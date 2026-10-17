@@ -33,11 +33,16 @@ public:
     void releaseAll() noexcept;
     void render (float* laneL, float* laneR, float prev16, float pos16, bool playing) noexcept;
 
+    // Filled by render(). Melodic playback stays on the lane buses; drum hits are also split per voice.
+    float drumOutL[NumDrumVoices] {};
+    float drumOutR[NumDrumVoices] {};
+
 private:
     struct Voice
     {
         bool on = false;
         int part = 0;
+        int drumVoice = -1;
         int midiNote = 60;
         int age = 0;
         const SampleAudio* audio = nullptr;
@@ -48,6 +53,12 @@ private:
         double loopB = 0.0;
         double xfade = 0.0;
         bool loop = false;
+        // Phrase loops keep their pitch and follow the host tempo.
+        bool tempoSync = false;
+        float stretch = 1.f;
+        double anchor = 0.0;
+        double splicePos = 0.0;
+        int spliceLeft = 0;
         float fade = 0.f;
         float fadeInc = 1.f;
         bool stopping = false;

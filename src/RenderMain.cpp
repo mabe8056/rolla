@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -113,7 +114,8 @@ struct RenderStats
     double seconds = 0.0;
 };
 
-RenderStats renderDialect (const rolla::PresetBank& bank, int dialect, const juce::File& out)
+RenderStats renderDialect (const rolla::PresetBank& bank, int dialect, const juce::File& out,
+                           rolla::SampleLibrary* library, const rolla::SampleIndex* index)
 {
     constexpr double sr = 48000.0;
     constexpr double bpm = 130.0;
@@ -166,6 +168,9 @@ RenderStats renderDialect (const rolla::PresetBank& bank, int dialect, const juc
     params.key = 2;
     params.dialect = dialect;
     params.presets = &bank;
+    params.library = library;
+    params.sampleIndex = index;
+    params.bpm = (float) bpm;
 
     juce::AudioBuffer<float> audio (2, total);
     audio.clear();
@@ -753,6 +758,25 @@ void silenceCheck (const rolla::PresetBank& bank)
     std::cout << "notePeak " << peak << " nonFinite " << bad << "\n";
 }
 
+void forceSynth (rolla::PresetBank& bank)
+{
+    auto clear = [] (rolla::SampleSpec& spec)
+    {
+        spec.mode = rolla::SampleMode::Synth;
+        spec.filter.on = false;
+    };
+    for (int i = 0; i < rolla::PresetBank::kPer; ++i)
+    {
+        clear (bank.bass[i].sample);
+        clear (bank.stab[i].sample);
+        clear (bank.hits[i].sample);
+        clear (bank.pluck[i].sample);
+        clear (bank.pad[i].sample);
+        clear (bank.vox[i].sample);
+        clear (bank.drums[i].sample);
+    }
+}
+
 } // namespace
 
 int main (int argc, char** argv)
@@ -765,8 +789,14 @@ int main (int argc, char** argv)
     rolla::PresetBank bank;
     rolla::loadPresetsFromJson (bank, BinaryData::presets_json, BinaryData::presets_jsonSize);
 
-    silenceCheck (bank);
-    const int arFailures = analyseSound (bank);
+    rolla::PresetBank synth = bank;
+    forceSynth (synth);
+    silenceCheck (synth);
+    const int arFailures = analyseSound (synth);
+    const auto pack = rolla::openInstalledPack (BinaryData::SAMPLE_MANIFEST_json, BinaryData::SAMPLE_MANIFEST_jsonSize);
+    const bool havePack = pack.library != nullptr && pack.index != nullptr;
+    if (! havePack)
+        std::cout << "no sample pack; sample renders stay silent\n";
 
     juce::File dir = juce::File::getCurrentWorkingDirectory().getChildFile ("renders");
     if (argc > 1)
@@ -778,7 +808,7 @@ int main (int argc, char** argv)
     for (int d = 0; d < rolla::NumDialects; ++d)
     {
         const auto file = dir.getChildFile (juce::String ("ROLLA-") + rolla::dialectId (d) + ".wav");
-        const auto stats = renderDialect (bank, d, file);
+        const auto stats = renderDialect (bank, d, file, pack.library.get(), pack.index.get());
         const double rms = stats.samples > 0 ? std::sqrt (stats.sum / (double) stats.samples) : 0.0;
         const double cpu = stats.seconds / audioSeconds;
         std::cout << rolla::dialectId (d)
@@ -799,8 +829,13 @@ int main (int argc, char** argv)
         }
         if (stats.peak < 0.01f)
         {
-            std::cerr << "FAIL silence in " << rolla::dialectId (d) << "\n";
-            ++failures;
+            if (havePack)
+            {
+                std::cerr << "FAIL silence in " << rolla::dialectId (d) << "\n";
+                ++failures;
+            }
+            else
+                std::cout << "no sample pack; render is silent\n";
         }
         if (stats.peak > 1.05f)
         {

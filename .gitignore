@@ -8,6 +8,8 @@ renders/
 *.aif
 *.aiff
 *.flac
+.rolla-index.json
+.rolla-loudness.json
 *.zip
 cmake-build-*/
 .cache/

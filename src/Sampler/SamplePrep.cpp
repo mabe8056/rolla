@@ -543,6 +543,22 @@ int midiFromFilename (const char* path) noexcept
     return found;
 }
 
+float loudnessGainDb (const std::vector<float>& left, const std::vector<float>& right, double rate)
+{
+    if (left.empty() || rate < 1000.0)
+        return 0.f;
+    const bool mono = right.size() != left.size();
+    const float lufs = integratedLufs (left, right, rate, mono);
+    const float peak = std::max (peakOf (left, right), std::max (truePeak (left), right.empty() ? 0.f : truePeak (right)));
+    const float ceiling = std::pow (10.f, kLoadTruePeakCapDb / 20.f);
+    float gain = std::pow (10.f, (kLoadLufsTarget - lufs) / 20.f);
+    if (peak > 1.0e-8f && peak * gain > ceiling)
+        gain = ceiling / peak;
+    if (! std::isfinite (gain) || gain <= 0.f)
+        return 0.f;
+    return 20.f * std::log10 (std::max (gain, 1.0e-6f));
+}
+
 int chooseSlotRoot (int slot, const float* mono, int frames, double rate, const char* path)
 {
     if (userSlotIsDrum (slot) && slot != SlotKick)

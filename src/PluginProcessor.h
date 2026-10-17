@@ -2,6 +2,7 @@
 
 #include "Engine/Engine.h"
 #include "Engine/SampleLibrary.h"
+#include "Mix/MixProgram.h"
 #include "Sampler/UserSlots.h"
 #include "Generator/Generator.h"
 #include "Generator/Pattern.h"
@@ -49,6 +50,9 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
+    // Snapshot. A PresetBank is about a megabyte; copying it by value overflows the
+    // 512 KB macOS thread pluginval uses to open the plugin.
+    std::shared_ptr<const PresetBank> sharePresets() const;
     PresetBank copyPresets() const;
     void modifyPresets (const std::function<void (PresetBank&)>& edit);
     std::uint32_t presetGeneration() const noexcept { return presetGen.load (std::memory_order_acquire); }
@@ -103,6 +107,21 @@ public:
     juce::File samplesRoot() const;
     SampleLibrary& sampleLibrary() noexcept { return library; }
 
+    // Files the background index found on disk, and manifest entries that are absent.
+    // -1 until the first scan is published.
+    int samplesFound() const noexcept
+    {
+        const int n = library.indexedFound();
+        return n >= 0 ? n : samplesFoundCount.load (std::memory_order_relaxed);
+    }
+    int samplesMissing() const noexcept
+    {
+        if (library.indexedFound() >= 0)
+            return library.indexedMissing();
+        return samplesMissingCount.load (std::memory_order_relaxed);
+    }
+    juce::String sampleInventoryText() const;
+
     // 14 session slots (6 lanes + 8 drum voices). Paths persist; audio does not.
     bool loadUserSlot (int slot, const juce::File& file, juce::String& error);
     void clearUserSlot (int slot);
@@ -125,9 +144,15 @@ private:
     void parameterChanged (const juce::String& parameterID, float newValue) override;
     void applyDialect (int dialect);
     void regenerate (int onlyPart);
+    void refreshSampleInventory();
     Settings currentSettings() const;
     void publish (const Groove& g);
     void publishInitial (const Groove& g);
+    void publishDerived();
+    void reapplyIntensity();
+    void storeSource (const Groove& g);
+    Groove copySource() const;
+    void post (std::function<void (RollaProcessor&)> fn);
     void deferredStartup();
     void rememberSample (int voice, const float* mono, int n, double rate, const juce::String& name);
     void applyRememberedSamples();
@@ -140,6 +165,7 @@ private:
     };
 
     Engine engine;
+    MixProgram mixProgram;
     std::uint8_t edited[NumParts] {};
     juce::String voxSampleName;
     std::shared_ptr<AsyncState> async = std::make_shared<AsyncState>();
@@ -147,6 +173,8 @@ private:
 
     mutable std::mutex grooveMu;
     Groove groove {};
+    Groove sourceGroove {};
+    std::atomic<bool> sourceReady { false };
 
     struct Remembered
     {
@@ -161,6 +189,8 @@ private:
     SampleLibrary library;
     UserSlots slots;
     std::atomic<int> samplePick[NumParts] {};
+    std::atomic<int> samplesFoundCount { -1 };
+    std::atomic<int> samplesMissingCount { -1 };
 
     std::atomic<int> editorWidth { 0 };
     std::atomic<int> editorHeight { 0 };

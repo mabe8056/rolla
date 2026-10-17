@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <memory>
 
 #include <juce_core/juce_core.h>
 
@@ -143,8 +144,63 @@ void readExtras (Extras& ex, const juce::var& o)
             apply (obj->getProperty ("ex"));
 }
 
+void readStyles (SampleSpec& spec, const juce::var& preset)
+{
+    spec.styles = 0;
+    auto* obj = preset.getDynamicObject();
+    if (obj == nullptr || ! obj->hasProperty ("styles"))
+        return;
+    if (auto* arr = obj->getProperty ("styles").getArray())
+    {
+        for (const auto& item : *arr)
+        {
+            const auto s = item.toString().toLowerCase();
+            if (s == "ukmin")
+                spec.styles = (std::uint8_t) (spec.styles | 1u);
+            else if (s == "long")
+                spec.styles = (std::uint8_t) (spec.styles | 2u);
+            else if (s == "pop")
+                spec.styles = (std::uint8_t) (spec.styles | 4u);
+            else if (s == "gaskin")
+                spec.styles = (std::uint8_t) (spec.styles | 8u);
+        }
+    }
+}
+
+void readVoicePools (DrumPatch& drum, const juce::var& preset)
+{
+    for (int v = 0; v < NumDrumVoices; ++v)
+        drum.voicePool[v].clear();
+    auto* obj = preset.getDynamicObject();
+    if (obj == nullptr || ! obj->hasProperty ("sample"))
+        return;
+    auto* sampleObj = obj->getProperty ("sample").getDynamicObject();
+    if (sampleObj == nullptr || ! sampleObj->hasProperty ("voicePools"))
+        return;
+    const auto pools = sampleObj->getProperty ("voicePools");
+    auto* poolsObj = pools.getDynamicObject();
+    if (poolsObj == nullptr)
+        return;
+    const char* keys[] = { "kick", "snare", "clap", "rim", "tomLow", "tomMid", "hatC", "hatO", "ride", "perc" };
+    for (int v = 0; v < NumDrumVoices && v < 10; ++v)
+    {
+        if (auto* arr = poolsObj->getProperty (keys[v]).getArray())
+        {
+            const int n = std::min (64, arr->size());
+            drum.voicePool[v].reserve ((size_t) n);
+            for (int i = 0; i < n; ++i)
+            {
+                const auto path = arr->getReference (i).toString();
+                if (path.isNotEmpty())
+                    drum.voicePool[v].push_back (path.toStdString());
+            }
+        }
+    }
+}
+
 void readSample (SampleSpec& spec, const juce::var& preset)
 {
+    readStyles (spec, preset);
     auto* obj = preset.getDynamicObject();
     if (obj == nullptr || ! obj->hasProperty ("sample"))
         return;
@@ -158,6 +214,46 @@ void readSample (SampleSpec& spec, const juce::var& preset)
     spec.reverse = flag (s, "reverse", spec.reverse);
     spec.slice = flag (s, "slice", spec.slice);
     spec.layerMix = std::clamp (num (s, "layerMix", spec.layerMix), 0.f, 1.f);
+    if (auto* sampleObj = s.getDynamicObject())
+    {
+        if (sampleObj->hasProperty ("poolFilter"))
+        {
+            const auto filter = sampleObj->getProperty ("poolFilter");
+            spec.filter.on = true;
+            const auto lane = str (filter, "lane", "");
+            if (lane.isNotEmpty())
+                spec.filter.lane = partFromLaneName (lane.toRawUTF8());
+            const auto voice = str (filter, "voice", "");
+            if (voice.isNotEmpty())
+                spec.filter.voice = voiceFromFolderName (voice.toRawUTF8());
+            copySamplePath (spec.filter.pack, 64, str (filter, "pack", "").toRawUTF8());
+            copySamplePath (spec.filter.category, 32, str (filter, "category", "").toRawUTF8());
+            if (auto* filterObj = filter.getDynamicObject())
+            {
+                if (filterObj->hasProperty ("root"))
+                {
+                    const auto root = filterObj->getProperty ("root");
+                    if (root.isString())
+                    {
+                        const auto text = root.toString();
+                        int midi = midiFromNoteName (text.toRawUTF8(), -1);
+                        if (midi < 0 && text.isNotEmpty())
+                            midi = midiFromNoteName ((text + "3").toRawUTF8(), -1);
+                        if (midi >= 0)
+                            spec.filter.rootPc = midi % 12;
+                    }
+                    else if (! root.isVoid())
+                    {
+                        const int pc = (int) root;
+                        if (pc >= 0)
+                            spec.filter.rootPc = pc % 12;
+                    }
+                }
+                if (filterObj->hasProperty ("loop"))
+                    spec.filter.loop = (double) filterObj->getProperty ("loop") > 0.5 ? 1 : 0;
+            }
+        }
+    }
     if (auto* sampleObj = s.getDynamicObject())
     {
         if (sampleObj->hasProperty ("loop"))
@@ -234,6 +330,22 @@ void fillDialect (DialectDefaults& d, const char* bass, const char* stab, const 
     d.swing = swing;
 }
 
+int presetCountIn (const juce::var& root, const char* part)
+{
+    auto* obj = root.getDynamicObject();
+    if (obj == nullptr)
+        return 0;
+    auto* partsObj = obj->getProperty ("parts").getDynamicObject();
+    if (partsObj == nullptr)
+        return 0;
+    auto* partObj = partsObj->getProperty (part).getDynamicObject();
+    if (partObj == nullptr)
+        return 0;
+    if (auto* arr = partObj->getProperty ("presets").getArray())
+        return std::min (PresetBank::kPer, arr->size());
+    return 0;
+}
+
 const juce::var* presetAt (const juce::var& root, const char* part, int index)
 {
     auto* obj = root.getDynamicObject();
@@ -258,7 +370,10 @@ const juce::var* presetAt (const juce::var& root, const char* part, int index)
 
 void loadDefaultPresets (PresetBank& bank)
 {
-    bank = PresetBank {};
+    // A PresetBank temporary is about a megabyte. Construct the blank on the heap so
+    // pluginval's 512 KB macOS test thread can open the plugin.
+    auto blank = std::make_unique<PresetBank>();
+    bank = std::move (*blank);
     fillDialect (bank.dialect[UkMin], "pluck", "dub", "warehouse", "hook", "air", "close", "tight", true, 0.52f);
     fillDialect (bank.dialect[Long], "round", "swell", "dusty", "bright", "wide", "booth", "tight", true, 0.51f);
     fillDialect (bank.dialect[Pop], "click", "click", "rave", "soft", "air", "chop", "tight", true, 0.50f);
@@ -403,8 +518,22 @@ bool loadPresetsFromJson (PresetBank& bank, const char* json, int size)
             b.drive = num (*p, "drive", b.drive);
             b.trimDb = num (*p, "trimDb", b.trimDb);
             readSample (b.sample, *p);
+            readVoicePools (b, *p);
         }
     }
+
+    const int counts[NumParts] = {
+        presetCountIn (parsed, "bass"),
+        presetCountIn (parsed, "stab"),
+        presetCountIn (parsed, "hits"),
+        presetCountIn (parsed, "pluck"),
+        presetCountIn (parsed, "pad"),
+        presetCountIn (parsed, "vox"),
+        presetCountIn (parsed, "drums"),
+    };
+    for (int part = 0; part < NumParts; ++part)
+        if (counts[part] > 0)
+            bank.count[part] = counts[part];
 
     if (auto* root = parsed.getDynamicObject())
     {
@@ -470,7 +599,8 @@ int presetIndex (const PresetBank& bank, int part, const char* id) noexcept
 {
     if (id == nullptr || id[0] == 0 || part < 0 || part >= NumParts)
         return -1;
-    for (int i = 0; i < PresetBank::kPer; ++i)
+    const int n = bank.count[part] > 0 ? bank.count[part] : PresetBank::kPer;
+    for (int i = 0; i < n; ++i)
     {
         const char* have = "";
         switch (part)

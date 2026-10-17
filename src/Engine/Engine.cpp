@@ -2,6 +2,7 @@
 
 #include "../DspUtil.h"
 #include "../Drums/DrumMachine.h"
+#include "../Mix/MixRuntime.h"
 #include "../Sampler/UserSlots.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
@@ -282,9 +283,9 @@ struct Duck
     bool gateMode = false;
 };
 
-int clampPreset (int i) noexcept
+int clampPreset (const PresetBank& bank, int part, int i) noexcept
 {
-    return std::clamp (i, 0, PresetBank::kPer - 1);
+    return presetSlot (bank, part, i);
 }
 
 float velGainOf (int vel) noexcept
@@ -316,7 +317,8 @@ struct Engine::Impl
     Svf dHp, dLp;
     juce::Reverb reverb;
     int reverbIdle = 1000000;
-    DcBlock mainDc, drumDc;
+    DcBlock mainDc, mainDcR, drumDc;
+    MixRuntime mixRt;
     bool primed = false;
     bool fxHeld = false;
     double lastPos = -1.0;
@@ -362,8 +364,10 @@ struct Engine::Impl
             level[i].setTime (18.f, sr);
         outGain.setTime (20.f, sr);
         mainDc.setCutoff (20.f, sr);
+        mainDcR.setCutoff (20.f, sr);
         drumDc.setCutoff (25.f, sr);
         drums.prepare (sr);
+        mixRt.prepare (sampleRate);
         reset();
         primed = true;
     }
@@ -388,7 +392,9 @@ struct Engine::Impl
         fxHeld = false;
         bass.ring = bass.last = live.ring = live.last = 0.f;
         mainDc.reset();
+        mainDcR.reset();
         drumDc.reset();
+        mixRt.reset();
         lastPos = -1.0;
         for (auto& p : play)
             p = {};
@@ -567,6 +573,8 @@ void Engine::process (const Groove& groove,
     const int bars = std::clamp (params.bars, 2, kMaxBars);
     const double loop16 = (double) bars * 16.0;
     const double bpm = std::clamp (transport.bpm, 20.0, 400.0);
+    EngineParams play = params;
+    play.bpm = (float) bpm;
     const double d16 = (bpm / 60.0) * 4.0 / sr;
     const bool justStarted = transport.playing && ! wasPlaying;
     double pos = transport.playing ? wrapLoop (transport.ppqStart * 4.0, loop16) : 0.0;
@@ -600,20 +608,24 @@ void Engine::process (const Groove& groove,
 
     const float toneB = params.tone[Bass] - 0.5f;
     const float punchB = params.punch[Bass] - 0.5f;
-    BassPatch bassPatch = bank.bass[clampPreset (params.preset[Bass])];
+    BassPatch bassPatch = bank.bass[clampPreset (bank, Bass, params.preset[Bass])];
     applyDialectBass (bank, params.dialect, bassPatch);
     const auto& bp = bassPatch;
-    const auto& sp = bank.stab[clampPreset (params.preset[Stab])];
-    const auto& hp = bank.hits[clampPreset (params.preset[Hits])];
-    const auto& pp = bank.pluck[clampPreset (params.preset[Pluck])];
-    const auto& padP = bank.pad[clampPreset (params.preset[Pad])];
-    const auto& vp = bank.vox[clampPreset (params.preset[Vox])];
-    const auto& dp = bank.drums[clampPreset (params.preset[Drums])];
+    const auto& sp = bank.stab[clampPreset (bank, Stab, params.preset[Stab])];
+    const auto& hp = bank.hits[clampPreset (bank, Hits, params.preset[Hits])];
+    const auto& pp = bank.pluck[clampPreset (bank, Pluck, params.preset[Pluck])];
+    const auto& padP = bank.pad[clampPreset (bank, Pad, params.preset[Pad])];
+    const auto& vp = bank.vox[clampPreset (bank, Vox, params.preset[Vox])];
+    const auto& dp = bank.drums[clampPreset (bank, Drums, params.preset[Drums])];
 
     for (int i = 0; i < NumParts; ++i)
     {
-        float db = params.mute[i] ? -80.f : params.levelDb[i];
-        E.level[i].target = dbToGain (db);
+        // A muted lane is exact silence. -80 dB still leaves a residual, and it
+        // still excites the shared delay (300 Hz–2.5 kHz feedback) and the plate.
+        if (params.mute[i])
+            E.level[i].snap (0.f);
+        else
+            E.level[i].target = dbToGain (params.levelDb[i]);
     }
     E.outGain.target = dbToGain (params.outputDb);
 
@@ -675,6 +687,40 @@ void Engine::process (const Groove& groove,
         midi.addEvent (juce::MidiMessage::noteOn (ch + 1, note, (juce::uint8) vel), sample);
     };
 
+    if (params.mix != nullptr && params.mix->loaded)
+    {
+        auto idOf = [&] (int part) -> const char*
+        {
+            const int idx = presetSlot (bank, part, params.preset[part]);
+            switch (part)
+            {
+                case Bass: return bank.bass[idx].id;
+                case Stab: return bank.stab[idx].id;
+                case Hits: return bank.hits[idx].id;
+                case Pluck: return bank.pluck[idx].id;
+                case Pad: return bank.pad[idx].id;
+                case Vox: return bank.vox[idx].id;
+                default: return nullptr;
+            }
+        };
+        // MAIN mask bits are BASS, STAB, PLUCK, HITS, PAD, VOX (not the part enum order).
+        static constexpr int kMaskBit[6] = { 0, 1, 3, 2, 4, 5 };
+        MixBlockInfo info;
+        info.dialect = params.dialect;
+        info.sumMask = params.sumMask;
+        info.bypassSumTrim = params.bypassSumTrim;
+        int active = 0;
+        for (int p = 0; p < 6; ++p)
+        {
+            info.presetIndex[p] = params.preset[p];
+            info.presetId[p] = idOf (p);
+            if (! params.mute[p])
+                active |= 1 << kMaskBit[p];
+        }
+        info.activeMask = active;
+        E.mixRt.beginBlock (*params.mix, info);
+    }
+
     for (int i = 0; i < numSamples; ++i)
     {
         const double prev = pos;
@@ -732,7 +778,7 @@ void Engine::process (const Groove& groove,
                 for (int c = 0; c < nIv; ++c)
                 {
                     const int note = std::clamp (incoming[e].note + (nIv == 1 ? 0 : sp.chordIv[c]), 0, 127);
-                    const auto taken = sampler.take (Stab, note, incoming[e].vel, 1.0e9f, bank, params);
+                    const auto taken = sampler.take (Stab, note, incoming[e].vel, 1.0e9f, bank, play);
                     if (taken.kind == 1)
                     {
                         midi.addEvent (juce::MidiMessage::noteOn (Stab + 1, note, (juce::uint8) std::clamp (incoming[e].vel, 1, 127)), i);
@@ -818,7 +864,7 @@ void Engine::process (const Groove& groove,
             {
                 const int note = incoming[e].note;
                 const float hz = std::clamp (midiHz (note), 10.f, srF * 0.45f);
-                const auto taken = sampler.take (Bass, note, incoming[e].vel, 1.0e9f, bank, params);
+                const auto taken = sampler.take (Bass, note, incoming[e].vel, 1.0e9f, bank, play);
                 if (taken.kind == 1)
                 {
                     if (E.live.midiOn)
@@ -901,7 +947,7 @@ void Engine::process (const Groove& groove,
                     continue;
                 const int semi = bassBase + n.chord[0];
                 const float hz = std::clamp (midiHz (semi), 10.f, srF * 0.22f);
-                const auto taken = sampler.take (Bass, semi, n.vel, en, bank, params);
+                const auto taken = sampler.take (Bass, semi, n.vel, en, bank, play);
                 if (taken.kind == 1)
                 {
                     if (E.bass.midiOn)
@@ -978,7 +1024,7 @@ void Engine::process (const Groove& groove,
                     for (int c = 0; c < count; ++c)
                     {
                         const int note = std::clamp (base + iv[c], 0, 127);
-                        const auto taken = sampler.take (part, note, n.vel, en, bank, params);
+                        const auto taken = sampler.take (part, note, n.vel, en, bank, play);
                         if (taken.kind == 1)
                         {
                             emitHeld (part, note, n.vel, st, en);
@@ -1060,7 +1106,7 @@ void Engine::process (const Groove& groove,
                 if (! crossedNote (n.start, n.length, st, en) || ! crossed (prev, pos, st, loop16))
                     continue;
                 const int primary = std::clamp (hitBase + n.chord[0], 0, 127);
-                const auto taken = sampler.take (Hits, primary, n.vel, en, bank, params);
+                const auto taken = sampler.take (Hits, primary, n.vel, en, bank, play);
                 if (taken.kind == 1)
                 {
                     const int count = std::clamp ((int) n.nChord, 1, 4);
@@ -1151,7 +1197,7 @@ void Engine::process (const Groove& groove,
                 if (! crossedNote (n.start, n.length, st, en) || ! crossed (prev, pos, st, loop16))
                     continue;
                 const int note = std::clamp (voxBase + n.chord[0], 0, 127);
-                const auto taken = sampler.take (Vox, note, n.vel, en, bank, params);
+                const auto taken = sampler.take (Vox, note, n.vel, en, bank, play);
                 if (taken.kind == 1)
                 {
                     emitHeld (Vox, note, n.vel, st, en);
@@ -1204,7 +1250,9 @@ void Engine::process (const Groove& groove,
                     return;
                 // DRUMS muted: DUCK falls back to the host quarter grid. While the lane
                 // plays, duck follows this function's kick note-ons instead.
-                if (params.mute[Drums] && params.duck && (t % 4) == 0)
+                // Mix path: muting drums must not retarget duck, or SOLO/MUTE/FULL
+                // bass envelopes stop nulling. Quarter-grid fallback stays on the legacy path.
+                if (params.mix == nullptr && params.mute[Drums] && params.duck && (t % 4) == 0)
                 {
                     const float depth = std::max (0.f, bp.duckDb + punchB * 8.f);
                     const float rec = bp.duckRecoverMs;
@@ -1318,7 +1366,9 @@ void Engine::process (const Groove& groove,
                     if (vel <= 0)
                         continue;
                     const float stepAcc = (voice == Kick || voice == Clap) ? acc : 1.f;
-                    if (voice == Kick && params.duck && ! params.mute[Drums])
+                    // Mix path: muting drums must not drop the kick duck, or SOLO/MUTE/FULL
+                    // bass envelopes stop nulling. The legacy path still skips it.
+                    if (voice == Kick && params.duck && (params.mix != nullptr || ! params.mute[Drums]))
                     {
                         const float depth = std::max (0.f, bp.duckDb + punchB * 8.f);
                         const float rec = bp.duckRecoverMs;
@@ -1336,7 +1386,10 @@ void Engine::process (const Groove& groove,
                     }
                     drumOn (drumMidiNote (voice), vel, midiHold (voice));
 
-                    float keep = 1.f;
+                    // Sample kits never feed the circuit model. A missing file is
+                    // another hit from the DRUMS pack, inside takeDrum.
+                    const bool circuitKit = dp.sample.mode == SampleMode::Synth;
+                    float keep = 0.f;
                     if (startSample (voice, vel, stepAcc))
                         keep = 0.f;
                     else if (DrumSampleSlot* slot = E.drums.sampleSlot())
@@ -1350,12 +1403,18 @@ void Engine::process (const Groove& groove,
                         req.folder = drumSampleFolder (voice);
                         req.key = drumVoiceKey (voice);
                         req.midiNote = drumMidiNote (voice);
-                        keep = slot->trigger (req);
+                        const float slotKeep = slot->trigger (req);
+                        if (circuitKit)
+                            keep = slotKeep;
+                        else if (slotKeep > 0.001f)
+                            sampler.takeDrum (voice, vel, bank, play);
                     }
+                    else if (circuitKit)
+                        keep = 1.f;
                     else
-                        keep = sampler.takeDrum (voice, vel, bank, params);
+                        sampler.takeDrum (voice, vel, bank, play);
 
-                    if (keep > 0.001f)
+                    if (circuitKit && keep > 0.001f)
                     {
                         DrumHit hit;
                         hit.voice = voice;
@@ -1600,8 +1659,10 @@ void Engine::process (const Groove& groove,
         float playL[NumParts] {}, playR[NumParts] {};
         sampler.render (playL, playR, (float) prev, (float) pos, transport.playing);
 
-        const float bLvl = E.level[Bass].next() * (params.duck ? E.duckB.next() : 1.f);
-        float bSamp = (renderBass (E.bass) + renderBass (E.live) + playL[Bass]) * bLvl;
+        const float bFader = E.level[Bass].next();
+        const float bDuck = params.duck ? E.duckB.next() : 1.f;
+        const float bDry = renderBass (E.bass) + renderBass (E.live) + playL[Bass];
+        float bSamp = bDry * bFader * bDuck;
 
         float sL = 0, sR = 0, sDelay = 0, sRev = 0;
         for (auto& v : E.stab)
@@ -1613,11 +1674,13 @@ void Engine::process (const Groove& groove,
             sRev += (l + r) * 0.5f * v.revSend;
         }
         const float stabDuck = params.duck ? E.duckS.next() : 1.f;
-        const float stabLvl = E.level[Stab].next();
-        sL = (sL + playL[Stab]) * stabLvl * stabDuck;
-        sR = (sR + playR[Stab]) * stabLvl * stabDuck;
-        sDelay *= stabLvl;
-        sRev *= stabLvl;
+        const float stabFader = E.level[Stab].next();
+        const float sDryL = sL + playL[Stab];
+        const float sDryR = sR + playR[Stab];
+        sL = sDryL * stabFader * stabDuck;
+        sR = sDryR * stabFader * stabDuck;
+        sDelay *= stabFader;
+        sRev *= stabFader;
 
         float pL = 0, pR = 0;
         for (auto& v : E.pluck)
@@ -1626,9 +1689,12 @@ void Engine::process (const Groove& groove,
             pL += l;
             pR += r;
         }
-        const float pl = E.level[Pluck].next() * (params.duck ? E.duckPl.next() : 1.f);
-        pL = (pL + playL[Pluck]) * pl;
-        pR = (pR + playR[Pluck]) * pl;
+        const float pluckFader = E.level[Pluck].next();
+        const float pluckDuck = params.duck ? E.duckPl.next() : 1.f;
+        const float pDryL = pL + playL[Pluck];
+        const float pDryR = pR + playR[Pluck];
+        pL = pDryL * pluckFader * pluckDuck;
+        pR = pDryR * pluckFader * pluckDuck;
 
         float aL = 0, aR = 0, aRev = 0;
         for (auto& v : E.pad)
@@ -1639,10 +1705,12 @@ void Engine::process (const Groove& groove,
             aRev += (l + r) * 0.5f * v.revSend;
         }
         const float padDuck = params.duck ? E.duckP.next() : 1.f;
-        const float padLvl = E.level[Pad].next();
-        aL = (aL + playL[Pad]) * padLvl * padDuck;
-        aR = (aR + playR[Pad]) * padLvl * padDuck;
-        aRev *= padLvl;
+        const float padFader = E.level[Pad].next();
+        const float aDryL = aL + playL[Pad];
+        const float aDryR = aR + playR[Pad];
+        aL = aDryL * padFader * padDuck;
+        aR = aDryR * padFader * padDuck;
+        aRev *= padFader;
 
         float hL = 0, hR = 0;
         for (auto& v : E.hits)
@@ -1790,9 +1858,12 @@ void Engine::process (const Groove& groove,
             hL += y * (1.f - v.pan);
             hR += y * (1.f + v.pan * 0.5f);
         }
-        const float hLvl = E.level[Hits].next() * (params.duck ? E.duckH.next() : 1.f);
-        hL = (hL + playL[Hits]) * hLvl;
-        hR = (hR + playR[Hits]) * hLvl;
+        const float hitsFader = E.level[Hits].next();
+        const float hitsDuck = params.duck ? E.duckH.next() : 1.f;
+        const float hDryL = hL + playL[Hits];
+        const float hDryR = hR + playR[Hits];
+        hL = hDryL * hitsFader * hitsDuck;
+        hR = hDryR * hitsFader * hitsDuck;
 
         float voxL = 0, voxR = 0, voxRev = 0;
         static const float form[4][3] = {
@@ -1813,7 +1884,7 @@ void Engine::process (const Groove& groove,
                 voxR += v.ring * 0.92f;
                 continue;
             }
-            const float bright = bank.vox[clampPreset (params.preset[Vox])].brightness * std::pow (2.f, (params.tone[Vox] - 0.5f) * 0.6f);
+            const float bright = bank.vox[clampPreset (bank, Vox, params.preset[Vox])].brightness * std::pow (2.f, (params.tone[Vox] - 0.5f) * 0.6f);
             v.vib += 5.f / srF;
             if (v.vib >= 1.f)
                 v.vib -= 1.f;
@@ -1847,13 +1918,25 @@ void Engine::process (const Groove& groove,
             voxR += y * 0.92f;
             voxRev += y * v.revSend;
         }
-        const float vLvl = E.level[Vox].next() * (params.duck ? E.duckV.next() : 1.f);
-        voxL = (voxL + playL[Vox]) * vLvl;
-        voxR = (voxR + playR[Vox]) * vLvl;
-        voxRev *= vLvl;
+        const float voxFader = E.level[Vox].next();
+        const float voxDuck = params.duck ? E.duckV.next() : 1.f;
+        const float vDryL = voxL + playL[Vox];
+        const float vDryR = voxR + playR[Vox];
+        voxL = vDryL * voxFader * voxDuck;
+        voxR = vDryR * voxFader * voxDuck;
+        voxRev *= voxFader;
 
+        const bool mixSum = params.mix != nullptr && params.mix->loaded;
+        float voiceL[NumDrumVoices] {};
+        float voiceR[NumDrumVoices] {};
+        float slotL = 0.f, slotR = 0.f;
         float synthL = 0.f, synthR = 0.f;
-        E.drums.process (synthL, synthR);
+        if (mixSum)
+            E.drums.process (slotL, slotR, voiceL, voiceR);
+        else
+            E.drums.process (synthL, synthR);
+
+        float vSamp[NumDrumVoices] {};
         float samp = 0.f;
         for (int v = 0; v < NumDrumVoices; ++v)
         {
@@ -1862,6 +1945,7 @@ void Engine::process (const Groove& groove,
             {
                 if (std::fabs (pl.ring) > 1.0e-6f)
                 {
+                    vSamp[v] += pl.ring;
                     samp += pl.ring;
                     pl.ring = flush (pl.ring * ringC);
                     pl.last = pl.ring;
@@ -1887,20 +1971,95 @@ void Engine::process (const Groove& groove,
             float s = slot.buf[pl.buf][(size_t) pl.pos++] * pl.gain * g + pl.ring;
             pl.ring = flush (pl.ring * ringC);
             pl.last = s;
+            vSamp[v] += s;
             samp += s;
             if (pl.pos >= pl.len)
                 pl.on = false;
         }
         samp = flush (samp);
-        float drumLft = synthL + samp + playL[Drums];
-        float drumRgt = synthR + samp + playR[Drums];
+
         const float dLvl = E.level[Drums].next();
-        const float dDrive = 1.f + dp.drive * 2.f;
-        drumLft = fastTanh (drumLft * dDrive) * dLvl;
-        drumRgt = fastTanh (drumRgt * dDrive) * dLvl;
-        drumLft = E.drumDc.process (drumLft);
-        // Independent DC state would be better; a shared one-pole is acceptable at this gain.
-        drumRgt = flush (drumRgt);
+        float drumLft = 0.f, drumRgt = 0.f;
+        if (mixSum)
+        {
+            // Duck, then the fixed strip, then the lane fader. A mute is exact silence
+            // after the strip so the shared delay and plate get nothing from that lane.
+            // The strip still sees the dry voice, so FULL / MUTE / SOLO share one state.
+            auto shaped = [&] (int lane, float dryL, float dryR, float duck, float fader, bool muted)
+            {
+                float l = dryL * duck;
+                float r = dryR * duck;
+                E.mixRt.process (lane, l, r);
+                if (muted)
+                    l = r = 0.f;
+                else
+                {
+                    l *= fader;
+                    r *= fader;
+                }
+                return std::pair<float, float> (l, r);
+            };
+            const auto b = shaped (0, bDry, bDry, bDuck, bFader, params.mute[Bass]);
+            bSamp = 0.5f * (b.first + b.second);
+            const auto st = shaped (1, sDryL, sDryR, stabDuck, stabFader, params.mute[Stab]);
+            sL = st.first;
+            sR = st.second;
+            const auto hi = shaped (2, hDryL, hDryR, hitsDuck, hitsFader, params.mute[Hits]);
+            hL = hi.first;
+            hR = hi.second;
+            const auto plk = shaped (3, pDryL, pDryR, pluckDuck, pluckFader, params.mute[Pluck]);
+            pL = plk.first;
+            pR = plk.second;
+            const auto pd = shaped (4, aDryL, aDryR, padDuck, padFader, params.mute[Pad]);
+            aL = pd.first;
+            aR = pd.second;
+            const auto vx = shaped (5, vDryL, vDryR, voxDuck, voxFader, params.mute[Vox]);
+            voxL = vx.first;
+            voxR = vx.second;
+            sDelay = 0.5f * (sL + sR) * sp.delaySend;
+            sRev = 0.5f * (sL + sR) * sp.reverbSend;
+            aRev = 0.5f * (aL + aR) * padP.reverbSend;
+            voxRev = 0.5f * (voxL + voxR) * vp.reverbSend;
+
+            // Kick Snare Clap Rim — toms stay linear — HatC HatO Ride Perc.
+            // Toms are not a solo lane. A shared nonlinear perc strip would
+            // stop MUTE_PERC − (FULL − SOLO_PERC) from nulling.
+            static constexpr int kLane[NumDrumVoices] = { 6, 7, 8, 9, -1, -1, 10, 11, 12, 13 };
+            for (int v = 0; v < NumDrumVoices; ++v)
+            {
+                const float dryL = voiceL[v] + vSamp[v] + sampler.drumOutL[v];
+                const float dryR = voiceR[v] + vSamp[v] + sampler.drumOutR[v];
+                if (kLane[v] < 0)
+                {
+                    if (! params.mute[Drums] && ! params.drumVoiceMute[v])
+                    {
+                        drumLft += dryL * dLvl;
+                        drumRgt += dryR * dLvl;
+                    }
+                    continue;
+                }
+                const bool muted = params.mute[Drums] || params.drumVoiceMute[v];
+                const auto o = shaped (kLane[v], dryL, dryR, 1.f, dLvl, muted);
+                drumLft += o.first;
+                drumRgt += o.second;
+            }
+            if (! params.mute[Drums])
+            {
+                drumLft += slotL * dLvl;
+                drumRgt += slotR * dLvl;
+            }
+        }
+        else
+        {
+            drumLft = synthL + samp + playL[Drums];
+            drumRgt = synthR + samp + playR[Drums];
+            const float dDrive = 1.f + dp.drive * 2.f;
+            drumLft = fastTanh (drumLft * dDrive) * dLvl;
+            drumRgt = fastTanh (drumRgt * dDrive) * dLvl;
+            drumLft = E.drumDc.process (drumLft);
+            // Independent DC state would be better; a shared one-pole is acceptable at this gain.
+            drumRgt = flush (drumRgt);
+        }
 
         float fxGate = 1.f;
         if (transport.playing)
@@ -1976,14 +2135,17 @@ void Engine::process (const Groove& groove,
 
         float revL = 0.f, revR = 0.f;
         const float send = (sRev + aRev + voxRev + (drumLft + drumRgt) * 0.5f * dp.room) * fxGate;
-        if (std::fabs (send) > 1.0e-6f || E.reverbIdle < (int) srF)
+        // The idle skip is a level gate. On the mix path it must stay closed, or a
+        // sparse solo drops the plate while the full mix keeps it running and the
+        // mute null fails.
+        if (mixSum || std::fabs (send) > 1.0e-6f || E.reverbIdle < (int) srF)
         {
             revL = send;
             revR = send;
             E.reverb.processStereo (&revL, &revR, 1);
             revL = flush (revL * fxGate);
             revR = flush (revR * fxGate);
-            if (std::fabs (revL) < 1.0e-7f && std::fabs (revR) < 1.0e-7f && std::fabs (send) < 1.0e-6f)
+            if (! mixSum && std::fabs (revL) < 1.0e-7f && std::fabs (revR) < 1.0e-7f && std::fabs (send) < 1.0e-6f)
                 ++E.reverbIdle;
             else
                 E.reverbIdle = 0;
@@ -1997,15 +2159,26 @@ void Engine::process (const Groove& groove,
             outL += drumLft;
             outR += drumRgt;
         }
-        outL = flush (fastTanh (E.mainDc.process (outL) * 1.05f) * og);
-        outR = flush (fastTanh (outR * 1.05f) * og);
+        if (params.mix != nullptr && params.mix->loaded)
+        {
+            // Linear sum. The shared fastTanh was the mute leak: MUTE − (FULL − SOLO)
+            // left a common 250 Hz–4 kHz residual from the cubic term of the sum.
+            const float sg = E.mixRt.sumGain();
+            outL = flush (E.mainDc.process (outL) * sg * og);
+            outR = flush (E.mainDcR.process (outR) * sg * og);
+        }
+        else
+        {
+            outL = flush (fastTanh (E.mainDc.process (outL) * 1.05f) * og);
+            outR = flush (fastTanh (outR * 1.05f) * og);
+        }
         mainL[i] = outL;
         if (mainR != nullptr)
             mainR[i] = outR;
         if (drumL != nullptr)
-            drumL[i] = flush (fastTanh (drumLft) * og);
+            drumL[i] = params.mix != nullptr && params.mix->loaded ? flush (drumLft * og) : flush (fastTanh (drumLft) * og);
         if (drumR != nullptr)
-            drumR[i] = flush (fastTanh (drumRgt) * og);
+            drumR[i] = params.mix != nullptr && params.mix->loaded ? flush (drumRgt * og) : flush (fastTanh (drumRgt) * og);
     }
 }
 

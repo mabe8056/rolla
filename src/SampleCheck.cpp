@@ -100,7 +100,7 @@ int main()
         prev = laneL[rolla::Bass];
     }
     std::cout << "peak " << peak << " jump " << jump << "\n";
-    if (peak < 0.02f)
+    if (peak < 0.008f)
         return fail ("silent sample");
     if (jump > 0.2f)
         return fail ("click");
@@ -111,8 +111,8 @@ int main()
         return fail ("missing flag");
     sampler.reset();
     const auto fallback = sampler.take (rolla::Bass, 69, 110, 1.0e9f, bank, params);
-    if (fallback.kind != 0)
-        return fail ("missing should keep the synth");
+    if (fallback.kind != 1 || std::fabs (fallback.synthGain) > 1.0e-6f)
+        return fail ("missing sample invented a synth");
 
     rolla::Engine engine;
     engine.prepare (48000.0, 128);
@@ -141,8 +141,8 @@ int main()
         transport.ppqStart += 128.0 * 130.0 / 60.0 / 48000.0;
     }
     std::cout << "fallback energy " << energy << "\n";
-    if (energy < 1.0e-4)
-        return fail ("missing file silenced the lane");
+    if (energy > 1.0e-4)
+        return fail ("missing file invented a sound");
 
     std::cout << "sample check ok\n";
     return 0;

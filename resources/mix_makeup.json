@@ -1,0 +1,64 @@
+{
+ "dialects": {
+  "UKMIN": {
+   "sum_align_db": 0.58,
+   "tp_ceil_db": {
+    "KICK": -19.5, "CLAP": -23.0, "SNARE": -21.0, "RIM": -23.0,
+    "CH": -23.0, "OH": -23.0, "RIDE": -23.0, "PERC": -23.0,
+    "BASS": -20.5, "STAB": -20.5, "PLUCK": -23.0, "HITS": -23.0,
+    "PAD": -23.0, "VOX": -23.0
+   },
+   "lanes": {
+    "KICK": 27.43, "CLAP": 20.42, "SNARE": 19.15, "RIM": 3.22,
+    "CH": 8.56, "OH": 9.5, "RIDE": 3.04, "PERC": 8.6,
+    "BASS": 15.33, "STAB": 17.65, "PLUCK": 18.81, "HITS": 10.39,
+    "PAD": -0.21, "VOX": 5.42
+   }
+  },
+  "LONG": {
+   "sum_align_db": 0.57,
+   "tp_ceil_db": {
+    "KICK": -19.5, "CLAP": -23.0, "SNARE": -21.0, "RIM": -23.0,
+    "CH": -23.0, "OH": -23.0, "RIDE": -23.0, "PERC": -23.0,
+    "BASS": -20.9, "STAB": -20.5, "PLUCK": -23.0, "HITS": -23.0,
+    "PAD": -23.0, "VOX": -23.0
+   },
+   "lanes": {
+    "KICK": 23.85, "CLAP": 20.38, "SNARE": 17.06, "RIM": 3.22,
+    "CH": 10.8, "OH": 13.24, "RIDE": 5.44, "PERC": 6.71,
+    "BASS": 24.31, "STAB": 8.32, "PLUCK": 11.85, "HITS": 18.05,
+    "PAD": 0.48, "VOX": 4.35
+   }
+  },
+  "POP": {
+   "sum_align_db": 0.99,
+   "tp_ceil_db": {
+    "KICK": -19.5, "CLAP": -23.0, "SNARE": -21.0, "RIM": -23.0,
+    "CH": -23.0, "OH": -23.0, "RIDE": -23.0, "PERC": -23.0,
+    "BASS": -20.5, "STAB": -20.5, "PLUCK": -23.0, "HITS": -21.5,
+    "PAD": -23.0, "VOX": -21.0
+   },
+   "lanes": {
+    "KICK": 23.85, "CLAP": 12.32, "SNARE": 7.06, "RIM": 1.0,
+    "CH": 8.2, "OH": 5.54, "RIDE": 2.84, "PERC": 3.9,
+    "BASS": 30.25, "STAB": 25.13, "PLUCK": 19.84, "HITS": 15.7,
+    "PAD": -0.41, "VOX": 16.61
+   }
+  },
+  "GASKIN": {
+   "sum_align_db": 0.61,
+   "tp_ceil_db": {
+    "KICK": -17.5, "CLAP": -23.0, "SNARE": -21.0, "RIM": -23.0,
+    "CH": -23.0, "OH": -23.0, "RIDE": -23.0, "PERC": -23.0,
+    "BASS": -20.5, "STAB": -20.5, "PLUCK": -23.0, "HITS": -21.5,
+    "PAD": -23.0, "VOX": -21.0
+   },
+   "lanes": {
+    "KICK": 21.73, "CLAP": -5.21, "SNARE": -0.46, "RIM": 1.32,
+    "CH": 2.81, "OH": 1.57, "RIDE": -3.29, "PERC": 0.0,
+    "BASS": 27.33, "STAB": 17.9, "PLUCK": 24.49, "HITS": 8.17,
+    "PAD": 0.21, "VOX": 7.55
+   }
+  }
+ }
+}

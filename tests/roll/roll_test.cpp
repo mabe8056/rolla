@@ -139,6 +139,73 @@ void testShuffleClearsAutoKeep()
             expect (seedOf (after, i) == others[i], std::string ("shuffle stays on ") + rolla::partId (i));
 }
 
+void setDenorm (rolla::RollaProcessor& proc, const char* id, float denorm)
+{
+    auto* param = proc.apvts.getParameter (id);
+    expect (param != nullptr, std::string ("missing parameter ") + id);
+    if (param == nullptr)
+        return;
+    param->setValueNotifyingHost (param->convertTo0to1 (denorm));
+}
+
+std::uint64_t noteSig (const rolla::Groove& groove, int part)
+{
+    const auto& lane = groove.lane[part];
+    std::uint64_t h = (std::uint64_t) lane.count;
+    for (int i = 0; i < lane.count; ++i)
+    {
+        h = h * 1315423911ull + (std::uint64_t) (lane.notes[i].start * 100.f);
+        h = h * 1315423911ull + lane.notes[i].vel;
+        h = h * 1315423911ull + (std::uint8_t) lane.notes[i].chord[0];
+    }
+    return h;
+}
+
+void testIntensityChangesOutput()
+{
+    rolla::RollaProcessor proc;
+    proc.waitUntilReady();
+
+    const auto at75 = proc.copyGroove();
+    expect (at75.lane[rolla::Pluck].count == 0, "default intensity leaves pluck out");
+    expect (at75.lane[rolla::Bass].count > 0, "bass stays in at the default");
+    expect (at75.lane[rolla::Stab].count > 0, "the stab knob keeps stab in");
+    const auto bass75 = noteSig (at75, rolla::Bass);
+    const auto seeds = at75;
+
+    setDenorm (proc, "intensity", 100.f);
+    expect (pumpUntil ([&]
+    {
+        return proc.copyGroove().lane[rolla::Pluck].count > 0;
+    }), "intensity 100 brings pluck back");
+    const auto full = proc.copyGroove();
+    for (int i = 0; i < rolla::NumParts; ++i)
+        expect (seedOf (full, i) == seedOf (seeds, i), std::string ("intensity keeps the ") + rolla::partId (i) + " seed");
+
+    setDenorm (proc, "intensity", 75.f);
+    expect (pumpUntil ([&]
+    {
+        const auto g = proc.copyGroove();
+        return g.lane[rolla::Pluck].count == 0 && noteSig (g, rolla::Bass) == bass75;
+    }), "intensity 75 restores the same bass and drops pluck");
+
+    setDenorm (proc, "stab", 0.f);
+    setDenorm (proc, "intensity", 0.f);
+    expect (pumpUntil ([&]
+    {
+        return proc.copyGroove().lane[rolla::Stab].count == 0;
+    }), "intensity 0 with the stab knob down takes stab out");
+    expect (seedOf (proc.copyGroove(), rolla::Stab) == seedOf (seeds, rolla::Stab), "an out lane keeps its seed");
+    expect (noteSig (proc.copyGroove(), rolla::Bass) != bass75, "low intensity changes the bar-8 arrangement");
+
+    setDenorm (proc, "stab", 0.8f);
+    expect (pumpUntil ([&]
+    {
+        return proc.copyGroove().lane[rolla::Stab].count > 0;
+    }), "turning the stab knob back up brings the lane in");
+    expect (seedOf (proc.copyGroove(), rolla::Stab) == seedOf (seeds, rolla::Stab), "the knob does not re-roll stab");
+}
+
 void testShuffleKeepsManualLock()
 {
     rolla::RollaProcessor proc;
@@ -166,6 +233,7 @@ int main()
     testRollSkipsMutedAndKept();
     testShuffleClearsAutoKeep();
     testShuffleKeepsManualLock();
+    testIntensityChangesOutput();
 
     if (fails == 0)
         std::cout << "roll tests passed\n";
