@@ -480,7 +480,7 @@ int assignSemi (const char* contour, int dialect, Role role, int index, int coun
 
 void commitBar (Lane& lane, int bar, const int* slots, int n, float wantLen, bool hole,
                 const char* contour, int dialect, Role role, int partner, Rng& rng, float ghostP,
-                float freedom, char* breaks, int breaksN)
+                float freedom, char* breaks, int breaksN, float dark)
 {
     int ord[16];
     const int m = std::min (n, 16);
@@ -536,6 +536,13 @@ void commitBar (Lane& lane, int bar, const int* slots, int n, float wantLen, boo
             semi = partner == 0 ? 7 : partner;
         if (ord[i] == 1 && (semi % 12) == 0)
             rootAt1 = true;
+        // DARK 0 and DARK 1 have to move the bass. Several contours ignore the
+        // partner degree, so the extremes retint the bar: a 5th when it is
+        // bright, a b2 when it is dark. The middle of the knob leaves the contour.
+        if (dark <= 0.2f)
+            semi = (i == m - 1) ? 7 : ((i % 2) ? 7 : 0);
+        else if (dark >= 0.8f)
+            semi = (i == m - 1) ? 1 : ((i % 2) ? 3 : 0);
         prevSemi = semi;
         if (semi == 1 && i + 1 < m)
         {
@@ -694,7 +701,7 @@ void writeBass (Lane& lane, const Settings& s, Rng& rng, const char* plan, const
             n = 10;
         const bool wantHole = turn && (breaks == nullptr || std::strstr (breaks, "rest") == nullptr);
         commitBar (lane, bar, slots, n, want, wantHole,
-                   contour, s.dialect, role, partner, rng, ghostP, freedom, breaks, breaksN);
+                   contour, s.dialect, role, partner, rng, ghostP, freedom, breaks, breaksN, s.dark);
     }
     std::snprintf (cells, (size_t) cellsN, "%s",
                    s.dialect == Pop ? "off_8th_pump,fifth_pop,rest"
@@ -951,6 +958,44 @@ void writeDrums (DrumLane& drums, std::uint32_t seed, const Settings& s, Rng& rn
         place (TomLow);
         if (rng.next() < 0.5)
             place (Snare);
+    }
+    // Ride belongs in the pattern, for four bars at a time. BUSY opens that
+    // spell and adds hats; a quiet BUSY keeps a single ride and thins the hats.
+    // The overlay does not draw from the drum seed, so min and max cannot tie.
+    const int rideBars = s.busy > 0.7f ? s.bars : (s.busy < 0.3f ? 1 : std::min (4, s.bars));
+    const int rideVel = s.busy > 0.7f ? 96 : 80;
+    for (int bar = 0; bar < rideBars && bar < s.bars; ++bar)
+        for (int slot : { 2, 6, 10, 14 })
+            drums.vel[Ride][bar * 16 + slot] = (std::uint8_t) rideVel;
+    if (s.busy < 0.3f)
+    {
+        for (int t = 0; t < steps; ++t)
+            if (t != 10)
+                drums.vel[Ride][t] = 0;
+        drums.vel[Ride][10] = 80;
+        int seen = 0;
+        for (int t = 0; t < steps; ++t)
+        {
+            if (drums.vel[HatC][t] == 0 && drums.vel[HatO][t] == 0)
+                continue;
+            if ((seen++ & 1) != 0)
+            {
+                drums.vel[HatC][t] = 0;
+                drums.vel[HatO][t] = 0;
+            }
+        }
+    }
+    else if (s.busy > 0.7f)
+    {
+        for (int t = 0; t < steps; ++t)
+        {
+            if ((t & 1) == 0 || drums.vel[HatC][t] != 0 || drums.vel[HatO][t] != 0 || kickSlot (t % 16))
+                continue;
+            drums.vel[HatC][t] = 40;
+        }
+        for (int bar = 0; bar < s.bars; ++bar)
+            if (drums.vel[Perc][bar * 16 + 3] == 0)
+                drums.vel[Perc][bar * 16 + 3] = 70;
     }
 }
 
