@@ -101,12 +101,6 @@ StringArray presetsForLane (const PresetBank& bank, int part)
     return names;
 }
 
-Font tracked (Font font, float em)
-{
-    font.setExtraKerningFactor (em);
-    return font;
-}
-
 String signed1 (float v)
 {
     String s (v, 1);
@@ -141,20 +135,22 @@ String stabCaption (float stab)
     return "every 4 bars";
 }
 
-void focusRing (Graphics& g, Component& c)
+void focusRing (Graphics& g, Component& c, float controlRadius = -1.f)
 {
     if (! c.hasKeyboardFocus (false))
         return;
-    // 2 px stroke whose inner edge sits 2 px outside the control.
+    const float radius = controlRadius >= 0.f ? controlRadius
+                         : 0.5f * (float) jmin (c.getWidth(), c.getHeight());
     g.setColour (col (kInk));
-    g.drawRoundedRectangle (c.getLocalBounds().toFloat().expanded (3.f), Theme::radiusFocus, 2.f);
+    g.drawRoundedRectangle (c.getLocalBounds().toFloat().expanded (3.f),
+                            Theme::focusRadius (radius), Theme::strokeFocus);
 }
 
 void paintMissingIcon (Graphics& g, float x, float y, float s)
 {
     Path tri;
     tri.addTriangle (x, y + s, x + s * 0.5f, y, x + s, y + s);
-    g.setColour (col (kMark));
+    g.setColour (col (kWarn));
     g.fillPath (tri);
     g.setColour (col (kPaper));
     const float cx = x + s * 0.5f;
@@ -164,14 +160,7 @@ void paintMissingIcon (Graphics& g, float x, float y, float s)
 
 struct Look : LookAndFeel_V4
 {
-    Font instSemi, instBold, mono, monoMed, monoSemi;
-
     Look()
-        : instSemi (Theme::sansSemi (Theme::typeControl)),
-          instBold (Theme::sansBold (Theme::typeControl)),
-          mono (Theme::mono (Theme::typeBody)),
-          monoMed (Theme::monoMed (Theme::typeBody)),
-          monoSemi (Theme::monoSemi (Theme::typeValue))
     {
         setColour (PopupMenu::backgroundColourId, col (kCard));
         setColour (PopupMenu::textColourId, col (kInk));
@@ -180,9 +169,9 @@ struct Look : LookAndFeel_V4
         setColour (ResizableWindow::backgroundColourId, col (kPaper));
     }
 
-    Font getPopupMenuFont() override { return instSemi.withPointHeight (Theme::typeControl); }
-    Font getLabelFont (Label&) override { return instSemi; }
-    Font getTextButtonFont (TextButton&, int) override { return instSemi; }
+    Font getPopupMenuFont() override { return Theme::font (Theme::Role::preset); }
+    Font getLabelFont (Label&) override { return Theme::font (Theme::Role::meta); }
+    Font getTextButtonFont (TextButton&, int) override { return Theme::font (Theme::Role::button); }
 
     void drawPopupMenuBackground (Graphics& g, int width, int height) override
     {
@@ -208,9 +197,9 @@ struct Look : LookAndFeel_V4
             g.fillRect (area);
         }
         g.setColour (isActive ? col (kInk) : col (kInk3));
-        g.setFont (instSemi.withPointHeight (Theme::typeControl));
+        g.setFont (Theme::font (Theme::Role::preset));
         auto textArea = area.reduced (28, 0);
-        g.drawFittedText (text, textArea, Justification::centredLeft, 1);
+        g.drawText (text, textArea, Justification::centredLeft, false);
         if (isTicked)
         {
             g.setColour (col (kInk));
@@ -218,7 +207,7 @@ struct Look : LookAndFeel_V4
             tick.startNewSubPath (10.f, (float) area.getCentreY());
             tick.lineTo (13.f, (float) area.getCentreY() + 3.f);
             tick.lineTo (18.f, (float) area.getCentreY() - 4.f);
-            g.strokePath (tick, PathStrokeType (1.6f, PathStrokeType::curved, PathStrokeType::rounded));
+            g.strokePath (tick, PathStrokeType (Theme::strokeIcon, PathStrokeType::curved, PathStrokeType::rounded));
         }
     }
 };
@@ -265,11 +254,11 @@ struct KnobSlider : Slider
     void paint (Graphics& g) override
     {
         const float size = (float) getWidth();
-        const float stroke = size >= 48.f ? 4.f : 3.f;
+        const float stroke = size >= 48.f ? Theme::strokeArcLarge : Theme::strokeArcSmall;
         const float r = size * 0.5f;
         const float arcR = r - stroke * 0.5f;
         const float capR = r * (size >= 48.f ? 0.64f : 0.60f);
-        const float ptrW = size >= 48.f ? 2.5f : 2.f;
+        const float ptrW = size >= 48.f ? 2.f : Theme::strokeIcon;
         const auto centre = getLocalBounds().toFloat().getCentre();
         const float start = degreesToRadians (-135.f);
         const float end = degreesToRadians (135.f);
@@ -339,17 +328,15 @@ struct LevelSlider : Slider
         g.setColour (col (kLine2));
         g.fillRoundedRectangle (b, rad);
         g.restoreState();
-        g.setColour (col (isMouseOver() ? kInk2 : kLine2));
-        g.drawRoundedRectangle (b.reduced (0.5f), rad, 1.f);
+        const bool hot = isMouseOver();
+        const bool held = isMouseButtonDown();
+        g.setColour (col (held ? kInk : (hot ? kInk2 : kLine2)));
+        g.drawRoundedRectangle (b.reduced (0.5f), rad - 0.5f, Theme::strokeHair);
 
-        auto lf = dynamic_cast<Look*> (&getLookAndFeel());
-        g.setColour (col (kInk2));
-        if (lf != nullptr)
-            g.setFont (tracked (lf->instSemi.withPointHeight (Theme::typeMicro), 0.08f));
-        g.drawText ("LVL", b.reduced (8.f, 0.f), Justification::centredLeft, false);
         g.setColour (col (kInk));
-        if (lf != nullptr)
-            g.setFont (lf->mono.withPointHeight (Theme::typeCaption));
+        g.setFont (Theme::font (Theme::Role::micro));
+        g.drawText ("LVL", b.reduced (8.f, 0.f), Justification::centredLeft, false);
+        g.setFont (Theme::font (Theme::Role::microval));
         g.drawText (String (getValue(), 1), b.reduced (8.f, 0.f), Justification::centredRight, false);
         focusRing (g, *this);
     }
@@ -384,8 +371,9 @@ struct SwingSlider : Slider
         g.setColour (col (kInk));
         g.fillRoundedRectangle (b.getX(), y - 2.f, b.getWidth() * pos, 4.f, 2.f);
         const float x = b.getX() + b.getWidth() * pos;
-        g.fillRoundedRectangle (x - 2.f, y - 8.f, 4.f, 16.f, 2.f);
-        focusRing (g, *this);
+        const float thumbW = isMouseOver() || isMouseButtonDown() ? 6.f : 4.f;
+        g.fillRoundedRectangle (x - thumbW * 0.5f, y - 8.f, thumbW, 16.f, 2.f);
+        focusRing (g, *this, Theme::radiusKey);
     }
 };
 
@@ -422,29 +410,25 @@ struct LabeledKnob : Component
 
     void paint (Graphics& g) override
     {
-        auto* lf = dynamic_cast<Look*> (&getLookAndFeel());
-        if (lf == nullptr)
-            return;
         auto top = getLocalBounds().toFloat().removeFromTop (compact ? 12.f : 16.f);
         g.setColour (col (kInk2));
-        g.setFont (tracked (lf->instSemi.withPointHeight (compact ? Theme::typeMicro
-                                                                  : (macro ? Theme::typeControl : Theme::typeCaption)),
-                            macro ? 0.10f : 0.10f));
+        g.setFont (Theme::font (compact ? Theme::Role::micro
+                                         : (macro ? Theme::Role::macro : Theme::Role::caption)));
         g.drawText (caption, top, Justification::centred, false);
 
         if (macro)
         {
             g.setColour (col (kInk));
-            g.setFont (lf->monoSemi.withPointHeight (Theme::typeValue));
+            g.setFont (Theme::font (Theme::Role::macroval));
             g.drawText (readout, Rectangle<float> (0.f, 96.f, (float) getWidth(), 16.f), Justification::centred, false);
             g.setColour (col (kInk2));
-            g.setFont (lf->mono.withPointHeight (Theme::typeCaption));
+            g.setFont (Theme::font (Theme::Role::meta));
             g.drawText (detail, Rectangle<float> (0.f, 112.f, (float) getWidth(), 14.f), Justification::centred, false);
         }
         else
         {
             g.setColour (col (kInk));
-            g.setFont (lf->mono.withPointHeight (compact ? Theme::typeCaption : Theme::typeControl));
+            g.setFont (Theme::font (compact ? Theme::Role::microval : Theme::Role::value));
             auto bottom = getLocalBounds().toFloat().removeFromBottom (compact ? 12.f : 16.f);
             g.drawText (readout, bottom, Justification::centred, false);
         }
@@ -551,7 +535,6 @@ struct IconButton : QuietButton
     {
         auto b = getLocalBounds().toFloat();
         const bool on = getToggleState();
-        auto* lf = dynamic_cast<Look*> (&getLookAndFeel());
         g.saveState();
         if (down)
             g.addTransform (AffineTransform::translation (0.f, 1.f));
@@ -583,14 +566,13 @@ struct IconButton : QuietButton
 
         if (kind == mute)
         {
-            if (lf != nullptr)
-                g.setFont (lf->instBold.withPointHeight (Theme::typeBody));
+            g.setFont (Theme::font (Theme::Role::button));
             g.drawText ("M", getLocalBounds(), Justification::centred, false);
         }
         else if (kind == dice)
         {
-            auto die = b.reduced (8.f);
-            g.drawRoundedRectangle (die, 2.2f, 1.4f);
+            auto die = b.withSizeKeepingCentre ((float) Theme::glyphBox, (float) Theme::glyphBox);
+            g.drawRoundedRectangle (die, 2.2f, Theme::strokeIcon);
             auto pip = [&] (float x, float y)
             {
                 g.fillEllipse (x - 1.15f, y - 1.15f, 2.3f, 2.3f);
@@ -607,7 +589,7 @@ struct IconButton : QuietButton
             if (on)
                 g.fillRoundedRectangle (body, 1.6f);
             else
-                g.drawRoundedRectangle (body, 1.6f, 1.4f);
+                g.drawRoundedRectangle (body, 1.6f, Theme::strokeIcon);
             Path shackle;
             if (on)
             {
@@ -741,27 +723,20 @@ struct LaneRow : Component, FileDragAndDropTarget
         }
 
         const bool muted = mute.getToggleState();
-        auto* lf = dynamic_cast<Look*> (&getLookAndFeel());
-        g.setColour (laneColour (part).withAlpha (muted ? 0.4f : 1.f));
+        g.setColour (laneColour (part).withAlpha (muted ? Theme::alphaMuted : 1.f));
         g.fillEllipse (16.f, 16.f, 8.f, 8.f);
         const auto name = String (laneShortName (part));
-        g.setColour ((selected || hovered ? col (kInk) : col (kInk2)).withAlpha (muted ? 0.4f : 1.f));
-        if (lf != nullptr)
+        const auto nameFont = Theme::font (Theme::Role::lane);
+        g.setColour (muted ? col (kInk2).withAlpha (Theme::alphaMutedText)
+                           : (selected || hovered ? col (kInk) : col (kInk2)));
+        g.setFont (nameFont);
+        g.drawText (name, 32, 12, 72, 16, Justification::centredLeft, false);
+        if (sampleMissing)
         {
-            auto nameFont = tracked (lf->instBold.withPointHeight (Theme::typeControl), 0.06f);
-            g.setFont (nameFont);
-            g.drawText (name, 32, 12, 72, 16, Justification::centredLeft, false);
-            if (sampleMissing)
-            {
-                float x = 32.f + textWidth (nameFont, name) + 4.f;
-                if (x > 92.f)
-                    x = 92.f;
-                paintMissingIcon (g, x, 14.f, 12.f);
-            }
-        }
-        else
-        {
-            g.drawText (name, 32, 12, 72, 16, Justification::centredLeft, false);
+            float x = 32.f + textWidth (nameFont, name) + 4.f;
+            if (x > 92.f)
+                x = 92.f;
+            paintMissingIcon (g, x, 14.f, 12.f);
         }
 
         if (hot)
@@ -827,7 +802,7 @@ void chevron (Graphics& g, Rectangle<float> b, bool right)
         p.lineTo (x - 1.5f, y);
         p.lineTo (x + 2.f, y + 3.5f);
     }
-    g.strokePath (p, PathStrokeType (1.6f, PathStrokeType::curved, PathStrokeType::rounded));
+    g.strokePath (p, PathStrokeType (Theme::strokeIcon, PathStrokeType::curved, PathStrokeType::rounded));
 }
 
 struct Stepper : Component
@@ -878,29 +853,29 @@ struct Stepper : Component
     void paint (Graphics& g) override
     {
         auto b = getLocalBounds().toFloat();
-        g.setColour (col (kCard));
+        g.setColour (col (kPaper));
         g.fillRoundedRectangle (b, b.getHeight() * 0.5f);
-        g.setColour (col (kLine2));
-        g.drawRoundedRectangle (b.reduced (0.5f), b.getHeight() * 0.5f - 0.5f, 1.f);
+        g.setColour (col (isMouseOver (false) ? kInk2 : kLine2));
+        g.drawRoundedRectangle (b.reduced (0.5f), b.getHeight() * 0.5f - 0.5f, Theme::strokeHair);
 
-        auto* lf = dynamic_cast<Look*> (&getLookAndFeel());
-        if (lf == nullptr)
-            return;
+        const bool kit = getHeight() < 36;
+        const auto titleRole = sub.isEmpty() && ! kit ? Theme::Role::pill : Theme::Role::preset;
+        const auto titleFont = Theme::font (titleRole);
         auto mid = getLocalBounds().reduced (40, 0).toFloat();
         g.setColour (strike ? col (kInk3) : col (kInk));
-        g.setFont (tracked (lf->instBold.withPointHeight (getHeight() < 36 ? Theme::typeControl : Theme::typePreset), 0.02f));
+        g.setFont (titleFont);
         if (sub.isEmpty())
-            g.drawFittedText (title, mid.toNearestInt(), Justification::centred, 1);
+            g.drawText (title, mid, Justification::centred, false);
         else
         {
             g.drawText (title, mid.removeFromTop (mid.getHeight() * 0.58f), Justification::centred, false);
             if (strike)
             {
-                const float tw = textWidth (lf->instBold.withPointHeight (Theme::typePreset), title);
+                const float tw = textWidth (titleFont, title);
                 g.drawLine (mid.getCentreX() - tw * 0.5f, mid.getY() - 1.f, mid.getCentreX() + tw * 0.5f, mid.getY() - 1.f, 1.f);
             }
             g.setColour (col (kInk3));
-            g.setFont (lf->mono.withPointHeight (Theme::typeCaption));
+            g.setFont (Theme::font (Theme::Role::meta));
             g.drawText (sub, mid, Justification::centred, false);
         }
     }
@@ -909,19 +884,24 @@ struct Stepper : Component
     {
         auto arrow = [&] (QuietButton& btn, bool right)
         {
-            auto b = btn.getBounds().toFloat().reduced (6.f, 4.f);
+            const float disc = getHeight() >= 36 ? 32.f : 24.f;
+            auto b = btn.getBounds().toFloat().withSizeKeepingCentre (disc, disc);
             if (btn.isEnabled() && btn.isDown())
             {
                 g.setColour (col (kLine));
-                g.fillRoundedRectangle (b, 8.f);
+                g.fillEllipse (b);
             }
             else if (btn.isEnabled() && btn.isOver())
             {
                 g.setColour (col (kHov));
-                g.fillRoundedRectangle (b, 8.f);
+                g.fillEllipse (b);
             }
-            g.setColour (btn.isEnabled() ? (btn.isOver() ? col (kInk) : col (kInk2)) : col (kInk2).withAlpha (0.35f));
-            chevron (g, btn.getBounds().toFloat(), right);
+            g.setColour (btn.isEnabled() ? (btn.isOver() || btn.isDown() ? col (kInk) : col (kInk2))
+                                         : col (kInk2).withAlpha (Theme::alphaDisabled));
+            auto glyph = btn.getBounds().toFloat();
+            if (btn.isEnabled() && btn.isDown())
+                glyph.translate (0.f, 1.f);
+            chevron (g, glyph, right);
         };
         arrow (prev, false);
         arrow (next, true);
@@ -946,6 +926,16 @@ struct DialectBar : Component
             buttons[i].onClick = [this, i] { if (onPick) onPick (i); };
             buttons[i].onStateChange = [this] { repaint(); };
         }
+#if JUCE_DEBUG
+        {
+            GlyphArrangement glyphs;
+            const auto pill = Theme::font (Theme::Role::pill);
+            glyphs.addLineOfText (pill, "GASKIN 90s", 0.f, 0.f);
+            const float measured = glyphs.getBoundingBox (0, -1, true).getWidth();
+            jassert (std::abs (measured - 71.4f) <= 0.5f);
+            jassert (measured + 2.f * Theme::padPillLarge <= (float) Theme::segmentLarge);
+        }
+#endif
     }
 
     void setCurrent (int index)
@@ -958,51 +948,57 @@ struct DialectBar : Component
 
     void resized() override
     {
-        auto r = getLocalBounds().reduced (4, 4);
+        const int h = getHeight() - Theme::space8;
         for (int i = 0; i < NumDialects; ++i)
-        {
-            const int w = (i == NumDialects - 1) ? r.getWidth() : r.getWidth() / (NumDialects - i);
-            buttons[i].setBounds (r.removeFromLeft (w));
-        }
+            buttons[i].setBounds (Theme::space4 + i * Theme::segmentLarge, Theme::space4,
+                                  Theme::segmentLarge, h);
     }
 
     void paint (Graphics& g) override
     {
         auto b = getLocalBounds().toFloat();
-        g.setColour (col (kCard));
-        g.fillRoundedRectangle (b, 20.f);
+        const float rad = b.getHeight() * 0.5f;
+        g.setColour (col (kPaper));
+        g.fillRoundedRectangle (b, rad);
         g.setColour (col (kLine2));
-        g.drawRoundedRectangle (b.reduced (0.5f), 19.5f, 1.f);
+        g.drawRoundedRectangle (b.reduced (0.5f), rad - 0.5f, Theme::strokeHair);
     }
 
     void paintOverChildren (Graphics& g) override
     {
-        auto* lf = dynamic_cast<Look*> (&getLookAndFeel());
+        g.setFont (Theme::font (Theme::Role::pill));
         for (int i = 0; i < NumDialects; ++i)
         {
-            auto b = buttons[i].getBounds().toFloat().reduced (2.f, 4.f);
+            auto b = buttons[i].getBounds().toFloat();
             const bool on = i == current;
             const bool down = buttons[i].isDown();
             const bool over = buttons[i].isOver();
+            const float rad = b.getHeight() * 0.5f;
             if (on)
             {
                 g.setColour (col (kInk));
-                g.fillRoundedRectangle (b, b.getHeight() * 0.5f);
+                g.fillRoundedRectangle (b, rad);
             }
             else if (down)
             {
                 g.setColour (col (kLine));
-                g.fillRoundedRectangle (b, b.getHeight() * 0.5f);
+                g.fillRoundedRectangle (b, rad);
             }
             else if (over)
             {
                 g.setColour (col (kHov));
-                g.fillRoundedRectangle (b, b.getHeight() * 0.5f);
+                g.fillRoundedRectangle (b, rad);
             }
-            if (lf != nullptr)
-                g.setFont (tracked (lf->instBold.withPointHeight (Theme::typeBody), 0.04f));
-            g.setColour (on ? col (kPaper) : (over ? col (kInk) : col (kInk2)));
-            g.drawFittedText (buttons[i].getButtonText(), buttons[i].getBounds(), Justification::centred, 1);
+            g.setColour (on ? col (kPaper) : ((over || down) ? col (kInk) : col (kInk2)));
+            auto label = buttons[i].getBounds();
+            if (down && ! on)
+                label.translate (0, 1);
+            g.drawText (buttons[i].getButtonText(), label, Justification::centred, false);
+            if (buttons[i].hasKeyboardFocus (false))
+            {
+                g.setColour (col (kInk));
+                g.drawRoundedRectangle (b.expanded (3.f), Theme::focusRadius (rad), Theme::strokeFocus);
+            }
         }
     }
 };
@@ -1037,51 +1033,62 @@ struct ModeBar : Component
 
     void resized() override
     {
-        auto r = getLocalBounds().reduced (3, 3);
+        const int inner = getWidth() - Theme::space8;
+        const int seg = inner / 3;
+        const int h = getHeight() - Theme::space8;
         for (int i = 0; i < 3; ++i)
         {
-            const int w = (i == 2) ? r.getWidth() : r.getWidth() / (3 - i);
-            buttons[i].setBounds (r.removeFromLeft (w));
+            const int x = Theme::space4 + i * seg;
+            const int w = (i == 2) ? getWidth() - Theme::space4 - x : seg;
+            buttons[i].setBounds (x, Theme::space4, w, h);
         }
     }
 
     void paint (Graphics& g) override
     {
         auto b = getLocalBounds().toFloat();
-        g.setColour (col (kCard));
-        g.fillRoundedRectangle (b, b.getHeight() * 0.5f);
+        const float rad = b.getHeight() * 0.5f;
+        g.setColour (col (kPaper));
+        g.fillRoundedRectangle (b, rad);
         g.setColour (col (kLine2));
-        g.drawRoundedRectangle (b.reduced (0.5f), b.getHeight() * 0.5f - 0.5f, 1.f);
+        g.drawRoundedRectangle (b.reduced (0.5f), rad - 0.5f, Theme::strokeHair);
     }
 
     void paintOverChildren (Graphics& g) override
     {
-        auto* lf = dynamic_cast<Look*> (&getLookAndFeel());
+        g.setFont (Theme::font (Theme::Role::button));
         for (int i = 0; i < 3; ++i)
         {
-            auto b = buttons[i].getBounds().toFloat().reduced (1.f, 1.f);
+            auto b = buttons[i].getBounds().toFloat();
             const bool on = i == current;
             const bool down = buttons[i].isDown();
             const bool over = buttons[i].isOver();
+            const float rad = b.getHeight() * 0.5f;
             if (on)
             {
                 g.setColour (col (kInk));
-                g.fillRoundedRectangle (b, b.getHeight() * 0.5f);
+                g.fillRoundedRectangle (b, rad);
             }
             else if (down)
             {
                 g.setColour (col (kLine));
-                g.fillRoundedRectangle (b, b.getHeight() * 0.5f);
+                g.fillRoundedRectangle (b, rad);
             }
             else if (over)
             {
                 g.setColour (col (kHov));
-                g.fillRoundedRectangle (b, b.getHeight() * 0.5f);
+                g.fillRoundedRectangle (b, rad);
             }
-            if (lf != nullptr)
-                g.setFont (tracked (lf->instBold.withPointHeight (Theme::typeCaption), 0.06f));
-            g.setColour (on ? col (kPaper) : (over ? col (kInk) : col (kInk2)));
-            g.drawFittedText (buttons[i].getButtonText(), buttons[i].getBounds(), Justification::centred, 1);
+            g.setColour (on ? col (kPaper) : ((over || down) ? col (kInk) : col (kInk2)));
+            auto label = buttons[i].getBounds();
+            if (down && ! on)
+                label.translate (0, 1);
+            g.drawText (buttons[i].getButtonText(), label, Justification::centred, false);
+            if (buttons[i].hasKeyboardFocus (false))
+            {
+                g.setColour (col (kInk));
+                g.drawRoundedRectangle (b.expanded (3.f), Theme::focusRadius (rad), Theme::strokeFocus);
+            }
         }
     }
 };
@@ -1100,10 +1107,10 @@ struct HistoryButton : QuietButton
     void paintButton (Graphics& g, bool over, bool down) override
     {
         auto b = getLocalBounds().toFloat();
-        g.setColour (down ? col (kLine) : (over ? col (kHov) : col (kCard)));
-        g.fillRoundedRectangle (b.reduced (0.5f), 20.f);
+        g.setColour (down ? col (kLine) : (over ? col (kHov) : col (kPaper)));
+        g.fillEllipse (b);
         g.setColour (col (kLine2));
-        g.drawRoundedRectangle (b.reduced (0.5f), 19.5f, 1.f);
+        g.drawEllipse (b.reduced (0.5f), Theme::strokeHair);
 
         Path icon;
         icon.startNewSubPath (5.f, 4.f);
@@ -1115,11 +1122,11 @@ struct HistoryButton : QuietButton
                             -MathConstants<float>::halfPi, MathConstants<float>::halfPi, true);
         icon.lineTo (7.f, 14.f);
         auto placed = icon;
-        placed.applyTransform (AffineTransform::translation (12.f, 12.f));
+        placed.applyTransform (AffineTransform::translation (12.f, down ? 13.f : 12.f));
         if (redo)
-            placed.applyTransform (AffineTransform::scale (-1.f, 1.f, 20.f, 20.f));
-        g.setColour (isEnabled() ? (over ? col (kInk) : col (kInk2)) : col (kInk2));
-        g.strokePath (placed, PathStrokeType (1.5f, PathStrokeType::curved, PathStrokeType::rounded));
+            placed.applyTransform (AffineTransform::scale (-1.f, 1.f, 20.f, down ? 21.f : 20.f));
+        g.setColour (isEnabled() ? ((over || down) ? col (kInk) : col (kInk2)) : col (kInk2));
+        g.strokePath (placed, PathStrokeType (Theme::strokeIcon, PathStrokeType::curved, PathStrokeType::rounded));
         focusRing (g, *this);
     }
 };
@@ -1305,9 +1312,9 @@ struct FaceRollButton : QuietButton, private Timer
         const bool hot = ! blocked && isOver();
         const bool held = ! blocked && isDown();
         g.setColour (held ? col (kPress) : (hot ? col (kHov) : col (kCard)));
-        g.fillRoundedRectangle (b, 8.f);
+        g.fillRoundedRectangle (b, Theme::radiusPanel);
         g.setColour (col (hot ? kLine2 : kLine));
-        g.drawRoundedRectangle (b.reduced (0.5f), 8.f, 1.f);
+        g.drawRoundedRectangle (b.reduced (0.5f), Theme::radiusPanel, Theme::strokeHair);
 
         FacePose pose;
         pose.hover = hover.v;
@@ -1319,28 +1326,23 @@ struct FaceRollButton : QuietButton, private Timer
             pose.dark = paramRaw (proc->apvts, "dark");
         paintRollFace (g, { 16.f, 16.f, 96.f, 96.f }, pose);
 
-        auto* lf = dynamic_cast<Look*> (&getLookAndFeel());
-        if (lf != nullptr)
-        {
-            g.setColour (col (kInk));
-            g.setFont (tracked (lf->instBold.withPointHeight (Theme::typeHero), -0.01f));
-            g.drawText ("Roll", 128, 32, 150, 40, Justification::centredLeft, false);
+        g.setColour (col (kInk));
+        g.setFont (Theme::font (Theme::Role::roll));
+        g.drawText ("Roll", 128, 32, 150, 40, Justification::centredLeft, false);
 
-            g.setColour (col (kInk2));
-            g.setFont (lf->mono.withPointHeight (Theme::typeCaption));
-            g.drawRoundedRectangle (272.f, 40.f, 48.f, 20.f, 4.f, 1.f);
-            g.drawText ("SPACE", 272, 40, 48, 20, Justification::centred, false);
+        g.setColour (col (kInk2));
+        g.setFont (Theme::font (Theme::Role::keycap));
+        g.drawRoundedRectangle (272.f, 40.f, 48.f, 20.f, Theme::radiusKey, Theme::strokeHair);
+        g.drawText ("SPACE", 272, 40, 48, 20, Justification::centred, false);
 
-            g.setFont (lf->mono.withPointHeight (Theme::typeBody));
-            const auto left = textWidth (lf->monoMed.withPointHeight (Theme::typeBody), countText);
-            g.setColour (col (kInk));
-            g.setFont (lf->monoMed.withPointHeight (Theme::typeBody));
-            g.drawText (countText, 128, 80, (int) std::ceil (left), 16, Justification::centredLeft, false);
-            g.setColour (col (kInk2));
-            g.setFont (lf->mono.withPointHeight (Theme::typeBody));
-            g.drawText (keptText, 128 + (int) std::ceil (left), 80, 190, 16, Justification::centredLeft, false);
-        }
-        focusRing (g, *this);
+        const auto captionFont = Theme::font (Theme::Role::meta);
+        const auto left = textWidth (captionFont, countText);
+        g.setColour (col (kInk));
+        g.setFont (captionFont);
+        g.drawText (countText, 128, 80, (int) std::ceil (left), 16, Justification::centredLeft, false);
+        g.setColour (col (kInk2));
+        g.drawText (keptText, 128 + (int) std::ceil (left), 80, 190, 16, Justification::centredLeft, false);
+        focusRing (g, *this, Theme::radiusPanel);
     }
 };
 
@@ -1380,7 +1382,7 @@ struct SampleSlot : Component, FileDragAndDropTarget
         const bool fromSlot = slotActive();
         const bool loaded = fromSlot || (proc != nullptr && (vox ? proc->hasVoxSample() : proc->drumVoiceLoaded (voice)));
         auto b = getLocalBounds().toFloat();
-        const float rad = vox ? 8.f : 6.f;
+        const float rad = Theme::radiusSlot;
         g.setColour (loaded ? col (kPaper) : col (kCard));
         g.fillRoundedRectangle (b, rad);
 
@@ -1400,8 +1402,7 @@ struct SampleSlot : Component, FileDragAndDropTarget
             g.fillPath (dashed);
         }
 
-        auto* lf = dynamic_cast<Look*> (&getLookAndFeel());
-        if (lf == nullptr || proc == nullptr)
+        if (proc == nullptr)
             return;
 
         if (vox)
@@ -1410,28 +1411,27 @@ struct SampleSlot : Component, FileDragAndDropTarget
             if (loaded)
                 text.removeFromRight (32.f);
             g.setColour (col (kInk));
-            g.setFont (lf->monoMed.withPointHeight (Theme::typeControl));
-            g.drawFittedText (fromSlot ? slotLabel() : (loaded ? proc->getVoxSampleName() : "drop"),
-                              text.removeFromTop (b.getHeight() * 0.55f).toNearestInt(),
-                              Justification::centredLeft, 1);
+            g.setFont (Theme::font (Theme::Role::meta));
+            g.drawText (fromSlot ? slotLabel() : (loaded ? proc->getVoxSampleName() : "drop"),
+                        text.removeFromTop (b.getHeight() * 0.55f),
+                        Justification::centredLeft, false);
             g.setColour (col (kInk2));
-            g.setFont (lf->instSemi.withPointHeight (Theme::typeCaption));
-            g.drawFittedText (loaded ? "overrides preset" : utf8 ("wav · aif · aiff · flac"),
-                              text.toNearestInt(), Justification::centredLeft, 1);
+            g.drawText (loaded ? "overrides preset" : utf8 ("wav · aif · aiff · flac"),
+                        text, Justification::centredLeft, false);
             if (loaded)
             {
                 g.setColour (col (kInk2));
-                g.drawLine (b.getRight() - 28.f, b.getCentreY() - 4.f, b.getRight() - 20.f, b.getCentreY() + 4.f, 1.4f);
-                g.drawLine (b.getRight() - 20.f, b.getCentreY() - 4.f, b.getRight() - 28.f, b.getCentreY() + 4.f, 1.4f);
+                g.drawLine (b.getRight() - 28.f, b.getCentreY() - 4.f, b.getRight() - 20.f, b.getCentreY() + 4.f, Theme::strokeIcon);
+                g.drawLine (b.getRight() - 20.f, b.getCentreY() - 4.f, b.getRight() - 28.f, b.getCentreY() + 4.f, Theme::strokeIcon);
             }
         }
         else
         {
-            g.setFont (tracked (lf->instBold.withPointHeight (Theme::typeCaption), 0.04f));
+            g.setFont (Theme::font (Theme::Role::micro));
             g.setColour (col (kInk));
             auto top = b.reduced (6.f, 1.f).removeFromTop (b.getHeight() * 0.5f);
             g.drawText (loaded ? "YOUR WAV" : "909", top, Justification::centredLeft, false);
-            g.setFont (lf->mono.withPointHeight (Theme::typeCaption));
+            g.setFont (Theme::font (Theme::Role::microval));
             g.setColour (col (kInk2));
             auto name = fromSlot ? slotLabel()
                                  : (loaded ? proc->getDrumSampleName (voice) : String (panelVoiceCode (voice)));
@@ -1440,7 +1440,7 @@ struct SampleSlot : Component, FileDragAndDropTarget
             g.drawText (name, b.reduced (6.f, 1.f).removeFromBottom (b.getHeight() * 0.5f),
                         Justification::centredLeft, false);
         }
-        focusRing (g, *this);
+        focusRing (g, *this, Theme::radiusSlot);
     }
 
     void mouseDown (const MouseEvent& e) override
@@ -1514,15 +1514,25 @@ struct AccentButton : QuietButton
     {
         auto b = getLocalBounds().toFloat();
         const bool on = getToggleState();
-        g.setColour (on ? col (kInk) : col (kPaper));
-        g.fillRoundedRectangle (b, 12.f);
-        g.setColour (on ? col (kInk) : (over ? col (kInk2) : col (kLine2)));
-        g.drawRoundedRectangle (b.reduced (0.5f), 12.f, 1.f);
-        auto* lf = dynamic_cast<Look*> (&getLookAndFeel());
-        g.setColour (on ? col (kPaper) : (over ? col (kInk) : col (kInk2)));
-        if (lf != nullptr)
-            g.setFont (tracked (lf->instBold.withPointHeight (Theme::typeCaption), 0.06f));
-        g.drawText ("ACCENT", getLocalBounds(), Justification::centred, false);
+        const bool down = isDown();
+        const float rad = b.getHeight() * 0.5f;
+        if (on)
+            g.setColour (col (kInk));
+        else if (down)
+            g.setColour (col (kLine));
+        else if (over)
+            g.setColour (col (kHov));
+        else
+            g.setColour (col (kPaper));
+        g.fillRoundedRectangle (b, rad);
+        g.setColour (on ? col (kInk) : ((over || down) ? col (kInk2) : col (kLine2)));
+        g.drawRoundedRectangle (b.reduced (0.5f), rad - 0.5f, Theme::strokeHair);
+        g.setColour (on ? col (kPaper) : ((over || down) ? col (kInk) : col (kInk2)));
+        g.setFont (Theme::font (Theme::Role::button));
+        auto label = getLocalBounds();
+        if (down && ! on)
+            label.translate (0, 1);
+        g.drawText ("ACCENT", label, Justification::centred, false);
         focusRing (g, *this);
     }
 
@@ -1612,11 +1622,8 @@ struct DrumColumn : Component
 
     void paint (Graphics& g) override
     {
-        auto* lf = dynamic_cast<Look*> (&getLookAndFeel());
-        if (lf == nullptr)
-            return;
         g.setColour (col (kInk));
-        g.setFont (tracked (lf->instBold.withPointHeight (Theme::typeBody), 0.06f));
+        g.setFont (Theme::font (Theme::Role::voice));
         g.drawText (panelVoiceLabel (voice), 0, 0, 80, 16, Justification::centredLeft, false);
     }
 };
@@ -1642,16 +1649,13 @@ struct DragTile : Component
     {
         auto b = getLocalBounds().toFloat();
         Path outline;
-        outline.addRoundedRectangle (b.reduced (0.5f), 8.f);
+        outline.addRoundedRectangle (b.reduced (0.5f), Theme::radiusPanel);
         Path dashed;
         const float dash[] = { 3.f, 3.f };
         PathStrokeType (1.f).createDashedStroke (dashed, outline, dash, 2);
         g.setColour (isMouseOver (true) ? col (kInk) : col (kInk3));
         g.fillPath (dashed);
 
-        auto* lf = dynamic_cast<Look*> (&getLookAndFeel());
-        if (lf == nullptr)
-            return;
         g.setColour (col (kInk2));
         Path arrow;
         arrow.startNewSubPath (28.f, 30.f);
@@ -1661,34 +1665,42 @@ struct DragTile : Component
         arrow.lineTo (34.f, 42.f);
         arrow.startNewSubPath (18.f, 56.f);
         arrow.lineTo (38.f, 56.f);
-        g.strokePath (arrow, PathStrokeType (1.6f, PathStrokeType::curved, PathStrokeType::rounded));
+        g.strokePath (arrow, PathStrokeType (Theme::strokeIcon, PathStrokeType::curved, PathStrokeType::rounded));
 
         g.setColour (col (kInk));
-        g.setFont (tracked (lf->instBold.withPointHeight (Theme::typePreset), 0.08f));
+        g.setFont (Theme::font (Theme::Role::tile));
         g.drawText ("DRAG MIDI", 48, 28, 160, 18, Justification::centredLeft, false);
         g.setColour (col (kInk2));
-        g.setFont (lf->mono.withPointHeight (Theme::typeBody));
+        g.setFont (Theme::font (Theme::Role::meta));
         g.drawText (caption, 48, 48, 180, 16, Justification::centredLeft, false);
     }
 
     void paintOverChildren (Graphics& g) override
     {
-        auto* lf = dynamic_cast<Look*> (&getLookAndFeel());
         auto b = exportBtn.getBounds().toFloat();
         const bool over = exportBtn.isOver();
-        g.setColour (over ? col (kInk) : col (kPaper));
-        g.fillRoundedRectangle (b, 16.f);
-        g.setColour (over ? col (kInk) : col (kLine2));
-        g.drawRoundedRectangle (b.reduced (0.5f), 16.f, 1.f);
-        g.setColour (over ? col (kPaper) : col (kInk));
-        if (lf != nullptr)
-            g.setFont (tracked (lf->instBold.withPointHeight (Theme::typeCaption), 0.06f));
-        g.drawText ("EXPORT", exportBtn.getBounds(), Justification::centred, false);
+        const bool down = exportBtn.isDown();
+        const float rad = b.getHeight() * 0.5f;
+        if (down)
+            g.setColour (col (kLine));
+        else if (over)
+            g.setColour (col (kHov));
+        else
+            g.setColour (col (kPaper));
+        g.fillRoundedRectangle (b, rad);
+        g.setColour ((over || down) ? col (kInk2) : col (kLine2));
+        g.drawRoundedRectangle (b.reduced (0.5f), rad - 0.5f, Theme::strokeHair);
+        g.setColour ((over || down) ? col (kInk) : col (kInk2));
+        g.setFont (Theme::font (Theme::Role::button));
+        auto label = exportBtn.getBounds();
+        if (down)
+            label.translate (0, 1);
+        g.drawText ("EXPORT", label, Justification::centred, false);
     }
 
     void resized() override
     {
-        exportBtn.setBounds (248, 28, 72, 32);
+        exportBtn.setBounds (240, 28, Theme::buttonWidth, Theme::heightIcon);
     }
 
     void mouseDown (const MouseEvent&) override { armed = false; }
@@ -1736,11 +1748,18 @@ struct SwitchButton : QuietButton
     {
         auto b = getLocalBounds().toFloat();
         const bool on = getToggleState();
+        const bool over = isOver();
+        const float rad = b.getHeight() * 0.5f;
         g.setColour (on ? col (kInk) : col (kLine2));
-        g.fillRoundedRectangle (b, 14.f);
-        const float d = 20.f;
+        g.fillRoundedRectangle (b, rad);
+        if (over)
+        {
+            g.setColour (col (kInk2));
+            g.drawRoundedRectangle (b.reduced (0.5f), rad - 0.5f, Theme::strokeHair);
+        }
+        const float d = 16.f;
         const float x = on ? b.getRight() - 4.f - d : b.getX() + 4.f;
-        g.setColour (on ? col (kPaper) : col (kInk2));
+        g.setColour (on ? col (kPaper) : (over ? col (kInk) : col (kInk2)));
         g.fillEllipse (x, b.getCentreY() - d * 0.5f, d, d);
         focusRing (g, *this);
     }
@@ -1761,15 +1780,13 @@ struct BpmReadout : Component
 
     void paint (Graphics& g) override
     {
-        auto* lf = dynamic_cast<Look*> (&getLookAndFeel());
-        if (lf == nullptr)
-            return;
-        g.setFont (lf->monoMed.withPointHeight (Theme::typeBody));
+        const auto number = Theme::font (Theme::Role::value);
+        g.setFont (number);
         g.setColour (col (kInk));
-        const float w = textWidth (lf->monoMed.withPointHeight (Theme::typeBody), bpm);
+        const float w = textWidth (number, bpm);
         g.drawText (bpm, 0, 0, (int) std::ceil (w), getHeight(), Justification::centredLeft, false);
         g.setColour (col (kInk2));
-        g.setFont (lf->mono.withPointHeight (Theme::typeBody));
+        g.setFont (Theme::font (Theme::Role::meta));
         g.drawText (" BPM", (int) std::ceil (w), 0, getWidth(), getHeight(), Justification::centredLeft, false);
     }
 };
@@ -1782,13 +1799,10 @@ struct LogoButton : QuietButton
         setMouseCursor (MouseCursor::PointingHandCursor);
     }
 
-    void paintButton (Graphics& g, bool over, bool) override
+    void paintButton (Graphics& g, bool, bool) override
     {
-        auto* lf = dynamic_cast<Look*> (&getLookAndFeel());
-        if (lf == nullptr)
-            return;
-        g.setColour (over ? col (kInk) : col (kInk));
-        g.setFont (tracked (lf->instBold.withPointHeight (Theme::typeLogo), -0.01f));
+        g.setColour (col (kInk));
+        g.setFont (Theme::font (Theme::Role::wordmark));
         g.drawText ("ROLLA", getLocalBounds(), Justification::centredLeft, false);
     }
 };
@@ -1808,11 +1822,9 @@ struct StatusStrip : Component
 
     void paint (Graphics& g) override
     {
-        auto* lf = dynamic_cast<Look*> (&getLookAndFeel());
         g.setColour (col (kInk2));
-        if (lf != nullptr)
-            g.setFont (lf->mono.withPointHeight (Theme::typeCaption));
-        g.drawFittedText (text, getLocalBounds(), Justification::centredLeft, 1);
+        g.setFont (Theme::font (Theme::Role::meta));
+        g.drawText (text, getLocalBounds(), Justification::centredLeft, false);
     }
 };
 
@@ -2147,7 +2159,7 @@ struct RollaEditor::Content : Component
             rows[i].strip.pos16 = pos16;
             rows[i].syncHover();
             const bool muted = rows[i].mute.getToggleState();
-            rows[i].strip.setAlpha (muted ? 0.4f : 1.f);
+            rows[i].strip.setAlpha (muted ? Theme::alphaMuted : 1.f);
             rows[i].shuffle.setEnabled (true);
             rows[i].shuffle.setAlpha (1.f);
             const bool miss = samples.missing (i);
@@ -2252,16 +2264,12 @@ struct RollaEditor::Content : Component
         card ({ 672.f, 200.f, 336.f, 272.f });
         card ({ 672.f, 480.f, 336.f, 48.f });
 
-        auto* lf = dynamic_cast<Look*> (&getLookAndFeel());
-        if (lf == nullptr)
-            return;
-
         g.setColour (col (kLine));
         g.fillRect (16, 399, 640, 1);
 
         g.setColour (laneColour (selected));
         g.fillEllipse (32.f, 371.f, 10.f, 10.f);
-        auto nameFont = tracked (lf->instBold.withPointHeight (Theme::typeTitle), 0.02f);
+        const auto nameFont = Theme::font (Theme::Role::section);
         g.setColour (col (kInk));
         g.setFont (nameFont);
         const auto panelName = String (laneShortName (selected));
@@ -2276,57 +2284,57 @@ struct RollaEditor::Content : Component
         if (selected != Drums)
         {
             g.setColour (col (kInk2));
-            g.setFont (lf->mono.withPointHeight (Theme::typeBody));
+            g.setFont (Theme::font (Theme::Role::meta));
             g.drawText (channelLine (selected), 168, 364, 160, 24, Justification::centredLeft, false);
         }
         if (proc.laneEdited (selected))
         {
             g.setColour (col (kMark));
-            g.setFont (lf->mono.withPointHeight (Theme::typeCaption));
-            g.drawFittedText ("EDITED",
-                              selected == Drums ? Rectangle<int> (128, 364, 120, 24)
-                                                : Rectangle<int> (336, 364, 112, 24),
-                              Justification::centredLeft, 1);
+            g.setFont (Theme::font (Theme::Role::micro));
+            g.drawText ("EDITED",
+                        selected == Drums ? Rectangle<int> (128, 364, 120, 24)
+                                          : Rectangle<int> (336, 364, 112, 24),
+                        Justification::centredLeft, false);
         }
 
         if (selected != Drums)
         {
             g.setColour (col (kInk2));
-            g.setFont (tracked (lf->instSemi.withPointHeight (Theme::typeCaption), 0.10f));
+            g.setFont (Theme::font (Theme::Role::caption));
             g.drawText ("PRESET", 32, 440, 80, 16, Justification::centredLeft, false);
             if (selected == Vox)
                 g.drawText ("SAMPLE", 32, 520, 80, 16, Justification::centredLeft, false);
             if (selected == Hits)
             {
                 g.drawText ("PLACEMENT", 32, 520, 100, 16, Justification::centredLeft, false);
-                g.setFont (lf->instSemi.withPointHeight (Theme::typeControl));
+                g.setFont (Theme::font (Theme::Role::pill));
                 g.setColour (col (kInk));
                 g.drawText ("In stab", 48, 544, 120, 40, Justification::centredLeft, false);
                 g.setColour (col (kInk2));
-                g.setFont (lf->instSemi.withPointHeight (Theme::typeBody));
+                g.setFont (Theme::font (Theme::Role::meta));
                 g.drawText ("Hits land on the stab's answer slots.", 32, 592, 280, 16, Justification::centredLeft, true);
             }
         }
 
         g.setColour (col (kInk2));
-        g.setFont (tracked (lf->instBold.withPointHeight (Theme::typeCaption), 0.10f));
+        g.setFont (Theme::font (Theme::Role::caption));
         g.drawText ("SWING", 688, 492, 52, 24, Justification::centredLeft, false);
         g.setColour (col (kInk));
-        g.setFont (lf->mono.withPointHeight (Theme::typeControl));
+        g.setFont (Theme::font (Theme::Role::value));
         g.drawText (String (roundToInt (paramRaw (proc.apvts, "swing") * 100.f)) + "%",
                     828, 492, 48, 24, Justification::centredLeft, false);
         g.setColour (col (kLine));
         g.fillRect (888, 492, 1, 24);
         g.setColour (col (kInk2));
-        g.setFont (tracked (lf->instBold.withPointHeight (Theme::typeCaption), 0.10f));
+        g.setFont (Theme::font (Theme::Role::caption));
         g.drawText ("DUCK", 904, 492, 48, 24, Justification::centredLeft, false);
     }
 
     void resized() override
     {
         logo.setBounds (16, 16, 76, 24);
-        dialects.setBounds (100, 8, 312, 40);
-        keyStep.setBounds (428, 8, 136, 40);
+        dialects.setBounds (100, 8, Theme::segmentLarge * NumDialects + Theme::space8, Theme::heightControl);
+        keyStep.setBounds (508, 8, Theme::stepperKey, Theme::heightControl);
         bpm.setBounds (832, 20, 72, 16);
         undoBtn.setBounds (912, 8, 40, 40);
         redoBtn.setBounds (968, 8, 40, 40);
@@ -2339,7 +2347,7 @@ struct RollaEditor::Content : Component
         punch.setBounds (424, 440, 64, 112);
         level.setBounds (520, 440, 64, 112);
         voxSlot.setBounds (32, 544, 240, 56);
-        inStab.setBounds (200, 550, 44, 28);
+        inStab.setBounds (200, 552, 40, Theme::heightSmall);
         kitStep.setBounds (264, 360, 176, 32);
         source.setBounds (456, 360, 184, 32);
         for (int i = 0; i < 7; ++i)
@@ -2351,7 +2359,7 @@ struct RollaEditor::Content : Component
         bounce.setBounds (724, 340, 64, 128);
         stab.setBounds (892, 340, 64, 128);
         swing.setBounds (744, 492, 80, 24);
-        duck.setBounds (956, 490, 44, 28);
+        duck.setBounds (956, 492, 40, Theme::heightSmall);
         drag.setBounds (672, 536, 336, 88);
         status.setBounds (Theme::space16, 624, 992, Theme::space16);
     }

@@ -18,11 +18,14 @@ FetchContent_MakeAvailable(juce)
 juce_add_binary_data(RollaData
     SOURCES
         resources/presets.json
-        resources/fonts/InstrumentSans-SemiBold.ttf
-        resources/fonts/InstrumentSans-Bold.ttf
-        resources/fonts/GeistMono-Regular.ttf
-        resources/fonts/GeistMono-Medium.ttf
-        resources/fonts/GeistMono-SemiBold.ttf
+        resources/fonts/Unbounded-SemiBold.ttf
+        resources/fonts/Unbounded-Bold.ttf
+        resources/fonts/Unbounded-ExtraBold.ttf
+        resources/fonts/MartianMono-SemiCond-Regular.ttf
+        resources/fonts/MartianMono-SemiCond-Medium.ttf
+        resources/fonts/MartianMono-SemiCond-SemiBold.ttf
+        resources/fonts/MartianMono-SemiCond-Bold.ttf
+        resources/fonts/OFL-UI.txt
 )
 
 set(ROLLA_FORMATS VST3 Standalone)
