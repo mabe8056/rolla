@@ -10,7 +10,7 @@ namespace rolla
 {
 
 // 14 user slots: six melodic lanes + eight 909 voices.
-// PERC is stored and loaded; the pattern generator has no PERC voice yet.
+// PERC is the shaker voice. Toms stay on the dropped-WAV path.
 inline constexpr int kUserSlotCount = 14;
 
 enum UserSlotId : int
@@ -78,6 +78,7 @@ inline int userSlotForDrum (int voice) noexcept
         case HatC: return SlotCh;
         case HatO: return SlotOh;
         case Ride: return SlotRide;
+        case Perc: return SlotPerc;
         default: return -1;
     }
 }

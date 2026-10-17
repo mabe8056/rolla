@@ -188,6 +188,8 @@ add_executable(rolla-sampler-test
     src/Sampler/UserSlots.cpp
     src/Generator/Generator.cpp
     src/Generator/Presets.cpp
+    src/Drums/DrumMachine.cpp
+    src/Drums/DrumPattern.cpp
 )
 
 target_include_directories(rolla-sampler-test PRIVATE src)

@@ -102,6 +102,7 @@ int main()
     expect (rolla::userSlotForPart (rolla::Drums) < 0, "drums lane is not a melodic slot");
     expect (rolla::userSlotForDrum (rolla::Kick) == rolla::SlotKick, "kick slot");
     expect (rolla::userSlotForDrum (rolla::HatC) == rolla::SlotCh, "hat slot");
+    expect (rolla::userSlotForDrum (rolla::Perc) == rolla::SlotPerc, "perc slot");
     expect (rolla::userSlotForDrum (rolla::TomLow) < 0, "toms stay on the dropped-wav path");
     expect (std::string (rolla::userSlotFolder (rolla::SlotPerc)) == "DRUMS/PERC", "perc folder");
 
