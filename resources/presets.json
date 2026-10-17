@@ -1,0 +1,795 @@
+{
+  "schemaVersion": 3,
+  "version": 3,
+  "notes": "Schema v3. Units stay in the spec's units: Hz, ms, dB, semitones. Omitted keys keep the engine defaults. Each preset may include a sample block. mode is SYNTH, SAMPLE, or LAYER. file and pool entries are paths relative to the samples root (macOS ~/Music/ROLLA/Samples, Windows %USERPROFILE%\\Music\\ROLLA\\Samples), using forward slashes. root is scientific pitch with C4 = 60 (D1 = 26). start and loop times are seconds; loop.end 0 means the file end. layerMix is 0 (synth) to 1 (sample). zones are optional multisample maps {file, root, lo, hi}. slice true (vox) starts each note at the next detected transient. Drums may set voices.kick/snare/clap/rim/tomLow/tomMid/hatC/hatO/ride under DRUMS/{KICK,SNARE,CLAP,RIM,PERC,CH,OH,RIDE}. A missing file keeps the synth and lights the lane warning. Do not commit audio.",
+  "parts": {
+    "bass": {
+      "presets": [
+        {
+          "id": "pluck",
+          "name": "Pluck",
+          "osc": "saw",
+          "subDb": -18,
+          "cutoffHz": 220,
+          "resonance": 0.04,
+          "filterEnvOct": 1.15,
+          "filterTauMs": 50,
+          "ampAMs": 3,
+          "ampDMs": 250,
+          "ampSDb": -8,
+          "ampRMs": 40,
+          "glideMs": 35,
+          "driveDb": 2.5,
+          "duckDb": 13,
+          "duckRecoverMs": 115,
+          "hpfHz": 25,
+          "gate": false,
+          "trimDb": 0,
+          "octave": 1,
+          "sample": {
+            "mode": "SYNTH",
+            "file": "",
+            "root": "D1",
+            "start": 0.0,
+            "reverse": false,
+            "slice": false,
+            "loop": {
+              "on": false,
+              "start": 0.0,
+              "end": 0.0,
+              "xfade": 0.0
+            },
+            "layerMix": 0.5,
+            "pool": []
+          }
+        },
+        {
+          "id": "round",
+          "name": "Round",
+          "osc": "tri",
+          "subDb": -6,
+          "cutoffHz": 110,
+          "resonance": 0.02,
+          "filterEnvOct": 2.2,
+          "filterTauMs": 33,
+          "ampAMs": 10,
+          "ampDMs": 400,
+          "ampSDb": -3,
+          "ampRMs": 80,
+          "glideMs": 50,
+          "driveDb": 1.5,
+          "duckDb": 18,
+          "duckRecoverMs": 180,
+          "hpfHz": 28,
+          "gate": false,
+          "trimDb": -1,
+          "octave": 1,
+          "sample": {
+            "mode": "SYNTH",
+            "file": "",
+            "root": "D1",
+            "start": 0.0,
+            "reverse": false,
+            "slice": false,
+            "loop": {
+              "on": false,
+              "start": 0.0,
+              "end": 0.0,
+              "xfade": 0.0
+            },
+            "layerMix": 0.5,
+            "pool": []
+          }
+        },
+        {
+          "id": "click",
+          "name": "Click",
+          "osc": "saw",
+          "subDb": -9,
+          "subLpfHz": 120,
+          "cutoffHz": 350,
+          "resonance": 0.1,
+          "filterEnvSt": 24,
+          "filterTauMs": 17,
+          "ampAMs": 1,
+          "ampDMs": 120,
+          "ampSDb": -60,
+          "ampRMs": 20,
+          "glideMs": 0,
+          "driveDb": 1,
+          "duckDb": 20,
+          "duckRecoverMs": 60,
+          "hpfHz": 30,
+          "gate": true,
+          "trimDb": 0,
+          "octave": 1,
+          "targets": {
+            "lufsS": -18,
+            "peakDb": -6
+          },
+          "sample": {
+            "mode": "SYNTH",
+            "file": "",
+            "root": "D1",
+            "start": 0.0,
+            "reverse": false,
+            "slice": false,
+            "loop": {
+              "on": false,
+              "start": 0.0,
+              "end": 0.0,
+              "xfade": 0.0
+            },
+            "layerMix": 0.5,
+            "pool": []
+          }
+        }
+      ]
+    },
+    "stab": {
+      "presets": [
+        {
+          "id": "dub",
+          "name": "Dub",
+          "mode": "dub",
+          "cutoffHz": 3500,
+          "envOct": 1.5,
+          "tauMs": 50,
+          "ampAMs": 1,
+          "ampDMs": 120,
+          "ampSDb": -40,
+          "ampRMs": 50,
+          "unison": 4,
+          "detuneCents": 12,
+          "spread": 0.62,
+          "hpfHz": 250,
+          "delaySend": 0.8,
+          "delayFeedback": 0.46,
+          "delayBeats": 0.75,
+          "reverbSend": 0.7,
+          "hold": false,
+          "trimDb": -8,
+          "chordOn": true,
+          "chord": [
+            0,
+            5,
+            10,
+            15
+          ],
+          "sample": {
+            "mode": "SYNTH",
+            "file": "",
+            "root": "D3",
+            "start": 0.0,
+            "reverse": false,
+            "slice": false,
+            "loop": {
+              "on": false,
+              "start": 0.0,
+              "end": 0.0,
+              "xfade": 0.0
+            },
+            "layerMix": 0.5,
+            "pool": []
+          }
+        },
+        {
+          "id": "swell",
+          "name": "Swell",
+          "mode": "swell",
+          "cutoffHz": 1400,
+          "envOct": 1.0,
+          "tauMs": 170,
+          "ampAMs": 90,
+          "ampDMs": 900,
+          "ampSDb": -18,
+          "ampRMs": 300,
+          "unison": 3,
+          "detuneCents": 12,
+          "spread": 0.75,
+          "hpfHz": 200,
+          "delaySend": 0.45,
+          "delayFeedback": 0.4,
+          "delayBeats": 0.75,
+          "reverbSend": 0.4,
+          "hold": true,
+          "trimDb": -10,
+          "chordOn": true,
+          "chord": [
+            0,
+            7
+          ],
+          "sample": {
+            "mode": "SYNTH",
+            "file": "",
+            "root": "D3",
+            "start": 0.0,
+            "reverse": false,
+            "slice": false,
+            "loop": {
+              "on": false,
+              "start": 0.0,
+              "end": 0.0,
+              "xfade": 0.0
+            },
+            "layerMix": 0.5,
+            "pool": []
+          }
+        },
+        {
+          "id": "click",
+          "name": "Click",
+          "mode": "click",
+          "cutoffHz": 4200,
+          "envOct": 0.6,
+          "tauMs": 18,
+          "ampAMs": 1,
+          "ampDMs": 70,
+          "ampSDb": -48,
+          "ampRMs": 30,
+          "unison": 2,
+          "detuneCents": 8,
+          "spread": 0.3,
+          "hpfHz": 400,
+          "delaySend": 0.2,
+          "delayFeedback": 0.25,
+          "delayBeats": 0.75,
+          "reverbSend": 0.12,
+          "hold": false,
+          "trimDb": -8,
+          "chordOn": true,
+          "chord": [
+            0,
+            7
+          ],
+          "noiseDb": -12,
+          "noiseHpfHz": 2000,
+          "noiseDecayMs": 15,
+          "sample": {
+            "mode": "SYNTH",
+            "file": "",
+            "root": "D3",
+            "start": 0.0,
+            "reverse": false,
+            "slice": false,
+            "loop": {
+              "on": false,
+              "start": 0.0,
+              "end": 0.0,
+              "xfade": 0.0
+            },
+            "layerMix": 0.5,
+            "pool": []
+          }
+        }
+      ]
+    },
+    "hits": {
+      "presets": [
+        {
+          "id": "warehouse",
+          "name": "Warehouse",
+          "decayScale": 1.0,
+          "brightness": 1.0,
+          "detune": 1.0,
+          "trimDb": 2,
+          "sample": {
+            "mode": "SYNTH",
+            "file": "",
+            "root": "C3",
+            "start": 0.0,
+            "reverse": false,
+            "slice": false,
+            "loop": {
+              "on": false,
+              "start": 0.0,
+              "end": 0.0,
+              "xfade": 0.0
+            },
+            "layerMix": 0.5,
+            "pool": []
+          }
+        },
+        {
+          "id": "rave",
+          "name": "Piano Hit",
+          "engine": "fm",
+          "fmRatio": 1,
+          "fmIndex": 3,
+          "fmIndexEnd": 0.4,
+          "fmDecayMs": 400,
+          "noiseDb": -20,
+          "noiseBpHz": 3000,
+          "noiseDecayMs": 12,
+          "decayScale": 0.85,
+          "brightness": 1.35,
+          "detune": 1.4,
+          "trimDb": -7,
+          "sample": {
+            "mode": "SYNTH",
+            "file": "",
+            "root": "C3",
+            "start": 0.0,
+            "reverse": false,
+            "slice": false,
+            "loop": {
+              "on": false,
+              "start": 0.0,
+              "end": 0.0,
+              "xfade": 0.0
+            },
+            "layerMix": 0.5,
+            "pool": []
+          }
+        },
+        {
+          "id": "dusty",
+          "name": "Hoover",
+          "engine": "pwm",
+          "pw": 0.5,
+          "pwmHz": 0.8,
+          "pwmDepth": 0.3,
+          "unison": 5,
+          "detuneCents": 18,
+          "pitchEnvSt": -7,
+          "pitchEnvTauMs": 150,
+          "osc2Db": -3,
+          "osc2Oct": -1,
+          "decayScale": 1.15,
+          "brightness": 0.72,
+          "detune": 0.8,
+          "trimDb": -6,
+          "sample": {
+            "mode": "SYNTH",
+            "file": "",
+            "root": "C3",
+            "start": 0.0,
+            "reverse": false,
+            "slice": false,
+            "loop": {
+              "on": false,
+              "start": 0.0,
+              "end": 0.0,
+              "xfade": 0.0
+            },
+            "layerMix": 0.5,
+            "pool": []
+          }
+        }
+      ]
+    },
+    "pluck": {
+      "presets": [
+        {
+          "id": "hook",
+          "name": "Hook",
+          "cutoffHz": 2400,
+          "decayMs": 160,
+          "brightness": 1.0,
+          "trimDb": -8,
+          "sample": {
+            "mode": "SYNTH",
+            "file": "",
+            "root": "D4",
+            "start": 0.0,
+            "reverse": false,
+            "slice": false,
+            "loop": {
+              "on": false,
+              "start": 0.0,
+              "end": 0.0,
+              "xfade": 0.0
+            },
+            "layerMix": 0.5,
+            "pool": []
+          }
+        },
+        {
+          "id": "soft",
+          "name": "Soft",
+          "cutoffHz": 1400,
+          "decayMs": 220,
+          "brightness": 0.7,
+          "trimDb": -8,
+          "sample": {
+            "mode": "SYNTH",
+            "file": "",
+            "root": "D4",
+            "start": 0.0,
+            "reverse": false,
+            "slice": false,
+            "loop": {
+              "on": false,
+              "start": 0.0,
+              "end": 0.0,
+              "xfade": 0.0
+            },
+            "layerMix": 0.5,
+            "pool": []
+          }
+        },
+        {
+          "id": "bright",
+          "name": "Bright",
+          "cutoffHz": 3800,
+          "decayMs": 120,
+          "brightness": 1.4,
+          "trimDb": -9,
+          "sample": {
+            "mode": "SYNTH",
+            "file": "",
+            "root": "D4",
+            "start": 0.0,
+            "reverse": false,
+            "slice": false,
+            "loop": {
+              "on": false,
+              "start": 0.0,
+              "end": 0.0,
+              "xfade": 0.0
+            },
+            "layerMix": 0.5,
+            "pool": []
+          }
+        }
+      ]
+    },
+    "pad": {
+      "presets": [
+        {
+          "id": "air",
+          "name": "Air",
+          "cutoffHz": 1800,
+          "attackMs": 150,
+          "releaseMs": 700,
+          "detuneCents": 8,
+          "reverbSend": 0.45,
+          "trimDb": -12,
+          "sample": {
+            "mode": "SYNTH",
+            "file": "",
+            "root": "D3",
+            "start": 0.0,
+            "reverse": false,
+            "slice": false,
+            "loop": {
+              "on": false,
+              "start": 0.0,
+              "end": 0.0,
+              "xfade": 0.0
+            },
+            "layerMix": 0.5,
+            "pool": []
+          }
+        },
+        {
+          "id": "wide",
+          "name": "Wide",
+          "cutoffHz": 2200,
+          "attackMs": 220,
+          "releaseMs": 900,
+          "detuneCents": 14,
+          "reverbSend": 0.6,
+          "trimDb": -13,
+          "sample": {
+            "mode": "SYNTH",
+            "file": "",
+            "root": "D3",
+            "start": 0.0,
+            "reverse": false,
+            "slice": false,
+            "loop": {
+              "on": false,
+              "start": 0.0,
+              "end": 0.0,
+              "xfade": 0.0
+            },
+            "layerMix": 0.5,
+            "pool": []
+          }
+        },
+        {
+          "id": "dark",
+          "name": "Dark",
+          "cutoffHz": 900,
+          "attackMs": 280,
+          "releaseMs": 800,
+          "detuneCents": 6,
+          "reverbSend": 0.35,
+          "trimDb": -11,
+          "sample": {
+            "mode": "SYNTH",
+            "file": "",
+            "root": "D3",
+            "start": 0.0,
+            "reverse": false,
+            "slice": false,
+            "loop": {
+              "on": false,
+              "start": 0.0,
+              "end": 0.0,
+              "xfade": 0.0
+            },
+            "layerMix": 0.5,
+            "pool": []
+          }
+        }
+      ]
+    },
+    "vox": {
+      "presets": [
+        {
+          "id": "close",
+          "name": "Close",
+          "brightness": 1.15,
+          "decayMs": 140,
+          "breath": 0.35,
+          "reverbSend": 0.32,
+          "trimDb": -8,
+          "sample": {
+            "mode": "SYNTH",
+            "file": "",
+            "root": "C4",
+            "start": 0.0,
+            "reverse": false,
+            "slice": true,
+            "loop": {
+              "on": false,
+              "start": 0.0,
+              "end": 0.0,
+              "xfade": 0.0
+            },
+            "layerMix": 0.5,
+            "pool": []
+          }
+        },
+        {
+          "id": "booth",
+          "name": "Booth",
+          "brightness": 0.85,
+          "decayMs": 180,
+          "breath": 0.25,
+          "reverbSend": 0.35,
+          "trimDb": -8,
+          "sample": {
+            "mode": "SYNTH",
+            "file": "",
+            "root": "C4",
+            "start": 0.0,
+            "reverse": false,
+            "slice": true,
+            "loop": {
+              "on": false,
+              "start": 0.0,
+              "end": 0.0,
+              "xfade": 0.0
+            },
+            "layerMix": 0.5,
+            "pool": []
+          }
+        },
+        {
+          "id": "chop",
+          "name": "Chop",
+          "brightness": 1.2,
+          "decayMs": 90,
+          "breath": 0.4,
+          "reverbSend": 0.18,
+          "trimDb": -7,
+          "sample": {
+            "mode": "SYNTH",
+            "file": "",
+            "root": "C4",
+            "start": 0.0,
+            "reverse": false,
+            "slice": true,
+            "loop": {
+              "on": false,
+              "start": 0.0,
+              "end": 0.0,
+              "xfade": 0.0
+            },
+            "layerMix": 0.5,
+            "pool": []
+          }
+        }
+      ]
+    },
+    "drums": {
+      "presets": [
+        {
+          "id": "tight",
+          "name": "909 Tight",
+          "kickHz": 52,
+          "kickDecayMs": 280,
+          "kickClick": 0.45,
+          "kickSweep": 1.7,
+          "snareTone": 0.55,
+          "snareSnap": 0.62,
+          "snareDecayMs": 160,
+          "clapDecayMs": 180,
+          "hatDecayMs": 45,
+          "hatOpenDecayMs": 280,
+          "hatHpHz": 6500,
+          "tomDecayMs": 260,
+          "room": 0.08,
+          "drive": 0.15,
+          "trimDb": 0,
+          "sample": {
+            "mode": "SYNTH",
+            "file": "",
+            "root": "C3",
+            "start": 0.0,
+            "reverse": false,
+            "slice": false,
+            "loop": {
+              "on": false,
+              "start": 0.0,
+              "end": 0.0,
+              "xfade": 0.0
+            },
+            "layerMix": 0.5,
+            "pool": [],
+            "voices": {
+              "kick": "",
+              "snare": "",
+              "clap": "",
+              "rim": "",
+              "tomLow": "",
+              "tomMid": "",
+              "hatC": "",
+              "hatO": "",
+              "ride": ""
+            }
+          }
+        },
+        {
+          "id": "room",
+          "name": "909 Room",
+          "kickHz": 50,
+          "kickDecayMs": 340,
+          "kickClick": 0.35,
+          "kickSweep": 1.5,
+          "snareTone": 0.45,
+          "snareSnap": 0.5,
+          "snareDecayMs": 210,
+          "clapDecayMs": 260,
+          "hatDecayMs": 70,
+          "hatOpenDecayMs": 360,
+          "hatHpHz": 5800,
+          "tomDecayMs": 320,
+          "room": 0.28,
+          "drive": 0.1,
+          "trimDb": -1,
+          "sample": {
+            "mode": "SYNTH",
+            "file": "",
+            "root": "C3",
+            "start": 0.0,
+            "reverse": false,
+            "slice": false,
+            "loop": {
+              "on": false,
+              "start": 0.0,
+              "end": 0.0,
+              "xfade": 0.0
+            },
+            "layerMix": 0.5,
+            "pool": [],
+            "voices": {
+              "kick": "",
+              "snare": "",
+              "clap": "",
+              "rim": "",
+              "tomLow": "",
+              "tomMid": "",
+              "hatC": "",
+              "hatO": "",
+              "ride": ""
+            }
+          }
+        },
+        {
+          "id": "dry",
+          "name": "909 Dry",
+          "kickHz": 54,
+          "kickDecayMs": 220,
+          "kickClick": 0.55,
+          "kickSweep": 1.9,
+          "snareTone": 0.7,
+          "snareSnap": 0.75,
+          "snareDecayMs": 120,
+          "clapDecayMs": 140,
+          "hatDecayMs": 30,
+          "hatOpenDecayMs": 200,
+          "hatHpHz": 7200,
+          "tomDecayMs": 200,
+          "room": 0.0,
+          "drive": 0.22,
+          "trimDb": 0,
+          "sample": {
+            "mode": "SYNTH",
+            "file": "",
+            "root": "C3",
+            "start": 0.0,
+            "reverse": false,
+            "slice": false,
+            "loop": {
+              "on": false,
+              "start": 0.0,
+              "end": 0.0,
+              "xfade": 0.0
+            },
+            "layerMix": 0.5,
+            "pool": [],
+            "voices": {
+              "kick": "",
+              "snare": "",
+              "clap": "",
+              "rim": "",
+              "tomLow": "",
+              "tomMid": "",
+              "hatC": "",
+              "hatO": "",
+              "ride": ""
+            }
+          }
+        }
+      ]
+    }
+  },
+  "dialects": {
+    "ukmin": {
+      "bass": "pluck",
+      "stab": "dub",
+      "hits": "warehouse",
+      "pluck": "hook",
+      "pad": "air",
+      "vox": "close",
+      "drums": "tight",
+      "hitsMute": true,
+      "swing": 0.52
+    },
+    "long": {
+      "bass": "round",
+      "stab": "swell",
+      "hits": "dusty",
+      "pluck": "bright",
+      "pad": "wide",
+      "vox": "booth",
+      "drums": "tight",
+      "hitsMute": true,
+      "swing": 0.51
+    },
+    "pop": {
+      "bass": "click",
+      "stab": "click",
+      "hits": "rave",
+      "pluck": "soft",
+      "pad": "air",
+      "vox": "chop",
+      "drums": "tight",
+      "hitsMute": true,
+      "swing": 0.5
+    },
+    "gaskin": {
+      "bass": "round",
+      "stab": "swell",
+      "hits": "warehouse",
+      "pluck": "hook",
+      "pad": "dark",
+      "vox": "chop",
+      "drums": "room",
+      "hitsMute": false,
+      "swing": 0.5,
+      "overrides": {
+        "bass": {
+          "whenPreset": "round",
+          "duckDb": 7,
+          "duckRecoverMs": 110,
+          "glideMs": 0
+        }
+      }
+    }
+  }
+}

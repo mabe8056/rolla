@@ -1,0 +1,885 @@
+#include "PluginProcessor.h"
+#include "PluginEditor.h"
+#include "DspUtil.h"
+#include "Generator/MidiFile.h"
+
+#include <juce_audio_formats/juce_audio_formats.h>
+
+#include <BinaryData.h>
+
+#include <cmath>
+#include <cstring>
+#include <random>
+#include <vector>
+
+namespace rolla
+{
+namespace
+{
+
+juce::AudioProcessorValueTreeState::ParameterLayout createLayout (const PresetBank& bank)
+{
+    using namespace juce;
+    std::vector<std::unique_ptr<RangedAudioParameter>> p;
+
+    auto add = [&p] (std::unique_ptr<RangedAudioParameter> param)
+    {
+        p.push_back (std::move (param));
+    };
+
+    const auto unit = NormalisableRange<float> (0.f, 1.f, 0.001f);
+    add (std::make_unique<AudioParameterFloat> (ParameterID { "dark", 1 }, "Dark", unit, 0.55f));
+    add (std::make_unique<AudioParameterFloat> (ParameterID { "busy", 1 }, "Busy", unit, 0.40f));
+    add (std::make_unique<AudioParameterFloat> (ParameterID { "bounce", 1 }, "Bounce", unit, 0.45f));
+    add (std::make_unique<AudioParameterFloat> (ParameterID { "stab", 1 }, "Stab", unit, 0.55f));
+
+    add (std::make_unique<AudioParameterChoice> (
+        ParameterID { "dialect", 1 }, "Dialect",
+        StringArray { "UK MIN", "LONG", "POP", "GASKIN 90s" }, 0));
+
+    add (std::make_unique<AudioParameterChoice> (
+        ParameterID { "key", 1 }, "Key",
+        StringArray { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" }, 2));
+
+    add (std::make_unique<AudioParameterFloat> (
+        ParameterID { "swing", 1 }, "Swing",
+        NormalisableRange<float> (0.50f, 0.57f, 0.001f), 0.52f));
+
+    add (std::make_unique<AudioParameterChoice> (
+        ParameterID { "length", 1 }, "Length",
+        StringArray { "2", "4", "8" }, 2));
+
+    add (std::make_unique<AudioParameterBool> (ParameterID { "fill", 1 }, "Fill", false));
+    add (std::make_unique<AudioParameterBool> (ParameterID { "duck", 1 }, "Duck", true));
+    add (std::make_unique<AudioParameterBool> (ParameterID { "drumsToMain", 1 }, "Drums To Main", true));
+    add (std::make_unique<AudioParameterFloat> (ParameterID { "drumsAccent", 1 }, "Drums Accent", unit, 0.60f));
+    add (std::make_unique<AudioParameterFloat> (
+        ParameterID { "output", 1 }, "Output",
+        NormalisableRange<float> (-24.f, 6.f, 0.01f), 0.f));
+
+    add (std::make_unique<AudioParameterBool> (ParameterID { "roll", 1 }, "Roll", false));
+    add (std::make_unique<AudioParameterBool> (
+        ParameterID { "reduceMotion", 1 }, "Reduce Motion", false,
+        AudioParameterBoolAttributes().withAutomatable (false)));
+    add (std::make_unique<AudioParameterBool> (ParameterID { "hitsInStab", 1 }, "Hits In Stab", false));
+
+    for (int v = 0; v < NumDrumVoices; ++v)
+    {
+        const auto id = String (v);
+        const auto label = String (drumName (v));
+        add (std::make_unique<AudioParameterFloat> (
+            ParameterID { "dTune" + id, 1 }, label + " Tune",
+            NormalisableRange<float> (-12.f, 12.f, 0.01f), 0.f));
+        add (std::make_unique<AudioParameterFloat> (
+            ParameterID { "dDecay" + id, 1 }, label + " Decay", unit, 0.5f));
+        add (std::make_unique<AudioParameterFloat> (
+            ParameterID { "dLevel" + id, 1 }, label + " Level",
+            NormalisableRange<float> (-24.f, 6.f, 0.01f), 0.f));
+        add (std::make_unique<AudioParameterBool> (ParameterID { "dAccent" + id, 1 }, label + " Accent", false));
+        add (std::make_unique<AudioParameterFloat> (
+            ParameterID { "dAccAmt" + id, 1 }, label + " Accent Amount", unit, 0.60f));
+    }
+
+    const char* names[NumParts][PresetBank::kPer] = {};
+    for (int i = 0; i < PresetBank::kPer; ++i)
+    {
+        names[Bass][i] = bank.bass[i].name;
+        names[Stab][i] = bank.stab[i].name;
+        names[Hits][i] = bank.hits[i].name;
+        names[Pluck][i] = bank.pluck[i].name;
+        names[Pad][i] = bank.pad[i].name;
+        names[Vox][i] = bank.vox[i].name;
+        names[Drums][i] = bank.drums[i].name;
+    }
+
+    for (int part = 0; part < NumParts; ++part)
+    {
+        const auto id = String (partId (part));
+        const auto label = String (partName (part));
+        add (std::make_unique<AudioParameterBool> (ParameterID { id + "Mute", 1 }, label + " Mute", part == Hits));
+        add (std::make_unique<AudioParameterBool> (ParameterID { id + "Keep", 1 }, label + " Keep", false));
+        StringArray presets;
+        for (int i = 0; i < PresetBank::kPer; ++i)
+            presets.add (names[part][i] != nullptr && names[part][i][0] != 0 ? names[part][i] : ("Preset " + String (i + 1)));
+        add (std::make_unique<AudioParameterChoice> (ParameterID { id + "Preset", 1 }, label + " Preset", presets, 0));
+        add (std::make_unique<AudioParameterFloat> (ParameterID { id + "Tone", 1 }, label + " Tone", unit, 0.50f));
+        add (std::make_unique<AudioParameterFloat> (ParameterID { id + "Punch", 1 }, label + " Punch", unit, 0.50f));
+        add (std::make_unique<AudioParameterFloat> (
+            ParameterID { id + "Level", 1 }, label + " Level",
+            NormalisableRange<float> (-24.f, 6.f, 0.01f), 0.f));
+        add (std::make_unique<AudioParameterBool> (
+            ParameterID { id + "Shuffle", 1 }, label + " Shuffle", false,
+            AudioParameterBoolAttributes().withAutomatable (false)));
+    }
+
+    return { p.begin(), p.end() };
+}
+
+PresetBank loadBank()
+{
+    PresetBank bank;
+    loadPresetsFromJson (bank, BinaryData::presets_json, BinaryData::presets_jsonSize);
+    return bank;
+}
+
+float raw (const juce::AudioProcessorValueTreeState& tree, const char* id)
+{
+    if (auto* v = tree.getRawParameterValue (id))
+        return v->load();
+    return 0.f;
+}
+
+uint32_t freshSeed()
+{
+    try
+    {
+        std::random_device rd;
+        auto s = (uint32_t) rd();
+        return s == 0 ? 1u : s;
+    }
+    catch (...)
+    {
+        return (uint32_t) juce::Time::getMillisecondCounter() | 1u;
+    }
+}
+
+juce::String encodeBlock (const void* data, size_t bytes)
+{
+    juce::MemoryBlock mb (data, bytes);
+    return mb.toBase64Encoding();
+}
+
+bool decodeBlock (const juce::String& text, void* data, size_t bytes)
+{
+    juce::MemoryBlock mb;
+    if (! mb.fromBase64Encoding (text) || mb.getSize() != bytes)
+        return false;
+    std::memcpy (data, mb.getData(), bytes);
+    return true;
+}
+
+} // namespace
+
+RollaProcessor::RollaProcessor()
+    : juce::AudioProcessor (BusesProperties()
+                                .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
+                                .withOutput ("Drums", juce::AudioChannelSet::stereo(), true)),
+      bank (loadBank()),
+      apvts (*this, &undo, "ROLLA", createLayout (bank))
+{
+    const uint32_t seeds[NumParts] = { 0x0B17u, 0x51ABu, 0x19C3u, 0x77E1u, 0x0A11u, 0xBEEFu, 0x0909u };
+    Groove initial {};
+    generate (initial, currentSettings(), seeds, 0x7fu);
+    publish (initial);
+
+    apvts.addParameterListener ("roll", this);
+    apvts.addParameterListener ("dialect", this);
+    for (int i = 0; i < NumParts; ++i)
+        apvts.addParameterListener (juce::String (partId (i)) + "Shuffle", this);
+
+    juce::PropertiesFile::Options options;
+    options.applicationName = "ROLLA";
+    options.filenameSuffix = "settings";
+    options.osxLibrarySubFolder = "Application Support";
+    options.folderName = "ROLLA";
+    options.storageFormat = juce::PropertiesFile::storeAsXML;
+    juce::PropertiesFile props (options);
+    const auto saved = props.getValue ("samplesRoot");
+    library.setRoot (saved.isNotEmpty() ? juce::File (saved) : SampleLibrary::defaultRoot());
+    library.watch (bank);
+}
+
+RollaProcessor::~RollaProcessor()
+{
+    apvts.removeParameterListener ("roll", this);
+    apvts.removeParameterListener ("dialect", this);
+    for (int i = 0; i < NumParts; ++i)
+        apvts.removeParameterListener (juce::String (partId (i)) + "Shuffle", this);
+
+    std::lock_guard<std::mutex> lock (async->mu);
+    async->alive.store (false);
+}
+
+void RollaProcessor::applyDialect (int dialect)
+{
+    if (dialect < 0 || dialect >= NumDialects)
+        return;
+    const auto& row = bank.dialect[dialect];
+    auto setDenorm = [this] (const juce::String& id, float denorm)
+    {
+        if (auto* p = apvts.getParameter (id))
+        {
+            const float norm = p->convertTo0to1 (denorm);
+            if (std::fabs (p->getValue() - norm) < 1.0e-4f)
+                return;
+            p->beginChangeGesture();
+            p->setValueNotifyingHost (norm);
+            p->endChangeGesture();
+        }
+    };
+    for (int part = 0; part < NumParts; ++part)
+    {
+        const int idx = row.presetIndex[part];
+        if (idx >= 0)
+            setDenorm (juce::String (partId (part)) + "Preset", (float) idx);
+    }
+    setDenorm ("hitsMute", row.hitsMute ? 1.f : 0.f);
+    setDenorm ("swing", row.swing);
+}
+
+void RollaProcessor::parameterChanged (const juce::String& parameterID, float newValue)
+{
+    if (restoring.load (std::memory_order_acquire))
+        return;
+
+    if (parameterID == "dialect")
+    {
+        auto* mm = juce::MessageManager::getInstanceWithoutCreating();
+        if (mm == nullptr)
+            return;
+        std::weak_ptr<AsyncState> weak = async;
+        const uint32_t epoch = async->epoch.load (std::memory_order_acquire);
+        const int dialect = (int) newValue;
+        auto* self = this;
+        mm->callAsync ([weak, epoch, self, dialect]
+        {
+            auto locked = weak.lock();
+            if (locked == nullptr)
+                return;
+            std::lock_guard<std::mutex> guard (locked->mu);
+            if (! locked->alive.load() || locked->epoch.load() != epoch)
+                return;
+            if (self->restoring.load (std::memory_order_acquire))
+                return;
+            self->applyDialect (dialect);
+        });
+        return;
+    }
+
+    if (newValue < 0.5f)
+        return;
+
+    int part = -1;
+    if (parameterID != "roll")
+    {
+        for (int i = 0; i < NumParts; ++i)
+            if (parameterID == juce::String (partId (i)) + "Shuffle")
+                part = i;
+        if (part < 0)
+            return;
+    }
+
+    auto* mm = juce::MessageManager::getInstanceWithoutCreating();
+    if (mm == nullptr)
+        return;
+
+    std::weak_ptr<AsyncState> weak = async;
+    const uint32_t epoch = async->epoch.load (std::memory_order_acquire);
+    auto* self = this;
+    mm->callAsync ([weak, epoch, self, part]
+    {
+        auto locked = weak.lock();
+        if (locked == nullptr)
+            return;
+        std::lock_guard<std::mutex> guard (locked->mu);
+        if (! locked->alive.load() || locked->epoch.load() != epoch)
+            return;
+        if (part >= 0)
+            self->clearEdited (part);
+        self->regenerate (part);
+    });
+}
+
+void RollaProcessor::triggerRoll()
+{
+    if (auto* p = apvts.getParameter ("roll"))
+    {
+        p->beginChangeGesture();
+        p->setValueNotifyingHost (0.f);
+        p->setValueNotifyingHost (1.f);
+        p->endChangeGesture();
+    }
+}
+
+void RollaProcessor::triggerShuffle (int part)
+{
+    if (part < 0 || part >= NumParts)
+        return;
+    if (auto* p = apvts.getParameter (juce::String (partId (part)) + "Shuffle"))
+    {
+        p->beginChangeGesture();
+        p->setValueNotifyingHost (0.f);
+        p->setValueNotifyingHost (1.f);
+        p->endChangeGesture();
+    }
+}
+
+Settings RollaProcessor::currentSettings() const
+{
+    Settings s;
+    s.dark = raw (apvts, "dark");
+    s.busy = raw (apvts, "busy");
+    s.bounce = raw (apvts, "bounce");
+    s.stab = raw (apvts, "stab");
+    s.dialect = (int) raw (apvts, "dialect");
+    s.key = (int) raw (apvts, "key");
+    s.bars = barsFromIndex ((int) raw (apvts, "length"));
+    s.fill = raw (apvts, "fill") >= 0.5f;
+    return s;
+}
+
+void RollaProcessor::regenerate (int onlyPart)
+{
+    Settings s = currentSettings();
+    Groove next = copyGroove();
+    uint32_t seeds[NumParts] {};
+    uint32_t mask = 0;
+
+    for (int i = 0; i < NumParts; ++i)
+    {
+        seeds[i] = i == Drums ? next.drums.seed : next.lane[i].seed;
+        if (seeds[i] == 0)
+            seeds[i] = 1;
+
+        const bool keep = raw (apvts, (juce::String (partId (i)) + "Keep").toRawUTF8()) >= 0.5f;
+        const bool hit = onlyPart >= 0 ? (i == onlyPart) : ! keep;
+        if (hit)
+        {
+            seeds[i] = freshSeed();
+            mask |= 1u << (unsigned) i;
+            samplePick[i].fetch_add (1, std::memory_order_relaxed);
+        }
+    }
+
+    if (mask == 0)
+        return;
+
+    generate (next, s, seeds, mask);
+    publish (next);
+}
+
+void RollaProcessor::publish (const Groove& g)
+{
+    std::lock_guard<std::mutex> lock (grooveMu);
+    groove = g;
+}
+
+Groove RollaProcessor::copyGroove() const
+{
+    std::lock_guard<std::mutex> lock (grooveMu);
+    return groove;
+}
+
+void RollaProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
+{
+    preparedRate = sampleRate > 1000.0 ? sampleRate : 48000.0;
+    engine.prepare (preparedRate, samplesPerBlock);
+    applyRememberedSamples();
+}
+
+void RollaProcessor::releaseResources()
+{
+    engine.reset();
+}
+
+bool RollaProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
+{
+    if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
+        return false;
+
+    if (layouts.outputBuses.size() > 1)
+    {
+        const auto& drums = layouts.outputBuses.getReference (1);
+        if (! drums.isDisabled() && drums != juce::AudioChannelSet::stereo())
+            return false;
+    }
+
+    const auto input = layouts.getMainInputChannelSet();
+    return input.isDisabled();
+}
+
+void RollaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
+{
+    juce::ScopedNoDenormals noDenormals;
+    const int n = buffer.getNumSamples();
+    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+        buffer.clear (ch, 0, n);
+
+    if (n <= 0)
+        return;
+
+    float bpm = 130.f;
+    bool hostPlaying = false;
+    double hostPpq = 0.0;
+    if (auto* head = getPlayHead())
+    {
+        if (auto pos = head->getPosition())
+        {
+            if (auto b = pos->getBpm())
+                bpm = (float) std::clamp (*b, 20.0, 400.0);
+            hostPlaying = pos->getIsPlaying();
+            if (auto ppq = pos->getPpqPosition())
+                hostPpq = *ppq;
+        }
+    }
+
+    const bool previewOn = preview.load (std::memory_order_relaxed);
+    Transport transport;
+    transport.sampleRate = preparedRate;
+    transport.bpm = bpm;
+    if (hostPlaying)
+    {
+        transport.playing = true;
+        transport.ppqStart = hostPpq;
+    }
+    else if (previewOn)
+    {
+        transport.playing = true;
+        transport.ppqStart = previewPpq;
+        previewPpq += (double) n * (double) bpm / 60.0;
+    }
+    else
+    {
+        transport.playing = false;
+        previewPpq = 0.0;
+    }
+
+    lastBpm.store (bpm);
+    playPpq.store (transport.playing ? transport.ppqStart : 0.0);
+    uiPlaying.store (transport.playing);
+
+    EngineParams params;
+    params.presets = &bank;
+    params.duck = raw (apvts, "duck") >= 0.5f;
+    params.drumsToMain = raw (apvts, "drumsToMain") >= 0.5f;
+    params.swing = raw (apvts, "swing");
+    params.outputDb = raw (apvts, "output");
+    params.drumsAccent = raw (apvts, "drumsAccent");
+    params.bars = barsFromIndex ((int) raw (apvts, "length"));
+    params.key = (int) raw (apvts, "key");
+    params.dialect = (int) raw (apvts, "dialect");
+    params.library = &library;
+    for (int i = 0; i < NumParts; ++i)
+    {
+        const auto id = juce::String (partId (i));
+        params.tone[i] = raw (apvts, (id + "Tone").toRawUTF8());
+        params.punch[i] = raw (apvts, (id + "Punch").toRawUTF8());
+        params.levelDb[i] = raw (apvts, (id + "Level").toRawUTF8());
+        params.mute[i] = raw (apvts, (id + "Mute").toRawUTF8()) >= 0.5f;
+        params.preset[i] = (int) raw (apvts, (id + "Preset").toRawUTF8());
+        params.samplePick[i] = samplePick[i].load (std::memory_order_relaxed);
+    }
+    for (int v = 0; v < NumDrumVoices; ++v)
+    {
+        const auto id = juce::String (v);
+        params.drumTuneSt[v] = raw (apvts, ("dTune" + id).toRawUTF8());
+        params.drumDecay[v] = raw (apvts, ("dDecay" + id).toRawUTF8());
+        params.drumLevelDb[v] = raw (apvts, ("dLevel" + id).toRawUTF8());
+        params.drumAccentOn[v] = raw (apvts, ("dAccent" + id).toRawUTF8()) >= 0.5f;
+        params.drumAccentAmt[v] = raw (apvts, ("dAccAmt" + id).toRawUTF8());
+    }
+
+    float* mainL = buffer.getWritePointer (0);
+    float* mainR = buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : nullptr;
+    float* drumL = nullptr;
+    float* drumR = nullptr;
+    if (auto* bus = getBus (false, 1); bus != nullptr && bus->isEnabled())
+    {
+        const int start = getChannelIndexInProcessBlockBuffer (false, 1, 0);
+        if (start >= 0 && start + 1 < buffer.getNumChannels())
+        {
+            drumL = buffer.getWritePointer (start);
+            drumR = buffer.getWritePointer (start + 1);
+        }
+    }
+
+    const Groove local = copyGroove();
+    engine.process (local, params, transport, mainL, mainR, drumL, drumR, n, midi, true);
+
+    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+    {
+        auto* data = buffer.getWritePointer (ch);
+        for (int i = 0; i < n; ++i)
+            data[i] = flush (data[i]);
+    }
+}
+
+void RollaProcessor::getStateInformation (juce::MemoryBlock& destData)
+{
+    juce::ValueTree tree = apvts.copyState();
+    const Groove local = copyGroove();
+    tree.setProperty ("grooveBytes", (int) sizeof (Groove), nullptr);
+    tree.setProperty ("groove", encodeBlock (&local, sizeof (Groove)), nullptr);
+    int editedMask = 0;
+    for (int i = 0; i < NumParts; ++i)
+        if (edited[i] != 0)
+            editedMask |= 1 << i;
+    tree.setProperty ("editedMask", editedMask, nullptr);
+    if (voxSampleName.isNotEmpty())
+        tree.setProperty ("voxSampleName", voxSampleName, nullptr);
+
+    const int editorW = editorWidth.load (std::memory_order_relaxed);
+    const int editorH = editorHeight.load (std::memory_order_relaxed);
+    if (editorW > 0 && editorH > 0)
+    {
+        tree.setProperty ("editorWidth", editorW, nullptr);
+        tree.setProperty ("editorHeight", editorH, nullptr);
+        for (int i = 0; i < NumParts; ++i)
+            tree.setProperty ("samplePick" + juce::String (i), samplePick[i].load(), nullptr);
+    }
+
+    {
+        std::lock_guard<std::mutex> lock (sampleMu);
+        for (int v = 0; v < NumDrumVoices; ++v)
+        {
+            const auto key = "sample" + juce::String (v);
+            const auto rateKey = "sampleRate" + juce::String (v);
+            if (! remembered[v].set || remembered[v].mono.empty())
+            {
+                tree.removeProperty (key, nullptr);
+                tree.removeProperty (rateKey, nullptr);
+                tree.removeProperty ("sampleName" + juce::String (v), nullptr);
+                continue;
+            }
+            tree.setProperty (key, encodeBlock (remembered[v].mono.data(), remembered[v].mono.size() * sizeof (float)), nullptr);
+            tree.setProperty (rateKey, remembered[v].rate, nullptr);
+            tree.setProperty ("sampleN" + juce::String (v), (int) remembered[v].mono.size(), nullptr);
+            tree.setProperty ("sampleName" + juce::String (v), remembered[v].name, nullptr);
+        }
+    }
+
+    if (auto xml = tree.createXml())
+        copyXmlToBinary (*xml, destData);
+}
+
+void RollaProcessor::setStateInformation (const void* data, int sizeInBytes)
+{
+    std::unique_ptr<juce::XmlElement> xml (getXmlFromBinary (data, sizeInBytes));
+    if (xml == nullptr)
+        return;
+    auto tree = juce::ValueTree::fromXml (*xml);
+    if (! tree.isValid())
+        return;
+
+    {
+        std::lock_guard<std::mutex> lock (async->mu);
+        async->epoch.fetch_add (1);
+        restoring.store (true);
+    }
+
+    apvts.replaceState (tree);
+
+    if ((int) tree.getProperty ("grooveBytes") == (int) sizeof (Groove))
+    {
+        Groove restored {};
+        if (decodeBlock (tree.getProperty ("groove").toString(), &restored, sizeof (Groove)))
+            publish (restored);
+    }
+
+    {
+        std::lock_guard<std::mutex> lock (sampleMu);
+        for (int v = 0; v < NumDrumVoices; ++v)
+        {
+            const int n = (int) tree.getProperty ("sampleN" + juce::String (v));
+            const double rate = (double) tree.getProperty ("sampleRate" + juce::String (v));
+            remembered[v] = {};
+            if (n > 8 && n < 2000000)
+            {
+                remembered[v].mono.resize ((size_t) n);
+                if (decodeBlock (tree.getProperty ("sample" + juce::String (v)).toString(),
+                                 remembered[v].mono.data(),
+                                 (size_t) n * sizeof (float)))
+                {
+                    remembered[v].rate = rate > 1000.0 ? rate : 48000.0;
+                    remembered[v].set = true;
+                    remembered[v].name = tree.getProperty ("sampleName" + juce::String (v)).toString();
+                }
+                else
+                    remembered[v] = {};
+            }
+        }
+    }
+
+    if (preparedRate > 1000.0)
+        applyRememberedSamples();
+
+    const int editedMask = (int) tree.getProperty ("editedMask");
+    for (int i = 0; i < NumParts; ++i)
+        edited[i] = (editedMask & (1 << i)) != 0 ? 1 : 0;
+    voxSampleName = tree.getProperty ("voxSampleName").toString();
+
+    if (tree.hasProperty ("editorWidth") && tree.hasProperty ("editorHeight"))
+    {
+        const int w = (int) tree.getProperty ("editorWidth");
+        const int h = (int) tree.getProperty ("editorHeight");
+        if (w >= 768 && h >= 480 && w <= 2048 && h <= 1280)
+        {
+            editorWidth.store (w, std::memory_order_relaxed);
+            editorHeight.store (h, std::memory_order_relaxed);
+            projectEditorSerial.fetch_add (1, std::memory_order_relaxed);
+        }
+    }
+
+    for (int i = 0; i < NumParts; ++i)
+        if (tree.hasProperty ("samplePick" + juce::String (i)))
+            samplePick[i].store ((int) tree.getProperty ("samplePick" + juce::String (i)), std::memory_order_relaxed);
+
+    restoring.store (false);
+}
+
+bool RollaProcessor::laneSampleMissing (int part) const
+{
+    if (part < 0 || part >= NumParts)
+        return false;
+    const int preset = std::clamp ((int) raw (apvts, (juce::String (partId (part)) + "Preset").toRawUTF8()), 0, PresetBank::kPer - 1);
+    const auto& spec = sampleSpecFor (bank, part, preset);
+    if (spec.mode == SampleMode::Synth)
+        return false;
+
+    auto absent = [&] (const char* file)
+    {
+        return file == nullptr || file[0] == 0 || library.missing (file);
+    };
+
+    if (part == Drums)
+    {
+        bool named = false;
+        for (int v = 0; v < NumDrumVoices; ++v)
+        {
+            if (spec.voiceFile[v][0] == 0)
+                continue;
+            named = true;
+            if (library.missing (spec.voiceFile[v]))
+                return true;
+        }
+        if (named)
+            return false;
+    }
+
+    const int pick = samplePick[part].load (std::memory_order_relaxed);
+    if (spec.zoneCount > 0)
+    {
+        for (int i = 0; i < spec.zoneCount; ++i)
+            if (absent (spec.zones[i].file))
+                return true;
+        return false;
+    }
+    const auto choice = chooseSample (spec, spec.root, pick, 0);
+    return absent (choice.file);
+}
+
+void RollaProcessor::setSamplesRoot (const juce::File& folder)
+{
+    if (folder == juce::File())
+        return;
+    library.setRoot (folder);
+    library.watch (bank);
+    juce::PropertiesFile::Options options;
+    options.applicationName = "ROLLA";
+    options.filenameSuffix = "settings";
+    options.osxLibrarySubFolder = "Application Support";
+    options.folderName = "ROLLA";
+    options.storageFormat = juce::PropertiesFile::storeAsXML;
+    juce::PropertiesFile props (options);
+    props.setValue ("samplesRoot", folder.getFullPathName());
+    props.saveIfNeeded();
+}
+
+juce::File RollaProcessor::samplesRoot() const
+{
+    return library.root();
+}
+
+void RollaProcessor::setEditorSize (int width, int height) noexcept
+{
+    editorWidth.store (width, std::memory_order_relaxed);
+    editorHeight.store (height, std::memory_order_relaxed);
+}
+
+juce::AudioProcessorEditor* RollaProcessor::createEditor()
+{
+    return new RollaEditor (*this);
+}
+
+void RollaProcessor::markEdited (int part)
+{
+    if (part < 0 || part >= NumParts || restoring.load())
+        return;
+    edited[part] = 1;
+    if (auto* p = apvts.getParameter (juce::String (partId (part)) + "Keep"))
+    {
+        if (p->getValue() >= 0.5f)
+            return;
+        undo.beginNewTransaction();
+        p->beginChangeGesture();
+        p->setValueNotifyingHost (1.f);
+        p->endChangeGesture();
+    }
+}
+
+bool RollaProcessor::laneEdited (int part) const noexcept
+{
+    return part >= 0 && part < NumParts && edited[part] != 0;
+}
+
+void RollaProcessor::clearEdited (int part) noexcept
+{
+    if (part >= 0 && part < NumParts)
+        edited[part] = 0;
+}
+
+bool RollaProcessor::loadVoxFile (const juce::File& file, juce::String& error)
+{
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
+    if (reader == nullptr)
+    {
+        error = "Could not read " + file.getFileName();
+        return false;
+    }
+    voxSampleName = file.getFileName();
+    markEdited (Vox);
+    error = voxSampleName;
+    return true;
+}
+
+void RollaProcessor::clearVoxSample()
+{
+    voxSampleName.clear();
+}
+
+juce::String RollaProcessor::exportMidiTo (const juce::File& dir)
+{
+    auto result = dir.createDirectory();
+    if (result.failed())
+        return "Could not create " + dir.getFullPathName();
+
+    std::vector<std::string> written;
+    std::string error;
+    const Groove local = copyGroove();
+    const bool ok = MidiExport::writeAll (dir.getFullPathName().toStdString(),
+                                          local,
+                                          (int) raw (apvts, "key"),
+                                          raw (apvts, "swing"),
+                                          (double) lastBpm.load(),
+                                          written,
+                                          error);
+    if (! ok)
+        return juce::String (error);
+    return dir.getFullPathName();
+}
+
+void RollaProcessor::rememberSample (int voice, const float* mono, int n, double rate, const juce::String& name)
+{
+    if (voice < 0 || voice >= NumDrumVoices)
+        return;
+    std::lock_guard<std::mutex> lock (sampleMu);
+    remembered[voice].mono.assign (mono, mono + n);
+    remembered[voice].rate = rate;
+    remembered[voice].set = true;
+    remembered[voice].name = name;
+}
+
+void RollaProcessor::applyRememberedSamples()
+{
+    std::lock_guard<std::mutex> lock (sampleMu);
+    for (int v = 0; v < NumDrumVoices; ++v)
+    {
+        if (remembered[v].set && ! remembered[v].mono.empty())
+            engine.loadDrumSample (v, remembered[v].mono.data(), (int) remembered[v].mono.size(), remembered[v].rate);
+        else
+            engine.clearDrumSample (v);
+    }
+}
+
+bool RollaProcessor::loadDrumFile (int voice, const juce::File& file, juce::String& error)
+{
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
+    if (reader == nullptr)
+    {
+        error = "Could not read " + file.getFileName();
+        return false;
+    }
+    const double rate = reader->sampleRate;
+    const auto maxSamples = (juce::int64) std::min (reader->lengthInSamples, (juce::int64) (rate * 2.0));
+    if (maxSamples < 16)
+    {
+        error = "Sample is too short.";
+        return false;
+    }
+    juce::AudioBuffer<float> buf ((int) reader->numChannels, (int) maxSamples);
+    reader->read (&buf, 0, (int) maxSamples, 0, true, true);
+    std::vector<float> mono ((size_t) maxSamples, 0.f);
+    const float inv = 1.f / (float) std::max (1, buf.getNumChannels());
+    for (int i = 0; i < (int) maxSamples; ++i)
+    {
+        float s = 0.f;
+        for (int ch = 0; ch < buf.getNumChannels(); ++ch)
+            s += buf.getSample (ch, i);
+        mono[(size_t) i] = s * inv;
+    }
+    rememberSample (voice, mono.data(), (int) mono.size(), rate, file.getFileName());
+    if (preparedRate > 1000.0)
+        engine.loadDrumSample (voice, mono.data(), (int) mono.size(), rate);
+    error = file.getFileName();
+    return true;
+}
+
+void RollaProcessor::clearDrumVoice (int voice)
+{
+    if (voice < 0 || voice >= NumDrumVoices)
+        return;
+    {
+        std::lock_guard<std::mutex> lock (sampleMu);
+        remembered[voice] = {};
+    }
+    engine.clearDrumSample (voice);
+}
+
+bool RollaProcessor::drumVoiceLoaded (int voice) const noexcept
+{
+    return engine.hasDrumSample (voice);
+}
+
+juce::String RollaProcessor::getDrumSampleName (int voice) const
+{
+    if (voice < 0 || voice >= NumDrumVoices)
+        return {};
+    std::lock_guard<std::mutex> lock (sampleMu);
+    return remembered[voice].name;
+}
+
+juce::String RollaProcessor::exportMidiToDocuments()
+{
+    return exportMidiTo (juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("ROLLA"));
+}
+
+juce::StringArray RollaProcessor::writeTempMidi()
+{
+    auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("ROLLA");
+    dir.createDirectory();
+    std::vector<std::string> written;
+    std::string error;
+    const Groove local = copyGroove();
+    MidiExport::writeAll (dir.getFullPathName().toStdString(),
+                          local,
+                          (int) raw (apvts, "key"),
+                          raw (apvts, "swing"),
+                          (double) lastBpm.load(),
+                          written,
+                          error);
+    juce::StringArray files;
+    for (const auto& path : written)
+        files.add (juce::String (path));
+    return files;
+}
+
+} // namespace rolla
+
+juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
+{
+    return new rolla::RollaProcessor();
+}

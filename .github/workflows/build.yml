@@ -1,0 +1,184 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: rolla-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: macOS universal VST3 + AU
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G "Unix Makefiles" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+
+      - name: Build VST3 and AU
+        run: cmake --build build --config Release --target ROLLA_VST3 ROLLA_AU -j 3
+
+      - name: Ad-hoc codesign
+        run: |
+          set -euo pipefail
+          VST3=$(find build -path '*ROLLA.vst3' -type d -print -quit)
+          AU=$(find build -path '*ROLLA.component' -type d -print -quit)
+          echo "VST3=$VST3"
+          echo "AU=$AU"
+          test -n "$VST3" && test -n "$AU"
+          BIN="$VST3/Contents/MacOS/ROLLA"
+          test -f "$BIN"
+          lipo -info "$BIN"
+          lipo -info "$BIN" | grep -q arm64
+          lipo -info "$BIN" | grep -q x86_64
+          AUBIN="$AU/Contents/MacOS/ROLLA"
+          test -f "$AUBIN"
+          lipo -info "$AUBIN" | grep -q arm64
+          lipo -info "$AUBIN" | grep -q x86_64
+          codesign --force --deep --sign - "$VST3"
+          codesign --force --deep --sign - "$AU"
+          codesign --verify --deep --strict --verbose=2 "$VST3"
+          codesign --verify --deep --strict --verbose=2 "$AU"
+          echo "$VST3" > /tmp/rolla_vst3_path
+          echo "$AU" > /tmp/rolla_au_path
+
+      - name: pluginval strictness 5
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/pluginval.zip \
+            https://github.com/Tracktion/pluginval/releases/download/v1.0.4/pluginval_macOS.zip
+          rm -rf /tmp/pluginval
+          unzip -q -o /tmp/pluginval.zip -d /tmp/pluginval
+          xattr -cr /tmp/pluginval || true
+          BIN=$(find /tmp/pluginval -type f -name pluginval -print -quit)
+          test -n "$BIN"
+          chmod +x "$BIN"
+          echo "pluginval=$BIN"
+          file "$BIN" || true
+          VST3=$(cat /tmp/rolla_vst3_path)
+          "$BIN" --strictness-level 5 --timeout-ms 300000 --validate-in-process --verbose "$VST3"
+
+      - name: auval
+        run: |
+          set -euo pipefail
+          AU=$(cat /tmp/rolla_au_path)
+          DEST="$HOME/Library/Audio/Plug-Ins/Components"
+          mkdir -p "$DEST"
+          rm -rf "$DEST/ROLLA.component"
+          cp -R "$AU" "$DEST/ROLLA.component"
+          xattr -cr "$DEST/ROLLA.component" || true
+          codesign --force --deep --sign - "$DEST/ROLLA.component"
+          rm -rf "$HOME/Library/Caches/AudioUnitCache" \
+                 "$HOME/Library/Caches/com.apple.audiounits.cache" || true
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          killall -9 audio-component-registrar 2>/dev/null || true
+          sleep 2
+          if ! auval -v aumu Roll Rola; then
+            echo "---- auval retry ----"
+            killall -9 AudioComponentRegistrar 2>/dev/null || true
+            killall -9 audio-component-registrar 2>/dev/null || true
+            sleep 2
+            if ! auval -v aumu Roll Rola; then
+              echo "---- auval -a ----"
+              auval -a || true
+              exit 1
+            fi
+          fi
+
+      - name: Zip universal plugins
+        run: |
+          set -euo pipefail
+          VST3=$(cat /tmp/rolla_vst3_path)
+          AU=$(cat /tmp/rolla_au_path)
+          STAGE=$(mktemp -d)
+          cp -R "$VST3" "$STAGE/ROLLA.vst3"
+          cp -R "$AU" "$STAGE/ROLLA.component"
+          (cd "$STAGE" && zip -r -y "$GITHUB_WORKSPACE/ROLLA-macOS-universal.zip" ROLLA.vst3 ROLLA.component)
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ROLLA-macOS-universal
+          path: ROLLA-macOS-universal.zip
+          if-no-files-found: error
+
+  windows:
+    name: Windows x64 VST3
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+
+      - name: Build VST3
+        run: cmake --build build --config Release --target ROLLA_VST3 -- /m
+
+      - name: Zip
+        shell: pwsh
+        run: |
+          $vst = Get-ChildItem -Recurse -Directory -Filter ROLLA.vst3 build | Select-Object -First 1
+          if (-not $vst) { throw "ROLLA.vst3 not found" }
+          tar -a -cf ROLLA-Windows-x64.zip -C $vst.DirectoryName ROLLA.vst3
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ROLLA-Windows-x64
+          path: ROLLA-Windows-x64.zip
+          if-no-files-found: error
+
+  linux:
+    name: Linux VST3 + renders
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake ninja-build pkg-config \
+            libasound2-dev libfreetype6-dev libx11-dev libxinerama-dev \
+            libxrandr-dev libxcursor-dev libxcomposite-dev libxext-dev \
+            libglu1-mesa-dev libgtk-3-dev xvfb
+
+      - name: Configure and build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --target ROLLA_VST3 rolla-render
+
+      - name: Offline renders
+        run: ./build/rolla-render "$GITHUB_WORKSPACE/renders"
+
+      - name: pluginval strictness 5
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/pluginval.zip \
+            https://github.com/Tracktion/pluginval/releases/download/v1.0.4/pluginval_Linux.zip
+          unzip -q -o /tmp/pluginval.zip -d /tmp/pluginval
+          BIN=$(find /tmp/pluginval -type f -name pluginval -print -quit)
+          test -n "$BIN"
+          chmod +x "$BIN"
+          VST3=$(find build -path '*ROLLA.vst3' -type d -print -quit)
+          test -n "$VST3"
+          xvfb-run -a "$BIN" --strictness-level 5 --timeout-ms 300000 --validate-in-process --verbose "$VST3"
+
+      - name: Upload renders
+        uses: actions/upload-artifact@v4
+        with:
+          name: ROLLA-linux-renders
+          path: renders/*.wav
+          if-no-files-found: error

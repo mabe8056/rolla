@@ -1,0 +1,10 @@
+Instrument Sans
+Copyright 2022 The Instrument Sans Project Authors (https://github.com/Instrument/instrument-sans)
+Licensed under the SIL Open Font License, Version 1.1.
+
+Geist Mono
+Copyright 2024 Vercel, Inc.
+Licensed under the SIL Open Font License, Version 1.1.
+
+The full OFL 1.1 text ships beside the earlier IBM Plex notice in resources/fonts/OFL.txt.
+These files are latin subsets embedded in the plugin via BinaryData.
