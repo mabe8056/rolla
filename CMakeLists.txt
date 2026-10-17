@@ -54,6 +54,8 @@ target_sources(ROLLA
         src/Engine/Engine.cpp
         src/Engine/Sampler.cpp
         src/Engine/SampleLibrary.cpp
+        src/Sampler/SamplePrep.cpp
+        src/Sampler/UserSlots.cpp
         src/Generator/Generator.cpp
         src/Generator/Presets.cpp
         src/Generator/MidiFile.cpp
@@ -144,6 +146,8 @@ add_executable(rolla-ui-shot
     src/Engine/Engine.cpp
     src/Engine/Sampler.cpp
     src/Engine/SampleLibrary.cpp
+    src/Sampler/SamplePrep.cpp
+    src/Sampler/UserSlots.cpp
     src/Generator/Generator.cpp
     src/Generator/Presets.cpp
     src/Generator/MidiFile.cpp
@@ -160,6 +164,36 @@ target_compile_definitions(rolla-ui-shot
 target_link_libraries(rolla-ui-shot
     PRIVATE
         RollaData
+        juce::juce_audio_utils
+        juce::juce_dsp
+        juce::juce_audio_formats
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags
+)
+
+add_executable(rolla-sampler-test
+    tests/sampler/sampler_test.cpp
+    src/Engine/Engine.cpp
+    src/Engine/Sampler.cpp
+    src/Engine/SampleLibrary.cpp
+    src/Sampler/SamplePrep.cpp
+    src/Sampler/UserSlots.cpp
+    src/Generator/Generator.cpp
+    src/Generator/Presets.cpp
+)
+
+target_include_directories(rolla-sampler-test PRIVATE src)
+
+target_compile_definitions(rolla-sampler-test
+    PRIVATE
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_DISPLAY_SPLASH_SCREEN=0
+        JUCE_REPORT_APP_USAGE=0
+)
+
+target_link_libraries(rolla-sampler-test
+    PRIVATE
         juce::juce_audio_utils
         juce::juce_dsp
         juce::juce_audio_formats

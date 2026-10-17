@@ -1,5 +1,7 @@
 #include "Sampler.h"
 #include "Engine.h"
+#include "../Sampler/PlayDecision.h"
+#include "../Sampler/UserSlots.h"
 
 #include <algorithm>
 #include <cmath>
@@ -306,11 +308,127 @@ Amp ampFor (const PresetBank& bank, int part, int preset)
 
 } // namespace
 
+bool Sampler::playUserSlot (int part, int drumVoice, int midiNote, int velocity, float end16,
+                             const PresetBank& bank, const EngineParams& params,
+                             Take& take, float& drumKeep) noexcept
+{
+    if (params.userSlots == nullptr || velocity <= 0)
+        return false;
+    const int slotIndex = drumVoice >= 0 ? userSlotForDrum (drumVoice) : userSlotForPart (part);
+    if (slotIndex < 0)
+        return false;
+    const auto& pod = params.userSlots->slots[slotIndex];
+    if (pod.mode == 0)
+        return false;
+
+    SlotQuery slot;
+    slot.mode = pod.mode;
+    slot.ready = pod.status == 2 && pod.audio != nullptr && pod.audio->frames >= 8;
+    slot.missing = pod.status == 3 || pod.file[0] == 0;
+    slot.loading = pod.status == 1 && ! slot.missing;
+    slot.file = pod.file;
+    slot.root = pod.root;
+    slot.cents = pod.cents;
+    slot.start = pod.start;
+    slot.reverse = pod.reverse != 0;
+    slot.loop = pod.loopOn != 0;
+    slot.loopStart = pod.loopStart;
+    slot.loopEnd = pod.loopEnd;
+    slot.loopXfade = pod.loopXfade;
+    slot.layerMix = pod.layerMix;
+    slot.gainDb = pod.gainDb;
+
+    const PlayDecision decision = resolvePlay (PresetQuery {}, &slot);
+    if (! decision.fromSlot && ! decision.suppressPreset)
+        return false;
+    if (! decision.fromSlot)
+    {
+        take = {};
+        drumKeep = 1.f;
+        return true;
+    }
+
+    const int voicePart = drumVoice >= 0 ? Drums : part;
+    Voice* voice = allocate (voicePart);
+    if (voice == nullptr)
+    {
+        take.kind = decision.kind;
+        take.synthGain = decision.synthGain;
+        drumKeep = decision.synthGain;
+        return true;
+    }
+
+    const auto amp = ampFor (bank, voicePart, presetOf (params, voicePart));
+    const float srF = (float) sr;
+    const double semis = drumVoice >= 0
+                             ? (double) params.drumTuneSt[drumVoice] + (double) decision.cents / 100.0
+                             : (double) (midiNote - decision.root) + (double) decision.cents / 100.0;
+    const double ratioMin = drumVoice >= 0 ? 0.25 : 0.05;
+    const double ratioMax = drumVoice >= 0 ? 4.0 : 16.0;
+    Voice fresh;
+    fresh.on = true;
+    fresh.part = voicePart;
+    fresh.midiNote = midiNote;
+    fresh.age = serial++;
+    fresh.audio = pod.audio;
+    fresh.reverse = decision.reverse;
+    fresh.ratio = std::clamp (std::pow (2.0, semis / 12.0) * (pod.audio->rate / sr), ratioMin, ratioMax);
+    fresh.end16 = end16;
+    fresh.fade = 0.f;
+    fresh.fadeInc = 1.f / (drumVoice >= 0 ? 32.f : 64.f);
+    fresh.stopping = false;
+    float trim = amp.trim * std::clamp (velocity / 127.f, 0.05f, 1.f);
+    if (drumVoice >= 0)
+        trim *= ampDb (params.drumLevelDb[drumVoice]);
+    fresh.gain = trim * decision.sampleMix * ampDb (decision.gainDb);
+    fresh.pan = (part == Stab || part == Pad) ? 0.15f : 0.f;
+    fresh.cut = amp.cut;
+    fresh.res = amp.res;
+    fresh.envOct = drumVoice >= 0 ? 0.f : amp.envOct;
+    fresh.fEnv = 1.f;
+    fresh.fCoef = expDecay (std::max (4.f, drumVoice >= 0 ? 30.f : amp.tau), srF);
+    fresh.hpfHz = drumVoice >= 0 ? 30.f : amp.hpf;
+    fresh.hpState = 0.f;
+    fresh.ladder.reset();
+    if (drumVoice >= 0)
+    {
+        const float decay = 80.f * std::pow (2.f, (params.drumDecay[drumVoice] - 0.5f) * 2.f);
+        fresh.env.start (0.5f, decay, 0.f, 12.f, srF);
+    }
+    else
+        fresh.env.start (amp.a, amp.d, amp.s, amp.r, srF);
+
+    const double startFrame = std::min (std::clamp ((double) decision.startSec, 0.0, 60.0) * pod.audio->rate,
+                                         (double) pod.audio->frames - 1.0);
+    fresh.pos = startFrame;
+    fresh.loop = decision.loop;
+    SampleLoop loop;
+    loop.on = decision.loop;
+    loop.start = decision.loopStart;
+    loop.end = decision.loopEnd;
+    loop.xfade = decision.loopXfade;
+    const auto region = makeLoopRegion (loop, pod.audio->rate, pod.audio->frames, startFrame);
+    fresh.loopA = region.a;
+    fresh.loopB = region.b;
+    fresh.xfade = region.xfade;
+    *voice = fresh;
+
+    take.kind = decision.kind;
+    take.synthGain = decision.synthGain;
+    drumKeep = decision.synthGain;
+    return true;
+}
+
 Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
                              const PresetBank& bank, const EngineParams& params) noexcept
 {
     Take result;
-    if (part < 0 || part >= Drums || params.library == nullptr)
+    if (part < 0 || part >= Drums)
+        return result;
+    float drumKeep = 1.f;
+    if (playUserSlot (part, -1, midiNote, velocity, end16, bank, params, result, drumKeep))
+        return result;
+    if (params.library == nullptr)
         return result;
     const auto& spec = sampleSpecFor (bank, part, presetOf (params, part));
     if (spec.mode == SampleMode::Synth)
@@ -364,9 +482,10 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     }
     fresh.pos = startFrame;
     fresh.loop = spec.loop.on && part != Hits && part != Vox;
-    fresh.loopA = spec.loop.start > 0.f ? spec.loop.start * audio->rate : startFrame;
-    fresh.loopB = spec.loop.end > spec.loop.start ? spec.loop.end * audio->rate : (double) audio->frames - 1.0;
-    fresh.xfade = std::max (0.f, spec.loop.xfade) * (float) audio->rate;
+    const auto region = makeLoopRegion (spec.loop, audio->rate, audio->frames, startFrame);
+    fresh.loopA = region.a;
+    fresh.loopB = region.b;
+    fresh.xfade = region.xfade;
     if (fresh.loopB > audio->frames - 1)
         fresh.loopB = (double) audio->frames - 1.0;
 
@@ -386,7 +505,13 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
 
 float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const EngineParams& params) noexcept
 {
-    if (voice < 0 || voice >= NumDrumVoices || params.library == nullptr || velocity <= 0)
+    if (voice < 0 || voice >= NumDrumVoices || velocity <= 0)
+        return 1.f;
+    Take taken;
+    float keep = 1.f;
+    if (playUserSlot (Drums, voice, 60, velocity, 1.0e9f, bank, params, taken, keep))
+        return keep;
+    if (params.library == nullptr)
         return 1.f;
     const auto& spec = sampleSpecFor (bank, Drums, presetOf (params, Drums));
     if (spec.mode == SampleMode::Synth)
@@ -438,9 +563,10 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
     fresh.env.start (0.5f, decay, 0.f, 12.f, (float) sr);
     fresh.pos = std::clamp ((double) spec.start, 0.0, 4.0) * audio->rate;
     fresh.loop = spec.loop.on;
-    fresh.loopA = spec.loop.start * audio->rate;
-    fresh.loopB = spec.loop.end > spec.loop.start ? spec.loop.end * audio->rate : (double) audio->frames - 1.0;
-    fresh.xfade = spec.loop.xfade * (float) audio->rate;
+    const auto region = makeLoopRegion (spec.loop, audio->rate, audio->frames, fresh.pos);
+    fresh.loopA = region.a;
+    fresh.loopB = region.b;
+    fresh.xfade = region.xfade;
     *slot = fresh;
 
     if (spec.mode == SampleMode::Sample)

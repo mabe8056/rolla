@@ -185,8 +185,10 @@ RollaProcessor::RollaProcessor()
     options.storageFormat = juce::PropertiesFile::storeAsXML;
     juce::PropertiesFile props (options);
     const auto saved = props.getValue ("samplesRoot");
-    library.setRoot (saved.isNotEmpty() ? juce::File (saved) : SampleLibrary::defaultRoot());
+    const auto samples = saved.isNotEmpty() ? juce::File (saved) : SampleLibrary::defaultRoot();
+    library.setRoot (samples);
     library.watch (bank);
+    slots.setRoot (samples);
 }
 
 RollaProcessor::~RollaProcessor()
@@ -459,6 +461,7 @@ void RollaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     params.key = (int) raw (apvts, "key");
     params.dialect = (int) raw (apvts, "dialect");
     params.library = &library;
+    params.userSlots = slots.published();
     for (int i = 0; i < NumParts; ++i)
     {
         const auto id = juce::String (partId (i));
@@ -548,6 +551,8 @@ void RollaProcessor::getStateInformation (juce::MemoryBlock& destData)
         }
     }
 
+    slots.writeState (tree);
+
     if (auto xml = tree.createXml())
         copyXmlToBinary (*xml, destData);
 }
@@ -624,6 +629,7 @@ void RollaProcessor::setStateInformation (const void* data, int sizeInBytes)
         if (tree.hasProperty ("samplePick" + juce::String (i)))
             samplePick[i].store ((int) tree.getProperty ("samplePick" + juce::String (i)), std::memory_order_relaxed);
 
+    slots.readState (tree);
     restoring.store (false);
 }
 
@@ -631,6 +637,15 @@ bool RollaProcessor::laneSampleMissing (int part) const
 {
     if (part < 0 || part >= NumParts)
         return false;
+    if (part == Drums)
+    {
+        for (int slot = SlotKick; slot <= SlotPerc; ++slot)
+            if (slots.warning (slot))
+                return true;
+    }
+    else if (slots.mode (part) != 0)
+        return slots.warning (part);
+
     const int preset = std::clamp ((int) raw (apvts, (juce::String (partId (part)) + "Preset").toRawUTF8()), 0, PresetBank::kPer - 1);
     const auto& spec = sampleSpecFor (bank, part, preset);
     if (spec.mode == SampleMode::Synth)
@@ -646,6 +661,9 @@ bool RollaProcessor::laneSampleMissing (int part) const
         bool named = false;
         for (int v = 0; v < NumDrumVoices; ++v)
         {
+            const int slot = userSlotForDrum (v);
+            if (slot >= 0 && slots.mode (slot) != 0)
+                continue;
             if (spec.voiceFile[v][0] == 0)
                 continue;
             named = true;
@@ -674,6 +692,7 @@ void RollaProcessor::setSamplesRoot (const juce::File& folder)
         return;
     library.setRoot (folder);
     library.watch (bank);
+    slots.setRoot (folder);
     juce::PropertiesFile::Options options;
     options.applicationName = "ROLLA";
     options.filenameSuffix = "settings";
@@ -747,6 +766,51 @@ bool RollaProcessor::loadVoxFile (const juce::File& file, juce::String& error)
 void RollaProcessor::clearVoxSample()
 {
     voxSampleName.clear();
+}
+
+bool RollaProcessor::loadUserSlot (int slot, const juce::File& file, juce::String& error)
+{
+    return slots.assign (slot, file, error);
+}
+
+void RollaProcessor::clearUserSlot (int slot)
+{
+    slots.clear (slot);
+}
+
+void RollaProcessor::setUserSlotMode (int slot, int mode)
+{
+    slots.setMode (slot, mode);
+}
+
+int RollaProcessor::userSlotMode (int slot) const noexcept
+{
+    return slots.mode (slot);
+}
+
+bool RollaProcessor::userSlotWarning (int slot) const noexcept
+{
+    return slots.warning (slot);
+}
+
+juce::String RollaProcessor::userSlotFile (int slot) const
+{
+    return slots.file (slot);
+}
+
+int RollaProcessor::userSlotRoot (int slot) const
+{
+    return slots.rootNote (slot);
+}
+
+void RollaProcessor::setUserSlotRoot (int slot, int midiNote, float cents)
+{
+    slots.setRootNote (slot, midiNote, cents);
+}
+
+juce::String RollaProcessor::userSlotError (int slot) const
+{
+    return slots.lastError (slot);
 }
 
 juce::String RollaProcessor::exportMidiTo (const juce::File& dir)
