@@ -836,6 +836,81 @@ struct IconButton : QuietButton
     }
 };
 
+void dragFilesOut (Component* source, const StringArray& files)
+{
+    if (source == nullptr || files.isEmpty())
+        return;
+    if (auto* dnd = DragAndDropContainer::findParentDragContainerFor (source))
+        dnd->performExternalDragDropOfFiles (files, false, source);
+}
+
+// One lane. Drag writes a MIDI clip. Alt, Ctrl, or Command (or the click
+// toggle) writes 8 bars of that lane as WAV instead.
+struct LaneDrag : Component
+{
+    RollaProcessor* proc = nullptr;
+    int part = 0;
+    bool audioMode = false;
+    bool armed = false;
+
+    LaneDrag()
+    {
+        setMouseCursor (MouseCursor::DraggingHandCursor);
+        setRepaintsOnMouseActivity (true);
+    }
+
+    void paint (Graphics& g) override
+    {
+        auto b = getLocalBounds().toFloat();
+        const bool hot = isMouseOver() || isMouseButtonDown();
+        g.setColour (audioMode ? col (kLine2) : (hot ? col (kLine) : Colours::transparentBlack));
+        g.fillEllipse (b.reduced (1.f));
+        g.setColour (hot || audioMode ? col (kInk2) : col (kLine2));
+        g.drawEllipse (b.reduced (1.5f), 1.f);
+
+        if (audioMode)
+        {
+            g.setColour (col (kInk));
+            g.setFont (Theme::font (Theme::Role::micro));
+            g.drawText ("WAV", getLocalBounds(), Justification::centred, false);
+        }
+        else
+        {
+            g.setColour (hot ? col (kInk) : col (kInk2));
+            Path arrow;
+            const float x = b.getCentreX();
+            const float y = b.getCentreY();
+            arrow.startNewSubPath (x, y - 6.f);
+            arrow.lineTo (x, y + 5.f);
+            arrow.startNewSubPath (x - 4.f, y + 1.f);
+            arrow.lineTo (x, y + 5.f);
+            arrow.lineTo (x + 4.f, y + 1.f);
+            g.strokePath (arrow, PathStrokeType (1.5f, PathStrokeType::curved, PathStrokeType::rounded));
+        }
+        focusRing (g, *this);
+    }
+
+    void mouseDown (const MouseEvent&) override { armed = false; }
+
+    void mouseDrag (const MouseEvent& e) override
+    {
+        if (proc == nullptr || armed || e.getDistanceFromDragStart() <= 4.f)
+            return;
+        armed = true;
+        const bool audio = audioMode || e.mods.isAltDown() || e.mods.isCommandDown() || e.mods.isCtrlDown();
+        dragFilesOut (this, audio ? proc->writeLaneAudio (part) : proc->writeLaneMidi (part));
+    }
+
+    void mouseUp (const MouseEvent& e) override
+    {
+        if (! armed && e.getDistanceFromDragStart() <= 4.f && e.mouseWasClicked())
+        {
+            audioMode = ! audioMode;
+            repaint();
+        }
+    }
+};
+
 struct LaneRow : Component, FileDragAndDropTarget
 {
     RollaProcessor* proc = nullptr;
@@ -851,6 +926,7 @@ struct LaneRow : Component, FileDragAndDropTarget
     IconButton mute { IconButton::mute, "Mute" };
     IconButton shuffle { IconButton::dice, "Shuffle" };
     IconButton keep { IconButton::lock, "Keep" };
+    LaneDrag drag;
     PatternStrip strip;
     std::unique_ptr<AudioProcessorValueTreeState::ButtonAttachment> muteA, keepA;
 
@@ -859,6 +935,7 @@ struct LaneRow : Component, FileDragAndDropTarget
         setWantsKeyboardFocus (true);
         setMouseCursor (MouseCursor::PointingHandCursor);
         addAndMakeVisible (strip);
+        addAndMakeVisible (drag);
         addAndMakeVisible (mute);
         addAndMakeVisible (shuffle);
         addAndMakeVisible (keep);
@@ -881,6 +958,9 @@ struct LaneRow : Component, FileDragAndDropTarget
         shuffle.proc = &processor;
         shuffle.part = index;
         strip.part = index;
+        drag.proc = &processor;
+        drag.part = index;
+        bindHelp (drag, "Drag this lane. MIDI clip, or WAV (click the handle, or hold Alt) for 8 bars.");
         const auto id = String (partId (part));
         muteA = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (processor.apvts, id + "Mute", mute);
         keepA = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (processor.apvts, id + "Keep", keep);
@@ -1059,12 +1139,14 @@ struct LaneRow : Component, FileDragAndDropTarget
     void resized() override
     {
         // 40px row → 24px strip. 80px row → 48px strip. Both stay centred.
+        // The strip stops short of the drag handle, which sits just before mute.
         const float rh = (float) getHeight();
         const float stripH = 24.f + (rh - 40.f) * (24.f / 40.f);
         const int sh = jmax (1, roundToInt (stripH));
         const int sy = jmax (0, roundToInt ((rh - (float) sh) * 0.5f));
-        strip.setBounds (112, sy, 384, sh);
+        strip.setBounds (112, sy, 352, sh);
         const int yIcon = jmax (0, roundToInt ((rh - 32.f) * 0.5f));
+        drag.setBounds (476, yIcon, 32, 32);
         mute.setBounds (520, yIcon, 32, 32);
         shuffle.setBounds (560, yIcon, 32, 32);
         keep.setBounds (600, yIcon, 32, 32);
@@ -1923,6 +2005,7 @@ struct DragTile : Component
     QuietButton exportBtn { "EXPORT" };
     String caption { utf8 ("7 tracks · 8 bars") };
     std::unique_ptr<FileChooser> chooser;
+    bool audioMode = false;
     bool armed = false;
 
     DragTile()
@@ -1958,7 +2041,7 @@ struct DragTile : Component
 
         g.setColour (col (kInk));
         g.setFont (Theme::font (Theme::Role::tile));
-        g.drawText ("DRAG MIDI", 48, 28, 160, 18, Justification::centredLeft, false);
+        g.drawText (audioMode ? "DRAG STEMS" : "DRAG MIDI", 48, 28, 180, 18, Justification::centredLeft, false);
         g.setColour (col (kInk2));
         g.setFont (Theme::font (Theme::Role::meta));
         g.drawText (caption, 48, 48, 180, 16, Justification::centredLeft, false);
@@ -2001,10 +2084,20 @@ struct DragTile : Component
         if (e.getDistanceFromDragStart() <= 4.f)
             return;
         armed = true;
-        auto files = proc->writeTempMidi();
-        if (auto* dnd = DragAndDropContainer::findParentDragContainerFor (this))
-            if (files.size() > 0)
-                dnd->performExternalDragDropOfFiles (files, false, this);
+        const bool audio = audioMode || e.mods.isAltDown() || e.mods.isCommandDown() || e.mods.isCtrlDown();
+        dragFilesOut (this, audio ? proc->writeStemAudio() : proc->writeTempMidi());
+    }
+
+    void mouseUp (const MouseEvent& e) override
+    {
+        if (e.eventComponent != this || armed)
+            return;
+        if (e.getDistanceFromDragStart() <= 4.f && e.mouseWasClicked())
+        {
+            audioMode = ! audioMode;
+            caption = audioMode ? utf8 ("7 stems · 8 bars") : utf8 ("7 tracks · 8 bars");
+            repaint();
+        }
     }
 
     void choose()
@@ -2012,12 +2105,17 @@ struct DragTile : Component
         if (proc == nullptr)
             return;
         const auto start = File::getSpecialLocation (File::userDocumentsDirectory).getChildFile ("ROLLA");
-        chooser = std::make_unique<FileChooser> ("Export MIDI", start, String(), true);
+        chooser = std::make_unique<FileChooser> (audioMode ? "Export stems" : "Export MIDI", start, String(), true);
+        const bool stems = audioMode;
         chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectDirectories,
-                              [this] (const FileChooser& fc)
+                              [this, stems] (const FileChooser& fc)
                               {
                                   const auto dir = fc.getResult();
-                                  if (dir != File() && proc != nullptr)
+                                  if (dir == File() || proc == nullptr)
+                                      return;
+                                  if (stems)
+                                      proc->exportStemsTo (dir);
+                                  else
                                       proc->exportMidiTo (dir);
                               });
     }
@@ -2299,7 +2397,7 @@ struct RollaEditor::Content : Component
         bindHelp (swing, "Swing, from 50 to 57 percent.");
         bindHelp (duck, "Duck. The bass dips under the stab.");
         bindHelp (face, "Roll. Re-rolls every lane that is not kept.");
-        bindHelp (drag, "Drag MIDI. Pulls a clip of the current pattern.");
+        bindHelp (drag, "Drag all. One MIDI file, one track per lane. Click the tile, or hold Alt, for a WAV stem of every lane.");
         bindHelp (voxSlot, "Vox sample. Drop a file to override the preset.");
         bindHelp (inStab, "In stab. Hits land on the stab's answer slots.");
         for (int i = 0; i < NumParts; ++i)
@@ -2309,6 +2407,9 @@ struct RollaEditor::Content : Component
         haveGroove = true;
         seenGen = groove.generation;
         restorePanel();
+        // Bass is the selected lane while the panel is closed. Bind it now so
+        // the tone, punch, and level knobs follow that lane before it is opened.
+        bindSound();
         sync();
     }
 
@@ -2917,7 +3018,9 @@ struct RollaEditor::Content : Component
             const auto tail = keptNames.isEmpty() ? String() : utf8 ("  ·  ") + keptNames.joinIntoString (" + ") + " kept";
             face.setCaption (count, tail, false);
         }
-        drag.caption = String (tracks) + (tracks == 1 ? utf8 (" track · ") : utf8 (" tracks · "))
+        const auto unit = drag.audioMode ? (tracks == 1 ? utf8 (" stem · ") : utf8 (" stems · "))
+                                         : (tracks == 1 ? utf8 (" track · ") : utf8 (" tracks · "));
+        drag.caption = String (tracks) + unit
                      + String (groove.bars) + (groove.bars == 1 ? " bar" : " bars");
         drag.repaint();
         voxSlot.repaint();

@@ -199,7 +199,7 @@ jobs:
       - name: Configure and build
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --target ROLLA_VST3 rolla-render rolla-sampler-test rolla-sample-check rolla-roll-test
+          cmake --build build --target ROLLA_VST3 rolla-render rolla-sampler-test rolla-sample-check rolla-roll-test rolla-knob-test
 
       - name: Sampler tests
         run: |
@@ -211,6 +211,11 @@ jobs:
         run: |
           set -euo pipefail
           ./build/rolla-roll-test
+
+      - name: Knob and export tests
+        run: |
+          set -euo pipefail
+          ./build/rolla-knob-test
 
       - name: Offline renders
         run: |

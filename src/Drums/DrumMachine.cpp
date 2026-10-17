@@ -215,6 +215,7 @@ struct ClapV
     float tailAmp = 0.3f;
     int tailAt = 0;
     float gain = 0.f;
+    float tune = 1.f;
     float last = 0.f;
     float ring = 0.f;
     Svf bp;
@@ -373,7 +374,9 @@ struct DrumMachine::Core
         const bool gaskin = hit.dialect == Gaskin;
         float hz = DrumMachine::kickHzForKey (hit.key) * hit.tuneRatio;
         hz *= std::pow (2.f, hit.tone * 0.12f);
-        hz = std::clamp (hz, 40.f, 70.f);
+        // The key follow sits near 55 Hz. Tune is ±12 st, so the body has to
+        // be allowed about an octave either side or the knob barely moves.
+        hz = std::clamp (hz, 30.f, 120.f);
         armRing (kick.last, kick.ring);
         kick.on = true;
         kick.f0 = hz;
@@ -444,6 +447,7 @@ struct DrumMachine::Core
         const float tailMs = (gaskin ? 90.f : 36.f) * decayOf (hit);
         clap.tailC = std::exp (-1.f / std::max (1.f, tailMs * 0.001f * sr));
         clap.bp.reset();
+        clap.tune = std::clamp (hit.tuneRatio, 0.5f, 2.f);
         const float accent = (hit.stepAccent > 0.f) ? hit.stepAccent : 1.f;
         clap.gain = kClapOut * velGain (hit.velocity) * hit.synthKeep * hit.levelGain * accent;
     }
@@ -618,7 +622,7 @@ struct DrumMachine::Core
                 clap.tail *= clap.tailC;
             }
             const bool gaskin = clap.nBurst == 3;
-            const float fc = gaskin ? 1500.f : 1300.f;
+            const float fc = (gaskin ? 1500.f : 1300.f) * std::max (0.5f, clap.tune);
             const float nz = clap.bp.bandpass (clap.noise.next() * 4.28f, fc, 1.7f, sr);
             raw = nz * env * clap.gain;
             ++clap.age;

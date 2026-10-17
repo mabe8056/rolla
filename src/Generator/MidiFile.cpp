@@ -216,7 +216,59 @@ bool writeFile (const std::string& path, const std::vector<std::uint8_t>& bytes,
     return out.good();
 }
 
+void anchorDownbeat (std::vector<Event>& ev, const Groove& groove, int part, int key)
+{
+    const int anchorPitch = part == Drums ? 36 : std::clamp (basePitch (part, key, groove.dialect), 0, 127);
+    const int anchorCh = part == Drums ? 9 : part;
+    for (const auto& e : ev)
+        if (e.tick == 0 && (e.status & 0xf0) == 0x90)
+            return;
+    addNote (ev, anchorCh, anchorPitch, 1, 0, 1);
+}
+
+std::vector<Event> laneEvents (const Groove& groove, int part, int key, float swing)
+{
+    std::vector<Event> ev;
+    collectPart (ev, groove, part, key, swing);
+    anchorDownbeat (ev, groove, part, key);
+    return ev;
+}
+
 } // namespace
+
+bool MidiExport::writePart (const std::string& path,
+                           const Groove& groove,
+                           int part,
+                           int key,
+                           float swing,
+                           double bpm,
+                           std::string& error)
+{
+    if (part < 0 || part >= NumParts)
+    {
+        error = "bad lane";
+        return false;
+    }
+    auto bytes = smf ({ trackBytes (laneEvents (groove, part, key, swing), bpm, groove.bars, true) });
+    return writeFile (path, bytes, error);
+}
+
+bool MidiExport::writeMultitrack (const std::string& path,
+                                 const Groove& groove,
+                                 int key,
+                                 float swing,
+                                 double bpm,
+                                 std::string& error)
+{
+    std::vector<std::vector<std::uint8_t>> tracks;
+    {
+        std::vector<Event> none;
+        tracks.push_back (trackBytes (none, bpm, groove.bars, true));
+    }
+    for (int part = 0; part < NumParts; ++part)
+        tracks.push_back (trackBytes (laneEvents (groove, part, key, swing), bpm, groove.bars, false));
+    return writeFile (path, smf (tracks), error);
+}
 
 bool MidiExport::writeAll (const std::string& directory,
                            const Groove& groove,
@@ -244,21 +296,8 @@ bool MidiExport::writeAll (const std::string& directory,
     {
         if (p != Drums && groove.lane[p].count <= 0)
             continue;
-        std::vector<Event> ev;
-        collectPart (ev, groove, p, key, swing);
-        // Anchor: a 1-tick velocity-1 note at tick 0 so FL "realign events" does not
-        // slide a loop that starts after the downbeat. Untick Realign anyway.
-        const int anchorPitch = p == Drums ? 36 : std::clamp (basePitch (p, key, groove.dialect), 0, 127);
-        const int anchorCh = p == Drums ? 9 : p;
-        bool hasZero = false;
-        for (const auto& e : ev)
-            if (e.tick == 0 && (e.status & 0xf0) == 0x90)
-                hasZero = true;
-        if (! hasZero)
-            addNote (ev, anchorCh, anchorPitch, 1, 0, 1);
-
-        auto trk = trackBytes (ev, bpm, groove.bars, true);
-        auto bytes = smf ({ trk });
+        const auto ev = laneEvents (groove, p, key, swing);
+        auto bytes = smf ({ trackBytes (ev, bpm, groove.bars, true) });
         const auto path = pathFor (partId (p));
         if (! writeFile (path, bytes, error))
             return false;

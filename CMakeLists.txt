@@ -304,6 +304,45 @@ target_link_libraries(rolla-mix-render
         juce::juce_recommended_warning_flags
 )
 
+add_executable(rolla-knob-test
+    tests/knob/knob_test.cpp
+    src/PluginProcessor.cpp
+    src/PluginEditor.cpp
+    src/ui/Theme.cpp
+    src/Engine/Engine.cpp
+    src/Engine/Sampler.cpp
+    src/Engine/SampleLibrary.cpp
+    src/Sampler/SamplePrep.cpp
+    src/Sampler/UserSlots.cpp
+    src/Generator/Generator.cpp
+    src/Generator/Presets.cpp
+    src/Generator/MidiFile.cpp
+    src/Drums/DrumMachine.cpp
+    src/Drums/DrumPattern.cpp
+    src/Mix/MixProgram.cpp
+    src/Mix/MixRuntime.cpp
+)
+
+target_include_directories(rolla-knob-test PRIVATE src)
+
+target_compile_definitions(rolla-knob-test
+    PRIVATE
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_DISPLAY_SPLASH_SCREEN=0
+        JUCE_REPORT_APP_USAGE=0
+)
+
+target_link_libraries(rolla-knob-test
+    PRIVATE
+        RollaData
+        juce::juce_audio_utils
+        juce::juce_dsp
+        juce::juce_audio_formats
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags
+)
+
 # Offline variety check. No JUCE. Not part of the CI workflow.
 add_executable(rolla-variety
     tools/variety_main.cpp
@@ -313,8 +352,8 @@ add_executable(rolla-variety
 target_include_directories(rolla-variety PRIVATE src tools)
 target_compile_options(rolla-variety PRIVATE -Wall -Wextra -Wpedantic)
 
-# 20 rolls per style to MIDI + WAV, plus tools/out/STATS.md.
-# Left out of CI: eighty renders is a local listening pass.
+# Headless roll renderer. With --samples DIR --style ID --count N --seed S
+# it writes that batch. Without those flags it still writes the local 20-roll set.
 add_executable(rolla-rolls
     tools/roll_batch.cpp
     tools/PatternStats.cpp
@@ -322,6 +361,7 @@ add_executable(rolla-rolls
     src/Engine/Sampler.cpp
     src/Engine/SampleLibrary.cpp
     src/Sampler/SamplePrep.cpp
+    src/Sampler/UserSlots.cpp
     src/Generator/Generator.cpp
     src/Generator/Presets.cpp
     src/Generator/MidiFile.cpp
