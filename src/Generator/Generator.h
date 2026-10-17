@@ -37,7 +37,9 @@ struct Rng
 // bar in a lane that is supposed to play, and a banned figure. Slot weights,
 // density, stab-vs-bass placement, plans, contours, and rests are a penalty.
 // Six candidates are ranked by that penalty and one is sampled with a
-// temperature that rises with freedom. The caller seed is what lands on the lane.
+// temperature that rises with freedom. Genre cells in GenreVocab.h sit beside
+// the transcription skeletons; inference cells weigh 0.35. The caller seed is
+// what lands on the lane.
 void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[NumParts], std::uint32_t partMask);
 
 // OC-style bass skeleton similarity in [0, 1]. A pair at or above 0.55 is the
