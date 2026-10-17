@@ -24,6 +24,7 @@ public:
     void mouseDown (const juce::MouseEvent&) override;
 
     void setEditorScale (float scale);
+    void selectLane (int part);
 
 private:
     void timerCallback() override;

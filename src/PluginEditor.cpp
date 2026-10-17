@@ -1,6 +1,7 @@
 #include "PluginEditor.h"
 
 #include "DspUtil.h"
+#include "LaneSampleUi.h"
 #include "RollFace.h"
 #include "UiTokens.h"
 
@@ -105,8 +106,21 @@ void focusRing (Graphics& g, Component& c)
 {
     if (! c.hasKeyboardFocus (false))
         return;
+    // 2 px stroke whose inner edge sits 2 px outside the control.
     g.setColour (col (kInk));
-    g.drawRoundedRectangle (c.getLocalBounds().toFloat().expanded (2.f), 4.f, 2.f);
+    g.drawRoundedRectangle (c.getLocalBounds().toFloat().expanded (3.f), 4.f, 2.f);
+}
+
+void paintMissingIcon (Graphics& g, float x, float y, float s)
+{
+    Path tri;
+    tri.addTriangle (x, y + s, x + s * 0.5f, y, x + s, y + s);
+    g.setColour (col (kMark));
+    g.fillPath (tri);
+    g.setColour (col (kPaper));
+    const float cx = x + s * 0.5f;
+    g.fillRect (cx - s * 0.055f, y + s * 0.36f, s * 0.11f, s * 0.30f);
+    g.fillEllipse (cx - s * 0.065f, y + s * 0.72f, s * 0.13f, s * 0.13f);
 }
 
 struct Look : LookAndFeel_V4
@@ -436,7 +450,8 @@ struct PatternStrip : Component
 
         if (part == Drums)
         {
-            const Colour rows[] = { col (kInk), col (kInk2), col (kInk3) };
+            // kick / snare+clap / hat — ink / ink / ink2
+            const Colour rows[] = { col (kInk), col (kInk), col (kInk2) };
             const float rh = (area.getHeight() - 4.f) / 3.f;
             for (int t = 0; t < steps && t < kMaxSteps; ++t)
             {
@@ -589,9 +604,9 @@ struct IconButton : QuietButton
         if (kind == lock && proc != nullptr && proc->laneEdited (part))
         {
             g.setColour (col (kSel));
-            g.fillEllipse (b.getRight() - 8.f, b.getY() - 1.f, 10.f, 10.f);
+            g.fillEllipse (b.getRight() - 10.f, b.getY() - 2.f, 12.f, 12.f);
             g.setColour (col (kMark));
-            g.fillEllipse (b.getRight() - 7.f, b.getY(), 8.f, 8.f);
+            g.fillEllipse (b.getRight() - 8.f, b.getY(), 8.f, 8.f);
         }
         focusRing (g, *this);
     }
@@ -603,6 +618,7 @@ struct LaneRow : Component
     int part = 0;
     bool selected = false;
     bool hovered = false;
+    bool sampleMissing = false;
     std::function<void (int)> onSelect;
     IconButton mute { IconButton::mute, "Mute" };
     IconButton shuffle { IconButton::dice, "Shuffle" };
@@ -694,17 +710,24 @@ struct LaneRow : Component
         auto* lf = dynamic_cast<Look*> (&getLookAndFeel());
         g.setColour (laneColour (part).withAlpha (muted ? 0.4f : 1.f));
         g.fillEllipse (16.f, 16.f, 8.f, 8.f);
+        const auto name = String (laneShortName (part));
         g.setColour ((selected || hovered ? col (kInk) : col (kInk2)).withAlpha (muted ? 0.4f : 1.f));
         if (lf != nullptr)
-            g.setFont (tracked (lf->instBold.withHeight (12.f), 0.06f));
-        g.drawText (laneShortName (part), 32, 12, 72, 16, Justification::centredLeft, false);
-
-        if (proc != nullptr && proc->laneSampleMissing (part))
         {
-            juce::Path warn;
-            warn.addTriangle (100.f, 14.f, 108.f, 14.f, 104.f, 21.f);
-            g.setColour (col (kMark));
-            g.fillPath (warn);
+            auto nameFont = tracked (lf->instBold.withHeight (12.f), 0.06f);
+            g.setFont (nameFont);
+            g.drawText (name, 32, 12, 72, 16, Justification::centredLeft, false);
+            if (sampleMissing)
+            {
+                float x = 32.f + textWidth (nameFont, name) + 4.f;
+                if (x > 92.f)
+                    x = 92.f;
+                paintMissingIcon (g, x, 14.f, 12.f);
+            }
+        }
+        else
+        {
+            g.drawText (name, 32, 12, 72, 16, Justification::centredLeft, false);
         }
     }
 
@@ -754,6 +777,8 @@ struct Stepper : Component
         next.setMouseCursor (MouseCursor::PointingHandCursor);
         prev.onClick = [this] { if (onStep && prev.isEnabled()) onStep (-1); };
         next.onClick = [this] { if (onStep && next.isEnabled()) onStep (1); };
+        prev.onStateChange = [this] { repaint(); };
+        next.onStateChange = [this] { repaint(); };
     }
 
     void setEnds (bool atStart, bool atEnd)
@@ -804,10 +829,24 @@ struct Stepper : Component
 
     void paintOverChildren (Graphics& g) override
     {
-        g.setColour (prev.isEnabled() ? (prev.isOver() ? col (kInk) : col (kInk2)) : col (kInk2).withAlpha (0.35f));
-        chevron (g, prev.getBounds().toFloat(), false);
-        g.setColour (next.isEnabled() ? (next.isOver() ? col (kInk) : col (kInk2)) : col (kInk2).withAlpha (0.35f));
-        chevron (g, next.getBounds().toFloat(), true);
+        auto arrow = [&] (QuietButton& btn, bool right)
+        {
+            auto b = btn.getBounds().toFloat().reduced (6.f, 4.f);
+            if (btn.isEnabled() && btn.isDown())
+            {
+                g.setColour (col (kLine));
+                g.fillRoundedRectangle (b, 8.f);
+            }
+            else if (btn.isEnabled() && btn.isOver())
+            {
+                g.setColour (col (kHov));
+                g.fillRoundedRectangle (b, 8.f);
+            }
+            g.setColour (btn.isEnabled() ? (btn.isOver() ? col (kInk) : col (kInk2)) : col (kInk2).withAlpha (0.35f));
+            chevron (g, btn.getBounds().toFloat(), right);
+        };
+        arrow (prev, false);
+        arrow (next, true);
     }
 };
 
@@ -827,6 +866,7 @@ struct DialectBar : Component
             buttons[i].setMouseCursor (MouseCursor::PointingHandCursor);
             addAndMakeVisible (buttons[i]);
             buttons[i].onClick = [this, i] { if (onPick) onPick (i); };
+            buttons[i].onStateChange = [this] { repaint(); };
         }
     }
 
@@ -868,14 +908,105 @@ struct DialectBar : Component
         {
             auto b = buttons[i].getBounds().toFloat().reduced (2.f, 4.f);
             const bool on = i == current;
+            const bool down = buttons[i].isDown();
+            const bool over = buttons[i].isOver();
             if (on)
             {
                 g.setColour (col (kInk));
                 g.fillRoundedRectangle (b, b.getHeight() * 0.5f);
             }
+            else if (down)
+            {
+                g.setColour (col (kLine));
+                g.fillRoundedRectangle (b, b.getHeight() * 0.5f);
+            }
+            else if (over)
+            {
+                g.setColour (col (kHov));
+                g.fillRoundedRectangle (b, b.getHeight() * 0.5f);
+            }
             if (lf != nullptr)
                 g.setFont (tracked (lf->instBold.withHeight (11.f), 0.04f));
-            g.setColour (on ? col (kPaper) : col (kInk2));
+            g.setColour (on ? col (kPaper) : (over ? col (kInk) : col (kInk2)));
+            g.drawFittedText (buttons[i].getButtonText(), buttons[i].getBounds(), Justification::centred, 1);
+        }
+    }
+};
+
+struct ModeBar : Component
+{
+    QuietButton buttons[3];
+    int current = 0;
+    std::function<void (int)> onPick;
+
+    ModeBar()
+    {
+        for (int i = 0; i < 3; ++i)
+        {
+            buttons[i].setButtonText (kLaneModeNames[i]);
+            buttons[i].setWantsKeyboardFocus (true);
+            buttons[i].setMouseCursor (MouseCursor::PointingHandCursor);
+            addAndMakeVisible (buttons[i]);
+            buttons[i].onClick = [this, i] { if (onPick) onPick (i); };
+            buttons[i].onStateChange = [this] { repaint(); };
+        }
+    }
+
+    void setCurrent (int index)
+    {
+        index = jlimit (0, 2, index);
+        if (current == index)
+            return;
+        current = index;
+        repaint();
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (3, 3);
+        for (int i = 0; i < 3; ++i)
+        {
+            const int w = (i == 2) ? r.getWidth() : r.getWidth() / (3 - i);
+            buttons[i].setBounds (r.removeFromLeft (w));
+        }
+    }
+
+    void paint (Graphics& g) override
+    {
+        auto b = getLocalBounds().toFloat();
+        g.setColour (col (kCard));
+        g.fillRoundedRectangle (b, b.getHeight() * 0.5f);
+        g.setColour (col (kLine2));
+        g.drawRoundedRectangle (b.reduced (0.5f), b.getHeight() * 0.5f - 0.5f, 1.f);
+    }
+
+    void paintOverChildren (Graphics& g) override
+    {
+        auto* lf = dynamic_cast<Look*> (&getLookAndFeel());
+        for (int i = 0; i < 3; ++i)
+        {
+            auto b = buttons[i].getBounds().toFloat().reduced (1.f, 1.f);
+            const bool on = i == current;
+            const bool down = buttons[i].isDown();
+            const bool over = buttons[i].isOver();
+            if (on)
+            {
+                g.setColour (col (kInk));
+                g.fillRoundedRectangle (b, b.getHeight() * 0.5f);
+            }
+            else if (down)
+            {
+                g.setColour (col (kLine));
+                g.fillRoundedRectangle (b, b.getHeight() * 0.5f);
+            }
+            else if (over)
+            {
+                g.setColour (col (kHov));
+                g.fillRoundedRectangle (b, b.getHeight() * 0.5f);
+            }
+            if (lf != nullptr)
+                g.setFont (tracked (lf->instBold.withHeight (10.f), 0.06f));
+            g.setColour (on ? col (kPaper) : (over ? col (kInk) : col (kInk2)));
             g.drawFittedText (buttons[i].getButtonText(), buttons[i].getBounds(), Justification::centred, 1);
         }
     }
@@ -967,6 +1098,8 @@ struct FaceRollButton : QuietButton, private Timer
     bool rolling = false;
     bool snap = false;
     double rollStart = 0.0;
+    bool clockOn = false;
+    VBlankAttachment vblank;
 
     FaceRollButton()
         : QuietButton ("Roll")
@@ -995,8 +1128,7 @@ struct FaceRollButton : QuietButton, private Timer
         rolling = true;
         snap = reduced;
         rollStart = Time::getMillisecondCounterHiRes();
-        if (! isTimerRunning())
-            startTimerHz (60);
+        armClock();
         repaint();
     }
 
@@ -1020,12 +1152,50 @@ struct FaceRollButton : QuietButton, private Timer
             press.v = p;
             press.run = false;
         }
-        if ((hover.run || press.run || rolling) && ! isTimerRunning())
-            startTimerHz (60);
+        if (hover.run || press.run || rolling || isOver() || isDown())
+            armClock();
         repaint();
     }
 
-    void timerCallback() override
+    void armClock()
+    {
+        if (clockOn && (getPeer() == nullptr || ! vblank.isEmpty()))
+            return;
+        clockOn = true;
+        if (getPeer() != nullptr)
+        {
+            stopTimer();
+            if (vblank.isEmpty())
+                vblank = VBlankAttachment (this, [this] (double) { advance(); });
+        }
+        else if (! isTimerRunning())
+        {
+            startTimerHz (60);
+        }
+    }
+
+    void disarmClock()
+    {
+        clockOn = false;
+        stopTimer();
+        if (vblank.isEmpty())
+            return;
+        if (auto* mm = MessageManager::getInstanceWithoutCreating())
+        {
+            Component::SafePointer<FaceRollButton> alive (this);
+            mm->callAsync ([alive]
+            {
+                if (alive != nullptr && ! alive->clockOn)
+                    alive->vblank = VBlankAttachment();
+            });
+        }
+        else
+        {
+            vblank = VBlankAttachment();
+        }
+    }
+
+    void advance()
     {
         const double now = Time::getMillisecondCounterHiRes();
         const bool reduced = proc != nullptr && paramRaw (proc->apvts, "reduceMotion") >= 0.5f;
@@ -1043,8 +1213,16 @@ struct FaceRollButton : QuietButton, private Timer
                 rolling = false;
         }
         repaint();
-        if (! rolling && ! hover.run && ! press.run && hover.v <= 0.001f && press.v <= 0.001f && ! isOver())
-            stopTimer();
+        const bool busy = rolling || hover.run || press.run || hover.v > 0.001f || press.v > 0.001f || isOver() || isDown();
+        if (! busy)
+            disarmClock();
+        else if (getPeer() != nullptr && vblank.isEmpty())
+            armClock();
+    }
+
+    void timerCallback() override
+    {
+        advance();
     }
 
     void paintButton (Graphics& g, bool /*over*/, bool /*down*/) override
@@ -1532,6 +1710,8 @@ struct RollaEditor::Content : Component
     LabeledKnob tone, punch, level;
     LabeledKnob dark, busy, bounce, stab;
     Stepper presetStep, kitStep;
+    ModeBar source;
+    LaneSampleProbe samples;
     SampleSlot voxSlot;
     SwitchButton inStab, duck;
     DrumColumn drums[7];
@@ -1549,7 +1729,7 @@ struct RollaEditor::Content : Component
     std::unique_ptr<AudioProcessorValueTreeState::ButtonAttachment> duckA, inStabA;
 
     Content (RollaProcessor& p, Look& lf, RollaEditor& ed)
-        : proc (p), editor (ed)
+        : proc (p), editor (ed), samples (p)
     {
         setLookAndFeel (&lf);
         setOpaque (true);
@@ -1588,6 +1768,15 @@ struct RollaEditor::Content : Component
         addAndMakeVisible (presetStep);
         kitStep.onStep = [this] (int dir) { stepPreset (dir); };
         addAndMakeVisible (kitStep);
+        source.onPick = [this] (int mode)
+        {
+            if (samples.mode (selected) == mode)
+                return;
+            samples.setMode (selected, mode);
+            proc.markEdited (selected);
+            sync();
+        };
+        addAndMakeVisible (source);
 
         voxSlot.proc = &proc;
         voxSlot.voice = -1;
@@ -1641,6 +1830,7 @@ struct RollaEditor::Content : Component
         haveGroove = true;
         seenGen = groove.generation;
         select (Bass);
+        sync();
     }
 
     ~Content() override
@@ -1717,6 +1907,7 @@ struct RollaEditor::Content : Component
             rows[i].repaint();
         }
         bindSound();
+        source.setCurrent (samples.mode (selected));
         repaint();
     }
 
@@ -1762,6 +1953,7 @@ struct RollaEditor::Content : Component
 
     void sync()
     {
+        samples.reconcile();
         auto next = proc.copyGroove();
         const bool playing = proc.isHostOrPreviewPlaying();
         const double pos16 = proc.getPlayPpq() * 4.0;
@@ -1783,10 +1975,17 @@ struct RollaEditor::Content : Component
             const bool manual = kept && ! edited;
             rows[i].shuffle.setEnabled (! manual);
             rows[i].shuffle.setAlpha (manual ? 0.35f : 1.f);
+            const bool miss = samples.missing (i);
+            if (miss != rows[i].sampleMissing)
+            {
+                rows[i].sampleMissing = miss;
+                rows[i].repaint();
+            }
             if (genChanged || playing)
                 rows[i].strip.repaint();
             rows[i].keep.repaint();
         }
+        source.setCurrent (samples.mode (selected));
 
         bpm.setBpm (proc.getPlayBpm() > 1.f ? proc.getPlayBpm() : 130.f);
         dialects.setCurrent (choiceIndex (proc.apvts, "dialect"));
@@ -1886,20 +2085,32 @@ struct RollaEditor::Content : Component
 
         g.setColour (laneColour (selected));
         g.fillEllipse (32.f, 371.f, 10.f, 10.f);
+        auto nameFont = tracked (lf->instBold.withHeight (16.f), 0.02f);
         g.setColour (col (kInk));
-        g.setFont (tracked (lf->instBold.withHeight (16.f), 0.02f));
-        g.drawText (laneShortName (selected), 48, 364, 120, 24, Justification::centredLeft, false);
-        g.setColour (col (kInk2));
-        g.setFont (lf->mono.withHeight (11.f));
-        g.drawText (channelLine (selected), 168, 364, 180, 24, Justification::centredLeft, false);
+        g.setFont (nameFont);
+        const auto panelName = String (laneShortName (selected));
+        g.drawText (panelName, 48, 364, 120, 24, Justification::centredLeft, false);
+        if (samples.missing (selected))
+        {
+            float x = 48.f + textWidth (nameFont, panelName) + 6.f;
+            if (selected == Drums && x > 112.f)
+                x = 112.f;
+            paintMissingIcon (g, x, 370.f, 12.f);
+        }
+        if (selected != Drums)
+        {
+            g.setColour (col (kInk2));
+            g.setFont (lf->mono.withHeight (11.f));
+            g.drawText (channelLine (selected), 168, 364, 160, 24, Justification::centredLeft, false);
+        }
         if (proc.laneEdited (selected))
         {
             g.setColour (col (kMark));
-            g.setFont (lf->mono.withHeight (11.f));
-            g.drawFittedText ("edited · kept until shuffled",
-                              selected == Drums ? Rectangle<int> (168, 364, 90, 24)
-                                                : Rectangle<int> (360, 364, 270, 24),
-                              Justification::centredRight, 1);
+            g.setFont (lf->mono.withHeight (10.f));
+            g.drawFittedText ("EDITED",
+                              selected == Drums ? Rectangle<int> (128, 364, 120, 24)
+                                                : Rectangle<int> (336, 364, 112, 24),
+                              Justification::centredLeft, 1);
         }
 
         if (selected != Drums)
@@ -1954,6 +2165,7 @@ struct RollaEditor::Content : Component
         voxSlot.setBounds (32, 544, 240, 56);
         inStab.setBounds (200, 550, 44, 28);
         kitStep.setBounds (264, 360, 176, 32);
+        source.setBounds (456, 360, 184, 32);
         for (int i = 0; i < 7; ++i)
             drums[i].setBounds (32 + 88 * i, 416, 80, 188);
 
@@ -2093,6 +2305,12 @@ void RollaEditor::resized()
     content->setTransform (AffineTransform::scale ((float) getWidth() / (float) kEditorBaseW));
     if (getWidth() >= 768)
         sizeDirty = true;
+}
+
+void RollaEditor::selectLane (int part)
+{
+    if (content != nullptr)
+        content->select (juce::jlimit (0, NumParts - 1, part));
 }
 
 void RollaEditor::setEditorScale (float scale)
