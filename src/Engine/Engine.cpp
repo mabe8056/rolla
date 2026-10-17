@@ -1688,7 +1688,7 @@ void Engine::process (const Groove& groove,
         };
 
         float playL[NumParts] {}, playR[NumParts] {};
-        sampler.render (playL, playR, (float) prev, (float) pos, transport.playing);
+        sampler.render (playL, playR, (float) prev, (float) pos, transport.playing, (float) loop16);
 
         const float bFader = E.level[Bass].next();
         const float bDuck = params.duck ? E.duckB.next() : 1.f;
@@ -2202,6 +2202,22 @@ void Engine::process (const Groove& groove,
         {
             outL = flush (fastTanh (E.mainDc.process (outL) * 1.05f) * og);
             outR = flush (fastTanh (outR * 1.05f) * og);
+        }
+        // The free tail after the loop is hard silence. Reach that silence
+        // on a raised cosine, or the last playing sample steps into the zero.
+        if (transport.playing)
+        {
+            const double untilEnd = loop16 - pos;
+            const double window = d16 * 0.010 * sr;
+            if (untilEnd > 0.0 && untilEnd < window)
+            {
+                const float t = (float) (untilEnd / window);
+                const float g = 0.5f * (1.f - std::cos (kPi * t));
+                outL *= g;
+                outR *= g;
+                drumLft *= g;
+                drumRgt *= g;
+            }
         }
         mainL[i] = outL;
         if (mainR != nullptr)

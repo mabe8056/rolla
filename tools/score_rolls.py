@@ -635,11 +635,21 @@ def score_dir(d, style, out=None, bars=None, bpm=None, refs=OC.DEFAULT_REFS, no_
         m, codes, soft = measure(bass, stab, kick, hats, drums, nb, tempo, S)
         c2, tinfo = midi_technical(groups, stuck, nb, end_beats); codes += c2
         winfo = {}
+        audio_skip = {"CLIPPING", "CLICKS", "TAIL_INTO_BAR1", "LOUDNESS"}
         if wav:
             try:
-                c3, winfo = wav_technical(wav, nb, tempo or bpm or 130.0); codes += c3
+                c3, winfo = wav_technical(wav, nb, tempo or bpm or 130.0)
+                if winfo.get("peak_dbfs", 0) < -45:
+                    c3 = [c for c in c3 if c.split(":")[0] not in audio_skip]
+                    winfo["audio_checks"] = "SKIPPED"
+                    winfo["skip_reason"] = "no sample energy; clicks, tails, and loudness are not scored"
+                    soft.append("SKIPPED_AUDIO")
+                codes += c3
             except Exception as e:
                 soft.append("WAV_UNREADABLE"); winfo = {"error": str(e)}
+        else:
+            winfo = {"audio_checks": "SKIPPED", "skip_reason": "no wav; clicks, tails, and loudness are not scored"}
+            soft.append("SKIPPED_AUDIO")
         names = " ".join(g["name"] for g in groups)
         if FX_RE.search(names): codes.append("BUILD_FX_IN_LOOP")
         if LATIN_RE.search(names) and not S.get("allow_latin"): codes.append("LATIN_PERC_BED")

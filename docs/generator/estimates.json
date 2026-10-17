@@ -1,0 +1,90 @@
+{
+  "source": "GENERATOR_RULES.md v1. Numbers tagged ESTIMATE. Calibrate against the first 20-roll listening set.",
+  "phrase": {
+    "plan_weights": {
+      "ukmin": {"P1": 0.35, "P2": 0.25, "P3": 0.15, "P5": 0.25},
+      "long": {"P1": 0.40, "P2": 0.30, "P3": 0.30},
+      "pop": {"P3": 0.60, "P2": 0.40},
+      "gaskin": {"P4": 0.80, "P2": 0.20}
+    },
+    "max_changed_slots_per_bar_vs_parent": 8,
+    "bar4_fill_probability": 0.5,
+    "max_lanes_changing_in_bar_8": 3
+  },
+  "bass": {
+    "npb_sd_min": 0.5,
+    "silent_slot_fraction_min": 0.10,
+    "min_distinct_length_buckets": 2,
+    "in_beat_spread_min_positions": 3,
+    "rest_cell_per_8bars_min": 2,
+    "ghost_share": [0.15, 0.40]
+  },
+  "stab": {
+    "ukmin_hits_per_bar": [0.5, 3.0],
+    "min_gap_after_bass_onset_16ths": 1,
+    "over_sounding_bass_pct_max": 0.25,
+    "placement_bars_default": [2, 4, 6, 8],
+    "bar8_extra_hits": [1, 3]
+  },
+  "hits": {
+    "per_4_bars": [1, 2],
+    "len16": [2, 8]
+  },
+  "pluck": {
+    "register_midi": [60, 84],
+    "hits_per_bar_other": [2, 5],
+    "pitch_classes_per_motif": [2, 4],
+    "len16": [0.5, 1.5]
+  },
+  "gaskin": {
+    "hat_swing": [62, 68],
+    "octave_share_max": 0.05
+  },
+  "avoid": {
+    "same_direction_steps_fail": 5,
+    "same_direction_steps_flag": 4,
+    "constant_density_sd": 0.5,
+    "constant_density_range": 2,
+    "identical_match1": 0.95,
+    "identical_match4": 0.97,
+    "too_random_match2": 0.50,
+    "too_random_match4": 0.47,
+    "stab_overlap_others_max": 0.25,
+    "stab_on_beat_hard_cap": 0.30,
+    "on_kick_hard_cap": 0.35,
+    "machinegun_run": 3,
+    "machinegun_npb": 9,
+    "machinegun_len_median": 0.9,
+    "root_share_max": 0.80,
+    "top2_min": 0.55,
+    "distinct_pitches_per_bar_max": 5,
+    "leap_max": 15,
+    "pad_sounding_max": 0.5,
+    "tail_last_10ms_dbfs": -45,
+    "hat_vel_sd_min": 3
+  },
+  "diversity": {
+    "batch_min": 1000,
+    "onset_jaccard_mean_max": 0.35,
+    "onset_jaccard_p90_max": 0.45,
+    "near_duplicate_rate_max": 0.02,
+    "near_duplicate_jaccard": 0.90,
+    "unique_bar1_onset_sets_min_share": 0.30,
+    "unique_degree_4grams_per_1000": 200,
+    "plan_weight_share_min": 0.50,
+    "cell_type_min_share": 0.10,
+    "contour_min_share": 0.05,
+    "npb_entropy_bits_min": 1.5,
+    "range_coverage_min": 0.60
+  },
+  "mutations": {
+    "safe_ops_per_8bars": [3, 10],
+    "bar8_extra_ops": [2, 6]
+  },
+  "rubric": {
+    "median_min": 26,
+    "rolls_at_22_min": 14,
+    "keepers_at_30_min": 5,
+    "max_score": 38
+  }
+}

@@ -329,8 +329,53 @@ void Sampler::reset() noexcept
 {
     for (auto& v : voices)
         v = {};
+    for (auto& v : tails)
+        v = {};
     for (int& c : sliceCursor)
         c = 0;
+}
+
+void Sampler::armAttack (Voice& v) noexcept
+{
+    v.attackN = std::max (8, (int) (0.003 * sr));
+    v.attackLeft = v.attackN;
+    v.fade = 1.f;
+    v.fadeInc = 0.f;
+    v.releaseLeft = 0;
+    v.releaseN = 0;
+    v.noteEdge = 1.f;
+    v.stopping = false;
+}
+
+void Sampler::park (const Voice& dying) noexcept
+{
+    Voice* dest = nullptr;
+    Voice* quiet = nullptr;
+    float quietG = 1.0e9f;
+    for (auto& t : tails)
+    {
+        if (! t.on)
+        {
+            dest = &t;
+            break;
+        }
+        const float g = t.env.amp * (t.releaseN > 0 ? (float) t.releaseLeft / (float) std::max (1, t.releaseN) : t.fade);
+        if (g < quietG)
+        {
+            quietG = g;
+            quiet = &t;
+        }
+    }
+    if (dest == nullptr)
+        dest = quiet;
+    if (dest == nullptr)
+        return;
+    *dest = dying;
+    dest->attackLeft = 0;
+    dest->releaseN = std::max (8, (int) (0.004 * sr));
+    dest->releaseLeft = dest->releaseN;
+    dest->stopping = true;
+    dest->fadeInc = 0.f;
 }
 
 void Sampler::releaseNote (int part, int midiNote) noexcept
@@ -365,10 +410,7 @@ Sampler::Voice* Sampler::allocate (int) noexcept
     if (slot == nullptr)
         return nullptr;
     if (slot->on)
-    {
-        slot->stopping = true;
-        slot->fadeInc = -1.f / 64.f;
-    }
+        park (*slot);
     return slot;
 }
 
@@ -482,7 +524,9 @@ void Sampler::readVoice (Voice& v, float& l, float& r) noexcept
     else
         v.pos += v.ratio;
     if (! v.loop && v.pos >= n - 1.0)
-        v.env.release();
+        v.on = false;
+    if (v.releaseN > 0 && v.releaseLeft <= 0 && v.stopping)
+        v.on = false;
 
     const float srF = (float) sr;
     if (v.fEnv > 0.f)
@@ -497,9 +541,33 @@ void Sampler::readVoice (Voice& v, float& l, float& r) noexcept
     }
     rs = ls + (rs - ls) * 0.85f;
 
+    float edge = v.noteEdge;
+    if (v.attackN > 0 && v.attackLeft > 0)
+    {
+        const float t = 1.f - (float) v.attackLeft / (float) v.attackN;
+        edge *= 0.5f * (1.f - std::cos (kSincPi * t));
+        --v.attackLeft;
+    }
+    if (v.releaseN > 0 && v.releaseLeft > 0)
+    {
+        const float t = (float) v.releaseLeft / (float) v.releaseN;
+        edge *= 0.5f * (1.f - std::cos (kSincPi * t));
+        --v.releaseLeft;
+    }
+    if (! v.loop)
+    {
+        const double remain = n - v.pos;
+        const double fade = std::max (8.0, 0.004 * (v.audio->rate > 1.0 ? v.audio->rate : sr));
+        if (remain < fade)
+        {
+            const float t = std::clamp ((float) (remain / fade), 0.f, 1.f);
+            edge *= 0.5f * (1.f - std::cos (kSincPi * t));
+        }
+    }
+
     const float env = v.env.amp;
     v.fade = std::clamp (v.fade + v.fadeInc, 0.f, 1.f);
-    const float g = env * v.gain * v.fade;
+    const float g = env * v.gain * v.fade * edge;
     l = ls * g * (1.f - v.pan * 0.5f);
     r = rs * g * (1.f + v.pan * 0.5f);
     if (! v.env.tick() || (v.stopping && v.fade <= 0.f))
@@ -663,6 +731,7 @@ bool Sampler::playUserSlot (int part, int drumVoice, int midiNote, int velocity,
     fresh.loopA = region.a;
     fresh.loopB = region.b;
     fresh.xfade = region.xfade;
+    armAttack (fresh);
     *voice = fresh;
 
     take.kind = decision.kind;
@@ -827,6 +896,7 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
         fresh.spliceLeft = 0;
     }
 
+    armAttack (fresh);
     *slot = fresh;
     if (layered)
     {
@@ -990,12 +1060,13 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
     fresh.loopA = region.a;
     fresh.loopB = region.b;
     fresh.xfade = region.xfade;
+    armAttack (fresh);
     *slot = fresh;
 
     return 0.f;
 }
 
-void Sampler::render (float* laneL, float* laneR, float prev16, float pos16, bool playing) noexcept
+void Sampler::render (float* laneL, float* laneR, float prev16, float pos16, bool playing, float loopEnd16) noexcept
 {
     if (laneL == nullptr || laneR == nullptr)
         return;
@@ -1004,11 +1075,34 @@ void Sampler::render (float* laneL, float* laneR, float prev16, float pos16, boo
     for (int v = 0; v < NumDrumVoices; ++v)
         drumOutL[v] = drumOutR[v] = 0.f;
 
-    for (auto& v : voices)
+    auto renderOne = [&] (Voice& v)
     {
         if (! v.on)
-            continue;
-        if (playing && v.end16 < 1.0e8f)
+            return;
+        v.noteEdge = 1.f;
+        if (playing && loopEnd16 > 1.f)
+        {
+            const float stop = std::min (v.end16, loopEnd16);
+            const float step = pos16 - prev16;
+            if (step > 0.f)
+            {
+                const float window = std::max (step, step * (float) (0.010 * sr));
+                const float remain = stop - pos16;
+                if (remain <= 0.f)
+                {
+                    v.on = false;
+                    return;
+                }
+                if (remain < window)
+                    v.noteEdge = 0.5f * (1.f - std::cos (kSincPi * remain / window));
+            }
+            else if (prev16 < stop && pos16 + 1.0e-3f < prev16)
+            {
+                v.on = false;
+                return;
+            }
+        }
+        else if (playing && v.end16 < 1.0e8f)
         {
             const bool hit = (prev16 < v.end16 && pos16 >= v.end16)
                           || (pos16 < prev16 && v.end16 >= prev16);
@@ -1027,7 +1121,11 @@ void Sampler::render (float* laneL, float* laneR, float prev16, float pos16, boo
                 drumOutR[v.drumVoice] += r;
             }
         }
-    }
+    };
+    for (auto& v : voices)
+        renderOne (v);
+    for (auto& v : tails)
+        renderOne (v);
 }
 
 } // namespace rolla

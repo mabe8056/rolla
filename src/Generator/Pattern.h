@@ -45,7 +45,7 @@ enum Dialect : int
 inline constexpr int kMaxBars = 8;
 inline constexpr int kStepsPerBar = 16;
 inline constexpr int kMaxSteps = kMaxBars * kStepsPerBar;
-inline constexpr int kMaxNotes = 72;
+inline constexpr int kMaxNotes = 96;
 
 enum NoteFlags : std::uint8_t
 {
@@ -88,7 +88,7 @@ struct Groove
     int guardLevel = 0; // 0 pass, 1 flag, 2 fail
     char guardRef[24] = "ORIGINAL";
     // Soft-rule breaks freedom asked for on this roll (comma-separated ids). Empty if none landed.
-    char brokenRules[64] = "";
+    char brokenRules[128] = "";
     float penalty = 0.f;
     Lane lane[NumParts] {};
     DrumLane drums {};

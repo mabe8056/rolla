@@ -352,6 +352,14 @@ add_executable(rolla-variety
 target_include_directories(rolla-variety PRIVATE src tools)
 target_compile_options(rolla-variety PRIVATE -Wall -Wextra -Wpedantic)
 
+# JSONL grooves for tools/score_rolls. No JUCE. Not part of CI.
+add_executable(rolla-dump
+    tools/dump_grooves.cpp
+    src/Generator/Generator.cpp
+)
+target_include_directories(rolla-dump PRIVATE src)
+target_compile_options(rolla-dump PRIVATE -Wall -Wextra -Wpedantic)
+
 # Headless roll renderer. With --samples DIR --style ID --count N --seed S
 # it writes that batch. Without those flags it still writes the local 20-roll set.
 add_executable(rolla-rolls
