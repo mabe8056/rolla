@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 namespace rolla
 {
@@ -17,6 +18,21 @@ float dbToLin (float db) noexcept
 {
     return std::pow (10.f, db / 20.f);
 }
+
+// 4× windowed-sinc, cutoff at base Nyquist, Hamming, 32 taps. Phase sums are ~1
+// so a constant passes at unity. Downsample coefficients are the same kernel at gain 1/4.
+constexpr float kTpUp[4][8] = {
+    { -2.521876595e-03f, 9.478050676e-03f, -3.669804799e-02f, 1.241118636e-01f, 9.749208155e-01f, -8.920659055e-02f, 2.703718712e-02f, -6.349975978e-03f },
+    { -7.274272497e-03f, 3.332998791e-02f, -1.189236275e-01f, 4.445740020e-01f, 7.698216084e-01f, -1.592658091e-01f, 4.721445142e-02f, -1.024776645e-02f },
+    { -1.024776645e-02f, 4.721445142e-02f, -1.592658091e-01f, 7.698216084e-01f, 4.445740020e-01f, -1.189236275e-01f, 3.332998791e-02f, -7.274272497e-03f },
+    { -6.349975978e-03f, 2.703718712e-02f, -8.920659055e-02f, 9.749208155e-01f, 1.241118636e-01f, -3.669804799e-02f, 9.478050676e-03f, -2.521876595e-03f },
+};
+constexpr float kTpDown[32] = {
+    -6.304691486e-04f, -1.818568124e-03f, -2.561941612e-03f, -1.587493994e-03f, 2.369512669e-03f, 8.332496978e-03f, 1.180361286e-02f, 6.759296779e-03f,
+    -9.174511998e-03f, -2.973090689e-02f, -3.981645227e-02f, -2.230164764e-02f, 3.102796591e-02f, 1.111435005e-01f, 1.924554021e-01f, 2.437302039e-01f,
+    2.437302039e-01f, 1.924554021e-01f, 1.111435005e-01f, 3.102796591e-02f, -2.230164764e-02f, -3.981645227e-02f, -2.973090689e-02f, -9.174511998e-03f,
+    6.759296779e-03f, 1.180361286e-02f, 8.332496978e-03f, 2.369512669e-03f, -1.587493994e-03f, -2.561941612e-03f, -1.818568124e-03f, -6.304691486e-04f,
+};
 
 } // namespace
 
@@ -232,6 +248,8 @@ void MixRuntime::reset() noexcept
         s.rms.reset();
         s.corr.reset();
         s.compEnv = 1.f;
+        std::memset (s.tpUp, 0, sizeof s.tpUp);
+        std::memset (s.tpDown, 0, sizeof s.tpDown);
         s.rampSample = 1000000;
         s.slopeXfade = s.satXfade = false;
         s.eqXfade[0] = s.eqXfade[1] = false;
@@ -269,6 +287,7 @@ MixChain MixRuntime::blended (const Strip& s) const noexcept
     c.lpfHz = lerpLog (std::max (20.f, s.from.lpfHz), std::max (20.f, s.to.lpfHz), uFreq);
     c.inputTrimDb = lerp (s.from.inputTrimDb, s.to.inputTrimDb, uGain);
     c.outputTrimDb = lerp (s.from.outputTrimDb, s.to.outputTrimDb, uGain);
+    c.tpCeilDb = lerp (s.from.tpCeilDb, s.to.tpCeilDb, uGain);
     c.tiltDbPerOct = lerp (s.from.tiltDbPerOct, s.to.tiltDbPerOct, uGain);
     c.tiltPivotHz = lerpLog (s.from.tiltPivotHz, s.to.tiltPivotHz, uFreq);
     c.monoBelowHz = lerpLog (std::max (1.f, s.from.monoBelowHz), std::max (1.f, s.to.monoBelowHz), uFreq);
@@ -360,6 +379,7 @@ void MixRuntime::beginBlock (const MixProgram& prog, const MixBlockInfo& info) n
         if (! target.valid)
             continue;
         target.outputTrimDb += prog.makeupDb[dialect][lane];
+        target.tpCeilDb = prog.tpCeilDb[dialect][lane];
         if (lane < kMixMelodic && info.presetId[lane] != nullptr)
             prog.applyOverride (target, lane, info.presetId[lane]);
         auto& s = strip[lane];
@@ -387,6 +407,7 @@ void MixRuntime::beginBlock (const MixProgram& prog, const MixBlockInfo& info) n
             || std::fabs (target.hpfHz - s.to.hpfHz) > 0.5f
             || std::fabs (target.inputTrimDb - s.to.inputTrimDb) > 0.01f
             || std::fabs (target.outputTrimDb - s.to.outputTrimDb) > 0.01f
+            || std::fabs (target.tpCeilDb - s.to.tpCeilDb) > 0.05f
             || std::fabs (target.compReleaseMs - s.to.compReleaseMs) > 0.5f
             || std::fabs (target.satDriveDb - s.to.satDriveDb) > 0.05f)
         {
@@ -429,6 +450,47 @@ void MixRuntime::beginBlock (const MixProgram& prog, const MixBlockInfo& info) n
         }
     }
     snapped = true;
+}
+
+float MixRuntime::tpShape (float x, float ceilLin) noexcept
+{
+    // +6 dB and above is "no ceiling": the lane still runs the FIR so every lane shares one delay.
+    if (ceilLin > 2.f)
+        return x;
+    const float ax = std::fabs (x);
+    const float knee = 0.7f * ceilLin;
+    if (ax <= knee)
+        return x;
+    const float span = std::max (1.0e-8f, ceilLin - knee);
+    float y = knee + span * std::tanh ((ax - knee) / span);
+    if (y > ceilLin)
+        y = ceilLin;
+    return std::copysign (y, x);
+}
+
+float MixRuntime::clipSample (Strip& s, int ch, float x, float ceilLin) noexcept
+{
+    float* up = s.tpUp[ch];
+    std::memmove (up + 1, up, sizeof (float) * 7);
+    up[0] = x;
+    float hi[4];
+    for (int p = 0; p < 4; ++p)
+    {
+        const float* c = kTpUp[p];
+        float acc = c[0] * up[0] + c[1] * up[1] + c[2] * up[2] + c[3] * up[3]
+                  + c[4] * up[4] + c[5] * up[5] + c[6] * up[6] + c[7] * up[7];
+        hi[p] = tpShape (acc, ceilLin);
+    }
+    float* down = s.tpDown[ch];
+    for (int p = 0; p < 4; ++p)
+    {
+        std::memmove (down + 1, down, sizeof (float) * 31);
+        down[0] = hi[p];
+    }
+    float y = 0.f;
+    for (int k = 0; k < 32; ++k)
+        y += kTpDown[k] * down[k];
+    return y;
 }
 
 void MixRuntime::process (int lane, float& l, float& r) noexcept
@@ -581,8 +643,11 @@ void MixRuntime::process (int lane, float& l, float& r) noexcept
     }
 
     const float trim = dbToLin (c.outputTrimDb);
-    l = flush (yL * trim);
-    r = flush (yR * trim);
+    const float ceilLin = dbToLin (c.tpCeilDb);
+    // Soft knee into a hard clamp at 4×, after the trim, so makeup can put the body
+    // back on the short-term target while the peak stays on the ceiling. No sum limiter.
+    l = flush (clipSample (s, 0, yL * trim, ceilLin));
+    r = flush (clipSample (s, 1, yR * trim, ceilLin));
 
     if (s.rampSample < 1000000)
         ++s.rampSample;
