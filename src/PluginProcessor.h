@@ -2,6 +2,7 @@
 
 #include "Engine/Engine.h"
 #include "Engine/SampleLibrary.h"
+#include "Mix/MixProgram.h"
 #include "Sampler/UserSlots.h"
 #include "Generator/Generator.h"
 #include "Generator/Pattern.h"
@@ -140,6 +141,7 @@ private:
     };
 
     Engine engine;
+    MixProgram mixProgram;
     std::uint8_t edited[NumParts] {};
     juce::String voxSampleName;
     std::shared_ptr<AsyncState> async = std::make_shared<AsyncState>();

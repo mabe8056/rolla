@@ -760,21 +760,37 @@ void DrumMachine::trigger (const DrumHit& hit) noexcept
 
 void DrumMachine::process (float& left, float& right) noexcept
 {
-    const float kick = core->renderKick();
-    addPan (kick, 0.f, left, right);
-    addPan (core->renderSnare(), 0.f, left, right);
-    addPan (core->renderClap(), 0.f, left, right);
-    const float rim = core->renderRimTom (core->rim);
-    addPan (rim, core->rim.pan, left, right);
-    const float tomL = core->renderRimTom (core->tomL);
-    addPan (tomL, core->tomL.pan, left, right);
-    const float tomM = core->renderRimTom (core->tomM);
-    addPan (tomM, core->tomM.pan, left, right);
-    addPan (core->renderPerc(), core->perc.pan, left, right);
-    addPan (core->renderMetal (core->hatC), 0.f, left, right);
-    addPan (core->renderMetal (core->hatO), 0.f, left, right);
-    const float ride = core->renderMetal (core->ride);
-    addPan (ride, 0.20f, left, right);
+    process (left, right, nullptr, nullptr);
+}
+
+void DrumMachine::process (float& left, float& right, float* voiceL, float* voiceR) noexcept
+{
+    const bool split = voiceL != nullptr && voiceR != nullptr;
+    auto take = [&] (int voice, float x, float pan)
+    {
+        float l = 0.f, r = 0.f;
+        addPan (x, pan, l, r);
+        if (split)
+        {
+            voiceL[voice] = l;
+            voiceR[voice] = r;
+        }
+        else
+        {
+            left += l;
+            right += r;
+        }
+    };
+    take (Kick, core->renderKick(), 0.f);
+    take (Snare, core->renderSnare(), 0.f);
+    take (Clap, core->renderClap(), 0.f);
+    take (Rim, core->renderRimTom (core->rim), core->rim.pan);
+    take (TomLow, core->renderRimTom (core->tomL), core->tomL.pan);
+    take (TomMid, core->renderRimTom (core->tomM), core->tomM.pan);
+    take (Perc, core->renderPerc(), core->perc.pan);
+    take (HatC, core->renderMetal (core->hatC), 0.f);
+    take (HatO, core->renderMetal (core->hatO), 0.f);
+    take (Ride, core->renderMetal (core->ride), 0.20f);
     if (auto* s = core->slot.load (std::memory_order_acquire))
         s->render (left, right);
 }
