@@ -10,8 +10,10 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <mutex>
+#include <thread>
 
 namespace rolla
 {
@@ -47,10 +49,22 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
-    PresetBank bank;
+    PresetBank copyPresets() const;
+    void modifyPresets (const std::function<void (PresetBank&)>& edit);
+    std::uint32_t presetGeneration() const noexcept { return presetGen.load (std::memory_order_acquire); }
+
+    // Blocks until preset JSON, the first pattern, and the sample-folder setup have finished.
+    void waitUntilReady();
+    double startupMillis() const noexcept { return startupMs.load (std::memory_order_relaxed); }
+
+private:
+    mutable std::mutex presetMu;
+    std::shared_ptr<PresetBank> presets;
+    std::atomic<std::uint32_t> presetGen { 0 };
+
+public:
     juce::UndoManager undo;
     juce::AudioProcessorValueTreeState apvts;
-    const PresetBank& getPresets() const noexcept { return bank; }
     juce::UndoManager& getUndo() noexcept { return undo; }
 
     void markEdited (int part);
@@ -111,6 +125,8 @@ private:
     void regenerate (int onlyPart);
     Settings currentSettings() const;
     void publish (const Groove& g);
+    void publishInitial (const Groove& g);
+    void deferredStartup();
     void rememberSample (int voice, const float* mono, int n, double rate, const juce::String& name);
     void applyRememberedSamples();
 
@@ -147,6 +163,15 @@ private:
     std::atomic<int> editorWidth { 0 };
     std::atomic<int> editorHeight { 0 };
     std::atomic<std::uint32_t> projectEditorSerial { 0 };
+
+    std::atomic<bool> startupStop { false };
+    std::atomic<bool> rootChosen { false };
+    std::mutex rootSetupMu;
+    std::atomic<bool> startupDone { false };
+    std::atomic<double> startupMs { 0.0 };
+    double startupT0 = 0.0;
+    std::thread startupThread;
+    std::atomic<std::uint32_t> grooveEpoch { 0 };
 
     std::atomic<bool> preview { false };
     std::atomic<bool> uiPlaying { false };

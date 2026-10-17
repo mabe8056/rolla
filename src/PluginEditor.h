@@ -22,6 +22,7 @@ public:
     void resized() override;
     bool keyPressed (const juce::KeyPress&) override;
     void mouseDown (const juce::MouseEvent&) override;
+    void mouseMove (const juce::MouseEvent&) override;
 
     void setEditorScale (float scale);
     void selectLane (int part);
@@ -40,6 +41,7 @@ private:
     std::unique_ptr<SizeConstrainer> constrainer;
     std::unique_ptr<juce::PropertiesFile> editorSettings;
     std::unique_ptr<Content> content;
+    std::unique_ptr<juce::TooltipWindow> tooltip;
     std::atomic<bool> rollPulse { false };
     std::uint32_t appliedProjectSerial = 0;
     bool sizeDirty = false;

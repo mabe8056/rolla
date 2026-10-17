@@ -51,6 +51,7 @@ target_sources(ROLLA
     PRIVATE
         src/PluginProcessor.cpp
         src/PluginEditor.cpp
+        src/ui/Theme.cpp
         src/Engine/Engine.cpp
         src/Engine/Sampler.cpp
         src/Engine/SampleLibrary.cpp
@@ -149,6 +150,7 @@ add_executable(rolla-ui-shot
     src/UiSnapshot.cpp
     src/PluginProcessor.cpp
     src/PluginEditor.cpp
+    src/ui/Theme.cpp
     src/Engine/Engine.cpp
     src/Engine/Sampler.cpp
     src/Engine/SampleLibrary.cpp
