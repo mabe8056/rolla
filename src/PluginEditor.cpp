@@ -62,6 +62,28 @@ bool audioFile (const String& path)
         || path.endsWithIgnoreCase (".flac");
 }
 
+StringArray presetsForLane (const PresetBank& bank, int part)
+{
+    StringArray names;
+    for (int i = 0; i < PresetBank::kPer; ++i)
+    {
+        const char* raw = nullptr;
+        switch (part)
+        {
+            case Bass: raw = bank.bass[i].name; break;
+            case Stab: raw = bank.stab[i].name; break;
+            case Hits: raw = bank.hits[i].name; break;
+            case Pluck: raw = bank.pluck[i].name; break;
+            case Pad: raw = bank.pad[i].name; break;
+            case Vox: raw = bank.vox[i].name; break;
+            case Drums: raw = bank.drums[i].name; break;
+            default: break;
+        }
+        names.add (raw != nullptr && raw[0] != 0 ? String (raw) : ("Preset " + String (i + 1)));
+    }
+    return names;
+}
+
 Font tracked (Font font, float em)
 {
     font.setExtraKerningFactor (em);
@@ -766,9 +788,11 @@ struct Stepper : Component
     String title, sub;
     bool strike = false;
     std::function<void (int)> onStep;
+    std::function<void()> onBrowse;
 
     Stepper()
     {
+        setMouseCursor (MouseCursor::PointingHandCursor);
         addAndMakeVisible (prev);
         addAndMakeVisible (next);
         prev.setWantsKeyboardFocus (true);
@@ -779,6 +803,12 @@ struct Stepper : Component
         next.onClick = [this] { if (onStep && next.isEnabled()) onStep (1); };
         prev.onStateChange = [this] { repaint(); };
         next.onStateChange = [this] { repaint(); };
+    }
+
+    void mouseDown (const MouseEvent& e) override
+    {
+        if (e.eventComponent == this && onBrowse)
+            onBrowse();
     }
 
     void setEnds (bool atStart, bool atEnd)
@@ -881,13 +911,9 @@ struct DialectBar : Component
     void resized() override
     {
         auto r = getLocalBounds().reduced (4, 4);
-        const float weights[] = { 6.f, 4.f, 3.f, 10.f };
-        float sum = 0.f;
-        for (float w : weights)
-            sum += w;
         for (int i = 0; i < NumDialects; ++i)
         {
-            const int w = (i == NumDialects - 1) ? r.getWidth() : roundToInt ((float) r.getWidth() * weights[i] / sum);
+            const int w = (i == NumDialects - 1) ? r.getWidth() : r.getWidth() / (NumDialects - i);
             buttons[i].setBounds (r.removeFromLeft (w));
         }
     }
@@ -1323,7 +1349,7 @@ struct SampleSlot : Component, FileDragAndDropTarget
                               Justification::centredLeft, 1);
             g.setColour (col (kInk2));
             g.setFont (lf->instSemi.withHeight (10.f));
-            g.drawFittedText (loaded ? "overrides preset" : "wav · aif · aiff · flac",
+            g.drawFittedText (loaded ? "overrides preset" : utf8 ("wav · aif · aiff · flac"),
                               text.toNearestInt(), Justification::centredLeft, 1);
             if (loaded)
             {
@@ -1342,7 +1368,7 @@ struct SampleSlot : Component, FileDragAndDropTarget
             g.setColour (col (kInk2));
             auto name = loaded ? proc->getDrumSampleName (voice) : String (panelVoiceCode (voice));
             if (name.length() > 12)
-                name = name.substring (0, 11) + "…";
+                name = name.substring (0, 11) + utf8 ("…");
             g.drawText (name, b.reduced (6.f, 1.f).removeFromBottom (b.getHeight() * 0.5f),
                         Justification::centredLeft, false);
         }
@@ -1527,7 +1553,7 @@ struct DragTile : Component
 {
     RollaProcessor* proc = nullptr;
     QuietButton exportBtn { "EXPORT" };
-    String caption { "7 tracks · 8 bars" };
+    String caption { utf8 ("7 tracks · 8 bars") };
     std::unique_ptr<FileChooser> chooser;
     bool armed = false;
 
@@ -1765,8 +1791,10 @@ struct RollaEditor::Content : Component
         for (auto* k : { &tone, &punch, &level })
             addAndMakeVisible (k);
         presetStep.onStep = [this] (int dir) { stepPreset (dir); };
+        presetStep.onBrowse = [this] { browseLanePresets (presetStep); };
         addAndMakeVisible (presetStep);
         kitStep.onStep = [this] (int dir) { stepPreset (dir); };
+        kitStep.onBrowse = [this] { browseLanePresets (kitStep); };
         addAndMakeVisible (kitStep);
         source.onPick = [this] (int mode)
         {
@@ -1869,7 +1897,7 @@ struct RollaEditor::Content : Component
         menu.addSeparator();
         menu.addItem (6, "Reduce motion", true, paramRaw (proc.apvts, "reduceMotion") >= 0.5f);
         menu.addSeparator();
-        menu.addItem (7, "Samples folder…");
+        menu.addItem (7, utf8 ("Samples folder…"));
         menu.addItem (8, proc.samplesRoot().getFullPathName(), false, false);
         menu.showMenuAsync (PopupMenu::Options().withTargetComponent (target != nullptr ? target : &logo),
                             [this] (int result)
@@ -1913,15 +1941,38 @@ struct RollaEditor::Content : Component
 
     void stepPreset (int dir)
     {
+        const auto names = presetsForLane (proc.bank, selected);
         const auto id = String (partId (selected)) + "Preset";
         if (auto* p = dynamic_cast<AudioParameterChoice*> (proc.apvts.getParameter (id)))
         {
             const int next = p->getIndex() + dir;
-            if (next < 0 || next >= p->choices.size())
+            if (next < 0 || next >= names.size())
                 return;
             setChoiceIndex (proc, id, next);
             proc.markEdited (selected);
         }
+    }
+
+    void browseLanePresets (Stepper& step)
+    {
+        const int part = selected;
+        const auto names = presetsForLane (proc.bank, part);
+        const auto id = String (partId (part)) + "Preset";
+        auto* param = dynamic_cast<AudioParameterChoice*> (proc.apvts.getParameter (id));
+        if (param == nullptr || names.isEmpty())
+            return;
+        PopupMenu menu;
+        const int current = jlimit (0, names.size() - 1, param->getIndex());
+        for (int i = 0; i < names.size(); ++i)
+            menu.addItem (i + 1, names[i], true, i == current);
+        menu.showMenuAsync (PopupMenu::Options().withTargetComponent (&step),
+                            [this, id, part, count = names.size()] (int result)
+                            {
+                                if (result <= 0 || result > count)
+                                    return;
+                                setChoiceIndex (proc, id, result - 1);
+                                proc.markEdited (part);
+                            });
     }
 
     void bindSound()
@@ -2003,18 +2054,19 @@ struct RollaEditor::Content : Component
 
         if (auto* preset = dynamic_cast<AudioParameterChoice*> (proc.apvts.getParameter (String (partId (selected)) + "Preset")))
         {
-            const int index = preset->getIndex();
-            const auto name = preset->choices[index].toUpperCase();
-            const auto sub = String (index + 1) + " / " + String (preset->choices.size())
-                           + " · " + dialectName (choiceIndex (proc.apvts, "dialect"));
+            const auto names = presetsForLane (proc.bank, selected);
+            const int index = names.isEmpty() ? 0 : jlimit (0, names.size() - 1, preset->getIndex());
+            const auto name = names.isEmpty() ? String() : names[index];
+            const auto sub = String (index + 1) + " / " + String (names.size())
+                           + utf8 (" · ") + String (dialectName (choiceIndex (proc.apvts, "dialect")));
             presetStep.title = name;
             presetStep.sub = sub;
             presetStep.strike = selected == Vox && proc.hasVoxSample();
-            presetStep.setEnds (index <= 0, index >= preset->choices.size() - 1);
+            presetStep.setEnds (index <= 0, index >= names.size() - 1);
             presetStep.repaint();
             kitStep.title = name;
             kitStep.sub = {};
-            kitStep.setEnds (index <= 0, index >= preset->choices.size() - 1);
+            kitStep.setEnds (index <= 0, index >= names.size() - 1);
             kitStep.repaint();
         }
 
@@ -2048,10 +2100,10 @@ struct RollaEditor::Content : Component
         else
         {
             const auto count = String (rolling) + (rolling == 1 ? " lane" : " lanes");
-            const auto tail = kept.isEmpty() ? String() : "  ·  " + kept.joinIntoString (" + ") + " kept";
+            const auto tail = kept.isEmpty() ? String() : utf8 ("  ·  ") + kept.joinIntoString (" + ") + " kept";
             face.setCaption (count, tail, false);
         }
-        drag.caption = String (tracks) + (tracks == 1 ? " track · " : " tracks · ")
+        drag.caption = String (tracks) + (tracks == 1 ? utf8 (" track · ") : utf8 (" tracks · "))
                      + String (groove.bars) + (groove.bars == 1 ? " bar" : " bars");
         drag.repaint();
         voxSlot.repaint();

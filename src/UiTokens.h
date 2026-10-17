@@ -86,17 +86,23 @@ inline const char* panelVoiceCode (int voice) noexcept
     }
 }
 
-inline const char* channelLine (int part) noexcept
+// juce::String(const char*) is ASCII-only, so a UTF-8 middle dot has to go through fromUTF8.
+inline juce::String utf8 (const char* text)
+{
+    return juce::String::fromUTF8 (text);
+}
+
+inline juce::String channelLine (int part)
 {
     switch (part)
     {
-        case Bass: return "ch 1 · sound";
-        case Stab: return "ch 2 · sound";
-        case Hits: return "ch 3 · sound";
-        case Pluck: return "ch 4 · sound";
-        case Pad: return "ch 5 · sound";
-        case Vox: return "ch 6 · sound";
-        default: return "909 kit · 7 voices";
+        case Bass: return utf8 ("ch 1 · sound");
+        case Stab: return utf8 ("ch 2 · sound");
+        case Hits: return utf8 ("ch 3 · sound");
+        case Pluck: return utf8 ("ch 4 · sound");
+        case Pad: return utf8 ("ch 5 · sound");
+        case Vox: return utf8 ("ch 6 · sound");
+        default: return utf8 ("909 kit · 7 voices");
     }
 }
 
