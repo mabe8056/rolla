@@ -230,6 +230,12 @@ std::uint64_t hashAll (const rolla::Groove& g)
     return h;
 }
 
+bool packOnDisk (rolla::RollaProcessor& proc)
+{
+    pumpUntil ([&] { return proc.samplesFound() >= 0; }, 8000);
+    return proc.samplesFound() > 0;
+}
+
 bool reshapeTo (rolla::RollaProcessor& proc, const char* id, float value)
 {
     const auto before = proc.copyGroove().generation;
@@ -293,6 +299,15 @@ void testSoundControls()
     // Default intensity leaves pluck out. The lane knobs are tested with every lane in.
     setDenorm (proc, "intensity", 100.f);
     expect (pumpUntil ([&] { return proc.copyGroove().lane[rolla::Pluck].count > 0; }), "intensity 100 brings pluck in");
+
+    // Factory presets play the sample pack and do not fall back to the synth.
+    // A runner without ~/Music/ROLLA/Samples stays silent, same as the loudness gate.
+    if (! packOnDisk (proc))
+    {
+        std::cout << "sound knobs skipped: sample pack is not on this machine\n";
+        proc.setPlayHead (nullptr);
+        return;
+    }
 
     const int lanes[] = { rolla::Bass, rolla::Stab, rolla::Hits, rolla::Pluck, rolla::Pad, rolla::Vox };
     const char* names[] = { "BASS", "STAB", "HITS", "PLUCK", "PAD", "VOX" };
@@ -593,6 +608,7 @@ void testExport()
     const int tracks = ((int) data[10] << 8) | (int) data[11];
     expect (tracks == 1, "a lane file is one track");
 
+    const bool pack = packOnDisk (proc);
     const auto wavs = proc.writeLaneAudio (rolla::Bass);
     expect (wavs.size() == 1, "one wav");
     if (wavs.isEmpty())
@@ -615,7 +631,10 @@ void testExport()
         double sum = 0.0;
         for (int i = 0; i < audio.getNumSamples(); ++i)
             sum += (double) audio.getSample (0, i) * (double) audio.getSample (0, i);
-        expect (std::sqrt (sum / (double) audio.getNumSamples()) > 1.0e-3, "lane wav is not silent");
+        if (pack)
+            expect (std::sqrt (sum / (double) audio.getNumSamples()) > 1.0e-3, "lane wav is not silent");
+        else
+            std::cout << "lane wav energy skipped: sample pack is not on this machine\n";
     }
 
     const auto all = proc.writeTempMidi();
@@ -654,7 +673,7 @@ void testExport()
         const double expected = 8.0 * 4.0 * 60.0 / 130.0 * stemReader->sampleRate;
         expect (stemReader->numChannels == 2, std::string (rolla::partId (i)) + " stem stereo");
         expect (std::abs ((double) stemReader->lengthInSamples - expected) < 64.0, std::string (rolla::partId (i)) + " stem is 8 bars");
-        if (i == rolla::Bass || i == rolla::Stab || i == rolla::Drums)
+        if (pack && (i == rolla::Bass || i == rolla::Stab || i == rolla::Drums))
         {
             // The stab answers on the odd bars, so the first second of an 8-bar stem
             // can be silence even when the lane rendered. Measure the whole file.
