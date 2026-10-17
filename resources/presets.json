@@ -1,7 +1,7 @@
 {
   "schemaVersion": 3,
   "version": 3,
-  "notes": "Schema v3. Units stay in the spec's units: Hz, ms, dB, semitones. Omitted keys keep the engine defaults. Each preset may include a sample block. mode is SYNTH, SAMPLE, or LAYER. file and pool entries are paths relative to the samples root (macOS ~/Music/ROLLA/Samples, Windows %USERPROFILE%\\Music\\ROLLA\\Samples), using forward slashes. root is scientific pitch with C4 = 60 (D1 = 26). start is seconds. Loop start/end/xfade above 32 are file-rate frames; smaller values are seconds. loop.end 0 means the file end. layerMix is 0 (synth) to 1 (sample). zones are optional multisample maps {file, root, lo, hi}. slice true starts each note at the next detected transient. Drums may set voices.kick/snare/clap/rim/tomLow/tomMid/hatC/hatO/ride to a path under DRUMS/{KICK,SNARE,CLAP,RIM,PERC,CH,OH,RIDE}. A missing file keeps the synth and lights the lane warning. Do not commit audio.",
+  "notes": "Schema v3. Factory presets are sample recipes. Each melodic recipe filters the scanned lane folder (root, pack and category when set) so ROLL draws from every file in that pool. VOX has phrase, chop, and tempo-locked loop recipes. PAD has an atmosphere recipe. Drum kits read DRUMS/<voice>/ from the index and do not embed file lists. A missing hit stays on another of his samples. There is no synth drum kit. Do not commit audio.",
   "parts": {
     "bass": {
       "presets": [
@@ -27,7 +27,7 @@
           "trimDb": 0,
           "octave": 1,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "BASS/THMAG_Bass_One_Shot_4_Fm.wav",
             "root": "F1",
             "start": 0.0006,
@@ -40,15 +40,14 @@
               "xfade": 0
             },
             "layerMix": 0.35,
-            "pool": [
-              "BASS/THMAG_Bass_One_Shot_8_Fm.wav",
-              "BASS/TAT_Bass_11_Ds.wav",
-              "BASS/THMAG_Bass_One_Shot_6_Fm.wav",
-              "BASS/TAT_Bass_09_Ds.wav",
-              "BASS/VER_MoodyOrgan_Bass_C.wav",
-              "BASS/SD_Bass_20_C.wav"
-            ]
-          }
+            "pool": [],
+            "poolFilter": {
+              "lane": "BASS"
+            }
+          },
+          "styles": [
+            "ukmin"
+          ]
         },
         {
           "id": "round",
@@ -72,7 +71,7 @@
           "trimDb": -1,
           "octave": 1,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "BASS/THMAG_Bass_One_Shot_1_Fm.wav",
             "root": "F1",
             "start": 0.006,
@@ -85,15 +84,15 @@
               "xfade": 4410
             },
             "layerMix": 0.6,
-            "pool": [
-              "BASS/VER_CleanSub_Bass_C.wav",
-              "BASS/THMAG_Bass_One_Shot_6_Fm.wav",
-              "BASS/THMN_Bass_Shot_14_Fmin.wav",
-              "BASS/TAT_Bass_16_F.wav",
-              "BASS/TAT_Bass_15_F.wav",
-              "BASS/JF_Bass_15_C.wav"
-            ]
-          }
+            "pool": [],
+            "poolFilter": {
+              "lane": "BASS"
+            }
+          },
+          "styles": [
+            "long",
+            "gaskin"
+          ]
         },
         {
           "id": "click",
@@ -122,7 +121,7 @@
             "peakDb": -6
           },
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "BASS/DCB_Bass_01_C.wav",
             "root": "C#1",
             "start": 0.0005,
@@ -135,15 +134,14 @@
               "xfade": 0
             },
             "layerMix": 0.5,
-            "pool": [
-              "BASS/THMAG_Bass_One_Shot_3_Fm.wav",
-              "BASS/DCB_Bass_09_C.wav",
-              "BASS/THMN_Bass_Shot_12_Fmin.wav",
-              "BASS/TAT_Bass_05_As.wav",
-              "BASS/AR_Bass_07_C.wav",
-              "BASS/MPH_Bass_03_C.wav"
-            ]
-          }
+            "pool": [],
+            "poolFilter": {
+              "lane": "BASS"
+            }
+          },
+          "styles": [
+            "pop"
+          ]
         }
       ]
     },
@@ -191,15 +189,14 @@
               "xfade": 0
             },
             "layerMix": 0.5,
-            "pool": [
-              "STAB/MA_C_Powerchord_Synth.wav",
-              "STAB/THMN_Stab_1_Cmin.wav",
-              "STAB/THMN_Stab_3_Cmin.wav",
-              "STAB/THMN_Stab_2_Cmin.wav",
-              "STAB/JF_Synth_12_C.wav",
-              "STAB/THMAG_Synth_One_Shot_29_Fm.wav"
-            ]
-          }
+            "pool": [],
+            "poolFilter": {
+              "lane": "STAB"
+            }
+          },
+          "styles": [
+            "ukmin"
+          ]
         },
         {
           "id": "swell",
@@ -228,7 +225,7 @@
             7
           ],
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "STAB/JF_Synth_12_C.wav",
             "root": "C3",
             "start": 0.0,
@@ -241,15 +238,15 @@
               "xfade": 8205
             },
             "layerMix": 0.6,
-            "pool": [
-              "STAB/THMN_Stab_8_Cmin.wav",
-              "STAB/THMN_Stab_1_Cmin.wav",
-              "STAB/CD_Synth_Hit_09_C.wav",
-              "STAB/THMN_Stab_4_Cmin.wav",
-              "STAB/AR_Synth_06_C.wav",
-              "STAB/SD_Synth_05_C.wav"
-            ]
-          }
+            "pool": [],
+            "poolFilter": {
+              "lane": "STAB"
+            }
+          },
+          "styles": [
+            "long",
+            "gaskin"
+          ]
         },
         {
           "id": "click",
@@ -294,15 +291,14 @@
               "xfade": 0
             },
             "layerMix": 0.5,
-            "pool": [
-              "STAB/VER_Stab_02_C.wav",
-              "STAB/VER_Synth_Hit_Buzz_C.wav",
-              "STAB/JF_Synth_09_C.wav",
-              "STAB/CD_Synth_Hit_17_Cm.wav",
-              "STAB/SD_Synth_04_C.wav",
-              "STAB/TAT_SFX_05.wav"
-            ]
-          }
+            "pool": [],
+            "poolFilter": {
+              "lane": "STAB"
+            }
+          },
+          "styles": [
+            "pop"
+          ]
         }
       ]
     },
@@ -316,7 +312,7 @@
           "detune": 1.0,
           "trimDb": 2,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "HITS/VER_DX7Organ_Bass_C.wav",
             "root": "C2",
             "start": 0.0006,
@@ -329,15 +325,15 @@
               "xfade": 0
             },
             "layerMix": 0.6,
-            "pool": [
-              "HITS/THMN_Chord_Stab_8_Cmin.wav",
-              "HITS/THMN_Chord_Stab_7_Cmin.wav",
-              "HITS/MPH_Synth_14_C.wav",
-              "HITS/THMAG_Synth_One_Shot_23_Fm.wav",
-              "HITS/AR_Synth_03_C.wav",
-              "HITS/SD_Synth_14_C.wav"
-            ]
-          }
+            "pool": [],
+            "poolFilter": {
+              "lane": "HITS"
+            }
+          },
+          "styles": [
+            "ukmin",
+            "gaskin"
+          ]
         },
         {
           "id": "rave",
@@ -368,15 +364,14 @@
               "xfade": 0
             },
             "layerMix": 0.5,
-            "pool": [
-              "HITS/JC_Keys_MPC_123_A_Minor.wav",
-              "HITS/VER_Synth_Hit_Tines_C.wav",
-              "HITS/TAT_SFX_20.wav",
-              "HITS/SD_Synth_14_C.wav",
-              "HITS/TAT_SFX_01.wav",
-              "HITS/THMAG_Synth_One_Shot_23_Fm.wav"
-            ]
-          }
+            "pool": [],
+            "poolFilter": {
+              "lane": "HITS"
+            }
+          },
+          "styles": [
+            "pop"
+          ]
         },
         {
           "id": "dusty",
@@ -396,7 +391,7 @@
           "detune": 0.8,
           "trimDb": -6,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "HITS/THMN_Instruments_Rave_Stabber_Dmin_142.wav",
             "root": "D4",
             "start": 0.0,
@@ -409,15 +404,14 @@
               "xfade": 0
             },
             "layerMix": 0.5,
-            "pool": [
-              "HITS/VER_Synth_Hit_Rave_C.wav",
-              "HITS/VER_HyperReese_Bass_C.wav",
-              "HITS/TAT_SFX_01.wav",
-              "HITS/TAT_SFX_20.wav",
-              "HITS/TAT_SFX_07.wav",
-              "HITS/THMN_Chord_Stab_7_Cmin.wav"
-            ]
-          }
+            "pool": [],
+            "poolFilter": {
+              "lane": "HITS"
+            }
+          },
+          "styles": [
+            "long"
+          ]
         }
       ]
     },
@@ -444,15 +438,15 @@
               "xfade": 0
             },
             "layerMix": 0.5,
-            "pool": [
-              "PLUCK/CD_Synth_Hit_20_C.wav",
-              "PLUCK/VER_Stab_06_C.wav",
-              "PLUCK/VER_Synth_Hit_Defuse_C.wav",
-              "PLUCK/AR_Synth_31_C.wav",
-              "PLUCK/AR_Synth_21_C.wav",
-              "PLUCK/CD_Synth_Hit_15_C.wav"
-            ]
-          }
+            "pool": [],
+            "poolFilter": {
+              "lane": "PLUCK"
+            }
+          },
+          "styles": [
+            "ukmin",
+            "gaskin"
+          ]
         },
         {
           "id": "soft",
@@ -475,15 +469,14 @@
               "xfade": 0
             },
             "layerMix": 0.5,
-            "pool": [
-              "PLUCK/VER_Synth_Hit_Formant_C.wav",
-              "PLUCK/CD_Synth_Hit_15_C.wav",
-              "PLUCK/CD_Synth_Hit_20_C.wav",
-              "PLUCK/AR_Synth_15_C.wav",
-              "PLUCK/VER_Synth_Hit_Defuse_C.wav",
-              "PLUCK/AR_Synth_21_C.wav"
-            ]
-          }
+            "pool": [],
+            "poolFilter": {
+              "lane": "PLUCK"
+            }
+          },
+          "styles": [
+            "pop"
+          ]
         },
         {
           "id": "bright",
@@ -493,7 +486,7 @@
           "brightness": 1.4,
           "trimDb": -9,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PLUCK/VER_Synth_Hit_Flutter_C.wav",
             "root": "C4",
             "start": 0.0,
@@ -506,15 +499,14 @@
               "xfade": 0
             },
             "layerMix": 0.6,
-            "pool": [
-              "PLUCK/TAT_SFX_06.wav",
-              "PLUCK/AR_Synth_01_C.wav",
-              "PLUCK/AR_Synth_22_C.wav",
-              "PLUCK/SD_Synth_01_C.wav",
-              "PLUCK/SD_Synth_06_C.wav",
-              "PLUCK/DCB_Synth_06_C.wav"
-            ]
-          }
+            "pool": [],
+            "poolFilter": {
+              "lane": "PLUCK"
+            }
+          },
+          "styles": [
+            "long"
+          ]
         }
       ]
     },
@@ -530,7 +522,7 @@
           "reverbSend": 0.45,
           "trimDb": -12,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/JF_128_Fm_Phased_Funky_Pad_1_Pad.wav",
             "root": "F2",
             "start": 0.0,
@@ -543,15 +535,15 @@
               "xfade": 11989
             },
             "layerMix": 0.6,
-            "pool": [
-              "PAD/TAT_128_Pad_11_Fm.wav",
-              "PAD/JF_128_Gsm_Strung_Up_Pad.wav",
-              "PAD/JF_128_Robot_Pad_Background.wav",
-              "PAD/THMAG_Background_Noise_1_Cmin_132.wav",
-              "PAD/THMN_Instruments_Pad_5th_Cmin_142.wav",
-              "PAD/DCB_132_Neb_Background.wav"
-            ]
-          }
+            "pool": [],
+            "poolFilter": {
+              "lane": "PAD"
+            }
+          },
+          "styles": [
+            "ukmin",
+            "pop"
+          ]
         },
         {
           "id": "wide",
@@ -576,15 +568,14 @@
               "xfade": 9757
             },
             "layerMix": 0.5,
-            "pool": [
-              "PAD/JF_128_Robot_Pad_Background.wav",
-              "PAD/JF_128_In_The_City_Background.wav",
-              "PAD/THMAG_Background_Noise_4_Cmin_132.wav",
-              "PAD/JF_128_Swampy_Background.wav",
-              "PAD/DCB_131_Frost_Background.wav",
-              "PAD/DCB_132_Gm_Echo_Pad.wav"
-            ]
-          }
+            "pool": [],
+            "poolFilter": {
+              "lane": "PAD"
+            }
+          },
+          "styles": [
+            "long"
+          ]
         },
         {
           "id": "dark",
@@ -596,7 +587,7 @@
           "reverbSend": 0.35,
           "trimDb": -11,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/TAT_128_Pad_11_Fm.wav",
             "root": "D#1",
             "start": 0.0,
@@ -609,14 +600,43 @@
               "xfade": 11043
             },
             "layerMix": 0.6,
-            "pool": [
-              "PAD/JF_128_Fm_Hey_Soundscape_Pads.wav",
-              "PAD/JF_128_Fm_Phased_Funky_Pad_1_Pad.wav",
-              "PAD/THMN_Instruments_Pad_5th_Cmin_142.wav",
-              "PAD/JF_128_Gsm_Strung_Up_Pad.wav",
-              "PAD/THMAG_Background_Noise_4_Cmin_132.wav",
-              "PAD/DCB_132_Neb_Background.wav"
-            ]
+            "pool": [],
+            "poolFilter": {
+              "lane": "PAD"
+            }
+          },
+          "styles": [
+            "gaskin"
+          ]
+        },
+        {
+          "id": "atmospheres",
+          "name": "Atmospheres",
+          "cutoffHz": 1800,
+          "attackMs": 150,
+          "releaseMs": 700,
+          "detuneCents": 8,
+          "reverbSend": 0.45,
+          "trimDb": -12,
+          "sample": {
+            "mode": "SAMPLE",
+            "file": "PAD/JF_128_Fm_Phased_Funky_Pad_1_Pad.wav",
+            "root": "F2",
+            "start": 0.0,
+            "reverse": false,
+            "slice": false,
+            "loop": {
+              "on": true,
+              "start": 11989,
+              "end": 70561,
+              "xfade": 11989
+            },
+            "layerMix": 0.6,
+            "pool": [],
+            "poolFilter": {
+              "lane": "PAD",
+              "category": "atmosphere"
+            }
           }
         }
       ]
@@ -645,15 +665,14 @@
               "xfade": 0
             },
             "layerMix": 0.5,
-            "pool": [
-              "VOX/THMN_Rap_One_Shot_UH_DRY.wav",
-              "VOX/UHV_125_UH.wav",
-              "VOX/CD_130_Vox_Shot_03.wav",
-              "VOX/UHV_125_Chiki_Ah_1.wav",
-              "VOX/UHV_125_Chiki_Ah_2.wav",
-              "VOX/CD_130_Vox_Shot_02.wav"
-            ]
-          }
+            "pool": [],
+            "poolFilter": {
+              "lane": "VOX"
+            }
+          },
+          "styles": [
+            "ukmin"
+          ]
         },
         {
           "id": "booth",
@@ -677,15 +696,14 @@
               "xfade": 0
             },
             "layerMix": 0.5,
-            "pool": [
-              "VOX/VER_134_VoxBuild_E_FX.wav",
-              "VOX/MTV_128_Voc_FX_03.wav",
-              "VOX/MTV_128_Voc_FX_05.wav",
-              "VOX/THMAG_Vocal_Effect_Into_Your_Mind_132.wav",
-              "VOX/MTV_128_Voc_FX_02.wav",
-              "VOX/THMAG_Vocal_Effect_The_Rhythm_132.wav"
-            ]
-          }
+            "pool": [],
+            "poolFilter": {
+              "lane": "VOX"
+            }
+          },
+          "styles": [
+            "long"
+          ]
         },
         {
           "id": "chop",
@@ -709,14 +727,102 @@
               "xfade": 0
             },
             "layerMix": 0.5,
-            "pool": [
-              "VOX/UHV_125_UH.wav",
-              "VOX/THMN_Rap_One_Shot_UH_DRY.wav",
-              "VOX/CD_130_Vox_Shot_04.wav",
-              "VOX/UHV_125_Chiki_Ah_1.wav",
-              "VOX/UHV_125_YEAH.wav",
-              "VOX/CD_130_Vox_Shot_02.wav"
-            ]
+            "pool": [],
+            "poolFilter": {
+              "lane": "VOX"
+            }
+          },
+          "styles": [
+            "pop",
+            "gaskin"
+          ]
+        },
+        {
+          "id": "phrases",
+          "name": "Phrases",
+          "brightness": 1.15,
+          "decayMs": 140,
+          "breath": 0.35,
+          "reverbSend": 0.32,
+          "trimDb": -8,
+          "sample": {
+            "mode": "SAMPLE",
+            "file": "VOX/UHV_125_YEAH.wav",
+            "root": "B0",
+            "start": 0.0008,
+            "reverse": false,
+            "slice": false,
+            "loop": {
+              "on": false,
+              "start": 0,
+              "end": 0,
+              "xfade": 0
+            },
+            "layerMix": 0.5,
+            "pool": [],
+            "poolFilter": {
+              "lane": "VOX",
+              "category": "phrase"
+            }
+          }
+        },
+        {
+          "id": "chops",
+          "name": "Chops",
+          "brightness": 1.15,
+          "decayMs": 140,
+          "breath": 0.35,
+          "reverbSend": 0.32,
+          "trimDb": -8,
+          "sample": {
+            "mode": "SAMPLE",
+            "file": "VOX/UHV_125_YEAH.wav",
+            "root": "B0",
+            "start": 0.0008,
+            "reverse": false,
+            "slice": false,
+            "loop": {
+              "on": false,
+              "start": 0,
+              "end": 0,
+              "xfade": 0
+            },
+            "layerMix": 0.5,
+            "pool": [],
+            "poolFilter": {
+              "lane": "VOX",
+              "category": "chop"
+            }
+          }
+        },
+        {
+          "id": "loops",
+          "name": "Loops",
+          "brightness": 1.15,
+          "decayMs": 140,
+          "breath": 0.35,
+          "reverbSend": 0.32,
+          "trimDb": -8,
+          "sample": {
+            "mode": "SAMPLE",
+            "file": "VOX/UHV_125_YEAH.wav",
+            "root": "B0",
+            "start": 0.0008,
+            "reverse": false,
+            "slice": false,
+            "loop": {
+              "on": false,
+              "start": 0,
+              "end": 0,
+              "xfade": 0
+            },
+            "layerMix": 0.5,
+            "pool": [],
+            "poolFilter": {
+              "lane": "VOX",
+              "category": "phrase",
+              "loop": 1
+            }
           }
         }
       ]
@@ -758,16 +864,25 @@
             "pool": [],
             "voices": {
               "kick": "DRUMS/KICK/CD_Kick_06.wav",
-              "snare": "",
+              "snare": "DRUMS/SNARE/TAT_Snare_12.wav",
               "clap": "DRUMS/CLAP/TAT_Clap_19.wav",
               "rim": "DRUMS/RIM/AR_Perc_22.wav",
               "tomLow": "DRUMS/PERC/TAT_Perc_20.wav",
-              "tomMid": "",
+              "tomMid": "DRUMS/PERC/TAT_Perc_20.wav",
               "hatC": "DRUMS/CH/DF_Closed_Hat_03.wav",
               "hatO": "DRUMS/OH/MTN_Hat_Open_Rave.wav",
-              "ride": ""
+              "ride": "DRUMS/RIDE/PHR_Ride_3.wav",
+              "perc": "DRUMS/PERC/TAT_Perc_20.wav"
+            },
+            "poolFilter": {
+              "lane": "DRUMS"
             }
-          }
+          },
+          "styles": [
+            "ukmin",
+            "long",
+            "pop"
+          ]
         },
         {
           "id": "room",
@@ -804,62 +919,23 @@
             "pool": [],
             "voices": {
               "kick": "DRUMS/KICK/CCH_Kick_06.wav",
-              "snare": "",
+              "snare": "DRUMS/SNARE/TAT_Snare_12.wav",
               "clap": "DRUMS/CLAP/CCH_Clap_04.wav",
-              "rim": "",
+              "rim": "DRUMS/RIM/AR_Perc_22.wav",
               "tomLow": "DRUMS/PERC/CCH_Perc_01.wav",
-              "tomMid": "",
+              "tomMid": "DRUMS/PERC/TAT_Perc_20.wav",
               "hatC": "DRUMS/CH/CCH_Hat_08.wav",
               "hatO": "DRUMS/OH/AE_Open_Hat_02.wav",
-              "ride": "DRUMS/RIDE/PHR_Ride_3.wav"
-            }
-          }
-        },
-        {
-          "id": "dry",
-          "name": "909 Dry",
-          "kickHz": 54,
-          "kickDecayMs": 220,
-          "kickClick": 0.55,
-          "kickSweep": 1.9,
-          "snareTone": 0.7,
-          "snareSnap": 0.75,
-          "snareDecayMs": 120,
-          "clapDecayMs": 140,
-          "hatDecayMs": 30,
-          "hatOpenDecayMs": 200,
-          "hatHpHz": 7200,
-          "tomDecayMs": 200,
-          "room": 0.0,
-          "drive": 0.22,
-          "trimDb": 0,
-          "sample": {
-            "mode": "SYNTH",
-            "file": "",
-            "root": "C3",
-            "start": 0.0,
-            "reverse": false,
-            "slice": false,
-            "loop": {
-              "on": false,
-              "start": 0.0,
-              "end": 0.0,
-              "xfade": 0.0
+              "ride": "DRUMS/RIDE/PHR_Ride_3.wav",
+              "perc": "DRUMS/PERC/TAT_Perc_20.wav"
             },
-            "layerMix": 0.5,
-            "pool": [],
-            "voices": {
-              "kick": "",
-              "snare": "",
-              "clap": "",
-              "rim": "",
-              "tomLow": "",
-              "tomMid": "",
-              "hatC": "",
-              "hatO": "",
-              "ride": ""
+            "poolFilter": {
+              "lane": "DRUMS"
             }
-          }
+          },
+          "styles": [
+            "gaskin"
+          ]
         }
       ]
     }

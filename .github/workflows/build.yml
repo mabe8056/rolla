@@ -11,6 +11,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  samples:
+    name: Sample coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Preset files match SAMPLE_MANIFEST.json
+        run: python3 tools/check_sample_coverage.py
+
   macos:
     name: macOS universal VST3 + AU
     runs-on: macos-14
