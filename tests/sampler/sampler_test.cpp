@@ -8,6 +8,7 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_events/juce_events.h>
 
+#include <cstdio>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -413,28 +414,19 @@ int main()
                     != "DRUMS/KICK/CD_Kick_06.wav",
                 "the next roll picks another kick");
         expect (factory.bass[0].sample.styles != 0, "pluck is tagged to a dialect");
-        int synths = 0;
-        int sampled = 0;
-        for (int i = 0; i < factory.count[rolla::Bass]; ++i)
-        {
-            if (factory.bass[i].sample.mode == rolla::SampleMode::Synth)
-                ++synths;
-            else if (factory.bass[i].sample.file[0] != 0)
-                ++sampled;
-        }
-        expect (factory.count[rolla::Bass] > 3, "bass bank grew past the three heroes");
-        expect (synths == 1 && std::string (factory.bass[factory.count[rolla::Bass] - 1].name) == "SYNTH",
-                "one clearly named synth bass preset");
-        expect (sampled + synths == factory.count[rolla::Bass], "every bass preset is a sample or SYNTH");
-        int factoryLayers = 0;
+        int bare = 0;
         for (int part = rolla::Bass; part <= rolla::Vox; ++part)
             for (int i = 0; i < factory.count[part]; ++i)
-                if (rolla::specAt (factory, part, i).mode == rolla::SampleMode::Layer)
-                    ++factoryLayers;
-        expect (factoryLayers == 0, "factory one-shots are SAMPLE; LAYER is opt-in");
+            {
+                const auto& spec = rolla::specAt (factory, part, i);
+                if (spec.mode != rolla::SampleMode::Sample || spec.file[0] == 0)
+                    ++bare;
+            }
+        expect (factory.count[rolla::Bass] > 3, "bass bank grew past the three heroes");
+        expect (bare == 0, "every default melodic preset references a sample");
         const int first = rolla::pickPresetForRoll (factory, rolla::Bass, rolla::UkMin, 1);
-        expect (first >= 0 && factory.bass[first].sample.mode != rolla::SampleMode::Synth,
-                "roll does not pick the synth bass");
+        expect (first >= 0 && factory.bass[first].sample.file[0] != 0,
+                "roll picks a sampled bass");
         bool varied = false;
         for (std::uint32_t seed = 2; seed < 24; ++seed)
             if (rolla::pickPresetForRoll (factory, rolla::Bass, rolla::UkMin, seed) != first)
@@ -442,6 +434,17 @@ int main()
         expect (varied, "roll preset pick changes with the seed");
         expect (rolla::pickPresetForRoll (factory, rolla::Drums, rolla::Gaskin, 3) == 1,
                 "gaskin roll stays on the sample kit");
+        int synthKit = -1;
+        for (int i = 0; i < factory.count[rolla::Drums]; ++i)
+            if (factory.drums[i].sample.mode == rolla::SampleMode::Synth)
+                synthKit = i;
+        expect (synthKit >= 0, "909 stays in the bank as an alternate");
+        bool rolled909 = false;
+        for (int dialect = 0; dialect < rolla::NumDialects; ++dialect)
+            for (std::uint32_t seed = 1; seed < 32; ++seed)
+                if (rolla::pickPresetForRoll (factory, rolla::Drums, dialect, seed) == synthKit)
+                    rolled909 = true;
+        expect (! rolled909, "roll never auto-selects 909 SYNTH");
 
         rolla::SampleLibrary missingLib;
         missingLib.setRoot (rootDir.getChildFile ("empty-root"));
@@ -454,8 +457,65 @@ int main()
         missingParams.presets = &factory;
         missingParams.library = &missingLib;
         const auto kept = missingSampler.take (rolla::Bass, 41, 100, 4.f, factory, missingParams);
-        expect (kept.kind == 0 && std::fabs (kept.synthGain - 1.f) < 1.0e-6f,
-                "missing factory file keeps the synth");
+        expect (kept.kind == 1 && std::fabs (kept.synthGain) < 1.0e-6f,
+                "a missing factory file does not play the synth");
+        expect (missingSampler.takeDrum (rolla::Kick, 100, factory, missingParams) < 0.001f,
+                "a missing kick does not play the 909");
+
+        rolla::PresetBank swap;
+        rolla::loadDefaultPresets (swap);
+        swap.count[rolla::Bass] = 2;
+        swap.bass[0].sample.mode = rolla::SampleMode::Sample;
+        std::snprintf (swap.bass[0].sample.file, sizeof swap.bass[0].sample.file, "BASS/gone.wav");
+        std::snprintf (swap.bass[0].id, sizeof swap.bass[0].id, "gone");
+        swap.bass[1].sample.mode = rolla::SampleMode::Sample;
+        std::snprintf (swap.bass[1].sample.file, sizeof swap.bass[1].sample.file, "BASS/alt.wav");
+        std::snprintf (swap.bass[1].id, sizeof swap.bass[1].id, "alt");
+        swap.bass[1].sample.root = 69;
+        swap.count[rolla::Drums] = 1;
+        swap.drums[0].sample.mode = rolla::SampleMode::Sample;
+        swap.drums[0].voicePool[rolla::Kick].push_back ("DRUMS/KICK/gone.wav");
+        swap.drums[0].voicePool[rolla::Kick].push_back ("DRUMS/KICK/alt.wav");
+        std::snprintf (swap.drums[0].sample.voiceFile[rolla::Kick], 96, "DRUMS/KICK/gone.wav");
+        const auto altBass = rootDir.getChildFile ("BASS/alt.wav");
+        const auto altKick = rootDir.getChildFile ("DRUMS/KICK/alt.wav");
+        writeTone (altBass, 0.25, 0.4f, 110.f, false);
+        writeTone (altKick, 0.2, 0.5f, 80.f, false);
+        rolla::SampleLibrary altLib;
+        altLib.setRoot (rootDir);
+        altLib.watch (swap);
+        expect (waitUntil ([&] { return altLib.ready ("BASS/alt.wav") && altLib.missing ("BASS/gone.wav"); }),
+                "alternate bass is ready and the missing one is flagged");
+        expect (waitUntil ([&] { return altLib.ready ("DRUMS/KICK/alt.wav") && altLib.missing ("DRUMS/KICK/gone.wav"); }),
+                "alternate kick is ready");
+        rolla::Sampler altSampler;
+        altSampler.prepare (48000.0);
+        rolla::EngineParams altParams;
+        altParams.presets = &swap;
+        altParams.library = &altLib;
+        const auto swapped = altSampler.take (rolla::Bass, 69, 110, 4.f, swap, altParams);
+        expect (swapped.kind == 1 && std::fabs (swapped.synthGain) < 1.0e-6f,
+                "a missing bass preset plays another bass sample");
+        float altPeak = 0.f;
+        for (int i = 0; i < 2000; ++i)
+        {
+            float laneL[rolla::NumParts] {};
+            float laneR[rolla::NumParts] {};
+            altSampler.render (laneL, laneR, 0.f, 0.f, false);
+            altPeak = std::max (altPeak, std::fabs (laneL[rolla::Bass]));
+        }
+        expect (altPeak > 0.01f, "the substitute bass sample is audible");
+        expect (altSampler.takeDrum (rolla::Kick, 110, swap, altParams) < 0.001f,
+                "a missing kick plays another kick, not the 909");
+        float kickAlt = 0.f;
+        for (int i = 0; i < 2000; ++i)
+        {
+            float laneL[rolla::NumParts] {};
+            float laneR[rolla::NumParts] {};
+            altSampler.render (laneL, laneR, 0.f, 0.f, false);
+            kickAlt = std::max (kickAlt, std::fabs (laneL[rolla::Drums]));
+        }
+        expect (kickAlt > 0.01f, "the substitute kick is audible");
     }
 
     {

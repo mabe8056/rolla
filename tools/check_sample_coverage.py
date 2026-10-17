@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Fail if a factory preset names a file outside SAMPLE_MANIFEST.json, or if
-any manifest file is unused. Also checks the factory shape: melodic presets
-are SAMPLE/LAYER except a few clearly named SYNTH presets, and the drum kit
-pools every voice folder.
+any manifest file is unused. Every default preset must reference a sample.
+909 SYNTH may exist only as an explicit drum alternate.
 """
 
 import json
@@ -72,32 +71,23 @@ def main():
 
     parts = presets["parts"]
     for lane in MELODIC:
-        synths = []
+        synths = 0
         for preset in parts[lane]["presets"]:
             sample = preset.get("sample") or {}
             mode = str(sample.get("mode", "SYNTH")).upper()
-            name = str(preset.get("name", ""))
-            if mode == "SYNTH":
-                synths.append(name)
-                if "SYNTH" not in name.upper():
-                    failed = True
-                    print(f"FAIL {lane} synth preset {name!r} is not clearly named")
-            elif mode == "LAYER":
+            if mode != "SAMPLE" or not sample.get("file"):
                 failed = True
-                print(f"FAIL {lane} preset {preset.get('id')} is LAYER; factory one-shots are SAMPLE")
-            elif mode != "SAMPLE":
-                failed = True
-                print(f"FAIL {lane} preset {preset.get('id')} mode {mode} is not SAMPLE")
-            elif not sample.get("file"):
-                failed = True
-                print(f"FAIL {lane} preset {preset.get('id')} has no sample file")
-        if len(synths) > 2:
-            failed = True
-            print(f"FAIL {lane} has {len(synths)} synth presets: {synths}")
-        print(f"{lane} presets {len(parts[lane]['presets'])} synth {len(synths)}")
+                synths += 1 if mode == "SYNTH" else 0
+                print(f"FAIL {lane} preset {preset.get('id')} lacks a sample reference ({mode})")
+        print(f"{lane} presets {len(parts[lane]['presets'])} synth {synths}")
 
     synth_kits = []
     sampled = 0
+    default_kit = parts["drums"]["presets"][0]
+    default_mode = str((default_kit.get("sample") or {}).get("mode", "SYNTH")).upper()
+    if default_mode != "SAMPLE":
+        failed = True
+        print(f"FAIL default drum kit {default_kit.get('id')} is {default_mode}, not SAMPLE")
     for preset in parts["drums"]["presets"]:
         sample = preset.get("sample") or {}
         mode = str(sample.get("mode", "SYNTH")).upper()

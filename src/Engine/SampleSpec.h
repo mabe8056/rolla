@@ -9,7 +9,8 @@ namespace rolla
 
 // How a lane preset uses the user's sample folder.
 // SYNTH ignores files. SAMPLE replaces the synth when the file is loaded.
-// LAYER blends. A missing file always keeps the synth.
+// LAYER blends, and only when the lane is set that way. A missing factory
+// file plays another sample from the same lane or drum pool.
 enum class SampleMode : int
 {
     Synth = 0,

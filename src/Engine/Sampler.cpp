@@ -47,6 +47,108 @@ int presetOf (const EngineParams& params, int part) noexcept
     return i;
 }
 
+enum class FileState { Ready, Pending, Absent };
+
+FileState probeFile (const SampleLibrary* library, const char* file, const SampleAudio*& audio) noexcept
+{
+    audio = nullptr;
+    if (library == nullptr || file == nullptr || file[0] == 0)
+        return FileState::Absent;
+    audio = library->tryGet (file);
+    if (audio != nullptr && audio->frames >= 8)
+        return FileState::Ready;
+    audio = nullptr;
+    if (library->missing (file))
+        return FileState::Absent;
+    return FileState::Pending;
+}
+
+struct LaneHit
+{
+    const SampleSpec* spec = nullptr;
+    SampleChoice choice {};
+    const SampleAudio* audio = nullptr;
+    bool pending = false;
+};
+
+bool readyChoice (const SampleLibrary* library, const SampleSpec& spec, int midiNote,
+                  int pick, int sliceIndex, LaneHit& hit) noexcept
+{
+    if (spec.mode == SampleMode::Synth)
+        return false;
+    const SampleAudio* audio = nullptr;
+    const auto choice = chooseSample (spec, midiNote, pick, sliceIndex);
+    const auto state = probeFile (library, choice.file, audio);
+    if (state == FileState::Ready)
+    {
+        hit.spec = &spec;
+        hit.choice = choice;
+        hit.audio = audio;
+        return true;
+    }
+    if (state == FileState::Pending)
+        hit.pending = true;
+
+    const char* extras[SampleSpec::kPool + SampleSpec::kZones + 1] {};
+    int n = 0;
+    if (spec.file[0] != 0)
+        extras[n++] = spec.file;
+    for (int i = 0; i < spec.poolCount && i < SampleSpec::kPool; ++i)
+        if (spec.pool[i][0] != 0)
+            extras[n++] = spec.pool[i];
+    for (int i = 0; i < spec.zoneCount && i < SampleSpec::kZones && n < SampleSpec::kPool + SampleSpec::kZones + 1; ++i)
+        if (spec.zones[i].file[0] != 0)
+            extras[n++] = spec.zones[i].file;
+    for (int i = 0; i < n; ++i)
+    {
+        if (choice.file != nullptr && std::strcmp (extras[i], choice.file) == 0)
+            continue;
+        const auto extra = probeFile (library, extras[i], audio);
+        if (extra == FileState::Ready)
+        {
+            hit.spec = &spec;
+            hit.choice = choice;
+            hit.choice.file = extras[i];
+            hit.audio = audio;
+            return true;
+        }
+        if (extra == FileState::Pending)
+            hit.pending = true;
+    }
+    return false;
+}
+
+// The chosen preset wins. A confirmed-missing file tries the rest of the lane.
+// A file that is still loading does not get replaced, and nothing here selects the synth.
+LaneHit resolveLane (const PresetBank& bank, const EngineParams& params, int part,
+                     int midiNote, int sliceIndex) noexcept
+{
+    LaneHit hit;
+    const int current = presetOf (params, part);
+    const auto& currentSpec = specAt (bank, part, current);
+    if (currentSpec.mode == SampleMode::Synth)
+        return hit;
+    const int pick = params.samplePick[part];
+    if (readyChoice (params.library, currentSpec, midiNote, pick, sliceIndex, hit))
+        return hit;
+    if (hit.pending)
+        return hit;
+
+    const int n = bank.count[part] > 0 ? bank.count[part] : 1;
+    for (int step = 1; step < n; ++step)
+    {
+        const int index = (current + (pick < 0 ? 0 : pick) + step) % n;
+        if (index == current)
+            continue;
+        LaneHit alt;
+        if (readyChoice (params.library, specAt (bank, part, index), midiNote, 0, 0, alt))
+            return alt;
+    }
+    hit.spec = &currentSpec;
+    hit.audio = nullptr;
+    return hit;
+}
+
 } // namespace
 
 const SampleSpec& sampleSpecFor (const PresetBank& bank, int part, int preset) noexcept
@@ -419,23 +521,35 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     float drumKeep = 1.f;
     if (playUserSlot (part, -1, midiNote, velocity, end16, bank, params, result, drumKeep))
         return result;
-    if (params.library == nullptr)
-        return result;
     const auto& spec = sampleSpecFor (bank, part, presetOf (params, part));
     if (spec.mode == SampleMode::Synth)
         return result;
+    if (params.library == nullptr)
+    {
+        result.kind = 1;
+        result.synthGain = 0.f;
+        return result;
+    }
 
     const int sliceIndex = sliceCursor[part]++;
-    const auto choice = chooseSample (spec, midiNote, params.samplePick[part], sliceIndex);
-    const SampleAudio* audio = (choice.file != nullptr && choice.file[0] != 0)
-                                  ? params.library->tryGet (choice.file)
-                                  : nullptr;
+    const auto hit = resolveLane (bank, params, part, midiNote, sliceIndex);
+    const SampleSpec& played = hit.spec != nullptr ? *hit.spec : spec;
+    const SampleChoice choice = hit.choice;
+    const SampleAudio* audio = hit.audio;
     if (audio == nullptr || audio->frames < 8)
+    {
+        result.kind = 1;
+        result.synthGain = 0.f;
         return result;
+    }
 
     Voice* slot = allocate (part);
     if (slot == nullptr)
+    {
+        result.kind = 1;
+        result.synthGain = 0.f;
         return result;
+    }
 
     const auto amp = ampFor (bank, part, presetOf (params, part));
     const float srF = (float) sr;
@@ -445,15 +559,16 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     fresh.midiNote = midiNote;
     fresh.age = serial++;
     fresh.audio = audio;
-    fresh.reverse = spec.reverse;
+    fresh.reverse = played.reverse;
     fresh.ratio = std::clamp ((midiHz (midiNote) / std::max (20.f, midiHz (choice.root))) * (audio->rate / sr), 0.05, 16.0);
     fresh.end16 = end16;
     fresh.fade = 0.f;
     fresh.fadeInc = 1.f / 64.f;
     fresh.stopping = false;
     fresh.gain = amp.trim * std::clamp (velocity / 127.f, 0.05f, 1.f);
-    if (spec.mode == SampleMode::Layer)
-        fresh.gain *= std::clamp (spec.layerMix, 0.f, 1.f);
+    const bool layered = &played == &spec && played.mode == SampleMode::Layer;
+    if (layered)
+        fresh.gain *= std::clamp (played.layerMix, 0.f, 1.f);
     fresh.pan = (part == Stab || part == Pad) ? 0.15f : 0.f;
     fresh.cut = amp.cut;
     fresh.res = amp.res;
@@ -465,15 +580,15 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     fresh.ladder.reset();
     fresh.env.start (amp.a, amp.d, amp.s, amp.r, srF);
 
-    double startFrame = std::clamp ((double) spec.start, 0.0, 16.0) * audio->rate;
+    double startFrame = std::clamp ((double) played.start, 0.0, 16.0) * audio->rate;
     if (choice.slice && audio->sliceCount > 1)
     {
         const int s = (choice.sliceIndex % audio->sliceCount + audio->sliceCount) % audio->sliceCount;
         startFrame = (double) audio->slices[s];
     }
     fresh.pos = startFrame;
-    fresh.loop = spec.loop.on && part != Hits && part != Vox;
-    const auto region = makeLoopRegion (spec.loop, audio->rate, audio->frames, startFrame);
+    fresh.loop = played.loop.on && part != Hits && part != Vox;
+    const auto region = makeLoopRegion (played.loop, audio->rate, audio->frames, startFrame);
     fresh.loopA = region.a;
     fresh.loopB = region.b;
     fresh.xfade = region.xfade;
@@ -481,15 +596,15 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
         fresh.loopB = (double) audio->frames - 1.0;
 
     *slot = fresh;
-    if (spec.mode == SampleMode::Sample)
+    if (layered)
     {
-        result.kind = 1;
-        result.synthGain = 0.f;
+        result.kind = 2;
+        result.synthGain = 1.f - std::clamp (played.layerMix, 0.f, 1.f);
     }
     else
     {
-        result.kind = 2;
-        result.synthGain = 1.f - std::clamp (spec.layerMix, 0.f, 1.f);
+        result.kind = 1;
+        result.synthGain = 0.f;
     }
     return result;
 }
@@ -502,31 +617,66 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
     float keep = 1.f;
     if (playUserSlot (Drums, voice, 60, velocity, 1.0e9f, bank, params, taken, keep))
         return keep;
-    if (params.library == nullptr)
-        return 1.f;
     const int preset = presetOf (params, Drums);
     const auto& spec = sampleSpecFor (bank, Drums, preset);
     if (spec.mode == SampleMode::Synth)
         return 1.f;
+    if (params.library == nullptr)
+        return 0.f;
 
-    const char* file = drumVoiceChoice (bank.drums[preset], voice, params.samplePick[Drums]);
-    int root = spec.root;
-    if ((file == nullptr || file[0] == 0) && spec.poolCount > 0)
+    const auto& pool = bank.drums[preset].voicePool[voice];
+    const SampleAudio* audio = nullptr;
+    bool pending = false;
+    auto consider = [&] (const char* file) noexcept
     {
-        const int i = (params.samplePick[Drums] % spec.poolCount + spec.poolCount) % spec.poolCount;
-        file = spec.pool[i];
-        if (spec.poolRoot[i] > 0)
-            root = spec.poolRoot[i];
+        const SampleAudio* got = nullptr;
+        const auto state = probeFile (params.library, file, got);
+        if (state == FileState::Ready)
+        {
+            audio = got;
+            return true;
+        }
+        if (state == FileState::Pending)
+            pending = true;
+        return false;
+    };
+    if (! pool.empty())
+    {
+        int shift = 0;
+        if (voice == TomMid)
+            shift = 1;
+        else if (voice == TomLow)
+            shift = 2;
+        int pick = params.samplePick[Drums];
+        if (pick < 0)
+            pick = 0;
+        const int n = (int) pool.size();
+        const int start = (pick + shift) % n;
+        const SampleAudio* got = nullptr;
+        const auto state = probeFile (params.library, pool[(size_t) start].c_str(), got);
+        if (state == FileState::Ready)
+            audio = got;
+        else if (state == FileState::Pending)
+            pending = true;
+        else
+        {
+            for (int i = 1; i < n && audio == nullptr; ++i)
+                consider (pool[(size_t) ((start + i) % n)].c_str());
+        }
     }
-    if (file[0] == 0)
-        file = spec.file;
-    const SampleAudio* audio = file[0] != 0 ? params.library->tryGet (file) : nullptr;
+    else
+    {
+        const char* file = spec.voiceFile[voice];
+        if (! consider (file) && ! pending)
+            consider (spec.file);
+    }
+    juce::ignoreUnused (pending);
     if (audio == nullptr || audio->frames < 8)
-        return 1.f;
+        return 0.f;
 
     Voice* slot = allocate (Drums);
     if (slot == nullptr)
-        return 1.f;
+        return 0.f;
 
     const auto amp = ampFor (bank, Drums, presetOf (params, Drums));
     const float tune = std::pow (2.f, params.drumTuneSt[voice] / 12.f);
@@ -538,7 +688,6 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
     fresh.audio = audio;
     fresh.reverse = spec.reverse;
     fresh.ratio = std::clamp (tune * (audio->rate / sr), 0.25, 4.0);
-    juce::ignoreUnused (root);
     fresh.end16 = 1.0e9f;
     fresh.fade = 0.f;
     fresh.fadeInc = 1.f / 32.f;
@@ -562,9 +711,7 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
     fresh.xfade = region.xfade;
     *slot = fresh;
 
-    if (spec.mode == SampleMode::Sample)
-        return 0.f;
-    return 1.f - std::clamp (spec.layerMix, 0.f, 1.f);
+    return 0.f;
 }
 
 void Sampler::render (float* laneL, float* laneR, float prev16, float pos16, bool playing) noexcept

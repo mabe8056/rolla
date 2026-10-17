@@ -1,7 +1,7 @@
 {
   "schemaVersion": 3,
   "version": 3,
-  "notes": "Schema v3. Factory melodic presets are SAMPLE and point at files under the samples root. LAYER is opt-in. One SYNTH preset per lane keeps the circuit voice. Drum kits sample every voice from DRUMS/{KICK,SNARE,CLAP,RIM,CH,OH,RIDE,PERC}; the circuit model plays only when that file is missing, or on the 909 SYNTH kit. Do not commit audio.",
+  "notes": "Schema v3. Every default preset references one of his samples. Melodic lanes are SAMPLE. LAYER is opt-in and there is no pure-synth factory preset. Drum kits sample every voice from DRUMS/{KICK,SNARE,CLAP,RIM,CH,OH,RIDE,PERC}. A missing file plays another sample from that lane or voice pool. 909 SYNTH is an explicit alternate and is never auto-selected. Do not commit audio.",
   "parts": {
     "bass": {
       "presets": [
@@ -1151,44 +1151,6 @@
             "pool": []
           },
           "library": true
-        },
-        {
-          "id": "synth",
-          "name": "SYNTH",
-          "osc": "saw",
-          "subDb": -18,
-          "cutoffHz": 220,
-          "resonance": 0.04,
-          "filterEnvOct": 1.15,
-          "filterTauMs": 50,
-          "ampAMs": 3,
-          "ampDMs": 250,
-          "ampSDb": -8,
-          "ampRMs": 40,
-          "glideMs": 35,
-          "driveDb": 2.5,
-          "duckDb": 13,
-          "duckRecoverMs": 115,
-          "hpfHz": 25,
-          "gate": false,
-          "trimDb": 0,
-          "octave": 1,
-          "sample": {
-            "mode": "SYNTH",
-            "file": "",
-            "root": "C3",
-            "start": 0.0,
-            "reverse": false,
-            "slice": false,
-            "loop": {
-              "on": false,
-              "start": 0,
-              "end": 0,
-              "xfade": 0
-            },
-            "layerMix": 0.0,
-            "pool": []
-          }
         }
       ]
     },
@@ -2611,51 +2573,6 @@
             "long"
           ],
           "library": true
-        },
-        {
-          "id": "synth",
-          "name": "SYNTH",
-          "mode": "dub",
-          "cutoffHz": 3500,
-          "envOct": 1.5,
-          "tauMs": 50,
-          "ampAMs": 1,
-          "ampDMs": 120,
-          "ampSDb": -40,
-          "ampRMs": 50,
-          "unison": 4,
-          "detuneCents": 12,
-          "spread": 0.62,
-          "hpfHz": 250,
-          "delaySend": 0.8,
-          "delayFeedback": 0.46,
-          "delayBeats": 0.75,
-          "reverbSend": 0.7,
-          "hold": false,
-          "trimDb": -8,
-          "chordOn": true,
-          "chord": [
-            0,
-            5,
-            10,
-            15
-          ],
-          "sample": {
-            "mode": "SYNTH",
-            "file": "",
-            "root": "C3",
-            "start": 0.0,
-            "reverse": false,
-            "slice": false,
-            "loop": {
-              "on": false,
-              "start": 0,
-              "end": 0,
-              "xfade": 0
-            },
-            "layerMix": 0.0,
-            "pool": []
-          }
         }
       ]
     },
@@ -3434,30 +3351,6 @@
             "gaskin"
           ],
           "library": true
-        },
-        {
-          "id": "synth",
-          "name": "SYNTH",
-          "decayScale": 1.0,
-          "brightness": 1.0,
-          "detune": 1.0,
-          "trimDb": 2,
-          "sample": {
-            "mode": "SYNTH",
-            "file": "",
-            "root": "C3",
-            "start": 0.0,
-            "reverse": false,
-            "slice": false,
-            "loop": {
-              "on": false,
-              "start": 0,
-              "end": 0,
-              "xfade": 0
-            },
-            "layerMix": 0.0,
-            "pool": []
-          }
         }
       ]
     },
@@ -4166,30 +4059,6 @@
             "pool": []
           },
           "library": true
-        },
-        {
-          "id": "synth",
-          "name": "SYNTH",
-          "cutoffHz": 2400,
-          "decayMs": 160,
-          "brightness": 1.0,
-          "trimDb": -8,
-          "sample": {
-            "mode": "SYNTH",
-            "file": "",
-            "root": "C3",
-            "start": 0.0,
-            "reverse": false,
-            "slice": false,
-            "loop": {
-              "on": false,
-              "start": 0,
-              "end": 0,
-              "xfade": 0
-            },
-            "layerMix": 0.0,
-            "pool": []
-          }
         }
       ]
     },
@@ -5166,32 +5035,6 @@
             "pool": []
           },
           "library": true
-        },
-        {
-          "id": "synth",
-          "name": "SYNTH",
-          "cutoffHz": 1800,
-          "attackMs": 150,
-          "releaseMs": 700,
-          "detuneCents": 8,
-          "reverbSend": 0.45,
-          "trimDb": -12,
-          "sample": {
-            "mode": "SYNTH",
-            "file": "",
-            "root": "C3",
-            "start": 0.0,
-            "reverse": false,
-            "slice": false,
-            "loop": {
-              "on": false,
-              "start": 0,
-              "end": 0,
-              "xfade": 0
-            },
-            "layerMix": 0.0,
-            "pool": []
-          }
         }
       ]
     },
@@ -6032,31 +5875,6 @@
             "pool": []
           },
           "library": true
-        },
-        {
-          "id": "synth",
-          "name": "SYNTH",
-          "brightness": 1.15,
-          "decayMs": 140,
-          "breath": 0.35,
-          "reverbSend": 0.32,
-          "trimDb": -8,
-          "sample": {
-            "mode": "SYNTH",
-            "file": "",
-            "root": "C3",
-            "start": 0.0,
-            "reverse": false,
-            "slice": false,
-            "loop": {
-              "on": false,
-              "start": 0,
-              "end": 0,
-              "xfade": 0
-            },
-            "layerMix": 0.0,
-            "pool": []
-          }
         }
       ]
     },
