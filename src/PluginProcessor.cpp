@@ -411,7 +411,7 @@ void RollaProcessor::parameterChanged (const juce::String& parameterID, float ne
         if (! locked->alive.load() || locked->epoch.load() != epoch)
             return;
         if (part >= 0)
-            self->clearEdited (part);
+            self->clearAutoKeep (part);
         self->regenerate (part);
     });
 }
@@ -467,8 +467,11 @@ void RollaProcessor::regenerate (int onlyPart)
         if (seeds[i] == 0)
             seeds[i] = 1;
 
-        const bool keep = raw (apvts, (juce::String (partId (i)) + "Keep").toRawUTF8()) >= 0.5f;
-        const bool hit = onlyPart >= 0 ? (i == onlyPart) : ! keep;
+        const auto id = juce::String (partId (i));
+        const bool keep = raw (apvts, (id + "Keep").toRawUTF8()) >= 0.5f;
+        const bool mute = raw (apvts, (id + "Mute").toRawUTF8()) >= 0.5f;
+        // ROLL skips kept and muted lanes. A lane's own shuffle (onlyPart) does not.
+        const bool hit = onlyPart >= 0 ? (i == onlyPart) : (! keep && ! mute);
         if (hit)
         {
             seeds[i] = freshSeed();
@@ -878,6 +881,21 @@ void RollaProcessor::clearEdited (int part) noexcept
 {
     if (part >= 0 && part < NumParts)
         edited[part] = 0;
+}
+
+void RollaProcessor::clearAutoKeep (int part)
+{
+    if (part < 0 || part >= NumParts || ! laneEdited (part))
+        return;
+    clearEdited (part);
+    if (auto* keep = apvts.getParameter (juce::String (partId (part)) + "Keep"))
+    {
+        if (keep->getValue() < 0.5f)
+            return;
+        keep->beginChangeGesture();
+        keep->setValueNotifyingHost (0.f);
+        keep->endChangeGesture();
+    }
 }
 
 bool RollaProcessor::loadVoxFile (const juce::File& file, juce::String& error)

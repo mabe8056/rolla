@@ -682,8 +682,8 @@ struct LaneRow : Component, FileDragAndDropTarget
         const auto id = String (partId (part));
         muteA = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (processor.apvts, id + "Mute", mute);
         keepA = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (processor.apvts, id + "Keep", keep);
-        bindHelp (mute, "Mute this lane. It stays quiet. Roll still rewrites it unless it is kept.");
-        bindHelp (shuffle, "Shuffle this lane only.");
+        bindHelp (mute, "Mute this lane. Roll leaves it alone, the same as Keep.");
+        bindHelp (shuffle, "Shuffle this lane only. Re-rolls it even if it is muted or kept, and clears an automatic keep.");
         bindHelp (keep, "Keep this lane. Roll leaves a kept lane alone.");
         shuffle.onClick = [this] { if (proc != nullptr) proc->triggerShuffle (part); };
         keep.onClick = [this]
@@ -2148,11 +2148,8 @@ struct RollaEditor::Content : Component
             rows[i].syncHover();
             const bool muted = rows[i].mute.getToggleState();
             rows[i].strip.setAlpha (muted ? 0.4f : 1.f);
-            const bool kept = rows[i].keep.getToggleState();
-            const bool edited = proc.laneEdited (i);
-            const bool manual = kept && ! edited;
-            rows[i].shuffle.setEnabled (! manual);
-            rows[i].shuffle.setAlpha (manual ? 0.35f : 1.f);
+            rows[i].shuffle.setEnabled (true);
+            rows[i].shuffle.setAlpha (1.f);
             const bool miss = samples.missing (i);
             if (miss != rows[i].sampleMissing)
             {

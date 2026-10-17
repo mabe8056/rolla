@@ -70,6 +70,8 @@ public:
     void markEdited (int part);
     bool laneEdited (int part) const noexcept;
     void clearEdited (int part) noexcept;
+    // Shuffle drops the keep that a manual edit turned on. A lock the user set stays.
+    void clearAutoKeep (int part);
 
     bool hasVoxSample() const noexcept { return voxSampleName.isNotEmpty(); }
     juce::String getVoxSampleName() const { return voxSampleName; }

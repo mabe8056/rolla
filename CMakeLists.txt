@@ -212,3 +212,40 @@ target_link_libraries(rolla-sampler-test
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags
 )
+
+add_executable(rolla-roll-test
+    tests/roll/roll_test.cpp
+    src/PluginProcessor.cpp
+    src/PluginEditor.cpp
+    src/ui/Theme.cpp
+    src/Engine/Engine.cpp
+    src/Engine/Sampler.cpp
+    src/Engine/SampleLibrary.cpp
+    src/Sampler/SamplePrep.cpp
+    src/Sampler/UserSlots.cpp
+    src/Generator/Generator.cpp
+    src/Generator/Presets.cpp
+    src/Generator/MidiFile.cpp
+    src/Drums/DrumMachine.cpp
+    src/Drums/DrumPattern.cpp
+)
+
+target_include_directories(rolla-roll-test PRIVATE src)
+
+target_compile_definitions(rolla-roll-test
+    PRIVATE
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_DISPLAY_SPLASH_SCREEN=0
+        JUCE_REPORT_APP_USAGE=0
+)
+
+target_link_libraries(rolla-roll-test
+    PRIVATE
+        RollaData
+        juce::juce_audio_utils
+        juce::juce_dsp
+        juce::juce_audio_formats
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags
+)

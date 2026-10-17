@@ -189,13 +189,18 @@ jobs:
       - name: Configure and build
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --target ROLLA_VST3 rolla-render rolla-sampler-test rolla-sample-check
+          cmake --build build --target ROLLA_VST3 rolla-render rolla-sampler-test rolla-sample-check rolla-roll-test
 
       - name: Sampler tests
         run: |
           set -euo pipefail
           ./build/rolla-sampler-test
           ./build/rolla-sample-check
+
+      - name: Roll tests
+        run: |
+          set -euo pipefail
+          ./build/rolla-roll-test
 
       - name: Offline renders
         run: |

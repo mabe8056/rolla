@@ -2,6 +2,7 @@
 
 #include <BinaryData.h>
 
+#include <cstdlib>
 #include <mutex>
 
 namespace rolla
@@ -17,6 +18,25 @@ struct Faces
     juce::Typeface::Ptr monoMed;
     juce::Typeface::Ptr monoSemi;
 };
+
+// The cache has to be released before this function's own static destructor.
+// On macOS the CoreText registry is a function-local static created while the
+// first typeface is built, so it is destroyed before a typeface cached in an
+// earlier static. ~CoreTextTypeface then locks that registry's mutex and
+// pluginval aborts with "mutex lock failed: Invalid argument".
+Faces* liveFaces = nullptr;
+
+void releaseFaces()
+{
+    if (liveFaces == nullptr)
+        return;
+    liveFaces->sansSemi = nullptr;
+    liveFaces->sansBold = nullptr;
+    liveFaces->mono = nullptr;
+    liveFaces->monoMed = nullptr;
+    liveFaces->monoSemi = nullptr;
+    liveFaces = nullptr;
+}
 
 Faces& faces()
 {
@@ -34,6 +54,8 @@ Faces& faces()
                                                                    BinaryData::GeistMonoMedium_ttfSize);
         loaded.monoSemi = juce::Typeface::createSystemTypefaceFor (BinaryData::GeistMonoSemiBold_ttf,
                                                                     BinaryData::GeistMonoSemiBold_ttfSize);
+        liveFaces = &loaded;
+        std::atexit (&releaseFaces);
     });
     return loaded;
 }
