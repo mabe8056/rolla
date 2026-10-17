@@ -397,6 +397,7 @@ void testGeneratorControls()
     compareMacro ("busy", "BUSY");
     compareMacro ("bounce", "BOUNCE");
     compareMacro ("stab", "STAB");
+    compareMacro ("styleIntensity", "STYLE INTENSITY");
 
     expect (reshapeTo (proc, "busy", 0.f), "busy back to min");
     setDenorm (proc, "bassKeep", 1.f);
@@ -412,7 +413,7 @@ void testGeneratorControls()
     expect (hashAll (proc.copyGroove()) != uk, "STYLE pattern changes");
     expect ((int) rawOf (proc, "dialect") == rolla::Gaskin, "style parameter landed");
 
-    for (const char* id : { "dark", "busy", "bounce", "stab", "swing", "duck", "key", "dialect",
+    for (const char* id : { "dark", "busy", "bounce", "stab", "styleIntensity", "swing", "duck", "key", "dialect",
                             "bassTone", "bassPunch", "bassLevel", "dTune0", "dDecay0", "dLevel0" })
     {
         auto* param = proc.apvts.getParameter (id);

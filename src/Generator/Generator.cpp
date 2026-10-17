@@ -697,6 +697,18 @@ void writeBass (Lane& lane, const Settings& s, Rng& rng, const char* plan, const
                     slots[n++] = sslot;
             }
         }
+        if (s.styleIntensity <= 0.25f && n > 4)
+            n = 4;
+        else if (s.styleIntensity >= 0.75f && n < 10)
+        {
+            const int extra = s.dialect == Gaskin ? 15 : (s.dialect == Pop ? 11 : 3);
+            bool clash = false;
+            for (int i = 0; i < n; ++i)
+                if (slots[i] == extra)
+                    clash = true;
+            if (! clash)
+                slots[n++] = extra;
+        }
         if (n > 10)
             n = 10;
         const bool wantHole = turn && (breaks == nullptr || std::strstr (breaks, "rest") == nullptr);
@@ -733,7 +745,11 @@ bool bassOnset (const Lane& lane, int slot)
 void writeStab (Lane& lane, const Lane& bass, const Settings& s, Rng& rng, float freedom, char* breaks, int breaksN)
 {
     clearLane (lane, lane.seed);
-    const int per = s.dialect == Pop ? 8 : s.dialect == Gaskin ? 6 : s.dialect == Long ? 3 : (s.stab > 0.66f ? 2 : 1);
+    int per = s.dialect == Pop ? 8 : s.dialect == Gaskin ? 6 : s.dialect == Long ? 3 : (s.stab > 0.66f ? 2 : 1);
+    if (s.styleIntensity <= 0.25f)
+        per = std::min (per, 1);
+    else if (s.styleIntensity >= 0.75f)
+        per = std::min (12, per + 2);
     const int voicings[][3] = { { 3, 10, 15 }, { 7, 10, 19 }, { 3, 7, 14 }, { 10, 14, 17 } };
     int overlaps = 0;
     int total = 0;
@@ -782,6 +798,8 @@ void writeStab (Lane& lane, const Lane& bass, const Settings& s, Rng& rng, float
 void writeHits (Lane& lane, const Groove& g, const Settings& s, Rng& rng)
 {
     clearLane (lane, lane.seed);
+    if (s.styleIntensity <= 0.25f)
+        return;
     const int bars[4] = { 1, 3, 5, 7 };
     const int nHits = 2 + (int) (rng.next() * 3);
     for (int h = 0; h < nHits; ++h)
@@ -829,7 +847,11 @@ void writeHits (Lane& lane, const Groove& g, const Settings& s, Rng& rng)
 void writePluck (Lane& lane, const Settings& s, Rng& rng)
 {
     clearLane (lane, lane.seed);
-    const int per = s.dialect == Pop ? 6 : 3;
+    int per = s.dialect == Pop ? 6 : 3;
+    if (s.styleIntensity <= 0.25f)
+        per = 1;
+    else if (s.styleIntensity >= 0.75f)
+        per = std::min (8, per + 2);
     const int degs[] = { 0, 3, 7, 10, 2 };
     for (int bar = 0; bar < s.bars && bar < 8; ++bar)
     {
@@ -849,11 +871,28 @@ void writePluck (Lane& lane, const Settings& s, Rng& rng)
                 ++placed;
         }
     }
+    if (s.styleIntensity >= 0.75f)
+    {
+        const int step = s.dialect == Long ? 5 : (s.dialect == Gaskin ? 7 : 3);
+        for (int t = 2; t < s.bars * 16; t += step)
+        {
+            Ev e;
+            e.start = (float) t;
+            e.len = 1.f;
+            e.nChord = 1;
+            e.chord[0] = (std::int8_t) degs[(t / step) % 5];
+            e.vel = 76;
+            if (! pushEv (lane, e, s.bars))
+                break;
+        }
+    }
 }
 
 void writePad (Lane& lane, const Settings& s, Rng& rng)
 {
     clearLane (lane, lane.seed);
+    if (s.styleIntensity <= 0.25f)
+        return;
     const int bars[6] = { 0, 1, 2, 3, 4, 5 };
     const int b0 = bars[(int) (rng.next() * 4) % 4];
     int b1 = b0 + 3 + (int) (rng.next() * 2);
@@ -996,6 +1035,25 @@ void writeDrums (DrumLane& drums, std::uint32_t seed, const Settings& s, Rng& rn
         for (int bar = 0; bar < s.bars; ++bar)
             if (drums.vel[Perc][bar * 16 + 3] == 0)
                 drums.vel[Perc][bar * 16 + 3] = 70;
+    }
+    // Style intensity. The middle leaves the style pattern alone. Low strips
+    // percussion. High lays a 3, 5, or 7 step perc loop on top of it.
+    if (s.styleIntensity <= 0.25f)
+    {
+        for (int t = 0; t < steps; ++t)
+            if ((t % 16) != 5)
+                drums.vel[Perc][t] = 0;
+    }
+    else if (s.styleIntensity >= 0.75f)
+    {
+        const int step = s.dialect == Long ? 5 : (s.dialect == Gaskin ? 7 : 3);
+        for (int t = 1; t < steps; t += step)
+        {
+            if (kickSlot (t % 16))
+                continue;
+            if (drums.vel[Perc][t] == 0)
+                drums.vel[Perc][t] = 62;
+        }
     }
 }
 
@@ -1389,6 +1447,7 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
     s.busy = std::clamp (s.busy, 0.f, 1.f);
     s.bounce = std::clamp (s.bounce, 0.f, 1.f);
     s.stab = std::clamp (s.stab, 0.f, 1.f);
+    s.styleIntensity = std::clamp (s.styleIntensity, 0.f, 1.f);
     s.freedom = std::clamp (s.freedom, 0.f, 1.f);
 
     auto regen = [&] (int part) { return (partMask & (1u << part)) != 0; };

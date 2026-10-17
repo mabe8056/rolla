@@ -103,6 +103,10 @@ struct Settings
     float busy = 0.40f;
     float bounce = 0.45f;
     float stab = 0.55f;
+    // How hard the selected style's own weights apply. 0 is a stripped skeleton,
+    // 0.5 is the normal style, 1 is the full style: denser cells, more lanes,
+    // and polymeter. This is not the 0-100 arrangement slider.
+    float styleIntensity = 0.5f;
     int dialect = UkMin;
     int key = 2;
     int bars = 8;

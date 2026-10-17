@@ -38,6 +38,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout (const PresetBa
     add (std::make_unique<AudioParameterFloat> (ParameterID { "busy", 1 }, "Busy", unit, 0.40f));
     add (std::make_unique<AudioParameterFloat> (ParameterID { "bounce", 1 }, "Bounce", unit, 0.45f));
     add (std::make_unique<AudioParameterFloat> (ParameterID { "stab", 1 }, "Stab", unit, 0.55f));
+    add (std::make_unique<AudioParameterFloat> (
+        ParameterID { "styleIntensity", 1 }, "Style Intensity", unit, 0.5f));
     add (std::make_unique<AudioParameterInt> (
         ParameterID { "intensity", 1 }, "Intensity", 0, 100, 75));
 
@@ -225,7 +227,7 @@ RollaProcessor::RollaProcessor()
 {
     apvts.addParameterListener ("roll", this);
     apvts.addParameterListener ("dialect", this);
-    for (const char* id : { "dark", "busy", "bounce", "stab" })
+    for (const char* id : { "dark", "busy", "bounce", "stab", "styleIntensity" })
         apvts.addParameterListener (id, this);
     apvts.addParameterListener ("intensity", this);
     for (int i = 0; i < NumParts; ++i)
@@ -249,7 +251,7 @@ RollaProcessor::~RollaProcessor()
 
     apvts.removeParameterListener ("roll", this);
     apvts.removeParameterListener ("dialect", this);
-    for (const char* id : { "dark", "busy", "bounce", "stab" })
+    for (const char* id : { "dark", "busy", "bounce", "stab", "styleIntensity" })
         apvts.removeParameterListener (id, this);
     apvts.removeParameterListener ("intensity", this);
     for (int i = 0; i < NumParts; ++i)
@@ -472,7 +474,8 @@ void RollaProcessor::parameterChanged (const juce::String& parameterID, float ne
         return;
     }
 
-    if (parameterID == "dark" || parameterID == "busy" || parameterID == "bounce" || parameterID == "stab")
+    if (parameterID == "dark" || parameterID == "busy" || parameterID == "bounce" || parameterID == "stab"
+        || parameterID == "styleIntensity")
     {
         requestReshape();
         return;
@@ -536,6 +539,7 @@ Settings RollaProcessor::currentSettings() const
     s.busy = raw (apvts, "busy");
     s.bounce = raw (apvts, "bounce");
     s.stab = raw (apvts, "stab");
+    s.styleIntensity = raw (apvts, "styleIntensity");
     s.dialect = (int) raw (apvts, "dialect");
     s.key = (int) raw (apvts, "key");
     s.bars = barsFromIndex ((int) raw (apvts, "length"));
