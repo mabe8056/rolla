@@ -1,0 +1,3791 @@
+{
+ "schema_version": "1.2.0",
+ "_doc": {
+  "what": "ROLLA baked per-lane mix chains per dialect (MIX_SPEC.md §8). Lanes are fully expanded per dialect (no inheritance needed at load). Preset overrides (§9) are applied on top.",
+  "generated_by": "/workspace/mixeng-scratch/tools/make_profiles.py from tests/targets.json + reference measurements",
+  "chain_order": [
+   "sample_prep",
+   "hpf",
+   "lpf",
+   "eq[0..1]",
+   "comp",
+   "sat",
+   "tilt",
+   "width",
+   "output_trim"
+  ],
+  "units": {
+   "freq_hz": "Hz",
+   "slope_db_oct": "dB/octave (12 or 24; Butterworth/TPT SVF cascade)",
+   "gain_db": "dB",
+   "q": "bandwidth Q (RBJ)",
+   "threshold_dbfs": "dBFS after sample prep (§4 normalises sources to -24 LUFS)",
+   "ratio": "x:1",
+   "attack_ms": "ms",
+   "release_ms": "ms",
+   "knee_db": "dB (total knee width)",
+   "target_gr_db": "dB peak gain reduction on the default pattern; harness nudges threshold to hit it",
+   "drive_db": "dB into the shaper",
+   "mix_pct": "% wet (dual-path crossfade)",
+   "db_per_oct": "dB/octave tilt around pivot_hz (tilt EQ setting, relative to the lane EQ)",
+   "measured_style_tilt_db_oct": "measured slope of the ref stem in that style (200-8k for other/vocals, 1-16k for drums)",
+   "side_mid_db": "side/mid energy ratio target (dB)",
+   "side_mid_min_db/side_mid_max_db": "test window (dB)",
+   "mono_below_hz": "stereo collapsed to mono below this frequency",
+   "lufs_offset_vs_kick_db": "lane ST LUFS max minus KICK ST LUFS max (dB)",
+   "st_target_lufs": "absolute ST LUFS max of a solo loop render (LUFS)",
+   "output_trim_db": "lane: style TOP trim applied to this lane (dB); dialect: MAIN output trim (dB)",
+   "top_trim_db": "per-style trim on all non-kick/bass/hits lanes (dB)",
+   "click_db_re_kick": "909 kick click level re kick peak (dB)"
+  },
+  "src_tags": {
+   "M": "measured on the reference stems (this spec)",
+   "M-melak/M-ref": "PRESET_SPEC §9 one-shot measurements",
+   "D": "derived arithmetic from measured data",
+   "A&R": "AR_SOUND_REVIEW target",
+   "PRESET_SPEC": "from PRESET_SPEC",
+   "N": "genre-norm fallback, not measurable from refs (guarded by a measured test window)",
+   "N+crest-rule": "base value [N], per-dialect change = -(style crest - UK MIN crest) [D]",
+   "M-LOW": "measured, LOW confidence isolation"
+  }
+ },
+ "anchor": {
+  "kick_st_lufs": -23.7,
+  "sum_st_lufs": -19.0,
+  "sum_tp_dbtp": -6.0,
+  "bass_re_kick_db": -1.0,
+  "src": "D"
+ },
+ "dialects": {
+  "UKMIN": {
+   "output_trim_db": 0.0,
+   "top_trim_db": -0.0,
+   "default_lanes": [
+    "DRUMS.KICK",
+    "BASS",
+    "STAB",
+    "DRUMS.CLAP",
+    "DRUMS.CH+OH",
+    "DRUMS.PERC",
+    "VOX"
+   ],
+   "lanes": {
+    "BASS": {
+     "hpf": {
+      "type": "hpf",
+      "freq_hz": 30,
+      "slope_db_oct": 24,
+      "src": "D"
+     },
+     "lpf": {
+      "type": "lpf",
+      "freq_hz": 2500,
+      "slope_db_oct": 12,
+      "src": "M"
+     },
+     "eq": [
+      {
+       "type": "bell",
+       "freq_hz": 90,
+       "gain_db": 1.5,
+       "q": 0.9,
+       "src": "M"
+      },
+      {
+       "type": "lowshelf",
+       "freq_hz": 45,
+       "gain_db": -2.0,
+       "q": 0.7,
+       "src": "M/A&R"
+      }
+     ],
+     "comp": {
+      "threshold_dbfs": -20,
+      "ratio": 4,
+      "attack_ms": 8,
+      "release_ms": 150,
+      "knee_db": 6,
+      "target_gr_db": 4,
+      "src": {
+       "attack_ms": "M",
+       "release_ms": "M",
+       "threshold_dbfs": "N",
+       "ratio": "N",
+       "knee_db": "N",
+       "target_gr_db": "N+crest-rule"
+      }
+     },
+     "sat": {
+      "type": "tape",
+      "drive_db": 4,
+      "mix_pct": 50,
+      "src": "N"
+     },
+     "width": {
+      "mono_below_hz": 220,
+      "side_mid_max_db": -23.8,
+      "src": "M",
+      "side_mid_db": -26.9
+     },
+     "tilt": {
+      "pivot_hz": 1000,
+      "db_per_oct": 0.0,
+      "measured_style_tilt_db_oct": null,
+      "src": "n/a"
+     },
+     "lufs_offset_vs_kick_db": -1.0,
+     "st_target_lufs": -24.7,
+     "output_trim_db": 0.0,
+     "level_src": "D clamp"
+    },
+    "STAB": {
+     "hpf": {
+      "type": "hpf",
+      "freq_hz": 120,
+      "slope_db_oct": 12,
+      "src": "D"
+     },
+     "lpf": {
+      "type": "lpf",
+      "freq_hz": 10000,
+      "slope_db_oct": 12,
+      "src": "M"
+     },
+     "eq": [
+      {
+       "type": "bell",
+       "freq_hz": 1200,
+       "gain_db": 1.5,
+       "q": 0.8,
+       "src": "M"
+      },
+      {
+       "type": "bell",
+       "freq_hz": 300,
+       "gain_db": -1.5,
+       "q": 1.0,
+       "src": "D"
+      }
+     ],
+     "comp": {
+      "threshold_dbfs": -22,
+      "ratio": 3,
+      "attack_ms": 12,
+      "release_ms": 170,
+      "knee_db": 6,
+      "target_gr_db": 3,
+      "src": {
+       "attack_ms": "M",
+       "release_ms": "M",
+       "threshold_dbfs": "N",
+       "ratio": "N",
+       "knee_db": "N",
+       "target_gr_db": "N+crest-rule"
+      }
+     },
+     "sat": {
+      "type": "tube_asym",
+      "drive_db": 3,
+      "mix_pct": 30,
+      "src": "N"
+     },
+     "width": {
+      "mono_below_hz": 120,
+      "src": "M",
+      "side_mid_db": -5.2
+     },
+     "tilt": {
+      "pivot_hz": 1000,
+      "db_per_oct": 0.0,
+      "measured_style_tilt_db_oct": -4.36,
+      "src": "M"
+     },
+     "lufs_offset_vs_kick_db": -3.1,
+     "st_target_lufs": -26.8,
+     "output_trim_db": -0.0,
+     "level_src": "M"
+    },
+    "VOX": {
+     "hpf": {
+      "type": "hpf",
+      "freq_hz": 150,
+      "slope_db_oct": 24,
+      "src": "M"
+     },
+     "lpf": {
+      "type": "lpf",
+      "freq_hz": 12000,
+      "slope_db_oct": 12,
+      "src": "N"
+     },
+     "eq": [
+      {
+       "type": "bell",
+       "freq_hz": 300,
+       "gain_db": -2.5,
+       "q": 1.2,
+       "src": "M"
+      },
+      {
+       "type": "bell",
+       "freq_hz": 3000,
+       "gain_db": 2.0,
+       "q": 1.0,
+       "src": "M"
+      }
+     ],
+     "comp": {
+      "threshold_dbfs": -22,
+      "ratio": 3,
+      "attack_ms": 5,
+      "release_ms": 80,
+      "knee_db": 6,
+      "target_gr_db": 3,
+      "src": {
+       "attack_ms": "N",
+       "release_ms": "N",
+       "threshold_dbfs": "N",
+       "ratio": "N",
+       "knee_db": "N",
+       "target_gr_db": "N+crest-rule"
+      }
+     },
+     "sat": {
+      "type": "tape",
+      "drive_db": 2,
+      "mix_pct": 20,
+      "src": "N"
+     },
+     "width": {
+      "mono_below_hz": 120,
+      "src": "M",
+      "side_mid_db": -8.7
+     },
+     "tilt": {
+      "pivot_hz": 1000,
+      "db_per_oct": 0.0,
+      "measured_style_tilt_db_oct": -0.18,
+      "src": "M"
+     },
+     "lufs_offset_vs_kick_db": -5.0,
+     "st_target_lufs": -28.7,
+     "output_trim_db": -0.0,
+     "level_src": "M"
+    },
+    "HITS": {
+     "hpf": {
+      "type": "hpf",
+      "freq_hz": 220,
+      "slope_db_oct": 24,
+      "src": "A&R"
+     },
+     "lpf": null,
+     "eq": [
+      {
+       "type": "bell",
+       "freq_hz": 500,
+       "gain_db": -2.0,
+       "q": 1.0,
+       "src": "D"
+      }
+     ],
+     "comp": {
+      "threshold_dbfs": -20,
+      "ratio": 4,
+      "attack_ms": 11,
+      "release_ms": 250,
+      "knee_db": 6,
+      "target_gr_db": 4,
+      "src": {
+       "attack_ms": "M(borrowed Gaskin stab)",
+       "release_ms": "M(borrowed Gaskin stab)",
+       "threshold_dbfs": "N",
+       "ratio": "N",
+       "knee_db": "N",
+       "target_gr_db": "N"
+      }
+     },
+     "sat": {
+      "type": "tube_asym",
+      "drive_db": 4,
+      "mix_pct": 40,
+      "src": "N"
+     },
+     "width": {
+      "mono_below_hz": 150,
+      "corr_lt120_min": 0.98,
+      "src": "A&R"
+     },
+     "tilt": {
+      "pivot_hz": 1000,
+      "db_per_oct": 0.0,
+      "measured_style_tilt_db_oct": null,
+      "src": "n/a"
+     },
+     "lufs_offset_vs_kick_db": -4.0,
+     "st_target_lufs": -27.7,
+     "output_trim_db": 0.0,
+     "level_src": "A&R"
+    },
+    "PAD": {
+     "hpf": {
+      "type": "hpf",
+      "freq_hz": 150,
+      "slope_db_oct": 12,
+      "src": "N"
+     },
+     "lpf": {
+      "type": "lpf",
+      "freq_hz": 8000,
+      "slope_db_oct": 12,
+      "src": "N"
+     },
+     "eq": [],
+     "comp": {
+      "threshold_dbfs": -24,
+      "ratio": 2,
+      "attack_ms": 30,
+      "release_ms": 300,
+      "knee_db": 6,
+      "target_gr_db": 2,
+      "src": {
+       "attack_ms": "N",
+       "release_ms": "N",
+       "threshold_dbfs": "N",
+       "ratio": "N",
+       "knee_db": "N",
+       "target_gr_db": "N"
+      }
+     },
+     "sat": {
+      "type": "none",
+      "drive_db": 0,
+      "mix_pct": 0,
+      "src": "N"
+     },
+     "width": {
+      "mono_below_hz": 120,
+      "side_mid_min_db": -12,
+      "side_mid_max_db": 0,
+      "src": "N"
+     },
+     "tilt": {
+      "pivot_hz": 1000,
+      "db_per_oct": 0.0,
+      "measured_style_tilt_db_oct": null,
+      "src": "n/a"
+     },
+     "lufs_offset_vs_kick_db": -9.0,
+     "st_target_lufs": -32.7,
+     "output_trim_db": -0.0,
+     "level_src": "PRESET_SPEC D"
+    },
+    "PLUCK": {
+     "hpf": {
+      "type": "hpf",
+      "freq_hz": 120,
+      "slope_db_oct": 12,
+      "src": "D"
+     },
+     "lpf": {
+      "type": "lpf",
+      "freq_hz": 10000,
+      "slope_db_oct": 12,
+      "src": "M"
+     },
+     "eq": [
+      {
+       "type": "bell",
+       "freq_hz": 1200,
+       "gain_db": 1.5,
+       "q": 0.8,
+       "src": "M"
+      },
+      {
+       "type": "bell",
+       "freq_hz": 300,
+       "gain_db": -1.5,
+       "q": 1.0,
+       "src": "D"
+      }
+     ],
+     "comp": {
+      "threshold_dbfs": -22,
+      "ratio": 3,
+      "attack_ms": 12,
+      "release_ms": 110,
+      "knee_db": 6,
+      "target_gr_db": 3,
+      "src": {
+       "attack_ms": "M",
+       "release_ms": "M(LONG other decay 106)",
+       "threshold_dbfs": "N",
+       "ratio": "N",
+       "knee_db": "N",
+       "target_gr_db": "N+crest-rule"
+      }
+     },
+     "sat": {
+      "type": "tube_asym",
+      "drive_db": 3,
+      "mix_pct": 30,
+      "src": "N"
+     },
+     "width": {
+      "mono_below_hz": 120,
+      "src": "M",
+      "side_mid_db": -5.2
+     },
+     "tilt": {
+      "pivot_hz": 1000,
+      "db_per_oct": 0.0,
+      "measured_style_tilt_db_oct": -4.36,
+      "src": "M"
+     },
+     "lufs_offset_vs_kick_db": -3.1,
+     "st_target_lufs": -26.8,
+     "output_trim_db": -0.0,
+     "level_src": "M"
+    },
+    "DRUMS": {
+     "_doc": "909 lane: per-voice chains; DRUMS bus has no extra processing in v1",
+     "voices": {
+      "CLAP": {
+       "hpf": {
+        "type": "hpf",
+        "freq_hz": 200,
+        "slope_db_oct": 24,
+        "src": "M"
+       },
+       "lpf": {
+        "type": "lpf",
+        "freq_hz": 14000,
+        "slope_db_oct": 12,
+        "src": "N"
+       },
+       "eq": [
+        {
+         "type": "bell",
+         "freq_hz": 1300,
+         "gain_db": 2.0,
+         "q": 1.2,
+         "src": "M-melak"
+        },
+        {
+         "type": "bell",
+         "freq_hz": 400,
+         "gain_db": -2.0,
+         "q": 1.5,
+         "src": "N"
+        }
+       ],
+       "comp": {
+        "threshold_dbfs": -20,
+        "ratio": 4,
+        "attack_ms": 3,
+        "release_ms": 60,
+        "knee_db": 3,
+        "target_gr_db": 4,
+        "src": {
+         "attack_ms": "M",
+         "release_ms": "M",
+         "threshold_dbfs": "N",
+         "ratio": "N",
+         "knee_db": "N",
+         "target_gr_db": "N+crest-rule"
+        }
+       },
+       "sat": {
+        "type": "softclip_tanh",
+        "drive_db": 2,
+        "mix_pct": 100,
+        "src": "N"
+       },
+       "width": {
+        "mono_below_hz": 120,
+        "src": "M",
+        "side_mid_db": -9.9
+       },
+       "tilt": {
+        "pivot_hz": 1000,
+        "db_per_oct": 0.0,
+        "measured_style_tilt_db_oct": null,
+        "src": "n/a"
+       },
+       "lufs_offset_vs_kick_db": -2.5,
+       "st_target_lufs": -26.2,
+       "output_trim_db": -0.0,
+       "level_src": "M"
+      },
+      "SNARE": {
+       "hpf": {
+        "type": "hpf",
+        "freq_hz": 150,
+        "slope_db_oct": 24,
+        "src": "N"
+       },
+       "lpf": {
+        "type": "lpf",
+        "freq_hz": 14000,
+        "slope_db_oct": 12,
+        "src": "N"
+       },
+       "eq": [
+        {
+         "type": "bell",
+         "freq_hz": 200,
+         "gain_db": 2.0,
+         "q": 1.2,
+         "src": "N"
+        }
+       ],
+       "comp": {
+        "threshold_dbfs": -20,
+        "ratio": 4,
+        "attack_ms": 3,
+        "release_ms": 80,
+        "knee_db": 3,
+        "target_gr_db": 4,
+        "src": {
+         "attack_ms": "N",
+         "release_ms": "N",
+         "threshold_dbfs": "N",
+         "ratio": "N",
+         "knee_db": "N",
+         "target_gr_db": "N"
+        }
+       },
+       "sat": {
+        "type": "softclip_tanh",
+        "drive_db": 2,
+        "mix_pct": 100,
+        "src": "N"
+       },
+       "width": {
+        "mono_below_hz": 120,
+        "src": "M(clap)",
+        "side_mid_db": -9.9
+       },
+       "tilt": {
+        "pivot_hz": 1000,
+        "db_per_oct": 0.0,
+        "measured_style_tilt_db_oct": null,
+        "src": "n/a"
+       },
+       "lufs_offset_vs_kick_db": -2.5,
+       "st_target_lufs": -26.2,
+       "output_trim_db": -0.0,
+       "level_src": "N(clap slot)"
+      },
+      "RIM": {
+       "hpf": {
+        "type": "hpf",
+        "freq_hz": 300,
+        "slope_db_oct": 24,
+        "src": "N"
+       },
+       "lpf": null,
+       "eq": [
+        {
+         "type": "bell",
+         "freq_hz": 1760,
+         "gain_db": 2.0,
+         "q": 2.0,
+         "src": "M-ref"
+        }
+       ],
+       "comp": {
+        "threshold_dbfs": -22,
+        "ratio": 3,
+        "attack_ms": 2,
+        "release_ms": 150,
+        "knee_db": 3,
+        "target_gr_db": 2,
+        "src": {
+         "attack_ms": "N",
+         "release_ms": "M-ref",
+         "threshold_dbfs": "N",
+         "ratio": "N",
+         "knee_db": "N",
+         "target_gr_db": "N+crest-rule"
+        }
+       },
+       "sat": {
+        "type": "none",
+        "drive_db": 0,
+        "mix_pct": 0,
+        "src": "N"
+       },
+       "width": {
+        "mono_below_hz": 120,
+        "src": "N"
+       },
+       "tilt": {
+        "pivot_hz": 1000,
+        "db_per_oct": 0.0,
+        "measured_style_tilt_db_oct": null,
+        "src": "n/a"
+       },
+       "lufs_offset_vs_kick_db": -7.5,
+       "st_target_lufs": -31.2,
+       "output_trim_db": -0.0,
+       "level_src": "M-ref"
+      },
+      "CH": {
+       "hpf": {
+        "type": "hpf",
+        "freq_hz": 2000,
+        "slope_db_oct": 24,
+        "src": "PRESET_SPEC"
+       },
+       "lpf": null,
+       "eq": [
+        {
+         "type": "highshelf",
+         "freq_hz": 10000,
+         "gain_db": 1.5,
+         "q": 0.7,
+         "src": "M"
+        },
+        {
+         "type": "bell",
+         "freq_hz": 4000,
+         "gain_db": -2.0,
+         "q": 2.0,
+         "src": "N"
+        }
+       ],
+       "comp": {
+        "threshold_dbfs": -24,
+        "ratio": 3,
+        "attack_ms": 2,
+        "release_ms": 45,
+        "knee_db": 3,
+        "target_gr_db": 2,
+        "src": {
+         "attack_ms": "M",
+         "release_ms": "M",
+         "threshold_dbfs": "N",
+         "ratio": "N",
+         "knee_db": "N",
+         "target_gr_db": "N+crest-rule"
+        }
+       },
+       "sat": {
+        "type": "none",
+        "drive_db": 0,
+        "mix_pct": 0,
+        "src": "N"
+       },
+       "width": {
+        "mono_below_hz": 120,
+        "src": "M",
+        "side_mid_db": -8.8
+       },
+       "tilt": {
+        "pivot_hz": 1000,
+        "db_per_oct": 0.0,
+        "measured_style_tilt_db_oct": null,
+        "src": "n/a"
+       },
+       "lufs_offset_vs_kick_db": -16.6,
+       "st_target_lufs": -40.3,
+       "output_trim_db": -0.0,
+       "level_src": "M split"
+      },
+      "OH": {
+       "hpf": {
+        "type": "hpf",
+        "freq_hz": 2000,
+        "slope_db_oct": 24,
+        "src": "PRESET_SPEC"
+       },
+       "lpf": null,
+       "eq": [
+        {
+         "type": "highshelf",
+         "freq_hz": 10000,
+         "gain_db": 1.5,
+         "q": 0.7,
+         "src": "M"
+        },
+        {
+         "type": "bell",
+         "freq_hz": 4000,
+         "gain_db": -2.0,
+         "q": 2.0,
+         "src": "N"
+        }
+       ],
+       "comp": {
+        "threshold_dbfs": -24,
+        "ratio": 3,
+        "attack_ms": 2,
+        "release_ms": 145,
+        "knee_db": 3,
+        "target_gr_db": 2,
+        "src": {
+         "attack_ms": "M",
+         "release_ms": "M",
+         "threshold_dbfs": "N",
+         "ratio": "N",
+         "knee_db": "N",
+         "target_gr_db": "N+crest-rule"
+        }
+       },
+       "sat": {
+        "type": "none",
+        "drive_db": 0,
+        "mix_pct": 0,
+        "src": "N"
+       },
+       "width": {
+        "mono_below_hz": 120,
+        "src": "M",
+        "side_mid_db": -8.8
+       },
+       "tilt": {
+        "pivot_hz": 1000,
+        "db_per_oct": 0.0,
+        "measured_style_tilt_db_oct": 0.17,
+        "src": "M"
+       },
+       "lufs_offset_vs_kick_db": -4.6,
+       "st_target_lufs": -28.3,
+       "output_trim_db": -0.0,
+       "level_src": "M"
+      },
+      "RIDE": {
+       "hpf": {
+        "type": "hpf",
+        "freq_hz": 2000,
+        "slope_db_oct": 24,
+        "src": "PRESET_SPEC"
+       },
+       "lpf": null,
+       "eq": [
+        {
+         "type": "highshelf",
+         "freq_hz": 8000,
+         "gain_db": 1.0,
+         "q": 0.7,
+         "src": "N"
+        }
+       ],
+       "comp": {
+        "threshold_dbfs": -24,
+        "ratio": 2,
+        "attack_ms": 2,
+        "release_ms": 175,
+        "knee_db": 3,
+        "target_gr_db": 1,
+        "src": {
+         "attack_ms": "N",
+         "release_ms": "M-melak",
+         "threshold_dbfs": "N",
+         "ratio": "N",
+         "knee_db": "N",
+         "target_gr_db": "N+crest-rule"
+        }
+       },
+       "sat": {
+        "type": "none",
+        "drive_db": 0,
+        "mix_pct": 0,
+        "src": "N"
+       },
+       "width": {
+        "mono_below_hz": 120,
+        "src": "M(hats)",
+        "side_mid_db": -8.8
+       },
+       "tilt": {
+        "pivot_hz": 1000,
+        "db_per_oct": 0.0,
+        "measured_style_tilt_db_oct": null,
+        "src": "n/a"
+       },
+       "lufs_offset_vs_kick_db": -22.6,
+       "st_target_lufs": -46.3,
+       "output_trim_db": -0.0,
+       "level_src": "PRESET_SPEC R"
+      },
+      "PERC": {
+       "hpf": {
+        "type": "hpf",
+        "freq_hz": 250,
+        "slope_db_oct": 24,
+        "src": "D"
+       },
+       "lpf": {
+        "type": "lpf",
+        "freq_hz": 12000,
+        "slope_db_oct": 12,
+        "src": "N"
+       },
+       "eq": [
+        {
+         "type": "bell",
+         "freq_hz": 2000,
+         "gain_db": 1.5,
+         "q": 1.0,
+         "src": "M-LOW"
+        }
+       ],
+       "comp": {
+        "threshold_dbfs": -22,
+        "ratio": 3,
+        "attack_ms": 3,
+        "release_ms": 75,
+        "knee_db": 3,
+        "target_gr_db": 2,
+        "src": {
+         "attack_ms": "N",
+         "release_ms": "M-melak",
+         "threshold_dbfs": "N",
+         "ratio": "N",
+         "knee_db": "N",
+         "target_gr_db": "N+crest-rule"
+        }
+       },
+       "sat": {
+        "type": "none",
+        "drive_db": 0,
+        "mix_pct": 0,
+        "src": "N"
+       },
+       "width": {
+        "mono_below_hz": 120,
+        "src": "M-LOW",
+        "side_mid_db": -12.1
+       },
+       "tilt": {
+        "pivot_hz": 1000,
+        "db_per_oct": 0.0,
+        "measured_style_tilt_db_oct": null,
+        "src": "n/a"
+       },
+       "lufs_offset_vs_kick_db": -7.6,
+       "st_target_lufs": -31.3,
+       "output_trim_db": -0.0,
+       "level_src": "M"
+      },
+      "KICK": {
+       "hpf": {
+        "type": "hpf",
+        "freq_hz": 28,
+        "slope_db_oct": 24,
+        "src": "D"
+       },
+       "lpf": null,
+       "eq": [
+        {
+         "type": "bell",
+         "freq_hz": 55,
+         "gain_db": 1.5,
+         "q": 1.0,
+         "src": "D"
+        },
+        {
+         "type": "bell",
+         "freq_hz": 250,
+         "gain_db": -2.0,
+         "q": 1.4,
+         "src": "D"
+        }
+       ],
+       "comp": {
+        "threshold_dbfs": -18,
+        "ratio": 4,
+        "attack_ms": 15,
+        "release_ms": 160,
+        "knee_db": 6,
+        "target_gr_db": 3,
+        "src": {
+         "attack_ms": "M",
+         "release_ms": "M",
+         "threshold_dbfs": "N",
+         "ratio": "N",
+         "knee_db": "N",
+         "target_gr_db": "N+crest-rule"
+        }
+       },
+       "sat": {
+        "type": "softclip_tanh",
+        "drive_db": 3,
+        "mix_pct": 100,
+        "src": "N"
+       },
+       "width": {
+        "mono_below_hz": 141,
+        "side_mid_max_db": -19.2,
+        "src": "M",
+        "side_mid_db": -27.8
+       },
+       "click_db_re_kick": -15,
+       "tilt": {
+        "pivot_hz": 1000,
+        "db_per_oct": 0.0,
+        "measured_style_tilt_db_oct": null,
+        "src": "n/a"
+       },
+       "lufs_offset_vs_kick_db": 0.0,
+       "st_target_lufs": -23.7,
+       "output_trim_db": 0.0,
+       "level_src": "D anchor"
+      }
+     }
+    }
+   }
+  },
+  "LONG": {
+   "output_trim_db": 0.0,
+   "top_trim_db": -0.3,
+   "default_lanes": [
+    "DRUMS.KICK",
+    "BASS",
+    "STAB",
+    "DRUMS.CLAP",
+    "DRUMS.CH+OH",
+    "DRUMS.PERC",
+    "VOX"
+   ],
+   "lanes": {
+    "BASS": {
+     "hpf": {
+      "type": "hpf",
+      "freq_hz": 30,
+      "slope_db_oct": 24,
+      "src": "D"
+     },
+     "lpf": {
+      "type": "lpf",
+      "freq_hz": 2500,
+      "slope_db_oct": 12,
+      "src": "M"
+     },
+     "eq": [
+      {
+       "type": "bell",
+       "freq_hz": 90,
+       "gain_db": 1.5,
+       "q": 0.9,
+       "src": "M"
+      },
+      {
+       "type": "lowshelf",
+       "freq_hz": 45,
+       "gain_db": -2.0,
+       "q": 0.7,
+       "src": "M/A&R"
+      }
+     ],
+     "comp": {
+      "threshold_dbfs": -20,
+      "ratio": 4,
+      "attack_ms": 8,
+      "release_ms": 210,
+      "knee_db": 6,
+      "target_gr_db": 4,
+      "src": {
+       "attack_ms": "M",
+       "release_ms": "M(style decay)",
+       "threshold_dbfs": "N",
+       "ratio": "N",
+       "knee_db": "N",
+       "target_gr_db": "N+crest-rule"
+      }
+     },
+     "sat": {
+      "type": "tape",
+      "drive_db": 4,
+      "mix_pct": 50,
+      "src": "N"
+     },
+     "width": {
+      "mono_below_hz": 220,
+      "side_mid_max_db": -23.8,
+      "src": "M",
+      "side_mid_db": -44.2
+     },
+     "tilt": {
+      "pivot_hz": 1000,
+      "db_per_oct": 0.0,
+      "measured_style_tilt_db_oct": null,
+      "src": "n/a"
+     },
+     "lufs_offset_vs_kick_db": -1.0,
+     "st_target_lufs": -24.7,
+     "output_trim_db": 0.0,
+     "level_src": "D clamp"
+    },
+    "STAB": {
+     "hpf": {
+      "type": "hpf",
+      "freq_hz": 120,
+      "slope_db_oct": 12,
+      "src": "D"
+     },
+     "lpf": {
+      "type": "lpf",
+      "freq_hz": 10000,
+      "slope_db_oct": 12,
+      "src": "M"
+     },
+     "eq": [
+      {
+       "type": "bell",
+       "freq_hz": 1200,
+       "gain_db": 1.5,
+       "q": 0.8,
+       "src": "M"
+      },
+      {
+       "type": "bell",
+       "freq_hz": 300,
+       "gain_db": -1.5,
+       "q": 1.0,
+       "src": "D"
+      }
+     ],
+     "comp": {
+      "threshold_dbfs": -22,
+      "ratio": 3,
+      "attack_ms": 12,
+      "release_ms": 170,
+      "knee_db": 6,
+      "target_gr_db": 0,
+      "src": {
+       "attack_ms": "M",
+       "release_ms": "M",
+       "threshold_dbfs": "N",
+       "ratio": "N",
+       "knee_db": "N",
+       "target_gr_db": "N+crest-rule"
+      }
+     },
+     "sat": {
+      "type": "tube_asym",
+      "drive_db": 2,
+      "mix_pct": 20,
+      "src": "N"
+     },
+     "width": {
+      "mono_below_hz": 120,
+      "src": "M",
+      "side_mid_db": -3.2
+     },
+     "tilt": {
+      "pivot_hz": 1000,
+      "db_per_oct": -0.9,
+      "measured_style_tilt_db_oct": -5.22,
+      "src": "M"
+     },
+     "lufs_offset_vs_kick_db": -8.9,
+     "st_target_lufs": -32.6,
+     "output_trim_db": -0.3,
+     "level_src": "M"
+    },
+    "VOX": {
+     "hpf": {
+      "type": "hpf",
+      "freq_hz": 150,
+      "slope_db_oct": 24,
+      "src": "M"
+     },
+     "lpf": {
+      "type": "lpf",
+      "freq_hz": 12000,
+      "slope_db_oct": 12,
+      "src": "N"
+     },
+     "eq": [
+      {
+       "type": "bell",
+       "freq_hz": 300,
+       "gain_db": -2.5,
+       "q": 1.2,
+       "src": "M"
+      },
+      {
+       "type": "bell",
+       "freq_hz": 3000,
+       "gain_db": 2.0,
+       "q": 1.0,
+       "src": "M"
+      }
+     ],
+     "comp": {
+      "threshold_dbfs": -22,
+      "ratio": 3,
+      "attack_ms": 5,
+      "release_ms": 80,
+      "knee_db": 6,
+      "target_gr_db": 4,
+      "src": {
+       "attack_ms": "N",
+       "release_ms": "N",
+       "threshold_dbfs": "N",
+       "ratio": "N",
+       "knee_db": "N",
+       "target_gr_db": "N+crest-rule"
+      }
+     },
+     "sat": {
+      "type": "tape",
+      "drive_db": 2,
+      "mix_pct": 20,
+      "src": "N"
+     },
+     "width": {
+      "mono_below_hz": 120,
+      "src": "M",
+      "side_mid_db": 0.9
+     },
+     "tilt": {
+      "pivot_hz": 1000,
+      "db_per_oct": 2.8,
+      "measured_style_tilt_db_oct": 2.66,
+      "src": "M"
+     },
+     "lufs_offset_vs_kick_db": -3.5,
+     "st_target_lufs": -27.2,
+     "output_trim_db": -0.3,
+     "level_src": "M"
+    },
+    "HITS": {
+     "hpf": {
+      "type": "hpf",
+      "freq_hz": 220,
+      "slope_db_oct": 24,
+      "src": "A&R"
+     },
+     "lpf": null,
+     "eq": [
+      {
+       "type": "bell",
+       "freq_hz": 500,
+       "gain_db": -2.0,
+       "q": 1.0,
+       "src": "D"
+      }
+     ],
+     "comp": {
+      "threshold_dbfs": -20,
+      "ratio": 4,
+      "attack_ms": 11,
+      "release_ms": 250,
+      "knee_db": 6,
+      "target_gr_db": 4,
+      "src": {
+       "attack_ms": "M(borrowed Gaskin stab)",
+       "release_ms": "M(borrowed Gaskin stab)",
+       "threshold_dbfs": "N",
+       "ratio": "N",
+       "knee_db": "N",
+       "target_gr_db": "N"
+      }
+     },
+     "sat": {
+      "type": "tube_asym",
+      "drive_db": 4,
+      "mix_pct": 40,
+      "src": "N"
+     },
+     "width": {
+      "mono_below_hz": 150,
+      "corr_lt120_min": 0.98,
+      "src": "A&R"
+     },
+     "tilt": {
+      "pivot_hz": 1000,
+      "db_per_oct": 0.0,
+      "measured_style_tilt_db_oct": null,
+      "src": "n/a"
+     },
+     "lufs_offset_vs_kick_db": -4.0,
+     "st_target_lufs": -27.7,
+     "output_trim_db": 0.0,
+     "level_src": "A&R"
+    },
+    "PAD": {
+     "hpf": {
+      "type": "hpf",
+      "freq_hz": 150,
+      "slope_db_oct": 12,
+      "src": "N"
+     },
+     "lpf": {
+      "type": "lpf",
+      "freq_hz": 8000,
+      "slope_db_oct": 12,
+      "src": "N"
+     },
+     "eq": [],
+     "comp": {
+      "threshold_dbfs": -24,
+      "ratio": 2,
+      "attack_ms": 30,
+      "release_ms": 300,
+      "knee_db": 6,
+      "target_gr_db": 2,
+      "src": {
+       "attack_ms": "N",
+       "release_ms": "N",
+       "threshold_dbfs": "N",
+       "ratio": "N",
+       "knee_db": "N",
+       "target_gr_db": "N"
+      }
+     },
+     "sat": {
+      "type": "none",
+      "drive_db": 0,
+      "mix_pct": 0,
+      "src": "N"
+     },
+     "width": {
+      "mono_below_hz": 120,
+      "side_mid_min_db": -12,
+      "side_mid_max_db": 0,
+      "src": "N"
+     },
+     "tilt": {
+      "pivot_hz": 1000,
+      "db_per_oct": 0.0,
+      "measured_style_tilt_db_oct": null,
+      "src": "n/a"
+     },
+     "lufs_offset_vs_kick_db": -9.3,
+     "st_target_lufs": -33.0,
+     "output_trim_db": -0.3,
+     "level_src": "PRESET_SPEC D"
+    },
+    "PLUCK": {
+     "hpf": {
+      "type": "hpf",
+      "freq_hz": 120,
+      "slope_db_oct": 12,
+      "src": "D"
+     },
+     "lpf": {
+      "type": "lpf",
+      "freq_hz": 10000,
+      "slope_db_oct": 12,
+      "src": "M"
+     },
+     "eq": [
+      {
+       "type": "bell",
+       "freq_hz": 1200,
+       "gain_db": 1.5,
+       "q": 0.8,
+       "src": "M"
+      },
+      {
+       "type": "bell",
+       "freq_hz": 300,
+       "gain_db": -1.5,
+       "q": 1.0,
+       "src": "D"
+      }
+     ],
+     "comp": {
+      "threshold_dbfs": -22,
+      "ratio": 3,
+      "attack_ms": 12,
+      "release_ms": 110,
+      "knee_db": 6,
+      "target_gr_db": 0,
+      "src": {
+       "attack_ms": "M",
+       "release_ms": "M(LONG other decay 106)",
+       "threshold_dbfs": "N",
+       "ratio": "N",
+       "knee_db": "N",
+       "target_gr_db": "N+crest-rule"
+      }
+     },
+     "sat": {
+      "type": "tube_asym",
+      "drive_db": 2,
+      "mix_pct": 20,
+      "src": "N"
+     },
+     "width": {
+      "mono_below_hz": 120,
+      "src": "M",
+      "side_mid_db": -3.2
+     },
+     "tilt": {
+      "pivot_hz": 1000,
+      "db_per_oct": -0.9,
+      "measured_style_tilt_db_oct": -5.22,
+      "src": "M"
+     },
+     "lufs_offset_vs_kick_db": -8.9,
+     "st_target_lufs": -32.6,
+     "output_trim_db": -0.3,
+     "level_src": "M"
+    },
+    "DRUMS": {
+     "_doc": "909 lane: per-voice chains; DRUMS bus has no extra processing in v1",
+     "voices": {
+      "CLAP": {
+       "hpf": {
+        "type": "hpf",
+        "freq_hz": 200,
+        "slope_db_oct": 24,
+        "src": "M"
+       },
+       "lpf": {
+        "type": "lpf",
+        "freq_hz": 14000,
+        "slope_db_oct": 12,
+        "src": "N"
+       },
+       "eq": [
+        {
+         "type": "bell",
+         "freq_hz": 1300,
+         "gain_db": 2.0,
+         "q": 1.2,
+         "src": "M-melak"
+        },
+        {
+         "type": "bell",
+         "freq_hz": 400,
+         "gain_db": -2.0,
+         "q": 1.5,
+         "src": "N"
+        }
+       ],
+       "comp": {
+        "threshold_dbfs": -20,
+        "ratio": 4,
+        "attack_ms": 3,
+        "release_ms": 60,
+        "knee_db": 3,
+        "target_gr_db": 5,
+        "src": {
+         "attack_ms": "M",
+         "release_ms": "M",
+         "threshold_dbfs": "N",
+         "ratio": "N",
+         "knee_db": "N",
+         "target_gr_db": "N+crest-rule"
+        }
+       },
+       "sat": {
+        "type": "softclip_tanh",
+        "drive_db": 2,
+        "mix_pct": 100,
+        "src": "N"
+       },
+       "width": {
+        "mono_below_hz": 120,
+        "src": "M",
+        "side_mid_db": -9.4
+       },
+       "tilt": {
+        "pivot_hz": 1000,
+        "db_per_oct": 0.0,
+        "measured_style_tilt_db_oct": null,
+        "src": "n/a"
+       },
+       "lufs_offset_vs_kick_db": -2.3,
+       "st_target_lufs": -26.0,
+       "output_trim_db": -0.3,
+       "level_src": "M"
+      },
+      "SNARE": {
+       "hpf": {
+        "type": "hpf",
+        "freq_hz": 150,
+        "slope_db_oct": 24,
+        "src": "N"
+       },
+       "lpf": {
+        "type": "lpf",
+        "freq_hz": 14000,
+        "slope_db_oct": 12,
+        "src": "N"
+       },
+       "eq": [
+        {
+         "type": "bell",
+         "freq_hz": 200,
+         "gain_db": 2.0,
+         "q": 1.2,
+         "src": "N"
+        }
+       ],
+       "comp": {
+        "threshold_dbfs": -20,
+        "ratio": 4,
+        "attack_ms": 3,
+        "release_ms": 80,
+        "knee_db": 3,
+        "target_gr_db": 5,
+        "src": {
+         "attack_ms": "N",
+         "release_ms": "N",
+         "threshold_dbfs": "N",
+         "ratio": "N",
+         "knee_db": "N",
+         "target_gr_db": "N"
+        }
+       },
+       "sat": {
+        "type": "softclip_tanh",
+        "drive_db": 2,
+        "mix_pct": 100,
+        "src": "N"
+       },
+       "width": {
+        "mono_below_hz": 120,
+        "src": "M(clap)",
+        "side_mid_db": -9.4
+       },
+       "tilt": {
+        "pivot_hz": 1000,
+        "db_per_oct": 0.0,
+        "measured_style_tilt_db_oct": null,
+        "src": "n/a"
+       },
+       "lufs_offset_vs_kick_db": -2.3,
+       "st_target_lufs": -26.0,
+       "output_trim_db": -0.3,
+       "level_src": "N(clap slot)"
+      },
+      "RIM": {
+       "hpf": {
+        "type": "hpf",
+        "freq_hz": 300,
+        "slope_db_oct": 24,
+        "src": "N"
+       },
+       "lpf": null,
+       "eq": [
+        {
+         "type": "bell",
+         "freq_hz": 1760,
+         "gain_db": 2.0,
+         "q": 2.0,
+         "src": "M-ref"
+        }
+       ],
+       "comp": {
+        "threshold_dbfs": -22,
+        "ratio": 3,
+        "attack_ms": 2,
+        "release_ms": 150,
+        "knee_db": 3,
+        "target_gr_db": 2,
+        "src": {
+         "attack_ms": "N",
+         "release_ms": "M-ref",
+         "threshold_dbfs": "N",
+         "ratio": "N",
+         "knee_db": "N",
+         "target_gr_db": "N+crest-rule"
+        }
+       },
+       "sat": {
+        "type": "none",
+        "drive_db": 0,
+        "mix_pct": 0,
+        "src": "N"
+       },
+       "width": {
+        "mono_below_hz": 120,
+        "src": "N"
+       },
+       "tilt": {
+        "pivot_hz": 1000,
+        "db_per_oct": 0.0,
+        "measured_style_tilt_db_oct": null,
+        "src": "n/a"
+       },
+       "lufs_offset_vs_kick_db": -7.3,
+       "st_target_lufs": -31.0,
+       "output_trim_db": -0.3,
+       "level_src": "M-ref"
+      },
+      "CH": {
+       "hpf": {
+        "type": "hpf",
+        "freq_hz": 2000,
+        "slope_db_oct": 24,
+        "src": "PRESET_SPEC"
+       },
+       "lpf": null,
+       "eq": [
+        {
+         "type": "highshelf",
+         "freq_hz": 10000,
+         "gain_db": 1.5,
+         "q": 0.7,
+         "src": "M"
+        },
+        {
+         "type": "bell",
+         "freq_hz": 4000,
+         "gain_db": -2.0,
+         "q": 2.0,
+         "src": "N"
+        }
+       ],
+       "comp": {
+        "threshold_dbfs": -24,
+        "ratio": 3,
+        "attack_ms": 2,
+        "release_ms": 45,
+        "knee_db": 3,
+        "target_gr_db": 3,
+        "src": {
+         "attack_ms": "M",
+         "release_ms": "M",
+         "threshold_dbfs": "N",
+         "ratio": "N",
+         "knee_db": "N",
+         "target_gr_db": "N+crest-rule"
+        }
+       },
+       "sat": {
+        "type": "none",
+        "drive_db": 0,
+        "mix_pct": 0,
+        "src": "N"
+       },
+       "width": {
+        "mono_below_hz": 120,
+        "src": "M",
+        "side_mid_db": -8.2
+       },
+       "tilt": {
+        "pivot_hz": 1000,
+        "db_per_oct": 0.0,
+        "measured_style_tilt_db_oct": null,
+        "src": "n/a"
+       },
+       "lufs_offset_vs_kick_db": -14.5,
+       "st_target_lufs": -38.2,
+       "output_trim_db": -0.3,
+       "level_src": "M split"
+      },
+      "OH": {
+       "hpf": {
+        "type": "hpf",
+        "freq_hz": 2000,
+        "slope_db_oct": 24,
+        "src": "PRESET_SPEC"
+       },
+       "lpf": null,
+       "eq": [
+        {
+         "type": "highshelf",
+         "freq_hz": 10000,
+         "gain_db": 1.5,
+         "q": 0.7,
+         "src": "M"
+        },
+        {
+         "type": "bell",
+         "freq_hz": 4000,
+         "gain_db": -2.0,
+         "q": 2.0,
+         "src": "N"
+        }
+       ],
+       "comp": {
+        "threshold_dbfs": -24,
+        "ratio": 3,
+        "attack_ms": 2,
+        "release_ms": 145,
+        "knee_db": 3,
+        "target_gr_db": 3,
+        "src": {
+         "attack_ms": "M",
+         "release_ms": "M",
+         "threshold_dbfs": "N",
+         "ratio": "N",
+         "knee_db": "N",
+         "target_gr_db": "N+crest-rule"
+        }
+       },
+       "sat": {
+        "type": "none",
+        "drive_db": 0,
+        "mix_pct": 0,
+        "src": "N"
+       },
+       "width": {
+        "mono_below_hz": 120,
+        "src": "M",
+        "side_mid_db": -8.2
+       },
+       "tilt": {
+        "pivot_hz": 1000,
+        "db_per_oct": 0.7,
+        "measured_style_tilt_db_oct": 0.85,
+        "src": "M"
+       },
+       "lufs_offset_vs_kick_db": -2.5,
+       "st_target_lufs": -26.2,
+       "output_trim_db": -0.3,
+       "level_src": "M"
+      },
+      "RIDE": {
+       "hpf": {
+        "type": "hpf",
+        "freq_hz": 2000,
+        "slope_db_oct": 24,
+        "src": "PRESET_SPEC"
+       },
+       "lpf": null,
+       "eq": [
+        {
+         "type": "highshelf",
+         "freq_hz": 8000,
+         "gain_db": 1.0,
+         "q": 0.7,
+         "src": "N"
+        }
+       ],
+       "comp": {
+        "threshold_dbfs": -24,
+        "ratio": 2,
+        "attack_ms": 2,
+        "release_ms": 175,
+        "knee_db": 3,
+        "target_gr_db": 1,
+        "src": {
+         "attack_ms": "N",
+         "release_ms": "M-melak",
+         "threshold_dbfs": "N",
+         "ratio": "N",
+         "knee_db": "N",
+         "target_gr_db": "N+crest-rule"
+        }
+       },
+       "sat": {
+        "type": "none",
+        "drive_db": 0,
+        "mix_pct": 0,
+        "src": "N"
+       },
+       "width": {
+        "mono_below_hz": 120,
+        "src": "M(hats)",
+        "side_mid_db": -8.2
+       },
+       "tilt": {
+        "pivot_hz": 1000,
+        "db_per_oct": 0.0,
+        "measured_style_tilt_db_oct": null,
+        "src": "n/a"
+       },
+       "lufs_offset_vs_kick_db": -20.5,
+       "st_target_lufs": -44.2,
+       "output_trim_db": -0.3,
+       "level_src": "PRESET_SPEC R"
+      },
+      "PERC": {
+       "hpf": {
+        "type": "hpf",
+        "freq_hz": 250,
+        "slope_db_oct": 24,
+        "src": "D"
+       },
+       "lpf": {
+        "type": "lpf",
+        "freq_hz": 12000,
+        "slope_db_oct": 12,
+        "src": "N"
+       },
+       "eq": [
+        {
+         "type": "bell",
+         "freq_hz": 2000,
+         "gain_db": 1.5,
+         "q": 1.0,
+         "src": "M-LOW"
+        }
+       ],
+       "comp": {
+        "threshold_dbfs": -22,
+        "ratio": 3,
+        "attack_ms": 3,
+        "release_ms": 75,
+        "knee_db": 3,
+        "target_gr_db": 4,
+        "src": {
+         "attack_ms": "N",
+         "release_ms": "M-melak",
+         "threshold_dbfs": "N",
+         "ratio": "N",
+         "knee_db": "N",
+         "target_gr_db": "N+crest-rule"
+        }
+       },
+       "sat": {
+        "type": "none",
+        "drive_db": 0,
+        "mix_pct": 0,
+        "src": "N"
+       },
+       "width": {
+        "mono_below_hz": 120,
+        "src": "M-LOW",
+        "side_mid_db": -19.4
+       },
+       "tilt": {
+        "pivot_hz": 1000,
+        "db_per_oct": 0.0,
+        "measured_style_tilt_db_oct": null,
+        "src": "n/a"
+       },
+       "lufs_offset_vs_kick_db": -8.7,
+       "st_target_lufs": -32.4,
+       "output_trim_db": -0.3,
+       "level_src": "M"
+      },
+      "KICK": {
+       "hpf": {
+        "type": "hpf",
+        "freq_hz": 28,
+        "slope_db_oct": 24,
+        "src": "D"
+       },
+       "lpf": null,
+       "eq": [
+        {
+         "type": "bell",
+         "freq_hz": 55,
+         "gain_db": 1.5,
+         "q": 1.0,
+         "src": "D"
+        },
+        {
+         "type": "bell",
+         "freq_hz": 250,
+         "gain_db": -2.0,
+         "q": 1.4,
+         "src": "D"
+        }
+       ],
+       "comp": {
+        "threshold_dbfs": -18,
+        "ratio": 4,
+        "attack_ms": 15,
+        "release_ms": 160,
+        "knee_db": 6,
+        "target_gr_db": 2,
+        "src": {
+         "attack_ms": "M",
+         "release_ms": "M",
+         "threshold_dbfs": "N",
+         "ratio": "N",
+         "knee_db": "N",
+         "target_gr_db": "N+crest-rule"
+        }
+       },
+       "sat": {
+        "type": "softclip_tanh",
+        "drive_db": 3,
+        "mix_pct": 100,
+        "src": "N"
+       },
+       "width": {
+        "mono_below_hz": 141,
+        "side_mid_max_db": -19.2,
+        "src": "M",
+        "side_mid_db": -31.5
+       },
+       "click_db_re_kick": -15,
+       "tilt": {
+        "pivot_hz": 1000,
+        "db_per_oct": 0.0,
+        "measured_style_tilt_db_oct": null,
+        "src": "n/a"
+       },
+       "lufs_offset_vs_kick_db": 0.0,
+       "st_target_lufs": -23.7,
+       "output_trim_db": 0.0,
+       "level_src": "D anchor"
+      }
+     }
+    }
+   }
+  },
+  "POP": {
+   "output_trim_db": 0.0,
+   "top_trim_db": -1.8,
+   "default_lanes": [
+    "DRUMS.KICK",
+    "BASS",
+    "STAB",
+    "DRUMS.CLAP",
+    "DRUMS.CH+OH",
+    "DRUMS.PERC",
+    "VOX"
+   ],
+   "lanes": {
+    "BASS": {
+     "hpf": {
+      "type": "hpf",
+      "freq_hz": 30,
+      "slope_db_oct": 24,
+      "src": "D"
+     },
+     "lpf": {
+      "type": "lpf",
+      "freq_hz": 2500,
+      "slope_db_oct": 12,
+      "src": "M"
+     },
+     "eq": [
+      {
+       "type": "bell",
+       "freq_hz": 90,
+       "gain_db": 1.5,
+       "q": 0.9,
+       "src": "M"
+      },
+      {
+       "type": "lowshelf",
+       "freq_hz": 45,
+       "gain_db": -2.0,
+       "q": 0.7,
+       "src": "M/A&R"
+      }
+     ],
+     "comp": {
+      "threshold_dbfs": -20,
+      "ratio": 4,
+      "attack_ms": 8,
+      "release_ms": 150,
+      "knee_db": 6,
+      "target_gr_db": 5,
+      "src": {
+       "attack_ms": "M",
+       "release_ms": "M",
+       "threshold_dbfs": "N",
+       "ratio": "N",
+       "knee_db": "N",
+       "target_gr_db": "N+crest-rule"
+      }
+     },
+     "sat": {
+      "type": "tape",
+      "drive_db": 5,
+      "mix_pct": 50,
+      "src": "N"
+     },
+     "width": {
+      "mono_below_hz": 220,
+      "side_mid_max_db": -23.8,
+      "src": "M",
+      "side_mid_db": -34.8
+     },
+     "tilt": {
+      "pivot_hz": 1000,
+      "db_per_oct": 0.0,
+      "measured_style_tilt_db_oct": null,
+      "src": "n/a"
+     },
+     "lufs_offset_vs_kick_db": -1.0,
+     "st_target_lufs": -24.7,
+     "output_trim_db": 0.0,
+     "level_src": "D clamp"
+    },
+    "STAB": {
+     "hpf": {
+      "type": "hpf",
+      "freq_hz": 120,
+      "slope_db_oct": 12,
+      "src": "D"
+     },
+     "lpf": {
+      "type": "lpf",
+      "freq_hz": 10000,
+      "slope_db_oct": 12,
+      "src": "M"
+     },
+     "eq": [
+      {
+       "type": "bell",
+       "freq_hz": 1200,
+       "gain_db": 1.5,
+       "q": 0.8,
+       "src": "M"
+      },
+      {
+       "type": "bell",
+       "freq_hz": 300,
+       "gain_db": -1.5,
+       "q": 1.0,
+       "src": "D"
+      }
+     ],
+     "comp": {
+      "threshold_dbfs": -22,
+      "ratio": 3,
+      "attack_ms": 12,
+      "release_ms": 170,
+      "knee_db": 6,
+      "target_gr_db": 5,
+      "src": {
+       "attack_ms": "M",
+       "release_ms": "M",
+       "threshold_dbfs": "N",
+       "ratio": "N",
+       "knee_db": "N",
+       "target_gr_db": "N+crest-rule"
+      }
+     },
+     "sat": {
+      "type": "tube_asym",
+      "drive_db": 3,
+      "mix_pct": 30,
+      "src": "N"
+     },
+     "width": {
+      "mono_below_hz": 120,
+      "src": "M",
+      "side_mid_db": -4.6
+     },
+     "tilt": {
+      "pivot_hz": 1000,
+      "db_per_oct": 0.0,
+      "measured_style_tilt_db_oct": -4.41,
+      "src": "M"
+     },
+     "lufs_offset_vs_kick_db": -2.3,
+     "st_target_lufs": -26.0,
+     "output_trim_db": -1.8,
+     "level_src": "M"
+    },
+    "VOX": {
+     "hpf": {
+      "type": "hpf",
+      "freq_hz": 150,
+      "slope_db_oct": 24,
+      "src": "M"
+     },
+     "lpf": {
+      "type": "lpf",
+      "freq_hz": 12000,
+      "slope_db_oct": 12,
+      "src": "N"
+     },
+     "eq": [
+      {
+       "type": "bell",
+       "freq_hz": 300,
+       "gain_db": -2.5,
+       "q": 1.2,
+       "src": "M"
+      },
+      {
+       "type": "bell",
+       "freq_hz": 3000,
+       "gain_db": 2.0,
+       "q": 1.0,
+       "src": "M"
+      }
+     ],
+     "comp": {
+      "threshold_dbfs": -22,
+      "ratio": 3,
+      "attack_ms": 5,
+      "release_ms": 80,
+      "knee_db": 6,
+      "target_gr_db": 8,
+      "src": {
+       "attack_ms": "N",
+       "release_ms": "N",
+       "threshold_dbfs": "N",
+       "ratio": "N",
+       "knee_db": "N",
+       "target_gr_db": "N+crest-rule"
+      }
+     },
+     "sat": {
+      "type": "tape",
+      "drive_db": 3,
+      "mix_pct": 30,
+      "src": "N"
+     },
+     "width": {
+      "mono_below_hz": 120,
+      "src": "M",
+      "side_mid_db": -11.6
+     },
+     "tilt": {
+      "pivot_hz": 1000,
+      "db_per_oct": -1.6,
+      "measured_style_tilt_db_oct": -1.77,
+      "src": "M"
+     },
+     "lufs_offset_vs_kick_db": -1.5,
+     "st_target_lufs": -25.2,
+     "output_trim_db": -1.8,
+     "level_src": "M"
+    },
+    "HITS": {
+     "hpf": {
+      "type": "hpf",
+      "freq_hz": 220,
+      "slope_db_oct": 24,
+      "src": "A&R"
+     },
+     "lpf": null,
+     "eq": [
+      {
+       "type": "bell",
+       "freq_hz": 500,
+       "gain_db": -2.0,
+       "q": 1.0,
+       "src": "D"
+      }
+     ],
+     "comp": {
+      "threshold_dbfs": -20,
+      "ratio": 4,
+      "attack_ms": 11,
+      "release_ms": 250,
+      "knee_db": 6,
+      "target_gr_db": 4,
+      "src": {
+       "attack_ms": "M(borrowed Gaskin stab)",
+       "release_ms": "M(borrowed Gaskin stab)",
+       "threshold_dbfs": "N",
+       "ratio": "N",
+       "knee_db": "N",
+       "target_gr_db": "N"
+      }
+     },
+     "sat": {
+      "type": "tube_asym",
+      "drive_db": 4,
+      "mix_pct": 40,
+      "src": "N"
+     },
+     "width": {
+      "mono_below_hz": 150,
+      "corr_lt120_min": 0.98,
+      "src": "A&R"
+     },
+     "tilt": {
+      "pivot_hz": 1000,
+      "db_per_oct": 0.0,
+      "measured_style_tilt_db_oct": null,
+      "src": "n/a"
+     },
+     "lufs_offset_vs_kick_db": -4.0,
+     "st_target_lufs": -27.7,
+     "output_trim_db": 0.0,
+     "level_src": "A&R"
+    },
+    "PAD": {
+     "hpf": {
+      "type": "hpf",
+      "freq_hz": 150,
+      "slope_db_oct": 12,
+      "src": "N"
+     },
+     "lpf": {
+      "type": "lpf",
+      "freq_hz": 8000,
+      "slope_db_oct": 12,
+      "src": "N"
+     },
+     "eq": [],
+     "comp": {
+      "threshold_dbfs": -24,
+      "ratio": 2,
+      "attack_ms": 30,
+      "release_ms": 300,
+      "knee_db": 6,
+      "target_gr_db": 2,
+      "src": {
+       "attack_ms": "N",
+       "release_ms": "N",
+       "threshold_dbfs": "N",
+       "ratio": "N",
+       "knee_db": "N",
+       "target_gr_db": "N"
+      }
+     },
+     "sat": {
+      "type": "none",
+      "drive_db": 0,
+      "mix_pct": 0,
+      "src": "N"
+     },
+     "width": {
+      "mono_below_hz": 120,
+      "side_mid_min_db": -12,
+      "side_mid_max_db": 0,
+      "src": "N"
+     },
+     "tilt": {
+      "pivot_hz": 1000,
+      "db_per_oct": 0.0,
+      "measured_style_tilt_db_oct": null,
+      "src": "n/a"
+     },
+     "lufs_offset_vs_kick_db": -10.8,
+     "st_target_lufs": -34.5,
+     "output_trim_db": -1.8,
+     "level_src": "PRESET_SPEC D"
+    },
+    "PLUCK": {
+     "hpf": {
+      "type": "hpf",
+      "freq_hz": 120,
+      "slope_db_oct": 12,
+      "src": "D"
+     },
+     "lpf": {
+      "type": "lpf",
+      "freq_hz": 10000,
+      "slope_db_oct": 12,
+      "src": "M"
+     },
+     "eq": [
+      {
+       "type": "bell",
+       "freq_hz": 1200,
+       "gain_db": 1.5,
+       "q": 0.8,
+       "src": "M"
+      },
+      {
+       "type": "bell",
+       "freq_hz": 300,
+       "gain_db": -1.5,
+       "q": 1.0,
+       "src": "D"
+      }
+     ],
+     "comp": {
+      "threshold_dbfs": -22,
+      "ratio": 3,
+      "attack_ms": 12,
+      "release_ms": 110,
+      "knee_db": 6,
+      "target_gr_db": 5,
+      "src": {
+       "attack_ms": "M",
+       "release_ms": "M(LONG other decay 106)",
+       "threshold_dbfs": "N",
+       "ratio": "N",
+       "knee_db": "N",
+       "target_gr_db": "N+crest-rule"
+      }
+     },
+     "sat": {
+      "type": "tube_asym",
+      "drive_db": 3,
+      "mix_pct": 30,
+      "src": "N"
+     },
+     "width": {
+      "mono_below_hz": 120,
+      "src": "M",
+      "side_mid_db": -4.6
+     },
+     "tilt": {
+      "pivot_hz": 1000,
+      "db_per_oct": 0.0,
+      "measured_style_tilt_db_oct": -4.41,
+      "src": "M"
+     },
+     "lufs_offset_vs_kick_db": -2.3,
+     "st_target_lufs": -26.0,
+     "output_trim_db": -1.8,
+     "level_src": "M"
+    },
+    "DRUMS": {
+     "_doc": "909 lane: per-voice chains; DRUMS bus has no extra processing in v1",
+     "voices": {
+      "CLAP": {
+       "hpf": {
+        "type": "hpf",
+        "freq_hz": 200,
+        "slope_db_oct": 24,
+        "src": "M"
+       },
+       "lpf": {
+        "type": "lpf",
+        "freq_hz": 14000,
+        "slope_db_oct": 12,
+        "src": "N"
+       },
+       "eq": [
+        {
+         "type": "bell",
+         "freq_hz": 1300,
+         "gain_db": 2.0,
+         "q": 1.2,
+         "src": "M-melak"
+        },
+        {
+         "type": "bell",
+         "freq_hz": 400,
+         "gain_db": -2.0,
+         "q": 1.5,
+         "src": "N"
+        }
+       ],
+       "comp": {
+        "threshold_dbfs": -20,
+        "ratio": 4,
+        "attack_ms": 3,
+        "release_ms": 60,
+        "knee_db": 3,
+        "target_gr_db": 2,
+        "src": {
+         "attack_ms": "M",
+         "release_ms": "M",
+         "threshold_dbfs": "N",
+         "ratio": "N",
+         "knee_db": "N",
+         "target_gr_db": "N+crest-rule"
+        }
+       },
+       "sat": {
+        "type": "softclip_tanh",
+        "drive_db": 2,
+        "mix_pct": 100,
+        "src": "N"
+       },
+       "width": {
+        "mono_below_hz": 120,
+        "src": "M",
+        "side_mid_db": -10.0
+       },
+       "tilt": {
+        "pivot_hz": 1000,
+        "db_per_oct": 0.0,
+        "measured_style_tilt_db_oct": null,
+        "src": "n/a"
+       },
+       "lufs_offset_vs_kick_db": -5.3,
+       "st_target_lufs": -29.0,
+       "output_trim_db": -1.8,
+       "level_src": "M"
+      },
+      "SNARE": {
+       "hpf": {
+        "type": "hpf",
+        "freq_hz": 150,
+        "slope_db_oct": 24,
+        "src": "N"
+       },
+       "lpf": {
+        "type": "lpf",
+        "freq_hz": 14000,
+        "slope_db_oct": 12,
+        "src": "N"
+       },
+       "eq": [
+        {
+         "type": "bell",
+         "freq_hz": 200,
+         "gain_db": 2.0,
+         "q": 1.2,
+         "src": "N"
+        }
+       ],
+       "comp": {
+        "threshold_dbfs": -20,
+        "ratio": 4,
+        "attack_ms": 3,
+        "release_ms": 80,
+        "knee_db": 3,
+        "target_gr_db": 2,
+        "src": {
+         "attack_ms": "N",
+         "release_ms": "N",
+         "threshold_dbfs": "N",
+         "ratio": "N",
+         "knee_db": "N",
+         "target_gr_db": "N"
+        }
+       },
+       "sat": {
+        "type": "softclip_tanh",
+        "drive_db": 2,
+        "mix_pct": 100,
+        "src": "N"
+       },
+       "width": {
+        "mono_below_hz": 120,
+        "src": "M(clap)",
+        "side_mid_db": -10.0
+       },
+       "tilt": {
+        "pivot_hz": 1000,
+        "db_per_oct": 0.0,
+        "measured_style_tilt_db_oct": null,
+        "src": "n/a"
+       },
+       "lufs_offset_vs_kick_db": -5.3,
+       "st_target_lufs": -29.0,
+       "output_trim_db": -1.8,
+       "level_src": "N(clap slot)"
+      },
+      "RIM": {
+       "hpf": {
+        "type": "hpf",
+        "freq_hz": 300,
+        "slope_db_oct": 24,
+        "src": "N"
+       },
+       "lpf": null,
+       "eq": [
+        {
+         "type": "bell",
+         "freq_hz": 1760,
+         "gain_db": 2.0,
+         "q": 2.0,
+         "src": "M-ref"
+        }
+       ],
+       "comp": {
+        "threshold_dbfs": -22,
+        "ratio": 3,
+        "attack_ms": 2,
+        "release_ms": 150,
+        "knee_db": 3,
+        "target_gr_db": 2,
+        "src": {
+         "attack_ms": "N",
+         "release_ms": "M-ref",
+         "threshold_dbfs": "N",
+         "ratio": "N",
+         "knee_db": "N",
+         "target_gr_db": "N+crest-rule"
+        }
+       },
+       "sat": {
+        "type": "none",
+        "drive_db": 0,
+        "mix_pct": 0,
+        "src": "N"
+       },
+       "width": {
+        "mono_below_hz": 120,
+        "src": "N"
+       },
+       "tilt": {
+        "pivot_hz": 1000,
+        "db_per_oct": 0.0,
+        "measured_style_tilt_db_oct": null,
+        "src": "n/a"
+       },
+       "lufs_offset_vs_kick_db": -10.3,
+       "st_target_lufs": -34.0,
+       "output_trim_db": -1.8,
+       "level_src": "M-ref"
+      },
+      "CH": {
+       "hpf": {
+        "type": "hpf",
+        "freq_hz": 2000,
+        "slope_db_oct": 24,
+        "src": "PRESET_SPEC"
+       },
+       "lpf": null,
+       "eq": [
+        {
+         "type": "highshelf",
+         "freq_hz": 10000,
+         "gain_db": 1.5,
+         "q": 0.7,
+         "src": "M"
+        },
+        {
+         "type": "bell",
+         "freq_hz": 4000,
+         "gain_db": -2.0,
+         "q": 2.0,
+         "src": "N"
+        }
+       ],
+       "comp": {
+        "threshold_dbfs": -24,
+        "ratio": 3,
+        "attack_ms": 2,
+        "release_ms": 45,
+        "knee_db": 3,
+        "target_gr_db": 2,
+        "src": {
+         "attack_ms": "M",
+         "release_ms": "M",
+         "threshold_dbfs": "N",
+         "ratio": "N",
+         "knee_db": "N",
+         "target_gr_db": "N+crest-rule"
+        }
+       },
+       "sat": {
+        "type": "none",
+        "drive_db": 0,
+        "mix_pct": 0,
+        "src": "N"
+       },
+       "width": {
+        "mono_below_hz": 120,
+        "src": "M",
+        "side_mid_db": -9.6
+       },
+       "tilt": {
+        "pivot_hz": 1000,
+        "db_per_oct": 0.0,
+        "measured_style_tilt_db_oct": null,
+        "src": "n/a"
+       },
+       "lufs_offset_vs_kick_db": -18.6,
+       "st_target_lufs": -42.3,
+       "output_trim_db": -1.8,
+       "level_src": "M split"
+      },
+      "OH": {
+       "hpf": {
+        "type": "hpf",
+        "freq_hz": 2000,
+        "slope_db_oct": 24,
+        "src": "PRESET_SPEC"
+       },
+       "lpf": null,
+       "eq": [
+        {
+         "type": "highshelf",
+         "freq_hz": 10000,
+         "gain_db": 1.5,
+         "q": 0.7,
+         "src": "M"
+        },
+        {
+         "type": "bell",
+         "freq_hz": 4000,
+         "gain_db": -2.0,
+         "q": 2.0,
+         "src": "N"
+        }
+       ],
+       "comp": {
+        "threshold_dbfs": -24,
+        "ratio": 3,
+        "attack_ms": 2,
+        "release_ms": 145,
+        "knee_db": 3,
+        "target_gr_db": 2,
+        "src": {
+         "attack_ms": "M",
+         "release_ms": "M",
+         "threshold_dbfs": "N",
+         "ratio": "N",
+         "knee_db": "N",
+         "target_gr_db": "N+crest-rule"
+        }
+       },
+       "sat": {
+        "type": "none",
+        "drive_db": 0,
+        "mix_pct": 0,
+        "src": "N"
+       },
+       "width": {
+        "mono_below_hz": 120,
+        "src": "M",
+        "side_mid_db": -9.6
+       },
+       "tilt": {
+        "pivot_hz": 1000,
+        "db_per_oct": 1.5,
+        "measured_style_tilt_db_oct": 1.71,
+        "src": "M"
+       },
+       "lufs_offset_vs_kick_db": -6.6,
+       "st_target_lufs": -30.3,
+       "output_trim_db": -1.8,
+       "level_src": "M"
+      },
+      "RIDE": {
+       "hpf": {
+        "type": "hpf",
+        "freq_hz": 2000,
+        "slope_db_oct": 24,
+        "src": "PRESET_SPEC"
+       },
+       "lpf": null,
+       "eq": [
+        {
+         "type": "highshelf",
+         "freq_hz": 8000,
+         "gain_db": 1.0,
+         "q": 0.7,
+         "src": "N"
+        }
+       ],
+       "comp": {
+        "threshold_dbfs": -24,
+        "ratio": 2,
+        "attack_ms": 2,
+        "release_ms": 175,
+        "knee_db": 3,
+        "target_gr_db": 1,
+        "src": {
+         "attack_ms": "N",
+         "release_ms": "M-melak",
+         "threshold_dbfs": "N",
+         "ratio": "N",
+         "knee_db": "N",
+         "target_gr_db": "N+crest-rule"
+        }
+       },
+       "sat": {
+        "type": "none",
+        "drive_db": 0,
+        "mix_pct": 0,
+        "src": "N"
+       },
+       "width": {
+        "mono_below_hz": 120,
+        "src": "M(hats)",
+        "side_mid_db": -9.6
+       },
+       "tilt": {
+        "pivot_hz": 1000,
+        "db_per_oct": 0.0,
+        "measured_style_tilt_db_oct": null,
+        "src": "n/a"
+       },
+       "lufs_offset_vs_kick_db": -24.6,
+       "st_target_lufs": -48.3,
+       "output_trim_db": -1.8,
+       "level_src": "PRESET_SPEC R"
+      },
+      "PERC": {
+       "hpf": {
+        "type": "hpf",
+        "freq_hz": 250,
+        "slope_db_oct": 24,
+        "src": "D"
+       },
+       "lpf": {
+        "type": "lpf",
+        "freq_hz": 12000,
+        "slope_db_oct": 12,
+        "src": "N"
+       },
+       "eq": [
+        {
+         "type": "bell",
+         "freq_hz": 2000,
+         "gain_db": 1.5,
+         "q": 1.0,
+         "src": "M-LOW"
+        }
+       ],
+       "comp": {
+        "threshold_dbfs": -22,
+        "ratio": 3,
+        "attack_ms": 3,
+        "release_ms": 75,
+        "knee_db": 3,
+        "target_gr_db": 2,
+        "src": {
+         "attack_ms": "N",
+         "release_ms": "M-melak",
+         "threshold_dbfs": "N",
+         "ratio": "N",
+         "knee_db": "N",
+         "target_gr_db": "N+crest-rule"
+        }
+       },
+       "sat": {
+        "type": "none",
+        "drive_db": 0,
+        "mix_pct": 0,
+        "src": "N"
+       },
+       "width": {
+        "mono_below_hz": 120,
+        "src": "M-LOW",
+        "side_mid_db": -12.3
+       },
+       "tilt": {
+        "pivot_hz": 1000,
+        "db_per_oct": 0.0,
+        "measured_style_tilt_db_oct": null,
+        "src": "n/a"
+       },
+       "lufs_offset_vs_kick_db": -12.5,
+       "st_target_lufs": -36.2,
+       "output_trim_db": -1.8,
+       "level_src": "M"
+      },
+      "KICK": {
+       "hpf": {
+        "type": "hpf",
+        "freq_hz": 28,
+        "slope_db_oct": 24,
+        "src": "D"
+       },
+       "lpf": null,
+       "eq": [
+        {
+         "type": "bell",
+         "freq_hz": 55,
+         "gain_db": 1.5,
+         "q": 1.0,
+         "src": "D"
+        },
+        {
+         "type": "bell",
+         "freq_hz": 250,
+         "gain_db": -2.0,
+         "q": 1.4,
+         "src": "D"
+        }
+       ],
+       "comp": {
+        "threshold_dbfs": -18,
+        "ratio": 4,
+        "attack_ms": 15,
+        "release_ms": 160,
+        "knee_db": 6,
+        "target_gr_db": 3,
+        "src": {
+         "attack_ms": "M",
+         "release_ms": "M",
+         "threshold_dbfs": "N",
+         "ratio": "N",
+         "knee_db": "N",
+         "target_gr_db": "N+crest-rule"
+        }
+       },
+       "sat": {
+        "type": "softclip_tanh",
+        "drive_db": 3,
+        "mix_pct": 100,
+        "src": "N"
+       },
+       "width": {
+        "mono_below_hz": 141,
+        "side_mid_max_db": -19.2,
+        "src": "M",
+        "side_mid_db": -38.3
+       },
+       "click_db_re_kick": -15,
+       "tilt": {
+        "pivot_hz": 1000,
+        "db_per_oct": 0.0,
+        "measured_style_tilt_db_oct": null,
+        "src": "n/a"
+       },
+       "lufs_offset_vs_kick_db": 0.0,
+       "st_target_lufs": -23.7,
+       "output_trim_db": 0.0,
+       "level_src": "D anchor"
+      }
+     }
+    }
+   }
+  },
+  "GASKIN": {
+   "output_trim_db": 0.0,
+   "top_trim_db": 1.0,
+   "default_lanes": [
+    "DRUMS.KICK",
+    "BASS",
+    "STAB",
+    "DRUMS.CLAP",
+    "DRUMS.CH+OH",
+    "DRUMS.PERC",
+    "HITS"
+   ],
+   "lanes": {
+    "BASS": {
+     "hpf": {
+      "type": "hpf",
+      "freq_hz": 30,
+      "slope_db_oct": 24,
+      "src": "D"
+     },
+     "lpf": {
+      "type": "lpf",
+      "freq_hz": 2500,
+      "slope_db_oct": 12,
+      "src": "M"
+     },
+     "eq": [
+      {
+       "type": "bell",
+       "freq_hz": 90,
+       "gain_db": 1.5,
+       "q": 0.9,
+       "src": "M"
+      },
+      {
+       "type": "lowshelf",
+       "freq_hz": 45,
+       "gain_db": -2.0,
+       "q": 0.7,
+       "src": "M/A&R"
+      }
+     ],
+     "comp": {
+      "threshold_dbfs": -20,
+      "ratio": 4,
+      "attack_ms": 8,
+      "release_ms": 160,
+      "knee_db": 6,
+      "target_gr_db": 6,
+      "src": {
+       "attack_ms": "M",
+       "release_ms": "M(style decay)",
+       "threshold_dbfs": "N",
+       "ratio": "N",
+       "knee_db": "N",
+       "target_gr_db": "N+crest-rule"
+      }
+     },
+     "sat": {
+      "type": "tape",
+      "drive_db": 2,
+      "mix_pct": 20,
+      "src": "N"
+     },
+     "width": {
+      "mono_below_hz": 220,
+      "side_mid_max_db": -23.8,
+      "src": "M",
+      "side_mid_db": -34.4
+     },
+     "tilt": {
+      "pivot_hz": 1000,
+      "db_per_oct": 0.0,
+      "measured_style_tilt_db_oct": null,
+      "src": "n/a"
+     },
+     "lufs_offset_vs_kick_db": -1.0,
+     "st_target_lufs": -24.7,
+     "output_trim_db": 0.0,
+     "level_src": "D clamp"
+    },
+    "STAB": {
+     "hpf": {
+      "type": "hpf",
+      "freq_hz": 120,
+      "slope_db_oct": 12,
+      "src": "D"
+     },
+     "lpf": {
+      "type": "lpf",
+      "freq_hz": 10000,
+      "slope_db_oct": 12,
+      "src": "M"
+     },
+     "eq": [
+      {
+       "type": "bell",
+       "freq_hz": 1200,
+       "gain_db": 1.5,
+       "q": 0.8,
+       "src": "M"
+      },
+      {
+       "type": "bell",
+       "freq_hz": 300,
+       "gain_db": -1.5,
+       "q": 1.0,
+       "src": "D"
+      }
+     ],
+     "comp": {
+      "threshold_dbfs": -22,
+      "ratio": 3,
+      "attack_ms": 12,
+      "release_ms": 170,
+      "knee_db": 6,
+      "target_gr_db": 7,
+      "src": {
+       "attack_ms": "M",
+       "release_ms": "M",
+       "threshold_dbfs": "N",
+       "ratio": "N",
+       "knee_db": "N",
+       "target_gr_db": "N+crest-rule"
+      }
+     },
+     "sat": {
+      "type": "tube_asym",
+      "drive_db": 5,
+      "mix_pct": 40,
+      "src": "N"
+     },
+     "width": {
+      "mono_below_hz": 120,
+      "src": "M",
+      "side_mid_db": -9.4
+     },
+     "tilt": {
+      "pivot_hz": 1000,
+      "db_per_oct": -1.2,
+      "measured_style_tilt_db_oct": -5.52,
+      "src": "M"
+     },
+     "lufs_offset_vs_kick_db": -0.6,
+     "st_target_lufs": -24.3,
+     "output_trim_db": 1.0,
+     "level_src": "M"
+    },
+    "VOX": {
+     "hpf": {
+      "type": "hpf",
+      "freq_hz": 150,
+      "slope_db_oct": 24,
+      "src": "M"
+     },
+     "lpf": {
+      "type": "lpf",
+      "freq_hz": 12000,
+      "slope_db_oct": 12,
+      "src": "N"
+     },
+     "eq": [
+      {
+       "type": "bell",
+       "freq_hz": 300,
+       "gain_db": -2.5,
+       "q": 1.2,
+       "src": "M"
+      },
+      {
+       "type": "bell",
+       "freq_hz": 3000,
+       "gain_db": 2.0,
+       "q": 1.0,
+       "src": "M"
+      }
+     ],
+     "comp": {
+      "threshold_dbfs": -22,
+      "ratio": 3,
+      "attack_ms": 5,
+      "release_ms": 80,
+      "knee_db": 6,
+      "target_gr_db": 3,
+      "src": {
+       "attack_ms": "N",
+       "release_ms": "N",
+       "threshold_dbfs": "N",
+       "ratio": "N",
+       "knee_db": "N",
+       "target_gr_db": "N+crest-rule"
+      }
+     },
+     "sat": {
+      "type": "tape",
+      "drive_db": 2,
+      "mix_pct": 20,
+      "src": "N"
+     },
+     "width": {
+      "mono_below_hz": 120,
+      "src": "fallback UKMIN",
+      "side_mid_db": -8.7
+     },
+     "tilt": {
+      "pivot_hz": 1000,
+      "db_per_oct": 0.0,
+      "measured_style_tilt_db_oct": null,
+      "src": "fallback UKMIN"
+     },
+     "lufs_offset_vs_kick_db": -4.0,
+     "st_target_lufs": -27.7,
+     "output_trim_db": 1.0,
+     "level_src": "fallback UKMIN"
+    },
+    "HITS": {
+     "hpf": {
+      "type": "hpf",
+      "freq_hz": 220,
+      "slope_db_oct": 24,
+      "src": "A&R"
+     },
+     "lpf": null,
+     "eq": [
+      {
+       "type": "bell",
+       "freq_hz": 500,
+       "gain_db": -2.0,
+       "q": 1.0,
+       "src": "D"
+      }
+     ],
+     "comp": {
+      "threshold_dbfs": -20,
+      "ratio": 4,
+      "attack_ms": 11,
+      "release_ms": 250,
+      "knee_db": 6,
+      "target_gr_db": 4,
+      "src": {
+       "attack_ms": "M(borrowed Gaskin stab)",
+       "release_ms": "M(borrowed Gaskin stab)",
+       "threshold_dbfs": "N",
+       "ratio": "N",
+       "knee_db": "N",
+       "target_gr_db": "N"
+      }
+     },
+     "sat": {
+      "type": "tube_asym",
+      "drive_db": 4,
+      "mix_pct": 40,
+      "src": "N"
+     },
+     "width": {
+      "mono_below_hz": 150,
+      "corr_lt120_min": 0.98,
+      "src": "A&R"
+     },
+     "tilt": {
+      "pivot_hz": 1000,
+      "db_per_oct": 0.0,
+      "measured_style_tilt_db_oct": null,
+      "src": "n/a"
+     },
+     "lufs_offset_vs_kick_db": -4.0,
+     "st_target_lufs": -27.7,
+     "output_trim_db": 0.0,
+     "level_src": "A&R"
+    },
+    "PAD": {
+     "hpf": {
+      "type": "hpf",
+      "freq_hz": 150,
+      "slope_db_oct": 12,
+      "src": "N"
+     },
+     "lpf": {
+      "type": "lpf",
+      "freq_hz": 8000,
+      "slope_db_oct": 12,
+      "src": "N"
+     },
+     "eq": [],
+     "comp": {
+      "threshold_dbfs": -24,
+      "ratio": 2,
+      "attack_ms": 30,
+      "release_ms": 300,
+      "knee_db": 6,
+      "target_gr_db": 2,
+      "src": {
+       "attack_ms": "N",
+       "release_ms": "N",
+       "threshold_dbfs": "N",
+       "ratio": "N",
+       "knee_db": "N",
+       "target_gr_db": "N"
+      }
+     },
+     "sat": {
+      "type": "none",
+      "drive_db": 0,
+      "mix_pct": 0,
+      "src": "N"
+     },
+     "width": {
+      "mono_below_hz": 120,
+      "side_mid_min_db": -12,
+      "side_mid_max_db": 0,
+      "src": "N"
+     },
+     "tilt": {
+      "pivot_hz": 1000,
+      "db_per_oct": 0.0,
+      "measured_style_tilt_db_oct": null,
+      "src": "n/a"
+     },
+     "lufs_offset_vs_kick_db": -8.0,
+     "st_target_lufs": -31.7,
+     "output_trim_db": 1.0,
+     "level_src": "PRESET_SPEC D"
+    },
+    "PLUCK": {
+     "hpf": {
+      "type": "hpf",
+      "freq_hz": 120,
+      "slope_db_oct": 12,
+      "src": "D"
+     },
+     "lpf": {
+      "type": "lpf",
+      "freq_hz": 10000,
+      "slope_db_oct": 12,
+      "src": "M"
+     },
+     "eq": [
+      {
+       "type": "bell",
+       "freq_hz": 1200,
+       "gain_db": 1.5,
+       "q": 0.8,
+       "src": "M"
+      },
+      {
+       "type": "bell",
+       "freq_hz": 300,
+       "gain_db": -1.5,
+       "q": 1.0,
+       "src": "D"
+      }
+     ],
+     "comp": {
+      "threshold_dbfs": -22,
+      "ratio": 3,
+      "attack_ms": 12,
+      "release_ms": 110,
+      "knee_db": 6,
+      "target_gr_db": 7,
+      "src": {
+       "attack_ms": "M",
+       "release_ms": "M(LONG other decay 106)",
+       "threshold_dbfs": "N",
+       "ratio": "N",
+       "knee_db": "N",
+       "target_gr_db": "N+crest-rule"
+      }
+     },
+     "sat": {
+      "type": "tube_asym",
+      "drive_db": 5,
+      "mix_pct": 40,
+      "src": "N"
+     },
+     "width": {
+      "mono_below_hz": 120,
+      "src": "M",
+      "side_mid_db": -9.4
+     },
+     "tilt": {
+      "pivot_hz": 1000,
+      "db_per_oct": -1.2,
+      "measured_style_tilt_db_oct": -5.52,
+      "src": "M"
+     },
+     "lufs_offset_vs_kick_db": -0.6,
+     "st_target_lufs": -24.3,
+     "output_trim_db": 1.0,
+     "level_src": "M"
+    },
+    "DRUMS": {
+     "_doc": "909 lane: per-voice chains; DRUMS bus has no extra processing in v1",
+     "voices": {
+      "CLAP": {
+       "hpf": {
+        "type": "hpf",
+        "freq_hz": 200,
+        "slope_db_oct": 24,
+        "src": "M"
+       },
+       "lpf": {
+        "type": "lpf",
+        "freq_hz": 14000,
+        "slope_db_oct": 12,
+        "src": "N"
+       },
+       "eq": [
+        {
+         "type": "bell",
+         "freq_hz": 1500,
+         "gain_db": 2.0,
+         "q": 1.2,
+         "src": "M-melak"
+        },
+        {
+         "type": "bell",
+         "freq_hz": 400,
+         "gain_db": -2.0,
+         "q": 1.5,
+         "src": "N"
+        }
+       ],
+       "comp": {
+        "threshold_dbfs": -20,
+        "ratio": 4,
+        "attack_ms": 3,
+        "release_ms": 60,
+        "knee_db": 3,
+        "target_gr_db": 0,
+        "src": {
+         "attack_ms": "M",
+         "release_ms": "M",
+         "threshold_dbfs": "N",
+         "ratio": "N",
+         "knee_db": "N",
+         "target_gr_db": "N+crest-rule"
+        }
+       },
+       "sat": {
+        "type": "softclip_tanh",
+        "drive_db": 1,
+        "mix_pct": 100,
+        "src": "N"
+       },
+       "width": {
+        "mono_below_hz": 120,
+        "src": "M",
+        "side_mid_db": -10.6
+       },
+       "tilt": {
+        "pivot_hz": 1000,
+        "db_per_oct": 0.0,
+        "measured_style_tilt_db_oct": null,
+        "src": "n/a"
+       },
+       "lufs_offset_vs_kick_db": -5.2,
+       "st_target_lufs": -28.9,
+       "output_trim_db": 1.0,
+       "level_src": "M"
+      },
+      "SNARE": {
+       "hpf": {
+        "type": "hpf",
+        "freq_hz": 150,
+        "slope_db_oct": 24,
+        "src": "N"
+       },
+       "lpf": {
+        "type": "lpf",
+        "freq_hz": 14000,
+        "slope_db_oct": 12,
+        "src": "N"
+       },
+       "eq": [
+        {
+         "type": "bell",
+         "freq_hz": 200,
+         "gain_db": 2.0,
+         "q": 1.2,
+         "src": "N"
+        }
+       ],
+       "comp": {
+        "threshold_dbfs": -20,
+        "ratio": 4,
+        "attack_ms": 3,
+        "release_ms": 80,
+        "knee_db": 3,
+        "target_gr_db": 0,
+        "src": {
+         "attack_ms": "N",
+         "release_ms": "N",
+         "threshold_dbfs": "N",
+         "ratio": "N",
+         "knee_db": "N",
+         "target_gr_db": "N"
+        }
+       },
+       "sat": {
+        "type": "softclip_tanh",
+        "drive_db": 1,
+        "mix_pct": 100,
+        "src": "N"
+       },
+       "width": {
+        "mono_below_hz": 120,
+        "src": "M(clap)",
+        "side_mid_db": -10.6
+       },
+       "tilt": {
+        "pivot_hz": 1000,
+        "db_per_oct": 0.0,
+        "measured_style_tilt_db_oct": null,
+        "src": "n/a"
+       },
+       "lufs_offset_vs_kick_db": -5.2,
+       "st_target_lufs": -28.9,
+       "output_trim_db": 1.0,
+       "level_src": "N(clap slot)"
+      },
+      "RIM": {
+       "hpf": {
+        "type": "hpf",
+        "freq_hz": 300,
+        "slope_db_oct": 24,
+        "src": "N"
+       },
+       "lpf": null,
+       "eq": [
+        {
+         "type": "bell",
+         "freq_hz": 1760,
+         "gain_db": 2.0,
+         "q": 2.0,
+         "src": "M-ref"
+        }
+       ],
+       "comp": {
+        "threshold_dbfs": -22,
+        "ratio": 3,
+        "attack_ms": 2,
+        "release_ms": 150,
+        "knee_db": 3,
+        "target_gr_db": 2,
+        "src": {
+         "attack_ms": "N",
+         "release_ms": "M-ref",
+         "threshold_dbfs": "N",
+         "ratio": "N",
+         "knee_db": "N",
+         "target_gr_db": "N+crest-rule"
+        }
+       },
+       "sat": {
+        "type": "none",
+        "drive_db": 0,
+        "mix_pct": 0,
+        "src": "N"
+       },
+       "width": {
+        "mono_below_hz": 120,
+        "src": "N"
+       },
+       "tilt": {
+        "pivot_hz": 1000,
+        "db_per_oct": 0.0,
+        "measured_style_tilt_db_oct": null,
+        "src": "n/a"
+       },
+       "lufs_offset_vs_kick_db": -10.2,
+       "st_target_lufs": -33.9,
+       "output_trim_db": 1.0,
+       "level_src": "M-ref"
+      },
+      "CH": {
+       "hpf": {
+        "type": "hpf",
+        "freq_hz": 2000,
+        "slope_db_oct": 24,
+        "src": "PRESET_SPEC"
+       },
+       "lpf": null,
+       "eq": [
+        {
+         "type": "highshelf",
+         "freq_hz": 10000,
+         "gain_db": 1.5,
+         "q": 0.7,
+         "src": "M"
+        },
+        {
+         "type": "bell",
+         "freq_hz": 4000,
+         "gain_db": -2.0,
+         "q": 2.0,
+         "src": "N"
+        }
+       ],
+       "comp": {
+        "threshold_dbfs": -24,
+        "ratio": 3,
+        "attack_ms": 2,
+        "release_ms": 45,
+        "knee_db": 3,
+        "target_gr_db": 3,
+        "src": {
+         "attack_ms": "M",
+         "release_ms": "M",
+         "threshold_dbfs": "N",
+         "ratio": "N",
+         "knee_db": "N",
+         "target_gr_db": "N+crest-rule"
+        }
+       },
+       "sat": {
+        "type": "tape",
+        "drive_db": 2,
+        "mix_pct": 20,
+        "src": "N"
+       },
+       "width": {
+        "mono_below_hz": 120,
+        "src": "M",
+        "side_mid_db": -8.0
+       },
+       "tilt": {
+        "pivot_hz": 1000,
+        "db_per_oct": 0.0,
+        "measured_style_tilt_db_oct": null,
+        "src": "n/a"
+       },
+       "lufs_offset_vs_kick_db": -18.1,
+       "st_target_lufs": -41.8,
+       "output_trim_db": 1.0,
+       "level_src": "M split"
+      },
+      "OH": {
+       "hpf": {
+        "type": "hpf",
+        "freq_hz": 2000,
+        "slope_db_oct": 24,
+        "src": "PRESET_SPEC"
+       },
+       "lpf": null,
+       "eq": [
+        {
+         "type": "highshelf",
+         "freq_hz": 10000,
+         "gain_db": 1.5,
+         "q": 0.7,
+         "src": "M"
+        },
+        {
+         "type": "bell",
+         "freq_hz": 4000,
+         "gain_db": -2.0,
+         "q": 2.0,
+         "src": "N"
+        }
+       ],
+       "comp": {
+        "threshold_dbfs": -24,
+        "ratio": 3,
+        "attack_ms": 2,
+        "release_ms": 145,
+        "knee_db": 3,
+        "target_gr_db": 3,
+        "src": {
+         "attack_ms": "M",
+         "release_ms": "M",
+         "threshold_dbfs": "N",
+         "ratio": "N",
+         "knee_db": "N",
+         "target_gr_db": "N+crest-rule"
+        }
+       },
+       "sat": {
+        "type": "tape",
+        "drive_db": 2,
+        "mix_pct": 20,
+        "src": "N"
+       },
+       "width": {
+        "mono_below_hz": 120,
+        "src": "M",
+        "side_mid_db": -8.0
+       },
+       "tilt": {
+        "pivot_hz": 1000,
+        "db_per_oct": -1.8,
+        "measured_style_tilt_db_oct": -1.63,
+        "src": "M"
+       },
+       "lufs_offset_vs_kick_db": -6.1,
+       "st_target_lufs": -29.8,
+       "output_trim_db": 1.0,
+       "level_src": "M"
+      },
+      "RIDE": {
+       "hpf": {
+        "type": "hpf",
+        "freq_hz": 2000,
+        "slope_db_oct": 24,
+        "src": "PRESET_SPEC"
+       },
+       "lpf": null,
+       "eq": [
+        {
+         "type": "highshelf",
+         "freq_hz": 8000,
+         "gain_db": 1.0,
+         "q": 0.7,
+         "src": "N"
+        }
+       ],
+       "comp": {
+        "threshold_dbfs": -24,
+        "ratio": 2,
+        "attack_ms": 2,
+        "release_ms": 175,
+        "knee_db": 3,
+        "target_gr_db": 1,
+        "src": {
+         "attack_ms": "N",
+         "release_ms": "M-melak",
+         "threshold_dbfs": "N",
+         "ratio": "N",
+         "knee_db": "N",
+         "target_gr_db": "N+crest-rule"
+        }
+       },
+       "sat": {
+        "type": "tape",
+        "drive_db": 2,
+        "mix_pct": 20,
+        "src": "N"
+       },
+       "width": {
+        "mono_below_hz": 120,
+        "src": "M(hats)",
+        "side_mid_db": -8.0
+       },
+       "tilt": {
+        "pivot_hz": 1000,
+        "db_per_oct": 0.0,
+        "measured_style_tilt_db_oct": null,
+        "src": "n/a"
+       },
+       "lufs_offset_vs_kick_db": -24.1,
+       "st_target_lufs": -47.8,
+       "output_trim_db": 1.0,
+       "level_src": "PRESET_SPEC R"
+      },
+      "PERC": {
+       "hpf": {
+        "type": "hpf",
+        "freq_hz": 250,
+        "slope_db_oct": 24,
+        "src": "D"
+       },
+       "lpf": {
+        "type": "lpf",
+        "freq_hz": 12000,
+        "slope_db_oct": 12,
+        "src": "N"
+       },
+       "eq": [
+        {
+         "type": "bell",
+         "freq_hz": 2000,
+         "gain_db": 1.5,
+         "q": 1.0,
+         "src": "M-LOW"
+        }
+       ],
+       "comp": {
+        "threshold_dbfs": -22,
+        "ratio": 3,
+        "attack_ms": 3,
+        "release_ms": 75,
+        "knee_db": 3,
+        "target_gr_db": 0,
+        "src": {
+         "attack_ms": "N",
+         "release_ms": "M-melak",
+         "threshold_dbfs": "N",
+         "ratio": "N",
+         "knee_db": "N",
+         "target_gr_db": "N+crest-rule"
+        }
+       },
+       "sat": {
+        "type": "none",
+        "drive_db": 0,
+        "mix_pct": 0,
+        "src": "N"
+       },
+       "width": {
+        "mono_below_hz": 120,
+        "src": "M-LOW",
+        "side_mid_db": -15.3
+       },
+       "tilt": {
+        "pivot_hz": 1000,
+        "db_per_oct": 0.0,
+        "measured_style_tilt_db_oct": null,
+        "src": "n/a"
+       },
+       "lufs_offset_vs_kick_db": -11.2,
+       "st_target_lufs": -35.0,
+       "output_trim_db": 1.0,
+       "level_src": "M"
+      },
+      "KICK": {
+       "hpf": {
+        "type": "hpf",
+        "freq_hz": 28,
+        "slope_db_oct": 24,
+        "src": "D"
+       },
+       "lpf": null,
+       "eq": [
+        {
+         "type": "bell",
+         "freq_hz": 55,
+         "gain_db": 1.5,
+         "q": 1.0,
+         "src": "D"
+        },
+        {
+         "type": "bell",
+         "freq_hz": 250,
+         "gain_db": -2.0,
+         "q": 1.4,
+         "src": "D"
+        }
+       ],
+       "comp": {
+        "threshold_dbfs": -18,
+        "ratio": 4,
+        "attack_ms": 15,
+        "release_ms": 150,
+        "knee_db": 6,
+        "target_gr_db": 5,
+        "src": {
+         "attack_ms": "M",
+         "release_ms": "M(style decay)",
+         "threshold_dbfs": "N",
+         "ratio": "N",
+         "knee_db": "N",
+         "target_gr_db": "N+crest-rule"
+        }
+       },
+       "sat": {
+        "type": "softclip_tanh",
+        "drive_db": 5,
+        "mix_pct": 100,
+        "src": "N"
+       },
+       "width": {
+        "mono_below_hz": 141,
+        "side_mid_max_db": -19.2,
+        "src": "M",
+        "side_mid_db": -34.6
+       },
+       "click_db_re_kick": -8,
+       "tilt": {
+        "pivot_hz": 1000,
+        "db_per_oct": 0.0,
+        "measured_style_tilt_db_oct": null,
+        "src": "n/a"
+       },
+       "lufs_offset_vs_kick_db": 0.0,
+       "st_target_lufs": -23.7,
+       "output_trim_db": 0.0,
+       "level_src": "D anchor"
+      }
+     }
+    }
+   }
+  }
+ },
+ "preset_overrides": {
+  "_doc": "Applied on top of dialects[d].lanes[lane]. Only keys in allowed_keys may be overridden; level keys (lufs_offset_vs_kick_db, st_target_lufs, output_trim_db) and KICK/BASS width.mono_below_hz are locked. eq entries are replaced by index.",
+  "allowed_keys": [
+   "hpf.freq_hz",
+   "hpf.slope_db_oct",
+   "lpf.freq_hz",
+   "lpf.slope_db_oct",
+   "eq[i].freq_hz",
+   "eq[i].gain_db",
+   "eq[i].q",
+   "comp.attack_ms",
+   "comp.release_ms",
+   "comp.ratio",
+   "comp.knee_db",
+   "comp.target_gr_db",
+   "sat.type",
+   "sat.drive_db",
+   "sat.mix_pct",
+   "width.side_mid_db",
+   "click_db_re_kick",
+   "layers"
+  ],
+  "locked_keys": [
+   "lufs_offset_vs_kick_db",
+   "st_target_lufs",
+   "output_trim_db",
+   "KICK/BASS width.*",
+   "KICK/BASS hpf.freq_hz"
+  ],
+  "presets": {
+   "BASS:SUB": {},
+   "BASS:ROUND": {},
+   "BASS:CLICK": {
+    "comp.release_ms": 100,
+    "src": "M POP bass decay 96 ms"
+   },
+   "BASS:REESE": {
+    "layers": {
+     "sub": "BASS chain",
+     "reese": {
+      "hpf.freq_hz": 220,
+      "hpf.slope_db_oct": 24,
+      "width.mono_below_hz": 150,
+      "comp.ratio": 3,
+      "comp.attack_ms": 10,
+      "comp.release_ms": 120,
+      "sat.drive_db": 6,
+      "sat.mix_pct": 40
+     }
+    },
+    "src": "A&R HPF 220 / mono; rest N; 120 ms = 1/16 at 126 BPM"
+   },
+   "STAB:DUB": {
+    "comp.release_ms": 110,
+    "src": "M LIGHTLEAK decay 106"
+   },
+   "STAB:CHORD": {
+    "comp.release_ms": 180,
+    "src": "M V-Line 180.5 / Ellia 180"
+   },
+   "STAB:GASKIN_RAVE": {
+    "comp.release_ms": 250,
+    "comp.target_gr_db": 7,
+    "src": "M Gaskin decay 254, crest 16.8"
+   },
+   "STAB:POP_CLICK": {
+    "comp.release_ms": 125,
+    "comp.target_gr_db": 5,
+    "src": "M POP decay 126, crest 19.0"
+   }
+  }
+ },
+ "dialect_switch": {
+  "_doc": "MIX_SPEC §9.2. On a dialect switch every parameter ramps from old to new value; no instantaneous coefficient swap anywhere. All ramps start at the switch sample and use a raised-cosine shape.",
+  "shape": "raised_cosine",
+  "ramp_ms": {
+   "output_trim_db": 50,
+   "top_trim_db": 50,
+   "lufs_offset_vs_kick_db": 50,
+   "hpf.freq_hz": 50,
+   "lpf.freq_hz": 50,
+   "eq.freq_hz": 50,
+   "eq.gain_db": 50,
+   "eq.q": 50,
+   "tilt.db_per_oct": 50,
+   "width.side_mid_db": 50,
+   "click_db_re_kick": 50,
+   "comp.threshold_dbfs": 120,
+   "comp.ratio": 120,
+   "comp.knee_db": 120,
+   "comp.attack_ms": 120,
+   "comp.release_ms": 120,
+   "comp.target_gr_db": 120,
+   "sat.drive_db": 80,
+   "sat.mix_pct": 80,
+   "sat.type": 80,
+   "hpf.slope_db_oct": 80,
+   "lpf.slope_db_oct": 80,
+   "eq.type": 80
+  },
+  "interpolation": {
+   "gain-like (dB keys)": "linear in dB",
+   "freq_hz": "linear in log2(Hz); filters are TPT/SVF recomputed per sample (or per 16-sample block with per-sample coefficient interpolation)",
+   "q": "linear in ln(Q)",
+   "comp.*": "the parameter value itself is ramped (detector state kept); ratio ramped in 1/ratio",
+   "tilt/width": "linear",
+   "discrete (sat.type, slope, eq.type)": "dual-path: old and new paths both run for the ramp, output = correlation-compensated equal-power crossfade"
+  },
+  "equal_power_law": "g_old=cos(theta), g_new=sin(theta), theta 0..pi/2 raised-cosine, output /= sqrt(1 + 2*rho*sin(theta)*cos(theta)); rho = correlation of the two paths over the last 50 ms (rho~1 for dry vs saturated -> behaves like equal-gain; rho~0 -> plain equal-power)",
+  "sources": {
+   "50 ms": "D: settles inside one 1/16 at 126 BPM (119 ms); peak slope pi/2 x 8.3 dB (largest lane-offset change, STAB LONG->GASKIN) / 50 ms is a ramp, not a step (self-test PASS)",
+   "120 ms": "D: about 1/16 at 126 BPM and inside the measured comp release range (45-250 ms)",
+   "80 ms": "N"
+  },
+  "test": {
+   "mode": "mix_check.py switch",
+   "max_gain_jump_db": 0.5,
+   "max_click_excess_db": 12.0,
+   "frame_ms": 20,
+   "stimulus": "mix_check.py stimulus"
+  }
+ },
+ "main_auto_trim": {
+  "_doc": "PRESET_SPEC v1.3a §0.5.1 (Q13, Maestro) + engine rule E21; MIX_SPEC §9.4. A fixed sum trim at the MAIN output keyed by dialect x active-MAIN-lane mask.",
+  "table": "presets/main_sum_trim.json",
+  "key": "dialects.<D>.by_mask.<mask>.trim_db",
+  "lane_bit_order": [
+   "BASS",
+   "STAB",
+   "PLUCK",
+   "HITS",
+   "PAD",
+   "VOX"
+  ],
+  "apply_at": "MAIN output, after dialects.<D>.output_trim_db; moves every lane equally (kick/bass invariants and lane balance untouched)",
+  "default_set_trim_db": 0.0,
+  "no_double_count": "trim is 0 at each dialect default set; output_trim_db alone tunes that set to -19.0 from renders. The table field default_model_residual_db is informational and must NOT be applied (PRESET_SPEC v1.3c).",
+  "active": "lane unmuted and its pattern has notes in the current bar",
+  "ramp": {
+   "ms": 50,
+   "shape": "raised_cosine",
+   "interp": "linear in dB",
+   "restart": "from current value"
+  },
+  "lane_off": "start the ramp when the lane output has fallen 40 dB below its level, max 500 ms after note-off",
+  "lane_on": "start the ramp at the first note-on",
+  "solo_render": "bypassed (per-lane targets are measured without it)",
+  "gate": {
+   "sum_st_lufs": -19.0,
+   "tol_lu": 0.5,
+   "sum_tp_dbtp": -6.0,
+   "tp_tol_db": 1.0,
+   "applies_to": "any active-lane combination",
+   "dense": {
+    "min_active_lanes": 3,
+    "st_window_lufs": [
+     -19.5,
+     -18.5
+    ]
+   },
+   "sparse": {
+    "max_active_lanes": 2,
+    "st_window_lufs": [
+     -20.5,
+     -18.5
+    ],
+    "note": "1-2 active MAIN lanes; drums-only (0 lanes) also uses the sparse window"
+   },
+   "tp_cap_dbtp": -5.0,
+   "tp_cap_scope": "every lane set",
+   "sum_limiter": "none",
+   "decided": "Maestro 2026-10-17, E21 option (a)"
+  },
+  "headroom_guard": "a positive trim that would push the sum over -5.0 dBTP is capped at the largest passing value and logged (limiter GR must stay 0)",
+  "verify": "mix_check.py combos (MIX_SPEC §9.4)",
+  "src": "PRESET_SPEC v1.3a"
+ },
+ "engine_contracts": {
+  "_doc": "Engine behaviour the render tests enforce. MIX_SPEC §5.1.",
+  "mute_leak": {
+   "priority": "P0",
+   "rule": "a muted lane contributes nothing to any output",
+   "test": "mix_check.py mute",
+   "pass": {
+    "resid_max_dbfs_rms": -90.0,
+    "resid_max_re_lane_db": -60.0,
+    "every_band": true
+   },
+   "render_set": "per dialect (at minimum UKMIN): FULL.wav + MUTE_<LANE>.wav + SOLO_<LANE>.wav for each lane, float32, no dither, sample-aligned",
+   "src": "Maestro 2026-10-17"
+  }
+ },
+ "sample_prep_acceptance": {
+  "_doc": "PRESET_SPEC v1.3a Q15/Q16 (Maestro). MIX_SPEC §4.",
+  "tail_fade_ms_allowed": [
+   12,
+   24,
+   48,
+   96,
+   192
+  ],
+  "tail_fade_note": "12 ms default; longer (24-192 ms) accepted where 12 ms cannot bring the last 10 ms <= -60 dBFS (Q15)",
+  "tp_capped": "files at the -6 dBTP cap stay as-is, no per-file limiter; LUFS may be below -24; not a fail (Q16)",
+  "tp_cap_dbtp": -6.0,
+  "tp_tol_db": 0.05
+ }
+}

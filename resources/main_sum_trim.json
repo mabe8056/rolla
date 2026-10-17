@@ -1,0 +1,3700 @@
+{
+ "_doc": {
+  "what": "MAIN sum trim (dB) applied to the summed output (MAIN+DRUMS) so it stays at -19.0 LUFS-S; keyed by dialect and active-MAIN-lane set",
+  "model": "sum = powersum(active lane st_target_lufs + DRUMS default voices) - calibration_db[class(active set)]; class = D + B(bass) + O(stab/pluck/hits/pad) + V(vox); STAB+PLUCK both on -> each -3 dB",
+  "trim_rule": "trim_db = model_sum(dialect default MAIN lanes) - model_sum(active set)  (0 dB at the default set, which MIX_SPEC tunes to -19.0 with the render-measured output_trim_db). trim_abs_db and default_model_residual_db are INFORMATIONAL ONLY and must NEVER be applied by the engine",
+  "apply_at": "MAIN output stage after the per-dialect output_trim_db (MIX_SPEC §2.1.6); not a user parameter",
+  "ramp": {
+   "ms": 50,
+   "shape": "raised_cosine",
+   "interp": "linear in dB",
+   "restart": "a toggle mid-ramp starts a new ramp from the current value"
+  },
+  "lookup": "by_mask (dialect x active-lane bitmask, 64 entries) is normative because the spread within a lane count reaches 1.24 dB (> the 0.5 LU tolerance); by_count is the summary (median, min, max, max deviation)",
+  "lane_bit_order": [
+   "BASS",
+   "STAB",
+   "PLUCK",
+   "HITS",
+   "PAD",
+   "VOX"
+  ],
+  "source": "mix_profiles.json 1.0.0 st_target_lufs; MIX_SPEC §2.1 calibration",
+  "generated_by": "presets/_tools/main_sum_trim.py"
+ },
+ "target_sum_lufs_s": -19.0,
+ "tolerance_lu": 0.5,
+ "calibration_db_by_class": {
+  "UKMIN": {
+   "D": 0.43,
+   "DB": 0.66,
+   "DO": 0.63,
+   "DV": 0.81,
+   "DBO": 0.69,
+   "DBV": 1.02,
+   "DOV": 1.35,
+   "DBOV": 0.95
+  },
+  "LONG": {
+   "D": 1.43,
+   "DB": 1.07,
+   "DO": 1.48,
+   "DV": 1.53,
+   "DBO": 1.2,
+   "DBV": 1.21,
+   "DOV": 1.67,
+   "DBOV": 1.3
+  },
+  "POP": {
+   "D": 0.49,
+   "DB": 0.52,
+   "DO": 0.32,
+   "DV": 0.79,
+   "DBO": 0.4,
+   "DBV": 0.81,
+   "DOV": 0.51,
+   "DBOV": 0.6
+  },
+  "GASKIN": {
+   "D": 0.59,
+   "DB": 0.4,
+   "DO": 0.7,
+   "DV": 0.59,
+   "DBO": 0.47,
+   "DBV": 0.4,
+   "DOV": 0.7,
+   "DBOV": 0.47
+  }
+ },
+ "calibration_src": "tests/targets.json combo_model (M: Mix Engineer, data/cal_combos.json)",
+ "dialects": {
+  "UKMIN": {
+   "default_main_lanes": [
+    "BASS",
+    "STAB",
+    "VOX"
+   ],
+   "default_model_sum": -18.96,
+   "default_class": "DBOV",
+   "default_model_residual_db": -0.04,
+   "default_model_residual_note": "INFORMATIONAL ONLY - never applied by the engine; output_trim_db (render-measured) already covers the default set",
+   "drums_model": -20.9,
+   "by_count": {
+    "0": {
+     "n_combos": 1,
+     "trim_median_db": 1.94,
+     "trim_min_db": 1.94,
+     "trim_max_db": 1.94,
+     "max_dev_from_median_db": 0.0,
+     "loudest_combo(min trim)": [],
+     "quietest_combo(max trim)": [],
+     "count_keyed_only_ok": true
+    },
+    "1": {
+     "n_combos": 6,
+     "trim_median_db": 1.3,
+     "trim_min_db": 0.78,
+     "trim_max_db": 1.88,
+     "max_dev_from_median_db": 0.58,
+     "loudest_combo(min trim)": [
+      "BASS"
+     ],
+     "quietest_combo(max trim)": [
+      "PAD"
+     ],
+     "count_keyed_only_ok": false
+    },
+    "2": {
+     "n_combos": 15,
+     "trim_median_db": 1.02,
+     "trim_min_db": 0.13,
+     "trim_max_db": 2.03,
+     "max_dev_from_median_db": 1.01,
+     "loudest_combo(min trim)": [
+      "BASS",
+      "PLUCK"
+     ],
+     "quietest_combo(max trim)": [
+      "PAD",
+      "VOX"
+     ],
+     "count_keyed_only_ok": false
+    },
+    "3": {
+     "n_combos": 20,
+     "trim_median_db": 0.43,
+     "trim_min_db": -0.35,
+     "trim_max_db": 1.45,
+     "max_dev_from_median_db": 1.02,
+     "loudest_combo(min trim)": [
+      "BASS",
+      "PLUCK",
+      "HITS"
+     ],
+     "quietest_combo(max trim)": [
+      "STAB",
+      "PLUCK",
+      "VOX"
+     ],
+     "count_keyed_only_ok": false
+    },
+    "4": {
+     "n_combos": 15,
+     "trim_median_db": -0.04,
+     "trim_min_db": -0.5,
+     "trim_max_db": 1.26,
+     "max_dev_from_median_db": 1.3,
+     "loudest_combo(min trim)": [
+      "BASS",
+      "PLUCK",
+      "HITS",
+      "PAD"
+     ],
+     "quietest_combo(max trim)": [
+      "STAB",
+      "PLUCK",
+      "PAD",
+      "VOX"
+     ],
+     "count_keyed_only_ok": false
+    },
+    "5": {
+     "n_combos": 6,
+     "trim_median_db": -0.47,
+     "trim_min_db": -0.57,
+     "trim_max_db": 0.73,
+     "max_dev_from_median_db": 1.2,
+     "loudest_combo(min trim)": [
+      "BASS",
+      "PLUCK",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "quietest_combo(max trim)": [
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "count_keyed_only_ok": false
+    },
+    "6": {
+     "n_combos": 1,
+     "trim_median_db": -0.58,
+     "trim_min_db": -0.58,
+     "trim_max_db": -0.58,
+     "max_dev_from_median_db": 0.0,
+     "loudest_combo(min trim)": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "quietest_combo(max trim)": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "count_keyed_only_ok": true
+    }
+   },
+   "by_mask": {
+    "0": {
+     "lanes": [],
+     "class": "D",
+     "model_sum": -20.9,
+     "trim_db": 1.94,
+     "trim_abs_db": 1.9,
+     "trim_v13a_db": 2.46
+    },
+    "1": {
+     "lanes": [
+      "BASS"
+     ],
+     "class": "DB",
+     "model_sum": -19.74,
+     "trim_db": 0.78,
+     "trim_abs_db": 0.74,
+     "trim_v13a_db": 1.07
+    },
+    "2": {
+     "lanes": [
+      "STAB"
+     ],
+     "class": "DO",
+     "model_sum": -20.19,
+     "trim_db": 1.23,
+     "trim_abs_db": 1.19,
+     "trim_v13a_db": 1.55
+    },
+    "4": {
+     "lanes": [
+      "PLUCK"
+     ],
+     "class": "DO",
+     "model_sum": -20.19,
+     "trim_db": 1.23,
+     "trim_abs_db": 1.19,
+     "trim_v13a_db": 1.55
+    },
+    "8": {
+     "lanes": [
+      "HITS"
+     ],
+     "class": "DO",
+     "model_sum": -20.35,
+     "trim_db": 1.38,
+     "trim_abs_db": 1.35,
+     "trim_v13a_db": 1.7
+    },
+    "16": {
+     "lanes": [
+      "PAD"
+     ],
+     "class": "DO",
+     "model_sum": -20.85,
+     "trim_db": 1.88,
+     "trim_abs_db": 1.85,
+     "trim_v13a_db": 2.2
+    },
+    "32": {
+     "lanes": [
+      "VOX"
+     ],
+     "class": "DV",
+     "model_sum": -20.67,
+     "trim_db": 1.71,
+     "trim_abs_db": 1.67,
+     "trim_v13a_db": 1.85
+    },
+    "3": {
+     "lanes": [
+      "BASS",
+      "STAB"
+     ],
+     "class": "DBO",
+     "model_sum": -19.09,
+     "trim_db": 0.13,
+     "trim_abs_db": 0.09,
+     "trim_v13a_db": 0.39
+    },
+    "5": {
+     "lanes": [
+      "BASS",
+      "PLUCK"
+     ],
+     "class": "DBO",
+     "model_sum": -19.09,
+     "trim_db": 0.13,
+     "trim_abs_db": 0.09,
+     "trim_v13a_db": 0.39
+    },
+    "9": {
+     "lanes": [
+      "BASS",
+      "HITS"
+     ],
+     "class": "DBO",
+     "model_sum": -19.21,
+     "trim_db": 0.25,
+     "trim_abs_db": 0.21,
+     "trim_v13a_db": 0.51
+    },
+    "17": {
+     "lanes": [
+      "BASS",
+      "PAD"
+     ],
+     "class": "DBO",
+     "model_sum": -19.58,
+     "trim_db": 0.62,
+     "trim_abs_db": 0.58,
+     "trim_v13a_db": 0.88
+    },
+    "33": {
+     "lanes": [
+      "BASS",
+      "VOX"
+     ],
+     "class": "DBV",
+     "model_sum": -19.65,
+     "trim_db": 0.69,
+     "trim_abs_db": 0.65,
+     "trim_v13a_db": 0.62
+    },
+    "6": {
+     "lanes": [
+      "STAB",
+      "PLUCK"
+     ],
+     "class": "DO",
+     "model_sum": -20.19,
+     "trim_db": 1.23,
+     "trim_abs_db": 1.19,
+     "trim_v13a_db": 1.55
+    },
+    "10": {
+     "lanes": [
+      "STAB",
+      "HITS"
+     ],
+     "class": "DO",
+     "model_sum": -19.57,
+     "trim_db": 0.61,
+     "trim_abs_db": 0.57,
+     "trim_v13a_db": 0.93
+    },
+    "18": {
+     "lanes": [
+      "STAB",
+      "PAD"
+     ],
+     "class": "DO",
+     "model_sum": -19.98,
+     "trim_db": 1.02,
+     "trim_abs_db": 0.98,
+     "trim_v13a_db": 1.34
+    },
+    "34": {
+     "lanes": [
+      "STAB",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -20.41,
+     "trim_db": 1.45,
+     "trim_abs_db": 1.41,
+     "trim_v13a_db": 1.05
+    },
+    "12": {
+     "lanes": [
+      "PLUCK",
+      "HITS"
+     ],
+     "class": "DO",
+     "model_sum": -19.57,
+     "trim_db": 0.61,
+     "trim_abs_db": 0.57,
+     "trim_v13a_db": 0.93
+    },
+    "20": {
+     "lanes": [
+      "PLUCK",
+      "PAD"
+     ],
+     "class": "DO",
+     "model_sum": -19.98,
+     "trim_db": 1.02,
+     "trim_abs_db": 0.98,
+     "trim_v13a_db": 1.34
+    },
+    "36": {
+     "lanes": [
+      "PLUCK",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -20.41,
+     "trim_db": 1.45,
+     "trim_abs_db": 1.41,
+     "trim_v13a_db": 1.05
+    },
+    "24": {
+     "lanes": [
+      "HITS",
+      "PAD"
+     ],
+     "class": "DO",
+     "model_sum": -20.13,
+     "trim_db": 1.17,
+     "trim_abs_db": 1.13,
+     "trim_v13a_db": 1.49
+    },
+    "40": {
+     "lanes": [
+      "HITS",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -20.55,
+     "trim_db": 1.59,
+     "trim_abs_db": 1.55,
+     "trim_v13a_db": 1.19
+    },
+    "48": {
+     "lanes": [
+      "PAD",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -20.99,
+     "trim_db": 2.03,
+     "trim_abs_db": 1.99,
+     "trim_v13a_db": 1.63
+    },
+    "7": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PLUCK"
+     ],
+     "class": "DBO",
+     "model_sum": -19.09,
+     "trim_db": 0.13,
+     "trim_abs_db": 0.09,
+     "trim_v13a_db": 0.39
+    },
+    "11": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "HITS"
+     ],
+     "class": "DBO",
+     "model_sum": -18.61,
+     "trim_db": -0.35,
+     "trim_abs_db": -0.39,
+     "trim_v13a_db": -0.09
+    },
+    "19": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PAD"
+     ],
+     "class": "DBO",
+     "model_sum": -18.93,
+     "trim_db": -0.03,
+     "trim_abs_db": -0.07,
+     "trim_v13a_db": 0.23
+    },
+    "35": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.96,
+     "trim_db": 0.0,
+     "trim_abs_db": -0.04,
+     "trim_v13a_db": 0.0
+    },
+    "13": {
+     "lanes": [
+      "BASS",
+      "PLUCK",
+      "HITS"
+     ],
+     "class": "DBO",
+     "model_sum": -18.61,
+     "trim_db": -0.35,
+     "trim_abs_db": -0.39,
+     "trim_v13a_db": -0.09
+    },
+    "21": {
+     "lanes": [
+      "BASS",
+      "PLUCK",
+      "PAD"
+     ],
+     "class": "DBO",
+     "model_sum": -18.93,
+     "trim_db": -0.03,
+     "trim_abs_db": -0.07,
+     "trim_v13a_db": 0.23
+    },
+    "37": {
+     "lanes": [
+      "BASS",
+      "PLUCK",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.96,
+     "trim_db": 0.0,
+     "trim_abs_db": -0.04,
+     "trim_v13a_db": 0.0
+    },
+    "25": {
+     "lanes": [
+      "BASS",
+      "HITS",
+      "PAD"
+     ],
+     "class": "DBO",
+     "model_sum": -19.05,
+     "trim_db": 0.08,
+     "trim_abs_db": 0.05,
+     "trim_v13a_db": 0.34
+    },
+    "41": {
+     "lanes": [
+      "BASS",
+      "HITS",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -19.07,
+     "trim_db": 0.11,
+     "trim_abs_db": 0.07,
+     "trim_v13a_db": 0.11
+    },
+    "49": {
+     "lanes": [
+      "BASS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -19.41,
+     "trim_db": 0.45,
+     "trim_abs_db": 0.41,
+     "trim_v13a_db": 0.45
+    },
+    "14": {
+     "lanes": [
+      "STAB",
+      "PLUCK",
+      "HITS"
+     ],
+     "class": "DO",
+     "model_sum": -19.57,
+     "trim_db": 0.61,
+     "trim_abs_db": 0.57,
+     "trim_v13a_db": 0.93
+    },
+    "22": {
+     "lanes": [
+      "STAB",
+      "PLUCK",
+      "PAD"
+     ],
+     "class": "DO",
+     "model_sum": -19.98,
+     "trim_db": 1.02,
+     "trim_abs_db": 0.98,
+     "trim_v13a_db": 1.34
+    },
+    "38": {
+     "lanes": [
+      "STAB",
+      "PLUCK",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -20.41,
+     "trim_db": 1.45,
+     "trim_abs_db": 1.41,
+     "trim_v13a_db": 1.05
+    },
+    "26": {
+     "lanes": [
+      "STAB",
+      "HITS",
+      "PAD"
+     ],
+     "class": "DO",
+     "model_sum": -19.39,
+     "trim_db": 0.43,
+     "trim_abs_db": 0.39,
+     "trim_v13a_db": 0.75
+    },
+    "42": {
+     "lanes": [
+      "STAB",
+      "HITS",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -19.85,
+     "trim_db": 0.89,
+     "trim_abs_db": 0.85,
+     "trim_v13a_db": 0.49
+    },
+    "50": {
+     "lanes": [
+      "STAB",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -20.23,
+     "trim_db": 1.26,
+     "trim_abs_db": 1.23,
+     "trim_v13a_db": 0.86
+    },
+    "28": {
+     "lanes": [
+      "PLUCK",
+      "HITS",
+      "PAD"
+     ],
+     "class": "DO",
+     "model_sum": -19.39,
+     "trim_db": 0.43,
+     "trim_abs_db": 0.39,
+     "trim_v13a_db": 0.75
+    },
+    "44": {
+     "lanes": [
+      "PLUCK",
+      "HITS",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -19.85,
+     "trim_db": 0.89,
+     "trim_abs_db": 0.85,
+     "trim_v13a_db": 0.49
+    },
+    "52": {
+     "lanes": [
+      "PLUCK",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -20.23,
+     "trim_db": 1.26,
+     "trim_abs_db": 1.23,
+     "trim_v13a_db": 0.86
+    },
+    "56": {
+     "lanes": [
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -20.36,
+     "trim_db": 1.4,
+     "trim_abs_db": 1.36,
+     "trim_v13a_db": 1.0
+    },
+    "15": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "HITS"
+     ],
+     "class": "DBO",
+     "model_sum": -18.61,
+     "trim_db": -0.36,
+     "trim_abs_db": -0.39,
+     "trim_v13a_db": -0.1
+    },
+    "23": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "PAD"
+     ],
+     "class": "DBO",
+     "model_sum": -18.93,
+     "trim_db": -0.03,
+     "trim_abs_db": -0.07,
+     "trim_v13a_db": 0.23
+    },
+    "39": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.96,
+     "trim_db": -0.0,
+     "trim_abs_db": -0.04,
+     "trim_v13a_db": -0.0
+    },
+    "27": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "HITS",
+      "PAD"
+     ],
+     "class": "DBO",
+     "model_sum": -18.47,
+     "trim_db": -0.5,
+     "trim_abs_db": -0.53,
+     "trim_v13a_db": -0.24
+    },
+    "43": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "HITS",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.52,
+     "trim_db": -0.44,
+     "trim_abs_db": -0.48,
+     "trim_v13a_db": -0.44
+    },
+    "51": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.82,
+     "trim_db": -0.15,
+     "trim_abs_db": -0.18,
+     "trim_v13a_db": -0.15
+    },
+    "29": {
+     "lanes": [
+      "BASS",
+      "PLUCK",
+      "HITS",
+      "PAD"
+     ],
+     "class": "DBO",
+     "model_sum": -18.47,
+     "trim_db": -0.5,
+     "trim_abs_db": -0.53,
+     "trim_v13a_db": -0.24
+    },
+    "45": {
+     "lanes": [
+      "BASS",
+      "PLUCK",
+      "HITS",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.52,
+     "trim_db": -0.44,
+     "trim_abs_db": -0.48,
+     "trim_v13a_db": -0.44
+    },
+    "53": {
+     "lanes": [
+      "BASS",
+      "PLUCK",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.82,
+     "trim_db": -0.15,
+     "trim_abs_db": -0.18,
+     "trim_v13a_db": -0.15
+    },
+    "57": {
+     "lanes": [
+      "BASS",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.92,
+     "trim_db": -0.04,
+     "trim_abs_db": -0.08,
+     "trim_v13a_db": -0.04
+    },
+    "30": {
+     "lanes": [
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "PAD"
+     ],
+     "class": "DO",
+     "model_sum": -19.39,
+     "trim_db": 0.43,
+     "trim_abs_db": 0.39,
+     "trim_v13a_db": 0.75
+    },
+    "46": {
+     "lanes": [
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -19.85,
+     "trim_db": 0.89,
+     "trim_abs_db": 0.85,
+     "trim_v13a_db": 0.49
+    },
+    "54": {
+     "lanes": [
+      "STAB",
+      "PLUCK",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -20.22,
+     "trim_db": 1.26,
+     "trim_abs_db": 1.22,
+     "trim_v13a_db": 0.86
+    },
+    "58": {
+     "lanes": [
+      "STAB",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -19.69,
+     "trim_db": 0.73,
+     "trim_abs_db": 0.69,
+     "trim_v13a_db": 0.33
+    },
+    "60": {
+     "lanes": [
+      "PLUCK",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -19.69,
+     "trim_db": 0.73,
+     "trim_abs_db": 0.69,
+     "trim_v13a_db": 0.33
+    },
+    "31": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "PAD"
+     ],
+     "class": "DBO",
+     "model_sum": -18.46,
+     "trim_db": -0.5,
+     "trim_abs_db": -0.54,
+     "trim_v13a_db": -0.24
+    },
+    "47": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.52,
+     "trim_db": -0.44,
+     "trim_abs_db": -0.48,
+     "trim_v13a_db": -0.44
+    },
+    "55": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.82,
+     "trim_db": -0.15,
+     "trim_abs_db": -0.18,
+     "trim_v13a_db": -0.15
+    },
+    "59": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.39,
+     "trim_db": -0.57,
+     "trim_abs_db": -0.61,
+     "trim_v13a_db": -0.57
+    },
+    "61": {
+     "lanes": [
+      "BASS",
+      "PLUCK",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.39,
+     "trim_db": -0.57,
+     "trim_abs_db": -0.61,
+     "trim_v13a_db": -0.57
+    },
+    "62": {
+     "lanes": [
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -19.69,
+     "trim_db": 0.73,
+     "trim_abs_db": 0.69,
+     "trim_v13a_db": 0.33
+    },
+    "63": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.39,
+     "trim_db": -0.58,
+     "trim_abs_db": -0.61,
+     "trim_v13a_db": -0.58
+    }
+   }
+  },
+  "LONG": {
+   "default_main_lanes": [
+    "BASS",
+    "STAB",
+    "VOX"
+   ],
+   "default_model_sum": -19.33,
+   "default_class": "DBOV",
+   "default_model_residual_db": 0.33,
+   "default_model_residual_note": "INFORMATIONAL ONLY - never applied by the engine; output_trim_db (render-measured) already covers the default set",
+   "drums_model": -21.47,
+   "by_count": {
+    "0": {
+     "n_combos": 1,
+     "trim_median_db": 2.14,
+     "trim_min_db": 2.14,
+     "trim_max_db": 2.14,
+     "max_dev_from_median_db": 0.0,
+     "loudest_combo(min trim)": [],
+     "quietest_combo(max trim)": [],
+     "count_keyed_only_ok": true
+    },
+    "1": {
+     "n_combos": 6,
+     "trim_median_db": 1.73,
+     "trim_min_db": 0.51,
+     "trim_max_db": 1.98,
+     "max_dev_from_median_db": 1.22,
+     "loudest_combo(min trim)": [
+      "BASS"
+     ],
+     "quietest_combo(max trim)": [
+      "PAD"
+     ],
+     "count_keyed_only_ok": false
+    },
+    "2": {
+     "n_combos": 15,
+     "trim_median_db": 1.31,
+     "trim_min_db": 0.06,
+     "trim_max_db": 1.96,
+     "max_dev_from_median_db": 1.25,
+     "loudest_combo(min trim)": [
+      "BASS",
+      "VOX"
+     ],
+     "quietest_combo(max trim)": [
+      "STAB",
+      "PLUCK"
+     ],
+     "count_keyed_only_ok": false
+    },
+    "3": {
+     "n_combos": 20,
+     "trim_median_db": 0.66,
+     "trim_min_db": -0.31,
+     "trim_max_db": 1.76,
+     "max_dev_from_median_db": 1.1,
+     "loudest_combo(min trim)": [
+      "BASS",
+      "HITS",
+      "VOX"
+     ],
+     "quietest_combo(max trim)": [
+      "STAB",
+      "PLUCK",
+      "PAD"
+     ],
+     "count_keyed_only_ok": false
+    },
+    "4": {
+     "n_combos": 15,
+     "trim_median_db": -0.04,
+     "trim_min_db": -0.44,
+     "trim_max_db": 1.25,
+     "max_dev_from_median_db": 1.29,
+     "loudest_combo(min trim)": [
+      "BASS",
+      "PLUCK",
+      "HITS",
+      "VOX"
+     ],
+     "quietest_combo(max trim)": [
+      "STAB",
+      "PLUCK",
+      "PAD",
+      "VOX"
+     ],
+     "count_keyed_only_ok": false
+    },
+    "5": {
+     "n_combos": 6,
+     "trim_median_db": -0.32,
+     "trim_min_db": -0.57,
+     "trim_max_db": 0.71,
+     "max_dev_from_median_db": 1.03,
+     "loudest_combo(min trim)": [
+      "BASS",
+      "PLUCK",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "quietest_combo(max trim)": [
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "count_keyed_only_ok": false
+    },
+    "6": {
+     "n_combos": 1,
+     "trim_median_db": -0.57,
+     "trim_min_db": -0.57,
+     "trim_max_db": -0.57,
+     "max_dev_from_median_db": 0.0,
+     "loudest_combo(min trim)": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "quietest_combo(max trim)": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "count_keyed_only_ok": true
+    }
+   },
+   "by_mask": {
+    "0": {
+     "lanes": [],
+     "class": "D",
+     "model_sum": -21.47,
+     "trim_db": 2.14,
+     "trim_abs_db": 2.47,
+     "trim_v13a_db": 2.01
+    },
+    "1": {
+     "lanes": [
+      "BASS"
+     ],
+     "class": "DB",
+     "model_sum": -19.83,
+     "trim_db": 0.51,
+     "trim_abs_db": 0.83,
+     "trim_v13a_db": 0.74
+    },
+    "2": {
+     "lanes": [
+      "STAB"
+     ],
+     "class": "DO",
+     "model_sum": -21.29,
+     "trim_db": 1.96,
+     "trim_abs_db": 2.29,
+     "trim_v13a_db": 1.78
+    },
+    "4": {
+     "lanes": [
+      "PLUCK"
+     ],
+     "class": "DO",
+     "model_sum": -21.29,
+     "trim_db": 1.96,
+     "trim_abs_db": 2.29,
+     "trim_v13a_db": 1.78
+    },
+    "8": {
+     "lanes": [
+      "HITS"
+     ],
+     "class": "DO",
+     "model_sum": -20.83,
+     "trim_db": 1.51,
+     "trim_abs_db": 1.83,
+     "trim_v13a_db": 1.33
+    },
+    "16": {
+     "lanes": [
+      "PAD"
+     ],
+     "class": "DO",
+     "model_sum": -21.31,
+     "trim_db": 1.98,
+     "trim_abs_db": 2.31,
+     "trim_v13a_db": 1.8
+    },
+    "32": {
+     "lanes": [
+      "VOX"
+     ],
+     "class": "DV",
+     "model_sum": -20.81,
+     "trim_db": 1.48,
+     "trim_abs_db": 1.81,
+     "trim_v13a_db": 1.25
+    },
+    "3": {
+     "lanes": [
+      "BASS",
+      "STAB"
+     ],
+     "class": "DBO",
+     "model_sum": -19.79,
+     "trim_db": 0.46,
+     "trim_abs_db": 0.79,
+     "trim_v13a_db": 0.56
+    },
+    "5": {
+     "lanes": [
+      "BASS",
+      "PLUCK"
+     ],
+     "class": "DBO",
+     "model_sum": -19.79,
+     "trim_db": 0.46,
+     "trim_abs_db": 0.79,
+     "trim_v13a_db": 0.56
+    },
+    "9": {
+     "lanes": [
+      "BASS",
+      "HITS"
+     ],
+     "class": "DBO",
+     "model_sum": -19.44,
+     "trim_db": 0.11,
+     "trim_abs_db": 0.44,
+     "trim_v13a_db": 0.21
+    },
+    "17": {
+     "lanes": [
+      "BASS",
+      "PAD"
+     ],
+     "class": "DBO",
+     "model_sum": -19.8,
+     "trim_db": 0.48,
+     "trim_abs_db": 0.8,
+     "trim_v13a_db": 0.58
+    },
+    "33": {
+     "lanes": [
+      "BASS",
+      "VOX"
+     ],
+     "class": "DBV",
+     "model_sum": -19.39,
+     "trim_db": 0.06,
+     "trim_abs_db": 0.39,
+     "trim_v13a_db": 0.15
+    },
+    "6": {
+     "lanes": [
+      "STAB",
+      "PLUCK"
+     ],
+     "class": "DO",
+     "model_sum": -21.29,
+     "trim_db": 1.96,
+     "trim_abs_db": 2.29,
+     "trim_v13a_db": 1.78
+    },
+    "10": {
+     "lanes": [
+      "STAB",
+      "HITS"
+     ],
+     "class": "DO",
+     "model_sum": -20.63,
+     "trim_db": 1.31,
+     "trim_abs_db": 1.63,
+     "trim_v13a_db": 1.13
+    },
+    "18": {
+     "lanes": [
+      "STAB",
+      "PAD"
+     ],
+     "class": "DO",
+     "model_sum": -21.08,
+     "trim_db": 1.76,
+     "trim_abs_db": 2.08,
+     "trim_v13a_db": 1.58
+    },
+    "34": {
+     "lanes": [
+      "STAB",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -20.75,
+     "trim_db": 1.42,
+     "trim_abs_db": 1.75,
+     "trim_v13a_db": 1.05
+    },
+    "12": {
+     "lanes": [
+      "PLUCK",
+      "HITS"
+     ],
+     "class": "DO",
+     "model_sum": -20.63,
+     "trim_db": 1.31,
+     "trim_abs_db": 1.63,
+     "trim_v13a_db": 1.13
+    },
+    "20": {
+     "lanes": [
+      "PLUCK",
+      "PAD"
+     ],
+     "class": "DO",
+     "model_sum": -21.08,
+     "trim_db": 1.76,
+     "trim_abs_db": 2.08,
+     "trim_v13a_db": 1.58
+    },
+    "36": {
+     "lanes": [
+      "PLUCK",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -20.75,
+     "trim_db": 1.42,
+     "trim_abs_db": 1.75,
+     "trim_v13a_db": 1.05
+    },
+    "24": {
+     "lanes": [
+      "HITS",
+      "PAD"
+     ],
+     "class": "DO",
+     "model_sum": -20.65,
+     "trim_db": 1.32,
+     "trim_abs_db": 1.65,
+     "trim_v13a_db": 1.14
+    },
+    "40": {
+     "lanes": [
+      "HITS",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -20.36,
+     "trim_db": 1.04,
+     "trim_abs_db": 1.36,
+     "trim_v13a_db": 0.67
+    },
+    "48": {
+     "lanes": [
+      "PAD",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -20.77,
+     "trim_db": 1.44,
+     "trim_abs_db": 1.77,
+     "trim_v13a_db": 1.07
+    },
+    "7": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PLUCK"
+     ],
+     "class": "DBO",
+     "model_sum": -19.79,
+     "trim_db": 0.46,
+     "trim_abs_db": 0.79,
+     "trim_v13a_db": 0.56
+    },
+    "11": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "HITS"
+     ],
+     "class": "DBO",
+     "model_sum": -19.29,
+     "trim_db": -0.04,
+     "trim_abs_db": 0.29,
+     "trim_v13a_db": 0.06
+    },
+    "19": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PAD"
+     ],
+     "class": "DBO",
+     "model_sum": -19.63,
+     "trim_db": 0.31,
+     "trim_abs_db": 0.63,
+     "trim_v13a_db": 0.41
+    },
+    "35": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -19.33,
+     "trim_db": 0.0,
+     "trim_abs_db": 0.33,
+     "trim_v13a_db": 0.0
+    },
+    "13": {
+     "lanes": [
+      "BASS",
+      "PLUCK",
+      "HITS"
+     ],
+     "class": "DBO",
+     "model_sum": -19.29,
+     "trim_db": -0.04,
+     "trim_abs_db": 0.29,
+     "trim_v13a_db": 0.06
+    },
+    "21": {
+     "lanes": [
+      "BASS",
+      "PLUCK",
+      "PAD"
+     ],
+     "class": "DBO",
+     "model_sum": -19.63,
+     "trim_db": 0.31,
+     "trim_abs_db": 0.63,
+     "trim_v13a_db": 0.41
+    },
+    "37": {
+     "lanes": [
+      "BASS",
+      "PLUCK",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -19.33,
+     "trim_db": 0.0,
+     "trim_abs_db": 0.33,
+     "trim_v13a_db": 0.0
+    },
+    "25": {
+     "lanes": [
+      "BASS",
+      "HITS",
+      "PAD"
+     ],
+     "class": "DBO",
+     "model_sum": -19.3,
+     "trim_db": -0.03,
+     "trim_abs_db": 0.3,
+     "trim_v13a_db": 0.07
+    },
+    "41": {
+     "lanes": [
+      "BASS",
+      "HITS",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -19.02,
+     "trim_db": -0.31,
+     "trim_abs_db": 0.02,
+     "trim_v13a_db": -0.31
+    },
+    "49": {
+     "lanes": [
+      "BASS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -19.34,
+     "trim_db": 0.01,
+     "trim_abs_db": 0.34,
+     "trim_v13a_db": 0.01
+    },
+    "14": {
+     "lanes": [
+      "STAB",
+      "PLUCK",
+      "HITS"
+     ],
+     "class": "DO",
+     "model_sum": -20.63,
+     "trim_db": 1.31,
+     "trim_abs_db": 1.63,
+     "trim_v13a_db": 1.13
+    },
+    "22": {
+     "lanes": [
+      "STAB",
+      "PLUCK",
+      "PAD"
+     ],
+     "class": "DO",
+     "model_sum": -21.08,
+     "trim_db": 1.76,
+     "trim_abs_db": 2.08,
+     "trim_v13a_db": 1.58
+    },
+    "38": {
+     "lanes": [
+      "STAB",
+      "PLUCK",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -20.75,
+     "trim_db": 1.42,
+     "trim_abs_db": 1.75,
+     "trim_v13a_db": 1.05
+    },
+    "26": {
+     "lanes": [
+      "STAB",
+      "HITS",
+      "PAD"
+     ],
+     "class": "DO",
+     "model_sum": -20.46,
+     "trim_db": 1.13,
+     "trim_abs_db": 1.46,
+     "trim_v13a_db": 0.95
+    },
+    "42": {
+     "lanes": [
+      "STAB",
+      "HITS",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -20.19,
+     "trim_db": 0.86,
+     "trim_abs_db": 1.19,
+     "trim_v13a_db": 0.49
+    },
+    "50": {
+     "lanes": [
+      "STAB",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -20.58,
+     "trim_db": 1.25,
+     "trim_abs_db": 1.58,
+     "trim_v13a_db": 0.88
+    },
+    "28": {
+     "lanes": [
+      "PLUCK",
+      "HITS",
+      "PAD"
+     ],
+     "class": "DO",
+     "model_sum": -20.46,
+     "trim_db": 1.13,
+     "trim_abs_db": 1.46,
+     "trim_v13a_db": 0.95
+    },
+    "44": {
+     "lanes": [
+      "PLUCK",
+      "HITS",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -20.19,
+     "trim_db": 0.86,
+     "trim_abs_db": 1.19,
+     "trim_v13a_db": 0.49
+    },
+    "52": {
+     "lanes": [
+      "PLUCK",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -20.58,
+     "trim_db": 1.25,
+     "trim_abs_db": 1.58,
+     "trim_v13a_db": 0.88
+    },
+    "56": {
+     "lanes": [
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -20.21,
+     "trim_db": 0.88,
+     "trim_abs_db": 1.21,
+     "trim_v13a_db": 0.51
+    },
+    "15": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "HITS"
+     ],
+     "class": "DBO",
+     "model_sum": -19.29,
+     "trim_db": -0.04,
+     "trim_abs_db": 0.29,
+     "trim_v13a_db": 0.06
+    },
+    "23": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "PAD"
+     ],
+     "class": "DBO",
+     "model_sum": -19.63,
+     "trim_db": 0.31,
+     "trim_abs_db": 0.63,
+     "trim_v13a_db": 0.41
+    },
+    "39": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -19.33,
+     "trim_db": -0.0,
+     "trim_abs_db": 0.33,
+     "trim_v13a_db": -0.0
+    },
+    "27": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "HITS",
+      "PAD"
+     ],
+     "class": "DBO",
+     "model_sum": -19.15,
+     "trim_db": -0.18,
+     "trim_abs_db": 0.15,
+     "trim_v13a_db": -0.08
+    },
+    "43": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "HITS",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.88,
+     "trim_db": -0.44,
+     "trim_abs_db": -0.12,
+     "trim_v13a_db": -0.44
+    },
+    "51": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -19.19,
+     "trim_db": -0.14,
+     "trim_abs_db": 0.19,
+     "trim_v13a_db": -0.14
+    },
+    "29": {
+     "lanes": [
+      "BASS",
+      "PLUCK",
+      "HITS",
+      "PAD"
+     ],
+     "class": "DBO",
+     "model_sum": -19.15,
+     "trim_db": -0.18,
+     "trim_abs_db": 0.15,
+     "trim_v13a_db": -0.08
+    },
+    "45": {
+     "lanes": [
+      "BASS",
+      "PLUCK",
+      "HITS",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.88,
+     "trim_db": -0.44,
+     "trim_abs_db": -0.12,
+     "trim_v13a_db": -0.44
+    },
+    "53": {
+     "lanes": [
+      "BASS",
+      "PLUCK",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -19.19,
+     "trim_db": -0.14,
+     "trim_abs_db": 0.19,
+     "trim_v13a_db": -0.14
+    },
+    "57": {
+     "lanes": [
+      "BASS",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.9,
+     "trim_db": -0.43,
+     "trim_abs_db": -0.1,
+     "trim_v13a_db": -0.43
+    },
+    "30": {
+     "lanes": [
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "PAD"
+     ],
+     "class": "DO",
+     "model_sum": -20.46,
+     "trim_db": 1.13,
+     "trim_abs_db": 1.46,
+     "trim_v13a_db": 0.95
+    },
+    "46": {
+     "lanes": [
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -20.19,
+     "trim_db": 0.86,
+     "trim_abs_db": 1.19,
+     "trim_v13a_db": 0.49
+    },
+    "54": {
+     "lanes": [
+      "STAB",
+      "PLUCK",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -20.58,
+     "trim_db": 1.25,
+     "trim_abs_db": 1.58,
+     "trim_v13a_db": 0.88
+    },
+    "58": {
+     "lanes": [
+      "STAB",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -20.04,
+     "trim_db": 0.71,
+     "trim_abs_db": 1.04,
+     "trim_v13a_db": 0.34
+    },
+    "60": {
+     "lanes": [
+      "PLUCK",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -20.04,
+     "trim_db": 0.71,
+     "trim_abs_db": 1.04,
+     "trim_v13a_db": 0.34
+    },
+    "31": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "PAD"
+     ],
+     "class": "DBO",
+     "model_sum": -19.15,
+     "trim_db": -0.18,
+     "trim_abs_db": 0.15,
+     "trim_v13a_db": -0.08
+    },
+    "47": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.88,
+     "trim_db": -0.45,
+     "trim_abs_db": -0.12,
+     "trim_v13a_db": -0.45
+    },
+    "55": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -19.19,
+     "trim_db": -0.14,
+     "trim_abs_db": 0.19,
+     "trim_v13a_db": -0.14
+    },
+    "59": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.76,
+     "trim_db": -0.57,
+     "trim_abs_db": -0.24,
+     "trim_v13a_db": -0.57
+    },
+    "61": {
+     "lanes": [
+      "BASS",
+      "PLUCK",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.76,
+     "trim_db": -0.57,
+     "trim_abs_db": -0.24,
+     "trim_v13a_db": -0.57
+    },
+    "62": {
+     "lanes": [
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -20.04,
+     "trim_db": 0.71,
+     "trim_abs_db": 1.04,
+     "trim_v13a_db": 0.34
+    },
+    "63": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.76,
+     "trim_db": -0.57,
+     "trim_abs_db": -0.24,
+     "trim_v13a_db": -0.57
+    }
+   }
+  },
+  "POP": {
+   "default_main_lanes": [
+    "BASS",
+    "STAB",
+    "VOX"
+   ],
+   "default_model_sum": -18.65,
+   "default_class": "DBOV",
+   "default_model_residual_db": -0.35,
+   "default_model_residual_note": "INFORMATIONAL ONLY - never applied by the engine; output_trim_db (render-measured) already covers the default set",
+   "drums_model": -22.19,
+   "by_count": {
+    "0": {
+     "n_combos": 1,
+     "trim_median_db": 3.55,
+     "trim_min_db": 3.55,
+     "trim_max_db": 3.55,
+     "max_dev_from_median_db": 0.0,
+     "loudest_combo(min trim)": [],
+     "quietest_combo(max trim)": [],
+     "count_keyed_only_ok": true
+    },
+    "1": {
+     "n_combos": 6,
+     "trim_median_db": 2.12,
+     "trim_min_db": 1.81,
+     "trim_max_db": 3.15,
+     "max_dev_from_median_db": 1.03,
+     "loudest_combo(min trim)": [
+      "BASS"
+     ],
+     "quietest_combo(max trim)": [
+      "PAD"
+     ],
+     "count_keyed_only_ok": false
+    },
+    "2": {
+     "n_combos": 15,
+     "trim_median_db": 1.27,
+     "trim_min_db": 0.73,
+     "trim_max_db": 2.22,
+     "max_dev_from_median_db": 0.95,
+     "loudest_combo(min trim)": [
+      "BASS",
+      "PLUCK"
+     ],
+     "quietest_combo(max trim)": [
+      "HITS",
+      "PAD"
+     ],
+     "count_keyed_only_ok": false
+    },
+    "3": {
+     "n_combos": 20,
+     "trim_median_db": 0.69,
+     "trim_min_db": 0.0,
+     "trim_max_db": 1.84,
+     "max_dev_from_median_db": 1.15,
+     "loudest_combo(min trim)": [
+      "BASS",
+      "PLUCK",
+      "VOX"
+     ],
+     "quietest_combo(max trim)": [
+      "STAB",
+      "PLUCK",
+      "PAD"
+     ],
+     "count_keyed_only_ok": false
+    },
+    "4": {
+     "n_combos": 15,
+     "trim_median_db": 0.13,
+     "trim_min_db": -0.45,
+     "trim_max_db": 1.13,
+     "max_dev_from_median_db": 1.0,
+     "loudest_combo(min trim)": [
+      "BASS",
+      "PLUCK",
+      "HITS",
+      "VOX"
+     ],
+     "quietest_combo(max trim)": [
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "PAD"
+     ],
+     "count_keyed_only_ok": false
+    },
+    "5": {
+     "n_combos": 6,
+     "trim_median_db": -0.28,
+     "trim_min_db": -0.53,
+     "trim_max_db": 0.29,
+     "max_dev_from_median_db": 0.57,
+     "loudest_combo(min trim)": [
+      "BASS",
+      "PLUCK",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "quietest_combo(max trim)": [
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "count_keyed_only_ok": false
+    },
+    "6": {
+     "n_combos": 1,
+     "trim_median_db": -0.54,
+     "trim_min_db": -0.54,
+     "trim_max_db": -0.54,
+     "max_dev_from_median_db": 0.0,
+     "loudest_combo(min trim)": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "quietest_combo(max trim)": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "count_keyed_only_ok": true
+    }
+   },
+   "by_mask": {
+    "0": {
+     "lanes": [],
+     "class": "D",
+     "model_sum": -22.19,
+     "trim_db": 3.55,
+     "trim_abs_db": 3.19,
+     "trim_v13a_db": 3.66
+    },
+    "1": {
+     "lanes": [
+      "BASS"
+     ],
+     "class": "DB",
+     "model_sum": -20.46,
+     "trim_db": 1.81,
+     "trim_abs_db": 1.46,
+     "trim_v13a_db": 1.89
+    },
+    "2": {
+     "lanes": [
+      "STAB"
+     ],
+     "class": "DO",
+     "model_sum": -20.65,
+     "trim_db": 2.0,
+     "trim_abs_db": 1.65,
+     "trim_v13a_db": 2.28
+    },
+    "4": {
+     "lanes": [
+      "PLUCK"
+     ],
+     "class": "DO",
+     "model_sum": -20.65,
+     "trim_db": 2.0,
+     "trim_abs_db": 1.65,
+     "trim_v13a_db": 2.28
+    },
+    "8": {
+     "lanes": [
+      "HITS"
+     ],
+     "class": "DO",
+     "model_sum": -21.05,
+     "trim_db": 2.4,
+     "trim_abs_db": 2.05,
+     "trim_v13a_db": 2.68
+    },
+    "16": {
+     "lanes": [
+      "PAD"
+     ],
+     "class": "DO",
+     "model_sum": -21.8,
+     "trim_db": 3.15,
+     "trim_abs_db": 2.8,
+     "trim_v13a_db": 3.43
+    },
+    "32": {
+     "lanes": [
+      "VOX"
+     ],
+     "class": "DV",
+     "model_sum": -20.89,
+     "trim_db": 2.24,
+     "trim_abs_db": 1.89,
+     "trim_v13a_db": 2.05
+    },
+    "3": {
+     "lanes": [
+      "BASS",
+      "STAB"
+     ],
+     "class": "DBO",
+     "model_sum": -19.38,
+     "trim_db": 0.73,
+     "trim_abs_db": 0.38,
+     "trim_v13a_db": 0.93
+    },
+    "5": {
+     "lanes": [
+      "BASS",
+      "PLUCK"
+     ],
+     "class": "DBO",
+     "model_sum": -19.38,
+     "trim_db": 0.73,
+     "trim_abs_db": 0.38,
+     "trim_v13a_db": 0.93
+    },
+    "9": {
+     "lanes": [
+      "BASS",
+      "HITS"
+     ],
+     "class": "DBO",
+     "model_sum": -19.67,
+     "trim_db": 1.02,
+     "trim_abs_db": 0.67,
+     "trim_v13a_db": 1.22
+    },
+    "17": {
+     "lanes": [
+      "BASS",
+      "PAD"
+     ],
+     "class": "DBO",
+     "model_sum": -20.19,
+     "trim_db": 1.54,
+     "trim_abs_db": 1.19,
+     "trim_v13a_db": 1.74
+    },
+    "33": {
+     "lanes": [
+      "BASS",
+      "VOX"
+     ],
+     "class": "DBV",
+     "model_sum": -19.62,
+     "trim_db": 0.97,
+     "trim_abs_db": 0.62,
+     "trim_v13a_db": 0.76
+    },
+    "6": {
+     "lanes": [
+      "STAB",
+      "PLUCK"
+     ],
+     "class": "DO",
+     "model_sum": -20.65,
+     "trim_db": 2.0,
+     "trim_abs_db": 1.65,
+     "trim_v13a_db": 2.28
+    },
+    "10": {
+     "lanes": [
+      "STAB",
+      "HITS"
+     ],
+     "class": "DO",
+     "model_sum": -19.92,
+     "trim_db": 1.27,
+     "trim_abs_db": 0.92,
+     "trim_v13a_db": 1.55
+    },
+    "18": {
+     "lanes": [
+      "STAB",
+      "PAD"
+     ],
+     "class": "DO",
+     "model_sum": -20.49,
+     "trim_db": 1.84,
+     "trim_abs_db": 1.49,
+     "trim_v13a_db": 2.12
+    },
+    "34": {
+     "lanes": [
+      "STAB",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -19.61,
+     "trim_db": 0.97,
+     "trim_abs_db": 0.61,
+     "trim_v13a_db": 1.06
+    },
+    "12": {
+     "lanes": [
+      "PLUCK",
+      "HITS"
+     ],
+     "class": "DO",
+     "model_sum": -19.92,
+     "trim_db": 1.27,
+     "trim_abs_db": 0.92,
+     "trim_v13a_db": 1.55
+    },
+    "20": {
+     "lanes": [
+      "PLUCK",
+      "PAD"
+     ],
+     "class": "DO",
+     "model_sum": -20.49,
+     "trim_db": 1.84,
+     "trim_abs_db": 1.49,
+     "trim_v13a_db": 2.12
+    },
+    "36": {
+     "lanes": [
+      "PLUCK",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -19.61,
+     "trim_db": 0.97,
+     "trim_abs_db": 0.61,
+     "trim_v13a_db": 1.06
+    },
+    "24": {
+     "lanes": [
+      "HITS",
+      "PAD"
+     ],
+     "class": "DO",
+     "model_sum": -20.87,
+     "trim_db": 2.22,
+     "trim_abs_db": 1.87,
+     "trim_v13a_db": 2.5
+    },
+    "40": {
+     "lanes": [
+      "HITS",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -19.91,
+     "trim_db": 1.27,
+     "trim_abs_db": 0.91,
+     "trim_v13a_db": 1.36
+    },
+    "48": {
+     "lanes": [
+      "PAD",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -20.45,
+     "trim_db": 1.81,
+     "trim_abs_db": 1.45,
+     "trim_v13a_db": 1.9
+    },
+    "7": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PLUCK"
+     ],
+     "class": "DBO",
+     "model_sum": -19.37,
+     "trim_db": 0.73,
+     "trim_abs_db": 0.37,
+     "trim_v13a_db": 0.93
+    },
+    "11": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "HITS"
+     ],
+     "class": "DBO",
+     "model_sum": -18.83,
+     "trim_db": 0.18,
+     "trim_abs_db": -0.17,
+     "trim_v13a_db": 0.38
+    },
+    "19": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PAD"
+     ],
+     "class": "DBO",
+     "model_sum": -19.26,
+     "trim_db": 0.61,
+     "trim_abs_db": 0.26,
+     "trim_v13a_db": 0.81
+    },
+    "35": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.65,
+     "trim_db": 0.0,
+     "trim_abs_db": -0.35,
+     "trim_v13a_db": 0.0
+    },
+    "13": {
+     "lanes": [
+      "BASS",
+      "PLUCK",
+      "HITS"
+     ],
+     "class": "DBO",
+     "model_sum": -18.83,
+     "trim_db": 0.18,
+     "trim_abs_db": -0.17,
+     "trim_v13a_db": 0.38
+    },
+    "21": {
+     "lanes": [
+      "BASS",
+      "PLUCK",
+      "PAD"
+     ],
+     "class": "DBO",
+     "model_sum": -19.26,
+     "trim_db": 0.61,
+     "trim_abs_db": 0.26,
+     "trim_v13a_db": 0.81
+    },
+    "37": {
+     "lanes": [
+      "BASS",
+      "PLUCK",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.65,
+     "trim_db": 0.0,
+     "trim_abs_db": -0.35,
+     "trim_v13a_db": 0.0
+    },
+    "25": {
+     "lanes": [
+      "BASS",
+      "HITS",
+      "PAD"
+     ],
+     "class": "DBO",
+     "model_sum": -19.54,
+     "trim_db": 0.89,
+     "trim_abs_db": 0.54,
+     "trim_v13a_db": 1.09
+    },
+    "41": {
+     "lanes": [
+      "BASS",
+      "HITS",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.88,
+     "trim_db": 0.23,
+     "trim_abs_db": -0.12,
+     "trim_v13a_db": 0.23
+    },
+    "49": {
+     "lanes": [
+      "BASS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -19.29,
+     "trim_db": 0.64,
+     "trim_abs_db": 0.29,
+     "trim_v13a_db": 0.64
+    },
+    "14": {
+     "lanes": [
+      "STAB",
+      "PLUCK",
+      "HITS"
+     ],
+     "class": "DO",
+     "model_sum": -19.92,
+     "trim_db": 1.27,
+     "trim_abs_db": 0.92,
+     "trim_v13a_db": 1.55
+    },
+    "22": {
+     "lanes": [
+      "STAB",
+      "PLUCK",
+      "PAD"
+     ],
+     "class": "DO",
+     "model_sum": -20.48,
+     "trim_db": 1.84,
+     "trim_abs_db": 1.48,
+     "trim_v13a_db": 2.12
+    },
+    "38": {
+     "lanes": [
+      "STAB",
+      "PLUCK",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -19.61,
+     "trim_db": 0.97,
+     "trim_abs_db": 0.61,
+     "trim_v13a_db": 1.06
+    },
+    "26": {
+     "lanes": [
+      "STAB",
+      "HITS",
+      "PAD"
+     ],
+     "class": "DO",
+     "model_sum": -19.78,
+     "trim_db": 1.13,
+     "trim_abs_db": 0.78,
+     "trim_v13a_db": 1.41
+    },
+    "42": {
+     "lanes": [
+      "STAB",
+      "HITS",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -19.05,
+     "trim_db": 0.41,
+     "trim_abs_db": 0.05,
+     "trim_v13a_db": 0.5
+    },
+    "50": {
+     "lanes": [
+      "STAB",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -19.49,
+     "trim_db": 0.84,
+     "trim_abs_db": 0.49,
+     "trim_v13a_db": 0.93
+    },
+    "28": {
+     "lanes": [
+      "PLUCK",
+      "HITS",
+      "PAD"
+     ],
+     "class": "DO",
+     "model_sum": -19.78,
+     "trim_db": 1.13,
+     "trim_abs_db": 0.78,
+     "trim_v13a_db": 1.41
+    },
+    "44": {
+     "lanes": [
+      "PLUCK",
+      "HITS",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -19.05,
+     "trim_db": 0.41,
+     "trim_abs_db": 0.05,
+     "trim_v13a_db": 0.5
+    },
+    "52": {
+     "lanes": [
+      "PLUCK",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -19.49,
+     "trim_db": 0.84,
+     "trim_abs_db": 0.49,
+     "trim_v13a_db": 0.93
+    },
+    "56": {
+     "lanes": [
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -19.78,
+     "trim_db": 1.13,
+     "trim_abs_db": 0.78,
+     "trim_v13a_db": 1.22
+    },
+    "15": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "HITS"
+     ],
+     "class": "DBO",
+     "model_sum": -18.83,
+     "trim_db": 0.18,
+     "trim_abs_db": -0.17,
+     "trim_v13a_db": 0.38
+    },
+    "23": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "PAD"
+     ],
+     "class": "DBO",
+     "model_sum": -19.25,
+     "trim_db": 0.61,
+     "trim_abs_db": 0.25,
+     "trim_v13a_db": 0.81
+    },
+    "39": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.65,
+     "trim_db": -0.0,
+     "trim_abs_db": -0.35,
+     "trim_v13a_db": -0.0
+    },
+    "27": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "HITS",
+      "PAD"
+     ],
+     "class": "DBO",
+     "model_sum": -18.72,
+     "trim_db": 0.08,
+     "trim_abs_db": -0.28,
+     "trim_v13a_db": 0.28
+    },
+    "43": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "HITS",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.2,
+     "trim_db": -0.45,
+     "trim_abs_db": -0.8,
+     "trim_v13a_db": -0.45
+    },
+    "51": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.55,
+     "trim_db": -0.1,
+     "trim_abs_db": -0.45,
+     "trim_v13a_db": -0.1
+    },
+    "29": {
+     "lanes": [
+      "BASS",
+      "PLUCK",
+      "HITS",
+      "PAD"
+     ],
+     "class": "DBO",
+     "model_sum": -18.72,
+     "trim_db": 0.08,
+     "trim_abs_db": -0.28,
+     "trim_v13a_db": 0.28
+    },
+    "45": {
+     "lanes": [
+      "BASS",
+      "PLUCK",
+      "HITS",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.2,
+     "trim_db": -0.45,
+     "trim_abs_db": -0.8,
+     "trim_v13a_db": -0.45
+    },
+    "53": {
+     "lanes": [
+      "BASS",
+      "PLUCK",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.55,
+     "trim_db": -0.1,
+     "trim_abs_db": -0.45,
+     "trim_v13a_db": -0.1
+    },
+    "57": {
+     "lanes": [
+      "BASS",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.78,
+     "trim_db": 0.13,
+     "trim_abs_db": -0.22,
+     "trim_v13a_db": 0.13
+    },
+    "30": {
+     "lanes": [
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "PAD"
+     ],
+     "class": "DO",
+     "model_sum": -19.78,
+     "trim_db": 1.13,
+     "trim_abs_db": 0.78,
+     "trim_v13a_db": 1.41
+    },
+    "46": {
+     "lanes": [
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -19.05,
+     "trim_db": 0.4,
+     "trim_abs_db": 0.05,
+     "trim_v13a_db": 0.49
+    },
+    "54": {
+     "lanes": [
+      "STAB",
+      "PLUCK",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -19.49,
+     "trim_db": 0.84,
+     "trim_abs_db": 0.49,
+     "trim_v13a_db": 0.93
+    },
+    "58": {
+     "lanes": [
+      "STAB",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -18.94,
+     "trim_db": 0.3,
+     "trim_abs_db": -0.06,
+     "trim_v13a_db": 0.39
+    },
+    "60": {
+     "lanes": [
+      "PLUCK",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -18.94,
+     "trim_db": 0.3,
+     "trim_abs_db": -0.06,
+     "trim_v13a_db": 0.39
+    },
+    "31": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "PAD"
+     ],
+     "class": "DBO",
+     "model_sum": -18.72,
+     "trim_db": 0.07,
+     "trim_abs_db": -0.28,
+     "trim_v13a_db": 0.27
+    },
+    "47": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.2,
+     "trim_db": -0.45,
+     "trim_abs_db": -0.8,
+     "trim_v13a_db": -0.45
+    },
+    "55": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.55,
+     "trim_db": -0.1,
+     "trim_abs_db": -0.45,
+     "trim_v13a_db": -0.1
+    },
+    "59": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.11,
+     "trim_db": -0.53,
+     "trim_abs_db": -0.89,
+     "trim_v13a_db": -0.53
+    },
+    "61": {
+     "lanes": [
+      "BASS",
+      "PLUCK",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.11,
+     "trim_db": -0.53,
+     "trim_abs_db": -0.89,
+     "trim_v13a_db": -0.53
+    },
+    "62": {
+     "lanes": [
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -18.94,
+     "trim_db": 0.29,
+     "trim_abs_db": -0.06,
+     "trim_v13a_db": 0.38
+    },
+    "63": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.11,
+     "trim_db": -0.54,
+     "trim_abs_db": -0.89,
+     "trim_v13a_db": -0.54
+    }
+   }
+  },
+  "GASKIN": {
+   "default_main_lanes": [
+    "BASS",
+    "STAB",
+    "HITS"
+   ],
+   "default_model_sum": -18.49,
+   "default_class": "DBO",
+   "default_model_residual_db": -0.51,
+   "default_model_residual_note": "INFORMATIONAL ONLY - never applied by the engine; output_trim_db (render-measured) already covers the default set",
+   "drums_model": -22.15,
+   "by_count": {
+    "0": {
+     "n_combos": 1,
+     "trim_median_db": 3.66,
+     "trim_min_db": 3.66,
+     "trim_max_db": 3.66,
+     "max_dev_from_median_db": 0.0,
+     "loudest_combo(min trim)": [],
+     "quietest_combo(max trim)": [],
+     "count_keyed_only_ok": true
+    },
+    "1": {
+     "n_combos": 6,
+     "trim_median_db": 2.32,
+     "trim_min_db": 1.75,
+     "trim_max_db": 3.37,
+     "max_dev_from_median_db": 1.05,
+     "loudest_combo(min trim)": [
+      "BASS"
+     ],
+     "quietest_combo(max trim)": [
+      "PAD"
+     ],
+     "count_keyed_only_ok": false
+    },
+    "2": {
+     "n_combos": 15,
+     "trim_median_db": 1.28,
+     "trim_min_db": 0.49,
+     "trim_max_db": 2.5,
+     "max_dev_from_median_db": 1.22,
+     "loudest_combo(min trim)": [
+      "BASS",
+      "PLUCK"
+     ],
+     "quietest_combo(max trim)": [
+      "PAD",
+      "VOX"
+     ],
+     "count_keyed_only_ok": false
+    },
+    "3": {
+     "n_combos": 20,
+     "trim_median_db": 0.82,
+     "trim_min_db": 0.0,
+     "trim_max_db": 1.78,
+     "max_dev_from_median_db": 0.96,
+     "loudest_combo(min trim)": [
+      "BASS",
+      "PLUCK",
+      "HITS"
+     ],
+     "quietest_combo(max trim)": [
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "count_keyed_only_ok": false
+    },
+    "4": {
+     "n_combos": 15,
+     "trim_median_db": -0.0,
+     "trim_min_db": -0.44,
+     "trim_max_db": 1.05,
+     "max_dev_from_median_db": 1.05,
+     "loudest_combo(min trim)": [
+      "BASS",
+      "PLUCK",
+      "HITS",
+      "VOX"
+     ],
+     "quietest_combo(max trim)": [
+      "STAB",
+      "PLUCK",
+      "PAD",
+      "VOX"
+     ],
+     "count_keyed_only_ok": false
+    },
+    "5": {
+     "n_combos": 6,
+     "trim_median_db": -0.32,
+     "trim_min_db": -0.61,
+     "trim_max_db": 0.52,
+     "max_dev_from_median_db": 0.84,
+     "loudest_combo(min trim)": [
+      "BASS",
+      "PLUCK",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "quietest_combo(max trim)": [
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "count_keyed_only_ok": false
+    },
+    "6": {
+     "n_combos": 1,
+     "trim_median_db": -0.61,
+     "trim_min_db": -0.61,
+     "trim_max_db": -0.61,
+     "max_dev_from_median_db": 0.0,
+     "loudest_combo(min trim)": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "quietest_combo(max trim)": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "count_keyed_only_ok": true
+    }
+   },
+   "by_mask": {
+    "0": {
+     "lanes": [],
+     "class": "D",
+     "model_sum": -22.15,
+     "trim_db": 3.66,
+     "trim_abs_db": 3.15,
+     "trim_v13a_db": 3.54
+    },
+    "1": {
+     "lanes": [
+      "BASS"
+     ],
+     "class": "DB",
+     "model_sum": -20.24,
+     "trim_db": 1.75,
+     "trim_abs_db": 1.24,
+     "trim_v13a_db": 1.82
+    },
+    "2": {
+     "lanes": [
+      "STAB"
+     ],
+     "class": "DO",
+     "model_sum": -20.41,
+     "trim_db": 1.92,
+     "trim_abs_db": 1.41,
+     "trim_v13a_db": 1.69
+    },
+    "4": {
+     "lanes": [
+      "PLUCK"
+     ],
+     "class": "DO",
+     "model_sum": -20.41,
+     "trim_db": 1.92,
+     "trim_abs_db": 1.41,
+     "trim_v13a_db": 1.69
+    },
+    "8": {
+     "lanes": [
+      "HITS"
+     ],
+     "class": "DO",
+     "model_sum": -21.31,
+     "trim_db": 2.83,
+     "trim_abs_db": 2.31,
+     "trim_v13a_db": 2.6
+    },
+    "16": {
+     "lanes": [
+      "PAD"
+     ],
+     "class": "DO",
+     "model_sum": -21.86,
+     "trim_db": 3.37,
+     "trim_abs_db": 2.86,
+     "trim_v13a_db": 3.14
+    },
+    "32": {
+     "lanes": [
+      "VOX"
+     ],
+     "class": "DV",
+     "model_sum": -21.2,
+     "trim_db": 2.72,
+     "trim_abs_db": 2.2,
+     "trim_v13a_db": 2.6
+    },
+    "3": {
+     "lanes": [
+      "BASS",
+      "STAB"
+     ],
+     "class": "DBO",
+     "model_sum": -18.98,
+     "trim_db": 0.49,
+     "trim_abs_db": -0.02,
+     "trim_v13a_db": 0.49
+    },
+    "5": {
+     "lanes": [
+      "BASS",
+      "PLUCK"
+     ],
+     "class": "DBO",
+     "model_sum": -18.98,
+     "trim_db": 0.49,
+     "trim_abs_db": -0.02,
+     "trim_v13a_db": 0.49
+    },
+    "9": {
+     "lanes": [
+      "BASS",
+      "HITS"
+     ],
+     "class": "DBO",
+     "model_sum": -19.65,
+     "trim_db": 1.17,
+     "trim_abs_db": 0.65,
+     "trim_v13a_db": 1.17
+    },
+    "17": {
+     "lanes": [
+      "BASS",
+      "PAD"
+     ],
+     "class": "DBO",
+     "model_sum": -20.04,
+     "trim_db": 1.55,
+     "trim_abs_db": 1.04,
+     "trim_v13a_db": 1.55
+    },
+    "33": {
+     "lanes": [
+      "BASS",
+      "VOX"
+     ],
+     "class": "DBV",
+     "model_sum": -19.58,
+     "trim_db": 1.1,
+     "trim_abs_db": 0.58,
+     "trim_v13a_db": 1.17
+    },
+    "6": {
+     "lanes": [
+      "STAB",
+      "PLUCK"
+     ],
+     "class": "DO",
+     "model_sum": -20.4,
+     "trim_db": 1.92,
+     "trim_abs_db": 1.4,
+     "trim_v13a_db": 1.69
+    },
+    "10": {
+     "lanes": [
+      "STAB",
+      "HITS"
+     ],
+     "class": "DO",
+     "model_sum": -19.77,
+     "trim_db": 1.28,
+     "trim_abs_db": 0.77,
+     "trim_v13a_db": 1.05
+    },
+    "18": {
+     "lanes": [
+      "STAB",
+      "PAD"
+     ],
+     "class": "DO",
+     "model_sum": -20.14,
+     "trim_db": 1.65,
+     "trim_abs_db": 1.14,
+     "trim_v13a_db": 1.42
+    },
+    "34": {
+     "lanes": [
+      "STAB",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -19.77,
+     "trim_db": 1.28,
+     "trim_abs_db": 0.77,
+     "trim_v13a_db": 1.05
+    },
+    "12": {
+     "lanes": [
+      "PLUCK",
+      "HITS"
+     ],
+     "class": "DO",
+     "model_sum": -19.77,
+     "trim_db": 1.28,
+     "trim_abs_db": 0.77,
+     "trim_v13a_db": 1.05
+    },
+    "20": {
+     "lanes": [
+      "PLUCK",
+      "PAD"
+     ],
+     "class": "DO",
+     "model_sum": -20.14,
+     "trim_db": 1.65,
+     "trim_abs_db": 1.14,
+     "trim_v13a_db": 1.42
+    },
+    "36": {
+     "lanes": [
+      "PLUCK",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -19.77,
+     "trim_db": 1.28,
+     "trim_abs_db": 0.77,
+     "trim_v13a_db": 1.05
+    },
+    "24": {
+     "lanes": [
+      "HITS",
+      "PAD"
+     ],
+     "class": "DO",
+     "model_sum": -20.99,
+     "trim_db": 2.5,
+     "trim_abs_db": 1.99,
+     "trim_v13a_db": 2.27
+    },
+    "40": {
+     "lanes": [
+      "HITS",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -20.54,
+     "trim_db": 2.05,
+     "trim_abs_db": 1.54,
+     "trim_v13a_db": 1.82
+    },
+    "48": {
+     "lanes": [
+      "PAD",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -20.99,
+     "trim_db": 2.5,
+     "trim_abs_db": 1.99,
+     "trim_v13a_db": 2.27
+    },
+    "7": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PLUCK"
+     ],
+     "class": "DBO",
+     "model_sum": -18.98,
+     "trim_db": 0.49,
+     "trim_abs_db": -0.02,
+     "trim_v13a_db": 0.49
+    },
+    "11": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "HITS"
+     ],
+     "class": "DBO",
+     "model_sum": -18.49,
+     "trim_db": 0.0,
+     "trim_abs_db": -0.51,
+     "trim_v13a_db": 0.0
+    },
+    "19": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PAD"
+     ],
+     "class": "DBO",
+     "model_sum": -18.78,
+     "trim_db": 0.29,
+     "trim_abs_db": -0.22,
+     "trim_v13a_db": 0.29
+    },
+    "35": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.49,
+     "trim_db": 0.0,
+     "trim_abs_db": -0.51,
+     "trim_v13a_db": 0.0
+    },
+    "13": {
+     "lanes": [
+      "BASS",
+      "PLUCK",
+      "HITS"
+     ],
+     "class": "DBO",
+     "model_sum": -18.49,
+     "trim_db": 0.0,
+     "trim_abs_db": -0.51,
+     "trim_v13a_db": 0.0
+    },
+    "21": {
+     "lanes": [
+      "BASS",
+      "PLUCK",
+      "PAD"
+     ],
+     "class": "DBO",
+     "model_sum": -18.78,
+     "trim_db": 0.29,
+     "trim_abs_db": -0.22,
+     "trim_v13a_db": 0.29
+    },
+    "37": {
+     "lanes": [
+      "BASS",
+      "PLUCK",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.49,
+     "trim_db": 0.0,
+     "trim_abs_db": -0.51,
+     "trim_v13a_db": 0.0
+    },
+    "25": {
+     "lanes": [
+      "BASS",
+      "HITS",
+      "PAD"
+     ],
+     "class": "DBO",
+     "model_sum": -19.42,
+     "trim_db": 0.93,
+     "trim_abs_db": 0.42,
+     "trim_v13a_db": 0.93
+    },
+    "41": {
+     "lanes": [
+      "BASS",
+      "HITS",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -19.08,
+     "trim_db": 0.59,
+     "trim_abs_db": 0.08,
+     "trim_v13a_db": 0.59
+    },
+    "49": {
+     "lanes": [
+      "BASS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -19.42,
+     "trim_db": 0.93,
+     "trim_abs_db": 0.42,
+     "trim_v13a_db": 0.93
+    },
+    "14": {
+     "lanes": [
+      "STAB",
+      "PLUCK",
+      "HITS"
+     ],
+     "class": "DO",
+     "model_sum": -19.76,
+     "trim_db": 1.28,
+     "trim_abs_db": 0.76,
+     "trim_v13a_db": 1.05
+    },
+    "22": {
+     "lanes": [
+      "STAB",
+      "PLUCK",
+      "PAD"
+     ],
+     "class": "DO",
+     "model_sum": -20.14,
+     "trim_db": 1.65,
+     "trim_abs_db": 1.14,
+     "trim_v13a_db": 1.42
+    },
+    "38": {
+     "lanes": [
+      "STAB",
+      "PLUCK",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -19.76,
+     "trim_db": 1.28,
+     "trim_abs_db": 0.76,
+     "trim_v13a_db": 1.05
+    },
+    "26": {
+     "lanes": [
+      "STAB",
+      "HITS",
+      "PAD"
+     ],
+     "class": "DO",
+     "model_sum": -19.54,
+     "trim_db": 1.05,
+     "trim_abs_db": 0.54,
+     "trim_v13a_db": 0.82
+    },
+    "42": {
+     "lanes": [
+      "STAB",
+      "HITS",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -19.21,
+     "trim_db": 0.72,
+     "trim_abs_db": 0.21,
+     "trim_v13a_db": 0.49
+    },
+    "50": {
+     "lanes": [
+      "STAB",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -19.54,
+     "trim_db": 1.05,
+     "trim_abs_db": 0.54,
+     "trim_v13a_db": 0.82
+    },
+    "28": {
+     "lanes": [
+      "PLUCK",
+      "HITS",
+      "PAD"
+     ],
+     "class": "DO",
+     "model_sum": -19.54,
+     "trim_db": 1.05,
+     "trim_abs_db": 0.54,
+     "trim_v13a_db": 0.82
+    },
+    "44": {
+     "lanes": [
+      "PLUCK",
+      "HITS",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -19.21,
+     "trim_db": 0.72,
+     "trim_abs_db": 0.21,
+     "trim_v13a_db": 0.49
+    },
+    "52": {
+     "lanes": [
+      "PLUCK",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -19.54,
+     "trim_db": 1.05,
+     "trim_abs_db": 0.54,
+     "trim_v13a_db": 0.82
+    },
+    "56": {
+     "lanes": [
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -20.26,
+     "trim_db": 1.78,
+     "trim_abs_db": 1.26,
+     "trim_v13a_db": 1.55
+    },
+    "15": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "HITS"
+     ],
+     "class": "DBO",
+     "model_sum": -18.48,
+     "trim_db": -0.0,
+     "trim_abs_db": -0.52,
+     "trim_v13a_db": -0.0
+    },
+    "23": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "PAD"
+     ],
+     "class": "DBO",
+     "model_sum": -18.78,
+     "trim_db": 0.29,
+     "trim_abs_db": -0.22,
+     "trim_v13a_db": 0.29
+    },
+    "39": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.48,
+     "trim_db": -0.0,
+     "trim_abs_db": -0.52,
+     "trim_v13a_db": -0.0
+    },
+    "27": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "HITS",
+      "PAD"
+     ],
+     "class": "DBO",
+     "model_sum": -18.31,
+     "trim_db": -0.18,
+     "trim_abs_db": -0.69,
+     "trim_v13a_db": -0.18
+    },
+    "43": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "HITS",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.04,
+     "trim_db": -0.44,
+     "trim_abs_db": -0.96,
+     "trim_v13a_db": -0.44
+    },
+    "51": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.31,
+     "trim_db": -0.18,
+     "trim_abs_db": -0.69,
+     "trim_v13a_db": -0.18
+    },
+    "29": {
+     "lanes": [
+      "BASS",
+      "PLUCK",
+      "HITS",
+      "PAD"
+     ],
+     "class": "DBO",
+     "model_sum": -18.31,
+     "trim_db": -0.18,
+     "trim_abs_db": -0.69,
+     "trim_v13a_db": -0.18
+    },
+    "45": {
+     "lanes": [
+      "BASS",
+      "PLUCK",
+      "HITS",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.04,
+     "trim_db": -0.44,
+     "trim_abs_db": -0.96,
+     "trim_v13a_db": -0.44
+    },
+    "53": {
+     "lanes": [
+      "BASS",
+      "PLUCK",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.31,
+     "trim_db": -0.18,
+     "trim_abs_db": -0.69,
+     "trim_v13a_db": -0.18
+    },
+    "57": {
+     "lanes": [
+      "BASS",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.87,
+     "trim_db": 0.39,
+     "trim_abs_db": -0.13,
+     "trim_v13a_db": 0.39
+    },
+    "30": {
+     "lanes": [
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "PAD"
+     ],
+     "class": "DO",
+     "model_sum": -19.53,
+     "trim_db": 1.05,
+     "trim_abs_db": 0.53,
+     "trim_v13a_db": 0.82
+    },
+    "46": {
+     "lanes": [
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -19.21,
+     "trim_db": 0.72,
+     "trim_abs_db": 0.21,
+     "trim_v13a_db": 0.49
+    },
+    "54": {
+     "lanes": [
+      "STAB",
+      "PLUCK",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -19.53,
+     "trim_db": 1.05,
+     "trim_abs_db": 0.53,
+     "trim_v13a_db": 0.82
+    },
+    "58": {
+     "lanes": [
+      "STAB",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -19.01,
+     "trim_db": 0.52,
+     "trim_abs_db": 0.01,
+     "trim_v13a_db": 0.29
+    },
+    "60": {
+     "lanes": [
+      "PLUCK",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -19.01,
+     "trim_db": 0.52,
+     "trim_abs_db": 0.01,
+     "trim_v13a_db": 0.29
+    },
+    "31": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "PAD"
+     ],
+     "class": "DBO",
+     "model_sum": -18.3,
+     "trim_db": -0.18,
+     "trim_abs_db": -0.7,
+     "trim_v13a_db": -0.18
+    },
+    "47": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.04,
+     "trim_db": -0.45,
+     "trim_abs_db": -0.96,
+     "trim_v13a_db": -0.45
+    },
+    "55": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -18.3,
+     "trim_db": -0.18,
+     "trim_abs_db": -0.7,
+     "trim_v13a_db": -0.18
+    },
+    "59": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -17.88,
+     "trim_db": -0.61,
+     "trim_abs_db": -1.12,
+     "trim_v13a_db": -0.61
+    },
+    "61": {
+     "lanes": [
+      "BASS",
+      "PLUCK",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -17.88,
+     "trim_db": -0.61,
+     "trim_abs_db": -1.12,
+     "trim_v13a_db": -0.61
+    },
+    "62": {
+     "lanes": [
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DOV",
+     "model_sum": -19.0,
+     "trim_db": 0.52,
+     "trim_abs_db": 0.0,
+     "trim_v13a_db": 0.29
+    },
+    "63": {
+     "lanes": [
+      "BASS",
+      "STAB",
+      "PLUCK",
+      "HITS",
+      "PAD",
+      "VOX"
+     ],
+     "class": "DBOV",
+     "model_sum": -17.88,
+     "trim_db": -0.61,
+     "trim_abs_db": -1.12,
+     "trim_v13a_db": -0.61
+    }
+   }
+  }
+ }
+}
