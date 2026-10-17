@@ -75,6 +75,10 @@ private:
     Voice* allocate (int part) noexcept;
     float readSinc (const std::vector<float>& src, double index) const noexcept;
     void readVoice (Voice& v, float& l, float& r) noexcept;
+    // True when a user slot owns this note (playing, or still loading).
+    bool playUserSlot (int part, int drumVoice, int midiNote, int velocity, float end16,
+                       const PresetBank& bank, const EngineParams& params,
+                       Take& take, float& drumKeep) noexcept;
 
     double sr = 48000.0;
     int serial = 1;

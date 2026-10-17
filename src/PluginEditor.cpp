@@ -634,12 +634,13 @@ struct IconButton : QuietButton
     }
 };
 
-struct LaneRow : Component
+struct LaneRow : Component, FileDragAndDropTarget
 {
     RollaProcessor* proc = nullptr;
     int part = 0;
     bool selected = false;
     bool hovered = false;
+    bool hot = false;
     bool sampleMissing = false;
     std::function<void (int)> onSelect;
     IconButton mute { IconButton::mute, "Mute" };
@@ -708,7 +709,7 @@ struct LaneRow : Component
             g.setColour (col (kSel));
             g.fillRect (b);
         }
-        else if (hovered)
+        else if (hovered || hot)
         {
             g.setColour (col (kHov));
             g.fillRect (b);
@@ -751,6 +752,42 @@ struct LaneRow : Component
         {
             g.drawText (name, 32, 12, 72, 16, Justification::centredLeft, false);
         }
+
+        if (hot)
+        {
+            g.setColour (col (kInk));
+            g.drawRect (b.reduced (0.5f), 1.f);
+        }
+    }
+
+    bool isInterestedInFileDrag (const StringArray& files) override
+    {
+        // The drums lane's drops land on the 909 voice pads, which have their own slots.
+        return part >= Bass && part <= Vox && files.size() > 0 && audioFile (files[0]);
+    }
+
+    void fileDragEnter (const StringArray&, int, int) override
+    {
+        hot = true;
+        repaint();
+    }
+
+    void fileDragExit (const StringArray&) override
+    {
+        hot = false;
+        repaint();
+    }
+
+    void filesDropped (const StringArray& files, int, int) override
+    {
+        hot = false;
+        const int slot = userSlotForPart (part);
+        if (proc != nullptr && slot >= 0 && ! files.isEmpty())
+        {
+            String err;
+            proc->loadUserSlot (slot, File (files[0]), err);
+        }
+        repaint();
     }
 
     void resized() override
@@ -1308,10 +1345,29 @@ struct SampleSlot : Component, FileDragAndDropTarget
         setWantsKeyboardFocus (true);
     }
 
+    int slotIndex() const
+    {
+        return voice < 0 ? SlotVox : userSlotForDrum (voice);
+    }
+
+    bool slotActive() const
+    {
+        const int slot = slotIndex();
+        return proc != nullptr && slot >= 0 && proc->userSlotMode (slot) != 0;
+    }
+
+    String slotLabel() const
+    {
+        if (! slotActive())
+            return {};
+        return File (proc->userSlotFile (slotIndex())).getFileName();
+    }
+
     void paint (Graphics& g) override
     {
         const bool vox = voice < 0;
-        const bool loaded = proc != nullptr && (vox ? proc->hasVoxSample() : proc->drumVoiceLoaded (voice));
+        const bool fromSlot = slotActive();
+        const bool loaded = fromSlot || (proc != nullptr && (vox ? proc->hasVoxSample() : proc->drumVoiceLoaded (voice)));
         auto b = getLocalBounds().toFloat();
         const float rad = vox ? 8.f : 6.f;
         g.setColour (loaded ? col (kPaper) : col (kCard));
@@ -1344,7 +1400,7 @@ struct SampleSlot : Component, FileDragAndDropTarget
                 text.removeFromRight (32.f);
             g.setColour (col (kInk));
             g.setFont (lf->monoMed.withHeight (12.f));
-            g.drawFittedText (loaded ? proc->getVoxSampleName() : "drop",
+            g.drawFittedText (fromSlot ? slotLabel() : (loaded ? proc->getVoxSampleName() : "drop"),
                               text.removeFromTop (b.getHeight() * 0.55f).toNearestInt(),
                               Justification::centredLeft, 1);
             g.setColour (col (kInk2));
@@ -1366,7 +1422,8 @@ struct SampleSlot : Component, FileDragAndDropTarget
             g.drawText (loaded ? "YOUR WAV" : "909", top, Justification::centredLeft, false);
             g.setFont (lf->mono.withHeight (10.f));
             g.setColour (col (kInk2));
-            auto name = loaded ? proc->getDrumSampleName (voice) : String (panelVoiceCode (voice));
+            auto name = fromSlot ? slotLabel()
+                                 : (loaded ? proc->getDrumSampleName (voice) : String (panelVoiceCode (voice)));
             if (name.length() > 12)
                 name = name.substring (0, 11) + utf8 ("…");
             g.drawText (name, b.reduced (6.f, 1.f).removeFromBottom (b.getHeight() * 0.5f),
@@ -1380,7 +1437,9 @@ struct SampleSlot : Component, FileDragAndDropTarget
         if (proc == nullptr)
             return;
         const bool vox = voice < 0;
-        const bool loaded = vox ? proc->hasVoxSample() : proc->drumVoiceLoaded (voice);
+        const int slot = slotIndex();
+        const bool fromSlot = slotActive();
+        const bool loaded = fromSlot || (vox ? proc->hasVoxSample() : proc->drumVoiceLoaded (voice));
         if (! loaded)
             return;
         if (vox)
@@ -1388,8 +1447,11 @@ struct SampleSlot : Component, FileDragAndDropTarget
             auto eject = getLocalBounds().removeFromRight (36);
             if (! eject.contains (e.getPosition()) && ! e.mods.isPopupMenu())
                 return;
-            proc->clearVoxSample();
         }
+        if (fromSlot)
+            proc->clearUserSlot (slot);
+        else if (vox)
+            proc->clearVoxSample();
         else
             proc->clearDrumVoice (voice);
         if (onLoaded)
@@ -1414,10 +1476,9 @@ struct SampleSlot : Component, FileDragAndDropTarget
             return;
         }
         String err;
-        const bool ok = voice < 0 ? proc->loadVoxFile (File (files[0]), err)
-                                  : proc->loadDrumFile (voice, File (files[0]), err);
-        if (ok && voice >= 0)
-            proc->markEdited (Drums);
+        const int slot = slotIndex();
+        if (slot >= 0)
+            proc->loadUserSlot (slot, File (files[0]), err);
         if (onLoaded)
             onLoaded();
         repaint();

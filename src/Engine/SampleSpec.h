@@ -20,9 +20,11 @@ enum class SampleMode : int
 struct SampleLoop
 {
     bool on = false;
-    float start = 0.f; // seconds into the file. 0 = beginning
-    float end = 0.f;   // seconds. 0 = file end
-    float xfade = 0.f; // seconds of equal-power crossfade
+    // Seconds, unless any of the three is above 32: those are file-rate frames
+    // (PRESET_SPEC). end 0 means the file end.
+    float start = 0.f;
+    float end = 0.f;
+    float xfade = 0.f;
 };
 
 // One multisample zone. lo/hi/root are MIDI note numbers (C4 = 60).
@@ -165,11 +167,18 @@ inline SampleChoice chooseSample (const SampleSpec& spec, int midiNote, int pick
     }
     if (spec.poolCount > 0)
     {
-        const int i = (pick % spec.poolCount + spec.poolCount) % spec.poolCount;
-        c.file = spec.pool[i];
-        if (spec.poolRoot[i] > 0)
-            c.root = spec.poolRoot[i];
-        return c;
+        // Pick 0 is the primary file. Later picks rotate the shuffle pool.
+        const bool primary = spec.file[0] != 0;
+        const int span = spec.poolCount + (primary ? 1 : 0);
+        const int i = (pick % span + span) % span;
+        if (! primary || i > 0)
+        {
+            const int poolIndex = primary ? i - 1 : i;
+            c.file = spec.pool[poolIndex];
+            if (spec.poolRoot[poolIndex] > 0)
+                c.root = spec.poolRoot[poolIndex];
+            return c;
+        }
     }
     c.file = spec.file;
     return c;

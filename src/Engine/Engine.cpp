@@ -1,6 +1,7 @@
 #include "Engine.h"
 
 #include "../DspUtil.h"
+#include "../Sampler/UserSlots.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
 
@@ -1286,6 +1287,12 @@ void Engine::process (const Groove& groove,
                 auto startSample = [&] (int voice, int vel) -> bool
                 {
                     if (vel <= 0 || voice < 0 || voice >= NumDrumVoices)
+                        return false;
+                    // An active user slot owns the voice, including while it is
+                    // loading or missing. The dropped WAV and the preset sample wait.
+                    const int slot = userSlotForDrum (voice);
+                    if (slot >= 0 && params.userSlots != nullptr
+                        && params.userSlots->slots[slot].mode != 0)
                         return false;
                     auto& s = samples[voice];
                     if (! s.loaded.load (std::memory_order_acquire))

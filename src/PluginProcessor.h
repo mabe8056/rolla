@@ -2,6 +2,7 @@
 
 #include "Engine/Engine.h"
 #include "Engine/SampleLibrary.h"
+#include "Sampler/UserSlots.h"
 #include "Generator/Generator.h"
 #include "Generator/Pattern.h"
 #include "Generator/Presets.h"
@@ -85,6 +86,18 @@ public:
     juce::File samplesRoot() const;
     SampleLibrary& sampleLibrary() noexcept { return library; }
 
+    // 14 session slots (6 lanes + 8 drum voices). Paths persist; audio does not.
+    bool loadUserSlot (int slot, const juce::File& file, juce::String& error);
+    void clearUserSlot (int slot);
+    void setUserSlotMode (int slot, int mode);
+    int userSlotMode (int slot) const noexcept;
+    bool userSlotWarning (int slot) const noexcept;
+    juce::String userSlotFile (int slot) const;
+    int userSlotRoot (int slot) const;
+    void setUserSlotRoot (int slot, int midiNote, float cents);
+    juce::String userSlotError (int slot) const;
+    UserSlots& userSlots() noexcept { return slots; }
+
     // Editor size in this instance. 0 until a project state or the editor sets it.
     void setEditorSize (int width, int height) noexcept;
     int getEditorWidth() const noexcept { return editorWidth.load (std::memory_order_relaxed); }
@@ -127,6 +140,7 @@ private:
     mutable std::mutex sampleMu;
 
     SampleLibrary library;
+    UserSlots slots;
     std::atomic<int> samplePick[NumParts] {};
 
     std::atomic<int> editorWidth { 0 };

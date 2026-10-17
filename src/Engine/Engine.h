@@ -14,6 +14,8 @@
 namespace rolla
 {
 
+struct UserSlotView;
+
 struct EngineParams
 {
     float tone[NumParts] {};
@@ -37,6 +39,8 @@ struct EngineParams
     int dialect = UkMin;
     const PresetBank* presets = nullptr;
     const SampleLibrary* library = nullptr;
+    // Published by UserSlots. Null keeps the preset sample block only.
+    const UserSlotView* userSlots = nullptr;
     int samplePick[NumParts] {};
 };
 
