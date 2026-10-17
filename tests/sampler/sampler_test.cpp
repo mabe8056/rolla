@@ -376,6 +376,81 @@ int main()
     }
     expect (quiet < energy * 0.05, "SAMPLE mode replaces the synth instead of stacking it");
 
+    {
+        const auto jsonFile = juce::File (__FILE__)
+                                  .getParentDirectory().getParentDirectory().getParentDirectory()
+                                  .getChildFile ("resources/presets.json");
+        const auto text = jsonFile.loadFileAsString();
+        rolla::PresetBank factory;
+        expect (rolla::loadPresetsFromJson (factory, text.toRawUTF8(), (int) text.getNumBytesAsUTF8()),
+                "factory presets parse");
+        expect (std::string (factory.bass[0].id) == "pluck", "bass order");
+        expect (factory.bass[0].sample.mode == rolla::SampleMode::Layer, "pluck is layered");
+        expect (std::string (factory.bass[0].sample.file) == "BASS/THMAG_Bass_One_Shot_4_Fm.wav",
+                "pluck uses the manifest file");
+        expect (factory.bass[1].sample.loop.on && factory.bass[1].sample.loop.start > 32.f,
+                "round loop is stored in frames");
+        expect (factory.stab[0].sample.mode == rolla::SampleMode::Sample, "dub stab is a sample");
+        expect (factory.drums[0].sample.mode == rolla::SampleMode::Sample, "tight kit is sampled");
+        expect (std::string (factory.drums[0].sample.voiceFile[rolla::Kick]) == "DRUMS/KICK/CD_Kick_06.wav",
+                "tight kick file");
+        expect (factory.drums[1].sample.voiceFile[rolla::Ride][0] != 0, "room kit has a ride");
+        expect (factory.drums[2].sample.mode == rolla::SampleMode::Synth, "dry kit keeps the synth");
+
+        rolla::SampleLibrary missingLib;
+        missingLib.setRoot (rootDir.getChildFile ("empty-root"));
+        missingLib.watch (factory);
+        expect (waitUntil ([&] { return missingLib.missing (factory.bass[0].sample.file); }),
+                "absent factory file is flagged");
+        rolla::Sampler missingSampler;
+        missingSampler.prepare (48000.0);
+        rolla::EngineParams missingParams;
+        missingParams.presets = &factory;
+        missingParams.library = &missingLib;
+        const auto kept = missingSampler.take (rolla::Bass, 41, 100, 4.f, factory, missingParams);
+        expect (kept.kind == 0 && std::fabs (kept.synthGain - 1.f) < 1.0e-6f,
+                "missing factory file keeps the synth");
+    }
+
+    {
+        std::vector<float> silence (256, 0.f);
+        rolla::Engine drumEngine;
+        drumEngine.prepare (48000.0, 128);
+        drumEngine.loadDrumSample (rolla::Kick, silence.data(), (int) silence.size(), 48000.0);
+        rolla::Groove kick;
+        kick.bars = 2;
+        kick.drums.vel[rolla::Kick][0] = 110;
+        rolla::EngineParams drumParams;
+        drumParams.presets = &bank;
+        drumParams.bars = 2;
+        for (int i = 0; i < rolla::NumDrumVoices; ++i)
+            drumParams.drumDecay[i] = 0.5f;
+        auto measure = [&] (rolla::Engine& eng)
+        {
+            rolla::Transport play;
+            play.playing = true;
+            play.bpm = 130.0;
+            play.sampleRate = 48000.0;
+            double sum = 0.0;
+            for (int block = 0; block < 20; ++block)
+            {
+                float left[128] {}, right[128] {};
+                juce::MidiBuffer midi;
+                eng.process (kick, drumParams, play, left, right, nullptr, nullptr, 128, midi, false);
+                for (float s : left)
+                    sum += (double) s * (double) s;
+                play.ppqStart += 128.0 * 130.0 / 60.0 / 48000.0;
+            }
+            return sum;
+        };
+        const double dropped = measure (drumEngine);
+        expect (dropped < 1.0e-4, "a dropped silent kick replaces the synth");
+        drumEngine.reset();
+        drumParams.userSlots = slots.published();
+        const double slotted = measure (drumEngine);
+        expect (slotted > 1.0e-4, "user kick slot wins over the dropped wav");
+    }
+
     outside.deleteFile();
     tooLong.deleteFile();
     rootDir.deleteRecursively();
