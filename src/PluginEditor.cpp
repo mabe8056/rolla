@@ -1431,7 +1431,7 @@ struct SampleSlot : Component, FileDragAndDropTarget
             g.setFont (tracked (lf->instBold.withPointHeight (Theme::typeCaption), 0.04f));
             g.setColour (col (kInk));
             auto top = b.reduced (6.f, 1.f).removeFromTop (b.getHeight() * 0.5f);
-            g.drawText (loaded ? "YOUR WAV" : "909", top, Justification::centredLeft, false);
+            g.drawText (loaded ? "YOUR WAV" : "PACK", top, Justification::centredLeft, false);
             g.setFont (lf->mono.withPointHeight (Theme::typeCaption));
             g.setColour (col (kInk2));
             auto name = fromSlot ? slotLabel()

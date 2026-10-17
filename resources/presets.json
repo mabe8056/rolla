@@ -1,7 +1,7 @@
 {
   "schemaVersion": 3,
   "version": 3,
-  "notes": "Schema v3. Every default preset references one of his samples. Melodic lanes are SAMPLE. LAYER is opt-in and there is no pure-synth factory preset. Drum kits sample every voice from DRUMS/{KICK,SNARE,CLAP,RIM,CH,OH,RIDE,PERC}. A missing file plays another sample from that lane or voice pool. 909 SYNTH is an explicit alternate and is never auto-selected. Do not commit audio.",
+  "notes": "Schema v3. Every default preset references one of his samples. Melodic lanes are SAMPLE. LAYER is opt-in and there is no pure-synth factory preset. Every drum voice comes from DRUMS/{KICK,SNARE,CLAP,RIM,CH,OH,RIDE,PERC}. A missing or uncovered hit plays another file from that pack. There is no synth drum kit. Do not commit audio.",
   "parts": {
     "bass": {
       "presets": [
@@ -6273,53 +6273,6 @@
           "styles": [
             "gaskin"
           ]
-        },
-        {
-          "id": "synth",
-          "name": "909 SYNTH",
-          "kickHz": 54,
-          "kickDecayMs": 220,
-          "kickClick": 0.55,
-          "kickSweep": 1.9,
-          "snareTone": 0.7,
-          "snareSnap": 0.75,
-          "snareDecayMs": 120,
-          "clapDecayMs": 140,
-          "hatDecayMs": 30,
-          "hatOpenDecayMs": 200,
-          "hatHpHz": 7200,
-          "tomDecayMs": 200,
-          "room": 0.0,
-          "drive": 0.22,
-          "trimDb": 0,
-          "sample": {
-            "mode": "SYNTH",
-            "file": "",
-            "root": "C3",
-            "start": 0.0,
-            "reverse": false,
-            "slice": false,
-            "loop": {
-              "on": false,
-              "start": 0.0,
-              "end": 0.0,
-              "xfade": 0.0
-            },
-            "layerMix": 0.5,
-            "pool": [],
-            "voices": {
-              "kick": "",
-              "snare": "",
-              "clap": "",
-              "rim": "",
-              "tomLow": "",
-              "tomMid": "",
-              "hatC": "",
-              "hatO": "",
-              "ride": "",
-              "perc": ""
-            }
-          }
         }
       ]
     }

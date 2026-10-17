@@ -397,8 +397,9 @@ int main()
         expect (std::string (factory.drums[0].sample.voiceFile[rolla::Kick]) == "DRUMS/KICK/CD_Kick_06.wav",
                 "tight kick file");
         expect (factory.drums[1].sample.voiceFile[rolla::Ride][0] != 0, "room kit has a ride");
-        expect (factory.drums[2].sample.mode == rolla::SampleMode::Synth, "909 synth kit keeps the circuit model");
-        expect (std::string (factory.drums[2].name) == "909 SYNTH", "circuit kit is named 909 SYNTH");
+        expect (factory.count[rolla::Drums] == 2, "factory drums are the two sample kits");
+        for (int i = 0; i < factory.count[rolla::Drums]; ++i)
+            expect (factory.drums[i].sample.mode == rolla::SampleMode::Sample, "no synth drum kit");
         expect (factory.drums[0].voicePool[rolla::Kick].size() >= 20, "kick pool");
         expect (factory.drums[0].voicePool[rolla::Snare].size() >= 10, "snare pool");
         expect (factory.drums[0].voicePool[rolla::Clap].size() >= 16, "clap pool");
@@ -434,17 +435,13 @@ int main()
         expect (varied, "roll preset pick changes with the seed");
         expect (rolla::pickPresetForRoll (factory, rolla::Drums, rolla::Gaskin, 3) == 1,
                 "gaskin roll stays on the sample kit");
-        int synthKit = -1;
-        for (int i = 0; i < factory.count[rolla::Drums]; ++i)
-            if (factory.drums[i].sample.mode == rolla::SampleMode::Synth)
-                synthKit = i;
-        expect (synthKit >= 0, "909 stays in the bank as an alternate");
-        bool rolled909 = false;
         for (int dialect = 0; dialect < rolla::NumDialects; ++dialect)
             for (std::uint32_t seed = 1; seed < 32; ++seed)
-                if (rolla::pickPresetForRoll (factory, rolla::Drums, dialect, seed) == synthKit)
-                    rolled909 = true;
-        expect (! rolled909, "roll never auto-selects 909 SYNTH");
+            {
+                const int picked = rolla::pickPresetForRoll (factory, rolla::Drums, dialect, seed);
+                expect (picked >= 0 && factory.drums[picked].sample.mode == rolla::SampleMode::Sample,
+                        "roll stays on a sample kit");
+            }
 
         rolla::SampleLibrary missingLib;
         missingLib.setRoot (rootDir.getChildFile ("empty-root"));
@@ -516,6 +513,49 @@ int main()
             kickAlt = std::max (kickAlt, std::fabs (laneL[rolla::Drums]));
         }
         expect (kickAlt > 0.01f, "the substitute kick is audible");
+
+        swap.drums[0].voicePool[rolla::Kick].clear();
+        swap.drums[0].voicePool[rolla::Kick].push_back ("DRUMS/KICK/gone.wav");
+        swap.drums[0].voicePool[rolla::Perc].clear();
+        swap.drums[0].voicePool[rolla::Perc].push_back ("DRUMS/KICK/alt.wav");
+        altSampler.reset();
+        expect (altSampler.takeDrum (rolla::Kick, 110, swap, altParams) < 0.001f,
+                "a missing kick folder does not play the circuit model");
+        float packPeak = 0.f;
+        for (int i = 0; i < 2000; ++i)
+        {
+            float laneL[rolla::NumParts] {};
+            float laneR[rolla::NumParts] {};
+            altSampler.render (laneL, laneR, 0.f, 0.f, false);
+            packPeak = std::max (packPeak, std::fabs (laneL[rolla::Drums]));
+        }
+        expect (packPeak > 0.01f, "a missing kick plays a perc sample from the pack");
+
+        rolla::PresetBank packBank;
+        rolla::loadDefaultPresets (packBank);
+        packBank.count[rolla::Bass] = 1;
+        packBank.bass[0].sample.mode = rolla::SampleMode::Sample;
+        std::snprintf (packBank.bass[0].sample.file, sizeof packBank.bass[0].sample.file, "BASS/gone.wav");
+        packBank.count[rolla::Drums] = 1;
+        packBank.drums[0].sample.mode = rolla::SampleMode::Sample;
+        packBank.drums[0].voicePool[rolla::Perc].push_back ("DRUMS/KICK/alt.wav");
+        rolla::Sampler packSampler;
+        packSampler.prepare (48000.0);
+        rolla::EngineParams packParams;
+        packParams.presets = &packBank;
+        packParams.library = &altLib;
+        const auto packed = packSampler.take (rolla::Bass, 48, 110, 4.f, packBank, packParams);
+        expect (packed.kind == 1 && std::fabs (packed.synthGain) < 1.0e-6f,
+                "a lane with no sample plays the drum pack, not the synth");
+        float lanePack = 0.f;
+        for (int i = 0; i < 2000; ++i)
+        {
+            float laneL[rolla::NumParts] {};
+            float laneR[rolla::NumParts] {};
+            packSampler.render (laneL, laneR, 0.f, 0.f, false);
+            lanePack = std::max (lanePack, std::fabs (laneL[rolla::Bass]));
+        }
+        expect (lanePack > 0.01f, "the drum-pack substitute is audible on the lane");
     }
 
     {

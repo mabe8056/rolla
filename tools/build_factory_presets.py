@@ -3,8 +3,8 @@
 
 Hero presets stay first (dialect defaults). Each melodic file then gets its
 own SAMPLE preset. There is no pure-synth preset in a melodic lane.
-Drum kits give every voice a pool from its manifest folder. 909 SYNTH stays
-as an explicit alternate and is not part of a default bank.
+Drum kits give every voice a pool from its manifest folder. There is no
+synth drum kit. A missing hit uses another file from the pack.
 """
 
 import copy
@@ -201,27 +201,18 @@ def main():
             kept.append(preset)
         parts[lane]["presets"] = kept
 
+    sample_kits = []
     for preset in parts["drums"]["presets"]:
         ident = preset.get("id")
         if ident in ("dry", "synth") or preset.get("name") in ("909 Dry", "909 SYNTH"):
-            preset["id"] = "synth"
-            preset["name"] = "909 SYNTH"
-            preset.pop("styles", None)
-            sample = preset.setdefault("sample", {})
-            sample["mode"] = "SYNTH"
-            sample["file"] = ""
-            sample["pool"] = []
-            sample.pop("voicePools", None)
-            voices = sample.setdefault("voices", {})
-            for key in ("kick", "snare", "clap", "rim", "tomLow", "tomMid", "hatC", "hatO", "ride", "perc"):
-                voices[key] = ""
             continue
+        sample_kits.append(preset)
         styles = HERO_STYLES.get(("drums", ident))
         if styles:
             preset["styles"] = styles
         sample = preset.setdefault("sample", {})
-        # His kit is the voice. A missing file tries another sample in the
-        # pool. The circuit model plays only on the named 909 SYNTH kit.
+        # His kit is the voice. A missing file tries the rest of this folder,
+        # then PERC, OH and RIDE. Nothing in this bank is a synth drum.
         sample["mode"] = "SAMPLE"
         sample["layerMix"] = 1.0
         voices = sample.setdefault("voices", {})
@@ -238,14 +229,15 @@ def main():
                 voices[key] = pool[0]
                 pools[key] = pool
         sample["voicePools"] = pools
+    parts["drums"]["presets"] = sample_kits
 
     doc["notes"] = (
         "Schema v3. Every default preset references one of his samples. "
         "Melodic lanes are SAMPLE. LAYER is opt-in and there is no pure-synth "
-        "factory preset. Drum kits sample every voice from "
-        "DRUMS/{KICK,SNARE,CLAP,RIM,CH,OH,RIDE,PERC}. A missing file plays "
-        "another sample from that lane or voice pool. 909 SYNTH is an "
-        "explicit alternate and is never auto-selected. Do not commit audio."
+        "factory preset. Every drum voice comes from "
+        "DRUMS/{KICK,SNARE,CLAP,RIM,CH,OH,RIDE,PERC}. A missing or uncovered "
+        "hit plays another file from that pack. There is no synth drum kit. "
+        "Do not commit audio."
     )
 
     with open(PRESETS, "w", encoding="utf-8") as handle:

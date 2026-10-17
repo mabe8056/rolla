@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail if a factory preset names a file outside SAMPLE_MANIFEST.json, or if
 any manifest file is unused. Every default preset must reference a sample.
-909 SYNTH may exist only as an explicit drum alternate.
+A synth drum kit is a failure.
 """
 
 import json
@@ -81,7 +81,6 @@ def main():
                 print(f"FAIL {lane} preset {preset.get('id')} lacks a sample reference ({mode})")
         print(f"{lane} presets {len(parts[lane]['presets'])} synth {synths}")
 
-    synth_kits = []
     sampled = 0
     default_kit = parts["drums"]["presets"][0]
     default_mode = str((default_kit.get("sample") or {}).get("mode", "SYNTH")).upper()
@@ -91,15 +90,10 @@ def main():
     for preset in parts["drums"]["presets"]:
         sample = preset.get("sample") or {}
         mode = str(sample.get("mode", "SYNTH")).upper()
-        if mode == "SYNTH":
-            synth_kits.append(preset.get("name"))
-            if preset.get("name") != "909 SYNTH":
-                failed = True
-                print(f"FAIL drum synth kit is named {preset.get('name')!r}")
-            continue
         if mode != "SAMPLE":
             failed = True
-            print(f"FAIL kit {preset.get('id')} mode {mode} is not SAMPLE")
+            print(f"FAIL kit {preset.get('id')} is {mode}; factory drums are samples")
+            continue
         sampled += 1
         pools = sample.get("voicePools") or {}
         for voice in DRUM_VOICES:
@@ -108,10 +102,12 @@ def main():
             if not pool or not primary:
                 failed = True
                 print(f"FAIL kit {preset.get('id')} voice {voice} has no sample pool")
-    if not synth_kits:
-        failed = True
-        print("FAIL drums are missing the 909 SYNTH kit")
-    print(f"drums sample kits {sampled} synth kits {synth_kits}")
+        for voice in ("tomLow", "tomMid"):
+            pool = pools.get(voice) or []
+            if not pool:
+                failed = True
+                print(f"FAIL kit {preset.get('id')} {voice} is not covered by the perc pool")
+    print(f"drums sample kits {sampled}")
 
     if failed:
         return 1

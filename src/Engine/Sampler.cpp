@@ -534,8 +534,42 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     const int sliceIndex = sliceCursor[part]++;
     const auto hit = resolveLane (bank, params, part, midiNote, sliceIndex);
     const SampleSpec& played = hit.spec != nullptr ? *hit.spec : spec;
-    const SampleChoice choice = hit.choice;
+    SampleChoice choice = hit.choice;
     const SampleAudio* audio = hit.audio;
+    bool fromPack = false;
+    if ((audio == nullptr || audio->frames < 8) && ! hit.pending)
+    {
+        const int drumPreset = presetOf (params, Drums);
+        const auto& drum = bank.drums[drumPreset];
+        if (drum.sample.mode != SampleMode::Synth)
+        {
+            static constexpr int kPack[] = { Perc, HatO, Ride, HatC, Kick, Snare, Clap, Rim };
+            int pick = params.samplePick[part];
+            if (pick < 0)
+                pick = 0;
+            for (int alt : kPack)
+            {
+                const auto& pool = drum.voicePool[alt];
+                if (pool.empty())
+                    continue;
+                const int n = (int) pool.size();
+                for (int i = 0; i < n; ++i)
+                {
+                    const SampleAudio* got = nullptr;
+                    if (probeFile (params.library, pool[(size_t) ((pick + i) % n)].c_str(), got) == FileState::Ready)
+                    {
+                        audio = got;
+                        choice.file = pool[(size_t) ((pick + i) % n)].c_str();
+                        choice.root = played.root > 0 ? played.root : 60;
+                        fromPack = true;
+                        break;
+                    }
+                }
+                if (audio != nullptr)
+                    break;
+            }
+        }
+    }
     if (audio == nullptr || audio->frames < 8)
     {
         result.kind = 1;
@@ -580,14 +614,14 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     fresh.ladder.reset();
     fresh.env.start (amp.a, amp.d, amp.s, amp.r, srF);
 
-    double startFrame = std::clamp ((double) played.start, 0.0, 16.0) * audio->rate;
+    double startFrame = fromPack ? 0.0 : std::clamp ((double) played.start, 0.0, 16.0) * audio->rate;
     if (choice.slice && audio->sliceCount > 1)
     {
         const int s = (choice.sliceIndex % audio->sliceCount + audio->sliceCount) % audio->sliceCount;
         startFrame = (double) audio->slices[s];
     }
     fresh.pos = startFrame;
-    fresh.loop = played.loop.on && part != Hits && part != Vox;
+    fresh.loop = ! fromPack && played.loop.on && part != Hits && part != Vox;
     const auto region = makeLoopRegion (played.loop, audio->rate, audio->frames, startFrame);
     fresh.loopA = region.a;
     fresh.loopB = region.b;
@@ -624,53 +658,74 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
     if (params.library == nullptr)
         return 0.f;
 
-    const auto& pool = bank.drums[preset].voicePool[voice];
+    // Own folder first. A missing hit then comes from the rest of the pack
+    // (perc, open hat, ride, then the other folders). The circuit model is not a source.
+    const auto& drum = bank.drums[preset];
     const SampleAudio* audio = nullptr;
     bool pending = false;
-    auto consider = [&] (const char* file) noexcept
+    auto scanPool = [&] (const std::vector<std::string>& pool, int start, bool firstOnlyPending) noexcept
     {
+        if (pool.empty())
+            return;
+        const int n = (int) pool.size();
+        if (start < 0)
+            start = 0;
+        start %= n;
         const SampleAudio* got = nullptr;
-        const auto state = probeFile (params.library, file, got);
+        const auto state = probeFile (params.library, pool[(size_t) start].c_str(), got);
         if (state == FileState::Ready)
         {
             audio = got;
-            return true;
+            return;
         }
         if (state == FileState::Pending)
+        {
             pending = true;
-        return false;
+            if (firstOnlyPending)
+                return;
+        }
+        for (int i = 1; i < n && audio == nullptr; ++i)
+        {
+            const auto extra = probeFile (params.library, pool[(size_t) ((start + i) % n)].c_str(), got);
+            if (extra == FileState::Ready)
+                audio = got;
+            else if (extra == FileState::Pending)
+                pending = true;
+        }
     };
-    if (! pool.empty())
+
+    int shift = 0;
+    if (voice == TomMid)
+        shift = 1;
+    else if (voice == TomLow)
+        shift = 2;
+    int pick = params.samplePick[Drums];
+    if (pick < 0)
+        pick = 0;
+    const auto& own = drum.voicePool[voice];
+    if (! own.empty())
+        scanPool (own, pick + shift, true);
+    else
     {
-        int shift = 0;
-        if (voice == TomMid)
-            shift = 1;
-        else if (voice == TomLow)
-            shift = 2;
-        int pick = params.samplePick[Drums];
-        if (pick < 0)
-            pick = 0;
-        const int n = (int) pool.size();
-        const int start = (pick + shift) % n;
+        const char* file = spec.voiceFile[voice][0] != 0 ? spec.voiceFile[voice] : spec.file;
         const SampleAudio* got = nullptr;
-        const auto state = probeFile (params.library, pool[(size_t) start].c_str(), got);
+        const auto state = probeFile (params.library, file, got);
         if (state == FileState::Ready)
             audio = got;
         else if (state == FileState::Pending)
             pending = true;
-        else
+    }
+    if (audio == nullptr && ! pending)
+    {
+        // Crash, tom, shaker, noise, or a missing folder: PERC, then OH, then RIDE.
+        static constexpr int kPack[] = { Perc, HatO, Ride, HatC, Kick, Snare, Clap, Rim, TomLow, TomMid };
+        for (int alt : kPack)
         {
-            for (int i = 1; i < n && audio == nullptr; ++i)
-                consider (pool[(size_t) ((start + i) % n)].c_str());
+            if (alt == voice || audio != nullptr)
+                continue;
+            scanPool (drum.voicePool[alt], pick, false);
         }
     }
-    else
-    {
-        const char* file = spec.voiceFile[voice];
-        if (! consider (file) && ! pending)
-            consider (spec.file);
-    }
-    juce::ignoreUnused (pending);
     if (audio == nullptr || audio->frames < 8)
         return 0.f;
 

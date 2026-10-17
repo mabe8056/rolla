@@ -1372,7 +1372,10 @@ void Engine::process (const Groove& groove,
                     }
                     drumOn (drumMidiNote (voice), vel, midiHold (voice));
 
-                    float keep = 1.f;
+                    // Sample kits never feed the circuit model. A missing file is
+                    // another hit from the DRUMS pack, inside takeDrum.
+                    const bool circuitKit = dp.sample.mode == SampleMode::Synth;
+                    float keep = 0.f;
                     if (startSample (voice, vel, stepAcc))
                         keep = 0.f;
                     else if (DrumSampleSlot* slot = E.drums.sampleSlot())
@@ -1386,12 +1389,18 @@ void Engine::process (const Groove& groove,
                         req.folder = drumSampleFolder (voice);
                         req.key = drumVoiceKey (voice);
                         req.midiNote = drumMidiNote (voice);
-                        keep = slot->trigger (req);
+                        const float slotKeep = slot->trigger (req);
+                        if (circuitKit)
+                            keep = slotKeep;
+                        else if (slotKeep > 0.001f)
+                            sampler.takeDrum (voice, vel, bank, params);
                     }
+                    else if (circuitKit)
+                        keep = 1.f;
                     else
-                        keep = sampler.takeDrum (voice, vel, bank, params);
+                        sampler.takeDrum (voice, vel, bank, params);
 
-                    if (keep > 0.001f)
+                    if (circuitKit && keep > 0.001f)
                     {
                         DrumHit hit;
                         hit.voice = voice;
