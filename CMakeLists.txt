@@ -136,3 +136,33 @@ target_link_libraries(rolla-sample-check
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags
 )
+
+add_executable(rolla-ui-shot
+    src/UiSnapshot.cpp
+    src/PluginProcessor.cpp
+    src/PluginEditor.cpp
+    src/Engine/Engine.cpp
+    src/Engine/Sampler.cpp
+    src/Engine/SampleLibrary.cpp
+    src/Generator/Generator.cpp
+    src/Generator/Presets.cpp
+    src/Generator/MidiFile.cpp
+)
+
+target_compile_definitions(rolla-ui-shot
+    PRIVATE
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_DISPLAY_SPLASH_SCREEN=0
+        JUCE_REPORT_APP_USAGE=0
+)
+
+target_link_libraries(rolla-ui-shot
+    PRIVATE
+        RollaData
+        juce::juce_audio_utils
+        juce::juce_dsp
+        juce::juce_audio_formats
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags
+)
