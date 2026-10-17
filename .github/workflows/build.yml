@@ -276,10 +276,10 @@ jobs:
       - name: Validate profiles
         run: python3 tests/mix/validate_profiles.py
 
-      - name: Mute regression and section 5.1 renders
+      - name: UK MIN mute regression and loudness
         run: |
           set -euo pipefail
           ./build/rolla-mix-render --self-test
-          ./build/rolla-mix-render "$GITHUB_WORKSPACE/mix-renders"
+          ./build/rolla-mix-render --dialect UKMIN "$GITHUB_WORKSPACE/mix-renders"
           python3 -m pip install --user --break-system-packages numpy scipy soundfile pyloudnorm
-          python3 tests/mix/run_mix_checks.py "$GITHUB_WORKSPACE/mix-renders"
+          python3 tests/mix/run_mix_checks.py --style UKMIN --loudness "$GITHUB_WORKSPACE/mix-renders"
