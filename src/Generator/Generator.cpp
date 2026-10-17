@@ -1,5 +1,4 @@
 #include "Generator.h"
-#include "GenreVocab.h"
 
 #include <algorithm>
 #include <cmath>
@@ -46,199 +45,6 @@ int snapScale (int dialect, int semi) noexcept
             return semi + d;
     }
     return 0;
-}
-
-void noteBreak (char* breaks, int breaksN, const char* id);
-
-bool tagHas (const char* cells, const char* id) noexcept
-{
-    if (cells == nullptr || id == nullptr || id[0] == 0)
-        return false;
-    const std::size_t n = std::strlen (id);
-    for (const char* p = cells; (p = std::strstr (p, id)) != nullptr; p += n)
-    {
-        const bool left = p == cells || p[-1] == ',';
-        const bool right = p[n] == 0 || p[n] == ',';
-        if (left && right)
-            return true;
-    }
-    return false;
-}
-
-void tagAdd (char* cells, int cellsN, const char* id)
-{
-    if (cells == nullptr || cellsN <= 1 || id == nullptr || id[0] == 0 || tagHas (cells, id))
-        return;
-    const int len = (int) std::strlen (cells);
-    const int need = (int) std::strlen (id) + (len ? 1 : 0);
-    if (len + need + 1 >= cellsN)
-        return;
-    if (len)
-        cells[len] = ',';
-    std::memcpy (cells + len + (len ? 1 : 0), id, std::strlen (id) + 1);
-}
-
-float laneSwing (int part, int dialect) noexcept
-{
-    float amt = dialect == Gaskin ? 0.08f : dialect == Long ? 0.055f : dialect == Pop ? 0.03f : 0.045f;
-    if (part == Pluck)
-        amt += 0.03f;
-    else if (part == Vox)
-        amt += 0.02f;
-    else if (part == Stab)
-        amt += 0.015f;
-    return amt;
-}
-
-int velCurve (int slot, int accent) noexcept
-{
-    if (accent > 0 && accent < 55)
-        return accent;
-    const int gallop[] = { 100, 116, 86, 70 };
-    int vel = gallop[slot & 3];
-    if (accent >= 115)
-        vel = std::min (124, vel + 10);
-    return vel;
-}
-
-struct GridBar
-{
-    int n = 0;
-    int slot[16] {};
-    int vel[16] {};
-    int len[16] {};
-};
-
-bool decodeGrid (const char* row, GridBar& bar)
-{
-    bar.n = 0;
-    if (row == nullptr)
-        return false;
-    for (int i = 0; i < 16; ++i)
-    {
-        const char c = row[i];
-        if (c == 0 || c == '-' || c == '=')
-            continue;
-        int len = 1;
-        for (int j = i + 1; j < 16 && row[j] == '='; ++j)
-            ++len;
-        int vel = 100;
-        if (c == 'X' || c == 'O')
-            vel = 118;
-        else if (c == 'o')
-            vel = 40;
-        bar.slot[bar.n] = i;
-        bar.vel[bar.n] = vel;
-        bar.len[bar.n] = len;
-        ++bar.n;
-    }
-    return bar.n > 0;
-}
-
-const genre::Cell* pickCell (int lane, int dialect, Rng& rng, int voice)
-{
-    const int d = clampi (dialect, 0, 3);
-    double sum = 0.0;
-    for (int i = 0; i < genre::kN; ++i)
-    {
-        const auto& cell = genre::kCells[i];
-        if (cell.lane != lane)
-            continue;
-        if (voice >= 0 && cell.voice != voice)
-            continue;
-        sum += (double) genre::weight (cell, d);
-    }
-    if (sum <= 0.0)
-        return nullptr;
-    double needle = rng.next() * sum;
-    const genre::Cell* last = nullptr;
-    for (int i = 0; i < genre::kN; ++i)
-    {
-        const auto& cell = genre::kCells[i];
-        if (cell.lane != lane)
-            continue;
-        if (voice >= 0 && cell.voice != voice)
-            continue;
-        const double w = (double) genre::weight (cell, d);
-        if (w <= 0.0)
-            continue;
-        last = &cell;
-        needle -= w;
-        if (needle <= 0.0)
-            return &cell;
-    }
-    return last;
-}
-
-bool gridCoversBars (const genre::Cell& cell, int bars)
-{
-    for (int b = 0; b < bars && b < 8; ++b)
-    {
-        GridBar bar;
-        if (! decodeGrid (cell.grid + 16 * (b % cell.bars), bar))
-            return false;
-    }
-    return true;
-}
-
-int pickPolyStep (int dialect, Rng& rng, bool hatsOnly)
-{
-    struct Row { int step; float w[4]; };
-    // PM_3_16 / PM_5_16 / PM_7_16, and PM_hat_len_3or5 for hats (3 or 5, restarted each bar).
-    static constexpr Row rows[] = {
-        { 3, { 0.50f, 0.90f, 0.20f, 0.20f } },
-        { 5, { 0.30f, 0.80f, 0.10f, 0.10f } },
-        { 7, { 0.20f, 0.60f, 0.10f, 0.10f } },
-    };
-    const int n = hatsOnly ? 2 : 3;
-    const int d = clampi (dialect, 0, 3);
-    double sum = 0.0;
-    for (int i = 0; i < n; ++i)
-        sum += (double) rows[i].w[d];
-    double needle = rng.next() * (sum > 0.0 ? sum : 1.0);
-    for (int i = 0; i < n; ++i)
-    {
-        needle -= (double) rows[i].w[d];
-        if (needle <= 0.0)
-            return rows[i].step;
-    }
-    return 3;
-}
-
-int shadeInterval (int semi, float dark, int partner, int index, bool& colored)
-{
-    if (dark > 0.2f && dark < 0.8f)
-    {
-        if ((semi % 12 + 12) % 12 != 0)
-            colored = true;
-        return semi;
-    }
-    int pc = semi % 12;
-    if (pc < 0)
-        pc += 12;
-    int out = semi;
-    if (dark >= 0.8f)
-    {
-        const int small = (partner > 0 && partner <= 4) ? partner : 1;
-        if (pc == 0)
-            out = (index % 3 == 2) ? small : 0;
-        else if (pc > 4)
-            out = small;
-        else
-            out = pc;
-    }
-    else
-    {
-        if (pc == 0)
-            out = (index % 3 == 2) ? 7 : 0;
-        else if (pc < 5)
-            out = 7;
-        else
-            out = pc;
-    }
-    if ((out % 12 + 12) % 12 != 0)
-        colored = true;
-    return out;
 }
 
 bool genericSet (const int* slots, int n) noexcept
@@ -433,15 +239,13 @@ const char* contourFor (int dialect, Rng& rng, float freedom, bool& offContour)
 
 int partnerFor (int dialect, float dark, Rng& rng)
 {
-    // Bright to dark, matching the knob: 5, 2, b7, b3, b2.
-    const int ladder[] = { 7, 2, 10, 3, 1 };
-    int idx = (int) std::floor (std::clamp (dark, 0.f, 1.f) * 4.999f);
-    if (rng.next() < 0.30)
-        idx = clampi (idx + (rng.next() < 0.5 ? -1 : 1), 0, 4);
-    int p = ladder[idx];
-    if (dialect == Pop && dark < 0.5f && rng.next() < 0.8)
-        p = 7;
-    if (dialect == Gaskin && dark >= 0.5f && rng.next() < 0.25)
+    const int bright[] = { 7, 2, 5 };
+    const int darkd[] = { 10, 3, 8 };
+    const int* pool = dark >= 0.5f ? darkd : bright;
+    int p = pool[(int) (rng.next() * 3.0) % 3];
+    if (dialect == Pop)
+        p = rng.next() < 0.8 ? 7 : p;
+    if (dialect == Gaskin && rng.next() < 0.25)
         p = 1;
     return p;
 }
@@ -676,8 +480,7 @@ int assignSemi (const char* contour, int dialect, Role role, int index, int coun
 
 void commitBar (Lane& lane, int bar, const int* slots, int n, float wantLen, bool hole,
                 const char* contour, int dialect, Role role, int partner, Rng& rng, float ghostP,
-                float freedom, char* breaks, int breaksN, float dark, float swingAmt,
-                const int* velBySlot, const int* lenBySlot)
+                float freedom, char* breaks, int breaksN)
 {
     int ord[16];
     const int m = std::min (n, 16);
@@ -687,21 +490,19 @@ void commitBar (Lane& lane, int bar, const int* slots, int n, float wantLen, boo
     const int limit = hole ? 12 : 16;
     bool rootAt1 = false;
     int prevSemi = 0;
-    bool colored = false;
     for (int i = 0; i < m; ++i)
     {
-        if (ord[i] < 0 || ord[i] > 15 || ord[i] >= limit)
+        if (ord[i] >= limit)
             continue;
-        const int next = (i + 1 < m && ord[i + 1] < limit) ? ord[i + 1] : limit;
-        const int hold = (lenBySlot != nullptr) ? lenBySlot[ord[i]] : 0;
-        const float shape[] = { 1.05f, 1.45f, 1.15f, 0.8f };
-        float len = hold > 1 ? (float) hold : wantLen * shape[ord[i] & 3];
+        const int next = (i + 1 < m) ? ord[i + 1] : limit;
+        const float menu[4] = { 1.5f, 2.f, 2.f, 2.5f };
+        float len = menu[(int) (rng.next() * 4.0) % 4];
         if (dialect == Pop)
-            len = std::clamp (len, 0.75f, 1.75f);
+            len = rng.next() < 0.5 ? 1.f : 1.25f;
         else if (dialect == Long || dialect == Gaskin)
-            len = std::clamp (len, 1.5f, 3.25f);
+            len = std::max (len, 2.f);
         else
-            len = std::clamp (len, 1.0f, 2.6f);
+            len = std::max (1.f, std::min (len, wantLen + 0.5f));
         if (rng.next() < 0.12 * (double) freedom)
             len = 0.5f + (float) (rng.next() * 3.5);
         len = std::min (len, (float) (next - ord[i]));
@@ -713,38 +514,41 @@ void commitBar (Lane& lane, int bar, const int* slots, int n, float wantLen, boo
         {
             const int surprise[] = { 1, 2, 3, 5, 8, 10, 7 };
             semi = surprise[(int) (rng.next() * 7.0) % 7];
-            noteBreak (breaks, breaksN, "iv");
+            if (breaks != nullptr && breaksN > 0 && std::strstr (breaks, "iv") == nullptr)
+            {
+                const int lenB = (int) std::strlen (breaks);
+                if (lenB + 3 < breaksN)
+                    std::strncat (breaks, lenB ? ",iv" : "iv", (size_t) (breaksN - lenB - 1));
+            }
         }
         else if (i > 0 && rng.next() < 0.04 * (double) freedom)
         {
             const int step = rng.next() < 0.5 ? -1 : 1;
             semi = prevSemi + step;
-            noteBreak (breaks, breaksN, "iv");
+            if (breaks != nullptr && breaksN > 0 && std::strstr (breaks, "iv") == nullptr)
+            {
+                const int lenB = (int) std::strlen (breaks);
+                if (lenB + 3 < breaksN)
+                    std::strncat (breaks, lenB ? ",iv" : "iv", (size_t) (breaksN - lenB - 1));
+            }
         }
         if (ord[i] == 3 && rootAt1 && (semi % 12) == 0)
             semi = partner == 0 ? 7 : partner;
         if (ord[i] == 1 && (semi % 12) == 0)
             rootAt1 = true;
-        const bool lastKept = (i + 1 == m) || (i + 1 < m && ord[i + 1] >= limit);
-        semi = shadeInterval (semi, dark, partner, i, colored);
-        if (lastKept && ! colored)
-        {
-            semi = dark >= 0.8f ? ((partner > 0 && partner <= 4) ? partner : 1) : (dark <= 0.2f ? 7 : semi);
-            if ((semi % 12 + 12) % 12 != 0)
-                colored = true;
-        }
         prevSemi = semi;
+        if (semi == 1 && i + 1 < m)
+        {
+            // Leave toward root on the next note when the contour did not.
+        }
         Ev e;
         e.start = (float) (bar * 16 + ord[i]);
-        if ((ord[i] & 1) != 0)
-            e.start += swingAmt;
         e.len = len;
         e.nChord = 1;
         e.chord[0] = (std::int8_t) clampi (semi, -24, 36);
-        const int marked = (velBySlot != nullptr) ? velBySlot[ord[i]] : 0;
-        const bool ghost = marked == 0 && i > 0 && rng.next() < (double) ghostP;
-        e.vel = (std::uint8_t) clampi (ghost ? 42 : velCurve (ord[i], marked), 28, 124);
-        e.flags = (e.vel < 50) ? (std::uint8_t) NoteGhost : 0;
+        const bool ghost = i > 0 && rng.next() < (double) ghostP;
+        e.vel = ghost ? 80 : 112;
+        e.flags = ghost ? (std::uint8_t) NoteGhost : 0;
         if (i > 0 && std::abs (semi) <= 3 && semi != 0 && rng.next() < 0.08)
             e.flags = (std::uint8_t) (e.flags | NoteGlide);
         pushEv (lane, e, 8);
@@ -775,72 +579,13 @@ void writeBass (Lane& lane, const Settings& s, Rng& rng, const char* plan, const
     rolesFor (plan, roles);
     const bool allowKick = s.dialect == Gaskin || s.dialect == Long;
     const float ghostP = 0.22f;
-    const genre::Cell* gcell = nullptr;
-    {
-        double sum = 0.0;
-        for (int i = 0; i < genre::kN; ++i)
-            if (genre::kCells[i].lane == genre::Bass)
-                sum += (double) genre::weight (genre::kCells[i], s.dialect);
-        // Transcription skeletons keep half the draw. Genre cells, including the
-        // sparse ones, take the other half. Inference is already down-weighted.
-        if (sum > 0.0 && rng.next() >= 0.5)
-            gcell = pickCell (genre::Bass, s.dialect, rng, -1);
-    }
-    bool spaceCell = false;
-    const genre::Cell* spaceDef = nullptr;
-    for (int i = 0; i < genre::kN; ++i)
-        if (std::strcmp (genre::kCells[i].id, "B_sparse_space") == 0)
-            spaceDef = &genre::kCells[i];
-    // One interior bar can be the space cell without pulling the whole phrase
-    // out of the density band, so sparse bass still ships.
-    const bool spaceBar = spaceDef != nullptr && rng.next() < 0.40;
-    const int spaceAt = spaceBar ? (rng.next() < 0.5 ? 2 : 5) : -1;
     for (int bar = 0; bar < s.bars && bar < 8; ++bar)
     {
         Role role = roles[bar];
         int slots[16];
         int n = 0;
         float want = 2.f;
-        int velBy[16] {};
-        int lenBy[16] {};
-        bool fromCell = false;
-        if (spaceDef != nullptr && bar == spaceAt && role != RC && role != RDp)
-        {
-            GridBar decoded;
-            if (decodeGrid (spaceDef->grid, decoded))
-            {
-                fromCell = true;
-                spaceCell = true;
-                want = 1.5f;
-                for (int i = 0; i < decoded.n && n < 12; ++i)
-                {
-                    slots[n] = decoded.slot[i];
-                    velBy[decoded.slot[i]] = decoded.vel[i];
-                    lenBy[decoded.slot[i]] = decoded.len[i];
-                    ++n;
-                }
-            }
-        }
-        if (! fromCell && gcell != nullptr)
-        {
-            GridBar decoded;
-            if (decodeGrid (gcell->grid + 16 * (bar % std::max (1, gcell->bars)), decoded))
-            {
-                fromCell = true;
-                want = s.dialect == Pop ? 1.1f : s.dialect == UkMin ? 1.75f : 2.1f;
-                for (int i = 0; i < decoded.n && n < 12; ++i)
-                {
-                    slots[n] = decoded.slot[i];
-                    velBy[decoded.slot[i]] = decoded.vel[i];
-                    lenBy[decoded.slot[i]] = decoded.len[i];
-                    ++n;
-                }
-                if (n > 0 && n <= 3)
-                    spaceCell = true;
-            }
-        }
-        if (! fromCell)
-            baseSlots (s.dialect, role, rng, slots, n, want);
+        baseSlots (s.dialect, role, rng, slots, n, want);
         if (s.busy > 0.7f && n > 0 && n < 8 && role != RC)
         {
             if (n < 12)
@@ -895,8 +640,7 @@ void writeBass (Lane& lane, const Settings& s, Rng& rng, const char* plan, const
             }
         }
         breakRuns (slots, n);
-        if (! fromCell)
-            ungeneric (slots, n, allowKick);
+        ungeneric (slots, n, allowKick);
         if (turn && rng.next() > 0.55 * (double) freedom)
             enforceHole (slots, n);
         int kicks = 0;
@@ -933,7 +677,7 @@ void writeBass (Lane& lane, const Settings& s, Rng& rng, const char* plan, const
             slots[n++] = 2;
             slots[n++] = 6;
         }
-        if (! fromCell && inbeatUsed (slots, n) < 3)
+        if (inbeatUsed (slots, n) < 3)
         {
             const int add[] = { 1, 6, 11 };
             for (int sslot : add)
@@ -950,19 +694,13 @@ void writeBass (Lane& lane, const Settings& s, Rng& rng, const char* plan, const
             n = 10;
         const bool wantHole = turn && (breaks == nullptr || std::strstr (breaks, "rest") == nullptr);
         commitBar (lane, bar, slots, n, want, wantHole,
-                   contour, s.dialect, role, partner, rng, ghostP, freedom, breaks, breaksN,
-                   s.dark, laneSwing (Bass, s.dialect), fromCell ? velBy : nullptr, fromCell ? lenBy : nullptr);
+                   contour, s.dialect, role, partner, rng, ghostP, freedom, breaks, breaksN);
     }
-    if (gcell != nullptr)
-        std::snprintf (cells, (size_t) cellsN, "%s", gcell->id);
-    else
-        std::snprintf (cells, (size_t) cellsN, "%s",
-                       s.dialect == Pop ? "off_8th_pump,fifth_pop,rest"
-                       : s.dialect == Gaskin ? "dotted_grid,call_answer_2bar"
-                       : s.dialect == Long ? "hold_lean,answer_tag,pedal,rest"
-                                            : "beat1_signature,hold_lean,syncop_pair,answer_tag,rest");
-    if (spaceCell)
-        tagAdd (cells, cellsN, "space");
+    std::snprintf (cells, (size_t) cellsN, "%s",
+                   s.dialect == Pop ? "off_8th_pump,fifth_pop,rest"
+                   : s.dialect == Gaskin ? "dotted_grid,call_answer_2bar"
+                   : s.dialect == Long ? "hold_lean,answer_tag,pedal,rest"
+                                        : "beat1_signature,hold_lean,syncop_pair,answer_tag,rest");
 }
 
 bool bassSounds (const Lane& lane, int slot)
@@ -1010,22 +748,17 @@ void writeStab (Lane& lane, const Lane& bass, const Settings& s, Rng& rng, float
                 continue;
             if (onBass)
                 noteBreak (breaks, breaksN, "stab");
-            const float shape[] = { 1.4f, 1.0f, 1.8f, 0.75f };
-            float len = (s.dialect == Gaskin ? 6.f : s.dialect == Pop ? 1.f : 2.f) * shape[slot & 3];
-            if (s.dialect == Pop)
-                len = std::clamp (len, 0.75f, 1.75f);
-            else
-                len = std::clamp (len, 1.f, s.dialect == Gaskin ? 10.f : 4.f);
+            float len = s.dialect == Gaskin ? 8.f : s.dialect == Pop ? 1.f : 2.f;
             const float barEnd = (float) ((bar + 1) * 16);
             if ((float) abs + len > barEnd)
                 len = barEnd - (float) abs;
             if (len < 0.5f)
                 continue;
             Ev e;
-            e.start = (float) abs + ((slot & 1) ? laneSwing (Stab, s.dialect) : 0.f);
+            e.start = (float) abs;
             e.len = len;
             e.nChord = 3;
-            e.vel = (std::uint8_t) velCurve (slot, placed == 0 ? 118 : 100);
+            e.vel = 98;
             for (int c = 0; c < 3; ++c)
                 e.chord[c] = (std::int8_t) voi[c];
             if (pushEv (lane, e, s.bars))
@@ -1086,80 +819,28 @@ void writeHits (Lane& lane, const Groove& g, const Settings& s, Rng& rng)
     }
 }
 
-void writePluck (Lane& lane, const Settings& s, Rng& rng, char* cells, int cellsN)
+void writePluck (Lane& lane, const Settings& s, Rng& rng)
 {
     clearLane (lane, lane.seed);
-    const int degs[] = { 0, 7, 3, 10, 2, 5, 8 };
-    const float lens[] = { 0.5f, 1.0f, 1.5f, 2.0f };
-    const int vels[] = { 112, 84, 58 };
-    const bool useCell = rng.next() < 0.28;
-    const genre::Cell* cell = useCell ? pickCell (genre::Pluck, s.dialect, rng, -1) : nullptr;
-    const int step = pickPolyStep (s.dialect, rng, false);
-    const int phase = (int) (rng.next() * (double) step);
-    const int holeEvery = 4 + (int) (rng.next() * 4.0);
-    const int nudge = s.bounce >= 0.6f ? 1 : 0;
-    const float sw = laneSwing (Pluck, s.dialect);
-    int placed = 0;
-    if (cell != nullptr && cell->bars > 0 && std::strcmp (cell->id, "PL_rest") != 0)
+    const int per = s.dialect == Pop ? 6 : 3;
+    const int degs[] = { 0, 3, 7, 10, 2 };
+    for (int bar = 0; bar < s.bars && bar < 8; ++bar)
     {
-        tagAdd (cells, cellsN, cell->id);
-        for (int bar = 0; bar < s.bars && bar < 8; ++bar)
+        int placed = 0;
+        for (int pass = 0; pass < 16 && placed < per; ++pass)
         {
-            GridBar decoded;
-            if (! decodeGrid (cell->grid + 16 * (bar % cell->bars), decoded))
-                continue;
-            for (int i = 0; i < decoded.n; ++i)
-            {
-                const int slot = (decoded.slot[i] + nudge) % 16;
-                Ev e;
-                e.start = (float) (bar * 16 + slot) + ((slot & 1) ? sw : 0.f);
-                e.len = std::min ((float) std::max (1, decoded.len[i]), lens[placed % 4] + 0.5f);
-                e.nChord = 1;
-                e.chord[0] = (std::int8_t) snapScale (s.dialect, degs[placed % 7]);
-                e.vel = (std::uint8_t) (decoded.vel[i] < 55 ? 42 : vels[placed % 3]);
-                e.flags = e.vel < 50 ? (std::uint8_t) NoteGhost : 0;
-                if (pushEv (lane, e, s.bars))
-                    ++placed;
-            }
-        }
-    }
-    if (lane.count == 0)
-    {
-        char mark[8];
-        std::snprintf (mark, sizeof mark, "p%d", step);
-        tagAdd (cells, cellsN, mark);
-        for (int t = (phase + nudge) % step; t < s.bars * 16; t += step)
-        {
-            if (holeEvery > 0 && (placed % holeEvery) == holeEvery - 1)
-            {
-                ++placed;
-                continue;
-            }
-            const int slot = t % 16;
+            const int slot = 1 + (int) (rng.next() * 14);
             Ev e;
-            e.start = (float) t + ((slot & 1) ? sw : 0.f);
-            e.len = std::min (lens[placed % 4], (float) (step));
-            if (e.start + e.len > (float) (s.bars * 16))
-                e.len = (float) (s.bars * 16) - e.start;
+            e.start = (float) (bar * 16 + slot);
+            e.len = 0.5f + (float) rng.next();
+            if (e.len > 1.5f)
+                e.len = 1.5f;
             e.nChord = 1;
-            e.chord[0] = (std::int8_t) snapScale (s.dialect, degs[(placed + phase) % 7]);
-            e.vel = (std::uint8_t) vels[placed % 3];
-            e.flags = e.vel < 50 ? (std::uint8_t) NoteGhost : 0;
+            e.chord[0] = (std::int8_t) degs[(bar + placed) % 5];
+            e.vel = 84;
             if (pushEv (lane, e, s.bars))
                 ++placed;
-            if (placed >= 48)
-                break;
         }
-    }
-    if (lane.count == 0)
-    {
-        Ev e;
-        e.start = 6.f;
-        e.len = 1.f;
-        e.nChord = 1;
-        e.chord[0] = 0;
-        e.vel = 84;
-        pushEv (lane, e, s.bars);
     }
 }
 
@@ -1199,244 +880,77 @@ void writePad (Lane& lane, const Settings& s, Rng& rng)
     }
 }
 
-void writeVox (Lane& lane, const Settings& s, Rng& rng, char* cells, int cellsN)
+void writeVox (Lane& lane, const Settings& s, Rng& rng)
 {
     clearLane (lane, lane.seed);
-    const float sw = laneSwing (Vox, s.dialect);
-    const int degs[] = { 0, 3, 7, 10, 2 };
-    auto place = [&] (int bar, int slot, float len, int vel, int deg)
+    const int nCuts = 1 + (int) (rng.next() * 3);
+    int slots[3];
+    for (int i = 0; i < nCuts; ++i)
+        slots[i] = (int) (2 + rng.next() * 12);
+    const int shift = (int) (rng.next() * 11) - 5;
+    const bool ghost = rng.next() < 0.3;
+    for (int bar : { 0, 2, 4, 6 })
     {
-        if (bar < 0 || bar >= s.bars || slot < 0 || slot > 15)
-            return;
-        Ev e;
-        e.start = (float) (bar * 16 + slot) + ((slot & 1) ? sw : 0.f);
-        e.len = len;
-        const float barEnd = (float) ((bar + 1) * 16);
-        if (e.start + e.len > barEnd)
-            e.len = barEnd - e.start;
-        if (e.len < 0.5f)
-            return;
-        e.nChord = 1;
-        e.chord[0] = (std::int8_t) (snapScale (s.dialect, deg) - 4);
-        e.vel = (std::uint8_t) clampi (vel, 36, 120);
-        e.flags = e.vel < 50 ? (std::uint8_t) NoteGhost : 0;
-        pushEv (lane, e, s.bars);
-    };
-
-    if (s.dialect == Pop || s.dialect == Gaskin)
-    {
-        // Phrases sit in the back half of bars 4 and 8 (VX_phrase_bar4 / VX_word_a4 / chops).
-        int phrase[2];
-        int nPhrase = 0;
-        if (s.bars >= 8)
+        if (bar >= s.bars)
+            continue;
+        for (int i = 0; i < nCuts; ++i)
         {
-            phrase[0] = 3;
-            phrase[1] = 7;
-            nPhrase = 2;
+            Ev e;
+            e.start = (float) (bar * 16 + (slots[i] % 14));
+            e.len = 1.5f + (float) ((int) (rng.next() * 8)) * 0.5f;
+            if (e.start + e.len > (float) ((bar + 1) * 16))
+                e.len = (float) ((bar + 1) * 16) - e.start;
+            e.nChord = 1;
+            // chord is an offset from MIDI 64, so subtract that bias before storing a scale degree.
+            e.chord[0] = (std::int8_t) (snapScale (s.dialect, shift) - 4);
+            e.vel = ghost && i > 0 ? 80 : 100;
+            e.flags = ghost && i > 0 ? (std::uint8_t) NoteGhost : 0;
+            pushEv (lane, e, s.bars);
         }
-        else if (s.bars >= 4)
-        {
-            phrase[0] = 3;
-            nPhrase = 1;
-        }
-        else
-        {
-            phrase[0] = s.bars - 1;
-            nPhrase = 1;
-        }
-        if (s.dialect == Pop)
-        {
-            tagAdd (cells, cellsN, "VX_phrase_bar4");
-            const int slots[] = { 8, 10, 12, 14 };
-            const float lens[] = { 4.f, 1.5f, 1.0f, 1.25f };
-            const int vel[] = { 112, 86, 64, 96 };
-            for (int p = 0; p < nPhrase; ++p)
-                for (int i = 0; i < 4; ++i)
-                    place (phrase[p], slots[i], lens[i], vel[i], degs[(p + i) % 5]);
-        }
-        else
-        {
-            tagAdd (cells, cellsN, "VX_chop_syncop");
-            const int slots[] = { 9, 11, 14 };
-            const float lens[] = { 1.0f, 1.5f, 2.0f };
-            const int vel[] = { 108, 78, 118 };
-            for (int p = 0; p < nPhrase; ++p)
-                for (int i = 0; i < 3; ++i)
-                    place (phrase[p], slots[i], lens[i], vel[i], degs[(p + i) % 5]);
-            tagAdd (cells, cellsN, "VX_word_a4");
-        }
-        return;
-    }
-
-    if (rng.next() < 0.7 && s.bars > 0)
-    {
-        const int bar = s.bars >= 4 ? 3 : s.bars - 1;
-        place (bar, 10, 2.f, 72, 0);
-        tagAdd (cells, cellsN, "VX_breath_tex");
     }
 }
 
-void writeDrums (DrumLane& drums, std::uint32_t seed, const Settings& s, Rng& rng, char* cells, int cellsN)
+void writeDrums (DrumLane& drums, std::uint32_t seed, const Settings& s, Rng& rng)
 {
     drums.seed = seed ? seed : 1u;
     std::memset (drums.vel, 0, sizeof drums.vel);
     std::memset (drums.accent, 0, sizeof drums.accent);
     const int steps = s.bars * 16;
-    const int nudge = s.bounce >= 0.6f ? 1 : 0;
-
-    bool twoStep = false;
-    const genre::Cell* kickCell = nullptr;
-    if (s.dialect == Gaskin)
+    for (int t = 0; t < steps; ++t)
     {
-        for (int attempt = 0; attempt < 4 && kickCell == nullptr; ++attempt)
-        {
-            const genre::Cell* cand = pickCell (genre::Drum, s.dialect, rng, Kick);
-            if (cand != nullptr && gridCoversBars (*cand, s.bars))
-                kickCell = cand;
-        }
-        if (kickCell != nullptr && std::strcmp (kickCell->id, "K_2step") == 0)
-            twoStep = true;
+        if (kickSlot (t % 16))
+            drums.vel[Kick][t] = 112;
+        if ((t % 16) == 4 || (t % 16) == 12)
+            drums.vel[Clap][t] = 104;
     }
-    if (kickCell != nullptr)
-        tagAdd (cells, cellsN, kickCell->id);
-    if (twoStep)
-        tagAdd (cells, cellsN, "2step");
-
     for (int bar = 0; bar < s.bars; ++bar)
     {
-        if (kickCell != nullptr)
+        const int hats[] = { 2, 6, 10, 14 };
+        for (int k = 0; k < 4; ++k)
         {
-            GridBar decoded;
-            decodeGrid (kickCell->grid + 16 * (bar % kickCell->bars), decoded);
-            for (int i = 0; i < decoded.n; ++i)
-                drums.vel[Kick][bar * 16 + decoded.slot[i]] = (std::uint8_t) clampi (decoded.vel[i], 70, 124);
+            int slot = hats[k];
+            const bool open = (slot == 14) && ((bar & 1) == 1);
+            if (open)
+                drums.vel[HatO][bar * 16 + slot] = (std::uint8_t) (70 + (int) (rng.next() * 30));
+            else
+                drums.vel[HatC][bar * 16 + slot] = (std::uint8_t) (64 + (int) (rng.next() * 40));
         }
-        else
+        const int drop = hats[(int) (rng.next() * 4) % 4];
+        drums.vel[HatC][bar * 16 + drop] = 0;
+        drums.vel[HatO][bar * 16 + drop] = 0;
+        auto place = [&] (int voice)
         {
-            for (int slot : { 0, 4, 8, 12 })
-                drums.vel[Kick][bar * 16 + slot] = 112;
-        }
-        drums.vel[Clap][bar * 16 + 4] = 104;
-        drums.vel[Clap][bar * 16 + 12] = 104;
-        if (twoStep || s.busy > 0.65f || rng.next() < 0.55)
-        {
-            drums.vel[Snare][bar * 16 + 4] = twoStep ? 96 : 72;
-            drums.vel[Snare][bar * 16 + 12] = twoStep ? 88 : 64;
-        }
-        const int rimSlot = (2 + bar * 3 + nudge) % 16;
-        if (! kickSlot (rimSlot))
-            drums.vel[Rim][bar * 16 + rimSlot] = 74;
-        const int tomSlot = (7 + bar * 5) % 16;
-        if (! kickSlot (tomSlot))
-            drums.vel[TomLow][bar * 16 + tomSlot] = (std::uint8_t) (60 + (bar & 1) * 18);
-    }
-
-    const int hatStep = pickPolyStep (s.dialect, rng, true);
-    const int hatPhase = (int) (rng.next() * (double) hatStep);
-    const int lenCycle = rng.next() < 0.5 ? 3 : 5;
-    char hatMark[8];
-    std::snprintf (hatMark, sizeof hatMark, "h%d", hatStep);
-    tagAdd (cells, cellsN, hatMark);
-    int hatN = 0;
-    const int hatDrop = (int) (rng.next() * 7.0);
-    for (int bar = 0; bar < s.bars; ++bar)
-    {
-        int placedSlot[16];
-        int placedN = 0;
-        for (int slot = 0; slot < 16; ++slot)
-        {
-            if (((slot + hatPhase + nudge) % hatStep) != 0)
-                continue;
-            const bool open = (hatN % lenCycle) == 0;
-            const int vel = (hatN % 3 == 0) ? 112 : (hatN % 3 == 1) ? 78 : 46;
-            const int voice = open ? HatO : HatC;
-            drums.vel[voice][bar * 16 + slot] = (std::uint8_t) vel;
-            if (placedN < 16)
-                placedSlot[placedN++] = slot;
-            ++hatN;
-        }
-        if (placedN >= 3)
-        {
-            const int kill = placedSlot[(bar + hatDrop) % placedN];
-            drums.vel[HatC][bar * 16 + kill] = 0;
-            drums.vel[HatO][bar * 16 + kill] = 0;
-        }
-    }
-
-    const int percStep = pickPolyStep (s.dialect, rng, false);
-    const int percPhase = (int) (rng.next() * (double) percStep);
-    char percMark[8];
-    std::snprintf (percMark, sizeof percMark, "r%d", percStep);
-    tagAdd (cells, cellsN, percMark);
-    int percN = 0;
-    const int percDrop = (int) (rng.next() * 5.0);
-    int percBarCount[8] {};
-    int percBarSlot[8][16] {};
-    for (int t = (percPhase + nudge) % percStep; t < steps; t += percStep)
-    {
-        if (s.busy < 0.3f && (percN & 1))
-        {
-            ++percN;
-            continue;
-        }
-        const int vel = (percN % 3 == 0) ? 104 : (percN % 3 == 1) ? 74 : 42;
-        if (drums.vel[Perc][t] == 0)
-            drums.vel[Perc][t] = (std::uint8_t) vel;
-        const int bar = t / 16;
-        if (bar >= 0 && bar < 8 && percBarCount[bar] < 16)
-            percBarSlot[bar][percBarCount[bar]++] = t % 16;
-        ++percN;
-    }
-    for (int bar = 0; bar < s.bars && bar < 8; ++bar)
-    {
-        if (percBarCount[bar] < 2)
-            continue;
-        const int kill = percBarSlot[bar][(bar + percDrop) % percBarCount[bar]];
-        drums.vel[Perc][bar * 16 + kill] = 0;
-    }
-
-    const int rideHome = (rng.next() < 0.5 && s.bars > 4) ? 4 : 0;
-    const int rideSpan = s.busy > 0.7f ? s.bars : std::min (4, s.bars);
-    for (int bar = rideHome; bar < s.bars && bar < rideHome + rideSpan; ++bar)
-        for (int slot : { 2, 6, 10, 14 })
-            drums.vel[Ride][bar * 16 + ((slot + nudge) % 16)] = 86;
-    if (s.busy < 0.3f)
-    {
-        for (int t = 0; t < steps; ++t)
-            drums.vel[Ride][t] = 0;
-        drums.vel[Ride][10] = 80;
-        int seen = 0;
-        for (int t = 0; t < steps; ++t)
-        {
-            if (drums.vel[HatC][t] == 0 && drums.vel[HatO][t] == 0)
-                continue;
-            if ((seen++ & 1) != 0)
-            {
-                drums.vel[HatC][t] = 0;
-                drums.vel[HatO][t] = 0;
-            }
-        }
-    }
-    else if (s.busy > 0.7f)
-    {
-        for (int t = 0; t < steps; ++t)
-        {
-            if ((t & 1) == 0 || drums.vel[HatC][t] || drums.vel[HatO][t] || kickSlot (t % 16))
-                continue;
-            drums.vel[HatC][t] = 36;
-        }
-        for (int bar = 0; bar < s.bars; ++bar)
-            for (int slot : { 2, 6, 10, 14 })
-                if (drums.vel[Ride][bar * 16 + slot] == 0)
-                    drums.vel[Ride][bar * 16 + slot] = 78;
-    }
-    if (drums.vel[Ride][0] == 0)
-    {
-        bool anyRide = false;
-        for (int t = 0; t < steps; ++t)
-            anyRide = anyRide || drums.vel[Ride][t] > 0;
-        if (! anyRide)
-            drums.vel[Ride][std::min (10, steps - 1)] = 80;
+            int slot = 1 + (int) (rng.next() * 14);
+            if (kickSlot (slot))
+                slot = (slot + 1) % 16;
+            drums.vel[voice][bar * 16 + slot] = (std::uint8_t) (55 + (int) (rng.next() * 40));
+        };
+        place (Perc);
+        place (Perc);
+        place (Rim);
+        place (TomLow);
+        if (rng.next() < 0.5)
+            place (Snare);
     }
 }
 
@@ -1876,7 +1390,7 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
         planOf (s.dialect, rng, planName, freedom, offPlan);
         const char* contour = contourFor (s.dialect, rng, freedom, offContour);
         const int partner = partnerFor (s.dialect, s.dark, rng);
-        char cells[96] = "";
+        char cells[64] = "rest";
         char breaks[48] = "";
         if (offPlan)
             noteBreak (breaks, (int) sizeof breaks, "plan");
@@ -1906,7 +1420,7 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
         {
             Rng rp (seeds[Pluck] ? seeds[Pluck] : 1u);
             g.lane[Pluck].seed = rp.s;
-            writePluck (g.lane[Pluck], s, rp, cells, (int) sizeof cells);
+            writePluck (g.lane[Pluck], s, rp);
         }
         else
             clampLane (g.lane[Pluck], s.bars);
@@ -1924,7 +1438,7 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
         {
             Rng rv (seeds[Vox] ? seeds[Vox] : 1u);
             g.lane[Vox].seed = rv.s;
-            writeVox (g.lane[Vox], s, rv, cells, (int) sizeof cells);
+            writeVox (g.lane[Vox], s, rv);
         }
         else
             clampLane (g.lane[Vox], s.bars);
@@ -1941,40 +1455,7 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
         if (regen (Drums))
         {
             Rng rd (seeds[Drums] ? seeds[Drums] : 1u);
-            writeDrums (g.drums, seeds[Drums], s, rd, cells, (int) sizeof cells);
-        }
-
-        {
-            int opts[5];
-            int nOpt = 0;
-            const int cands[] = { Stab, Hits, Pluck, Pad, Vox };
-            for (int lane : cands)
-            {
-                if (! regen (lane) || g.lane[lane].count < 2)
-                    continue;
-                if (lane == Vox && (s.dialect == Pop || s.dialect == Gaskin))
-                    continue;
-                opts[nOpt++] = lane;
-            }
-            if (nOpt > 0)
-            {
-                const int lane = opts[(int) (rng.next() * (double) nOpt) % nOpt];
-                const float cut = (float) ((s.bars / 2) * 16);
-                Note keptNotes[kMaxNotes];
-                int keptN = 0;
-                for (int i = 0; i < g.lane[lane].count; ++i)
-                    if (g.lane[lane].notes[i].start < cut && keptN < kMaxNotes)
-                        keptNotes[keptN++] = g.lane[lane].notes[i];
-                if (keptN > 0 && keptN < g.lane[lane].count)
-                {
-                    g.lane[lane].count = keptN;
-                    for (int i = 0; i < keptN; ++i)
-                        g.lane[lane].notes[i] = keptNotes[i];
-                    const char* mark = lane == Stab ? "subS" : lane == Hits ? "subH" : lane == Pluck ? "subP"
-                                      : lane == Pad ? "subD" : "subV";
-                    tagAdd (cells, (int) sizeof cells, mark);
-                }
-            }
+            writeDrums (g.drums, seeds[Drums], s, rd);
         }
 
         ++draws;
