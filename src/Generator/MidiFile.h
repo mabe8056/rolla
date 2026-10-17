@@ -28,6 +28,14 @@ struct MidiExport
                            float swing,
                            double bpm,
                            std::string& error);
+
+    // One type-1 file. Track 0 is tempo. Each lane after that is its own track.
+    static bool writeMultitrack (const std::string& path,
+                                 const Groove& groove,
+                                 int key,
+                                 float swing,
+                                 double bpm,
+                                 std::string& error);
 };
 
 } // namespace rolla

@@ -1710,6 +1710,7 @@ struct DragTile : Component
     QuietButton exportBtn { "EXPORT" };
     String caption { utf8 ("7 tracks · 8 bars") };
     std::unique_ptr<FileChooser> chooser;
+    bool audioMode = false;
     bool armed = false;
 
     DragTile()
@@ -1748,7 +1749,7 @@ struct DragTile : Component
 
         g.setColour (col (kInk));
         g.setFont (tracked (lf->instBold.withPointHeight (Theme::typePreset), 0.08f));
-        g.drawText ("DRAG MIDI", 48, 28, 160, 18, Justification::centredLeft, false);
+        g.drawText (audioMode ? "DRAG STEMS" : "DRAG MIDI", 48, 28, 180, 18, Justification::centredLeft, false);
         g.setColour (col (kInk2));
         g.setFont (lf->mono.withPointHeight (Theme::typeBody));
         g.drawText (caption, 48, 48, 180, 16, Justification::centredLeft, false);
@@ -1783,7 +1784,20 @@ struct DragTile : Component
         if (e.getDistanceFromDragStart() <= 4.f)
             return;
         armed = true;
-        dragFilesOut (this, proc->writeTempMidi());
+        const bool audio = audioMode || e.mods.isAltDown() || e.mods.isCommandDown() || e.mods.isCtrlDown();
+        dragFilesOut (this, audio ? proc->writeStemAudio() : proc->writeTempMidi());
+    }
+
+    void mouseUp (const MouseEvent& e) override
+    {
+        if (e.eventComponent != this || armed)
+            return;
+        if (e.getDistanceFromDragStart() <= 4.f && e.mouseWasClicked())
+        {
+            audioMode = ! audioMode;
+            caption = audioMode ? utf8 ("7 stems · 8 bars") : utf8 ("7 tracks · 8 bars");
+            repaint();
+        }
     }
 
     void choose()
@@ -1791,12 +1805,17 @@ struct DragTile : Component
         if (proc == nullptr)
             return;
         const auto start = File::getSpecialLocation (File::userDocumentsDirectory).getChildFile ("ROLLA");
-        chooser = std::make_unique<FileChooser> ("Export MIDI", start, String(), true);
+        chooser = std::make_unique<FileChooser> (audioMode ? "Export stems" : "Export MIDI", start, String(), true);
+        const bool stems = audioMode;
         chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectDirectories,
-                              [this] (const FileChooser& fc)
+                              [this, stems] (const FileChooser& fc)
                               {
                                   const auto dir = fc.getResult();
-                                  if (dir != File() && proc != nullptr)
+                                  if (dir == File() || proc == nullptr)
+                                      return;
+                                  if (stems)
+                                      proc->exportStemsTo (dir);
+                                  else
                                       proc->exportMidiTo (dir);
                               });
     }
@@ -2050,7 +2069,7 @@ struct RollaEditor::Content : Component
         bindHelp (swing, "Swing, from 50 to 57 percent.");
         bindHelp (duck, "Duck. The bass dips under the stab.");
         bindHelp (face, "Roll. Re-rolls every lane that is not kept.");
-        bindHelp (drag, "Drag MIDI. Pulls a clip of the current pattern.");
+        bindHelp (drag, "Drag all. One MIDI file, one track per lane. Click the tile, or hold Alt, for a WAV stem of every lane.");
         bindHelp (voxSlot, "Vox sample. Drop a file to override the preset.");
         bindHelp (inStab, "In stab. Hits land on the stab's answer slots.");
         for (int i = 0; i < NumParts; ++i)

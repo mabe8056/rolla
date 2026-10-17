@@ -454,6 +454,7 @@ void testBindings()
     if (editor == nullptr)
         return;
     expect (countHelp (*editor, "Drag this lane") == rolla::NumParts, "a drag handle on every lane");
+    expect (countHelp (*editor, "Drag all.") == 1, "full drag tile");
 
     auto checkKnob = [&] (const char* help, const char* id)
     {
@@ -560,6 +561,8 @@ void testBindings()
     pumpUntil ([] { return false; }, 50);
 }
 
+bool trackHasChannel (const unsigned char* data, size_t size, int trackIndex, int channel);
+
 void testExport()
 {
     rolla::RollaProcessor proc;
@@ -613,7 +616,154 @@ void testExport()
     }
 
     const auto all = proc.writeTempMidi();
-    expect (all.size() >= rolla::NumParts + 1, "all-tracks drag still writes every lane");
+    expect (all.size() == 1, "full drag is one multitrack file");
+    if (! all.isEmpty())
+    {
+        juce::File allFile (all[0]);
+        expect (allFile.getFileExtension() == ".mid", "full drag is .mid");
+        expect (allFile.getParentDirectory() == cache, "full midi is in the cache");
+        juce::MemoryBlock allBytes;
+        allFile.loadFileAsData (allBytes);
+        const auto* allData = static_cast<const unsigned char*> (allBytes.getData());
+        expect (allBytes.getSize() > 14 && allData[0] == 'M' && allData[1] == 'T' && allData[2] == 'h' && allData[3] == 'd',
+                "full SMF header");
+        const int format = ((int) allData[8] << 8) | (int) allData[9];
+        const int allTracks = ((int) allData[10] << 8) | (int) allData[11];
+        expect (format == 1, "full export is a type-1 file");
+        expect (allTracks == rolla::NumParts + 1, "tempo track plus one track per lane");
+        expect (trackHasChannel (allData, allBytes.getSize(), 1, rolla::Bass), "bass is its own track");
+        expect (trackHasChannel (allData, allBytes.getSize(), 1 + rolla::Drums, 9), "drums are their own track");
+    }
+
+    const auto stems = proc.writeStemAudio();
+    expect (stems.size() == rolla::NumParts, "one stem per lane");
+    juce::AudioFormatManager stemFormats;
+    stemFormats.registerBasicFormats();
+    for (int i = 0; i < stems.size(); ++i)
+    {
+        juce::File stem (stems[i]);
+        expect (stem.getFileExtension() == ".wav", std::string (rolla::partId (i)) + " stem is wav");
+        expect (stem.getParentDirectory() == cache, std::string (rolla::partId (i)) + " stem is in the cache");
+        std::unique_ptr<juce::AudioFormatReader> stemReader (stemFormats.createReaderFor (stem));
+        expect (stemReader != nullptr, std::string (rolla::partId (i)) + " stem reads");
+        if (stemReader == nullptr)
+            continue;
+        const double expected = 8.0 * 4.0 * 60.0 / 130.0 * stemReader->sampleRate;
+        expect (stemReader->numChannels == 2, std::string (rolla::partId (i)) + " stem stereo");
+        expect (std::abs ((double) stemReader->lengthInSamples - expected) < 64.0, std::string (rolla::partId (i)) + " stem is 8 bars");
+        if (i == rolla::Bass || i == rolla::Stab || i == rolla::Drums)
+        {
+            // The stab answers on the odd bars, so the first second of an 8-bar stem
+            // can be silence even when the lane rendered. Measure the whole file.
+            const int n = (int) std::min (stemReader->lengthInSamples, (juce::int64) 800000);
+            juce::AudioBuffer<float> audio (2, std::max (1, n));
+            stemReader->read (&audio, 0, n, 0, true, true);
+            double sum = 0.0;
+            for (int s = 0; s < n; ++s)
+                sum += (double) audio.getSample (0, s) * (double) audio.getSample (0, s);
+            expect (std::sqrt (sum / (double) std::max (1, n)) > 1.0e-3,
+                    std::string (rolla::partId (i)) + " stem is not silent");
+        }
+    }
+}
+
+bool trackHasChannel (const unsigned char* data, size_t size, int trackIndex, int channel)
+{
+    if (data == nullptr || size < 14)
+        return false;
+    size_t pos = 14;
+    for (int index = 0; pos + 8 <= size; ++index)
+    {
+        if (data[pos] != 'M' || data[pos + 1] != 'T' || data[pos + 2] != 'r' || data[pos + 3] != 'k')
+            return false;
+        const size_t len = ((size_t) data[pos + 4] << 24) | ((size_t) data[pos + 5] << 16)
+                         | ((size_t) data[pos + 6] << 8) | (size_t) data[pos + 7];
+        pos += 8;
+        if (pos + len > size)
+            return false;
+        if (index == trackIndex)
+        {
+            size_t i = pos;
+            const size_t end = pos + len;
+            int status = 0;
+            while (i < end)
+            {
+                int guard = 0;
+                while (i < end && (data[i] & 0x80) != 0 && guard++ < 4)
+                    ++i;
+                if (i >= end)
+                    break;
+                ++i;
+                if (i >= end)
+                    break;
+                if ((data[i] & 0x80) != 0)
+                    status = data[i++];
+                if (i >= end)
+                    break;
+                const int cmd = status & 0xf0;
+                if (cmd == 0x90 || cmd == 0x80)
+                {
+                    const int vel = i + 1 < end ? data[i + 1] : 0;
+                    if (cmd == 0x90 && (status & 0x0f) == channel && vel > 0)
+                        return true;
+                    i += 2;
+                }
+                else if (cmd == 0xc0 || cmd == 0xd0)
+                    ++i;
+                else if (status == 0xff)
+                {
+                    if (++i >= end)
+                        break;
+                    const int n = data[i++];
+                    i += (size_t) n;
+                }
+                else
+                    i += 2;
+            }
+            return false;
+        }
+        pos += len;
+    }
+    return false;
+}
+
+void testStabDice()
+{
+    rolla::RollaProcessor proc;
+    proc.waitUntilReady();
+    std::uint64_t frozen[rolla::NumParts];
+    for (int i = 0; i < rolla::NumParts; ++i)
+        frozen[i] = hashPart (proc.copyGroove(), i);
+
+    std::unique_ptr<juce::AudioProcessorEditor> editor (proc.createEditor());
+    expect (editor != nullptr, "dice editor");
+    if (editor == nullptr)
+        return;
+    auto* row = findHelp (*editor, "STAB.");
+    expect (row != nullptr, "stab row");
+    auto* dice = row != nullptr ? findHelp (*row, "Shuffle this lane") : nullptr;
+    expect (dice != nullptr, "stab dice");
+
+    std::uint64_t stab = frozen[rolla::Stab];
+    for (int n = 0; n < 3; ++n)
+    {
+        if (auto* button = dynamic_cast<juce::Button*> (dice))
+            button->triggerClick();
+        else
+            proc.triggerShuffle (rolla::Stab);
+        expect (pumpUntil ([&] { return hashPart (proc.copyGroove(), rolla::Stab) != stab; }),
+                "stab dice changes only the stab pattern");
+        const auto groove = proc.copyGroove();
+        stab = hashPart (groove, rolla::Stab);
+        for (int i = 0; i < rolla::NumParts; ++i)
+            if (i != rolla::Stab)
+                expect (hashPart (groove, i) == frozen[i],
+                        std::string ("stab dice leaves ") + rolla::partId (i) + " on roll " + std::to_string (n + 1));
+    }
+
+    const auto before = proc.writeLaneMidi (rolla::Stab);
+    expect (before.size() == 1, "drag the re-rolled stab");
+    editor.reset();
 }
 
 } // namespace
@@ -625,6 +775,7 @@ int main()
     testGeneratorControls();
     testState();
     testExport();
+    testStabDice();
     testSoundControls();
     if (fails == 0)
         std::cout << "knob tests passed\n";

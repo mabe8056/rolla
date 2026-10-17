@@ -89,10 +89,14 @@ public:
     bool isHostOrPreviewPlaying() const noexcept { return uiPlaying.load (std::memory_order_relaxed); }
 
     juce::String exportMidiToDocuments();
+    // One type-1 MIDI file: tempo track, then one track per lane.
     juce::StringArray writeTempMidi();
+    // One 8-bar WAV stem per lane. Same cache and drag path as the MIDI file.
+    juce::StringArray writeStemAudio();
+    juce::String exportStemsTo (const juce::File& dir);
 
     // Drag-out files live here so FL Studio on macOS can read them after
-    // performExternalDragDropOfFiles. One file per call.
+    // performExternalDragDropOfFiles.
     juce::File exportCache() const;
     juce::StringArray writeLaneMidi (int part);
     juce::StringArray writeLaneAudio (int part);
@@ -136,6 +140,9 @@ private:
     void reshapeUnkept();
     EngineParams readParams (std::shared_ptr<const PresetBank>& hold) const;
     Settings currentSettings() const;
+    void prepareOffline (Engine& offline, double rate) const;
+    juce::AudioBuffer<float> bounceLane (Engine& offline, int part, double rate, double bpm) const;
+    juce::File laneExportFile (int part, const char* extension) const;
     void pruneExportCache (const juce::File& keep) const;
     bool writeWav (const juce::File& file, const juce::AudioBuffer<float>& audio, double sampleRate) const;
     void publish (const Groove& g);
