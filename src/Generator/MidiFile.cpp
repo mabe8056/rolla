@@ -242,6 +242,8 @@ bool MidiExport::writeAll (const std::string& directory,
 
     for (int p = 0; p < NumParts; ++p)
     {
+        if (p != Drums && groove.lane[p].count <= 0)
+            continue;
         std::vector<Event> ev;
         collectPart (ev, groove, p, key, swing);
         // Anchor: a 1-tick velocity-1 note at tick 0 so FL "realign events" does not

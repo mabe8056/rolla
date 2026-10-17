@@ -1,6 +1,7 @@
 #include "PluginEditor.h"
 
 #include "DspUtil.h"
+#include "Generator/Intensity.h"
 #include "LaneSampleUi.h"
 #include "RollFace.h"
 #include "UiTokens.h"
@@ -219,7 +220,8 @@ struct Look : LookAndFeel_V4
     Rectangle<int> getTooltipBounds (const String& tip, Point<int> pos, Rectangle<int> parent) override
     {
         const bool rich = tip.containsChar ('\t');
-        const int maxW = rich ? 352 : 240;
+        const bool intensity = tip.startsWith ("INTENSITY");
+        const int maxW = intensity ? 368 : (rich ? 352 : 240);
         const int padX = 12;
         const int padY = 8;
         const auto font = Theme::font (Theme::Role::meta);
@@ -232,10 +234,14 @@ struct Look : LookAndFeel_V4
             {
                 if (line.isEmpty())
                     continue;
+                const auto key = line.upToFirstOccurrenceOf ("\t", false, false);
                 const auto value = line.fromFirstOccurrenceOf ("\t", false, false);
                 GlyphArrangement row;
                 row.addLineOfText (font, value, 0.f, 0.f);
-                textW = jmax (textW, 64 + 8 + (int) std::ceil (row.getBoundingBox (0, -1, true).getWidth()));
+                const int keyW = (intensity && lines == 0) ? 96 : 64;
+                textW = jmax (textW, key.isEmpty()
+                                         ? (int) std::ceil (row.getBoundingBox (0, -1, true).getWidth())
+                                         : keyW + 8 + (int) std::ceil (row.getBoundingBox (0, -1, true).getWidth()));
                 ++lines;
             }
             lines = jmax (1, lines);
@@ -282,9 +288,17 @@ struct Look : LookAndFeel_V4
                 auto row = inner.withY (inner.getY() + rowH * (float) i).withHeight (rowH);
                 const auto key = lines[i].upToFirstOccurrenceOf ("\t", false, false);
                 const auto value = lines[i].fromFirstOccurrenceOf ("\t", false, false);
+                if (key.isEmpty())
+                {
+                    g.setColour (col (kInk));
+                    g.setFont (Theme::font (Theme::Role::meta));
+                    g.drawText (value, row, Justification::centredLeft, false);
+                    continue;
+                }
+                const float keyW = (text.startsWith ("INTENSITY") && i == 0) ? 96.f : 64.f;
                 g.setColour (col (kInk3));
                 g.setFont (Theme::font (Theme::Role::caption));
-                g.drawText (key, row.removeFromLeft (64.f), Justification::centredLeft, false);
+                g.drawText (key, row.removeFromLeft (keyW), Justification::centredLeft, false);
                 g.setColour (col (kInk));
                 g.setFont (Theme::font (Theme::Role::meta));
                 g.drawText (value, row.withTrimmedLeft (8.f), Justification::centredLeft, false);
@@ -466,6 +480,102 @@ struct SwingSlider : Slider
     }
 };
 
+struct IntensitySlider : Slider
+{
+    String word { "FULL ROLL" };
+    double dragOrigin = 75.0;
+    Point<float> dragPos;
+
+    IntensitySlider()
+    {
+        setRange (0.0, 100.0, 1.0);
+        setValue (75.0, dontSendNotification);
+        setSliderStyle (LinearBar);
+        setTextBoxStyle (NoTextBox, false, 0, 0);
+        setPopupDisplayEnabled (false, false, nullptr, 0);
+        setScrollWheelEnabled (true);
+        setWantsKeyboardFocus (true);
+        setPaintingIsUnclipped (true);
+        setDoubleClickReturnValue (true, 75.0, ModifierKeys::noModifiers);
+        setMouseCursor (MouseCursor::PointingHandCursor);
+    }
+
+    void mouseDown (const MouseEvent& e) override
+    {
+        if (e.getNumberOfClicks() >= 2)
+        {
+            setValue (75.0, sendNotificationSync);
+            return;
+        }
+        dragOrigin = getValue();
+        dragPos = e.position;
+    }
+
+    void mouseDrag (const MouseEvent& e) override
+    {
+        const float dx = e.position.x - dragPos.x;
+        const float dy = dragPos.y - e.position.y;
+        const float delta = std::abs (dx) >= std::abs (dy) ? dx : dy;
+        const float fine = e.mods.isShiftDown() ? 0.1f : 1.f;
+        setValue (jlimit (0.0, 100.0, dragOrigin + (double) (delta * (100.f / 200.f) * fine)),
+                  sendNotificationSync);
+    }
+
+    void mouseWheelMove (const MouseEvent&, const MouseWheelDetails& wheel) override
+    {
+        if (std::abs (wheel.deltaY) < 0.0001f && std::abs (wheel.deltaX) < 0.0001f)
+            return;
+        const int dir = wheel.deltaY > 0.f || wheel.deltaX > 0.f ? 1 : -1;
+        setValue (jlimit (0.0, 100.0, getValue() + (double) dir), sendNotificationSync);
+    }
+
+    bool keyPressed (const KeyPress& key) override
+    {
+        if (key == KeyPress::spaceKey)
+            return false;
+        const int step = key.getModifiers().isShiftDown() ? 10 : 1;
+        if (key == KeyPress::leftKey)
+        {
+            setValue (jlimit (0.0, 100.0, getValue() - (double) step), sendNotificationSync);
+            return true;
+        }
+        if (key == KeyPress::rightKey)
+        {
+            setValue (jlimit (0.0, 100.0, getValue() + (double) step), sendNotificationSync);
+            return true;
+        }
+        return false;
+    }
+
+    void paint (Graphics& g) override
+    {
+        auto b = getLocalBounds().toFloat();
+        const bool hot = isMouseOver();
+        const bool held = isMouseButtonDown();
+        g.setColour (col (kPaper));
+        g.fillRoundedRectangle (b, 20.f);
+        g.setColour (col (held ? kInk : (hot ? kInk2 : kLine2)));
+        g.drawRoundedRectangle (b.reduced (0.5f), 19.5f, Theme::strokeHair);
+
+        const float pos = (float) valueToProportionOfLength (getValue());
+        g.setColour (col (kLine2));
+        g.fillRoundedRectangle (16.f, 18.f, 40.f, 4.f, 2.f);
+        g.setColour (col (kInk));
+        g.fillRoundedRectangle (16.f, 18.f, 40.f * pos, 4.f, 2.f);
+        const float thumb = 16.f + 40.f * pos;
+        g.fillEllipse (thumb - 6.f, 14.f, 12.f, 12.f);
+
+        auto read = Rectangle<float> (64.f, 4.f, 96.f, 14.f);
+        g.setColour (col (kInk3));
+        g.setFont (Theme::font (Theme::Role::meta));
+        g.drawText ("INTENSITY " + String (roundToInt (getValue())), read, Justification::centredLeft, false);
+        g.setColour (col (kInk));
+        g.setFont (Theme::font (Theme::Role::pill));
+        g.drawText (word, Rectangle<float> (64.f, 18.f, 96.f, 16.f), Justification::centredLeft, false);
+        focusRing (g, *this, 20.f);
+    }
+};
+
 struct LabeledKnob : Component
 {
     KnobSlider slider;
@@ -622,7 +732,14 @@ struct IconButton : QuietButton
     {
         setWantsKeyboardFocus (true);
         setPaintingIsUnclipped (true);
-        setMouseCursor (MouseCursor::PointingHandCursor);
+        setMouseCursor (MouseCursor::NormalCursor);
+    }
+
+    bool keyPressed (const KeyPress& key) override
+    {
+        if (key == KeyPress::spaceKey || key == KeyPress::returnKey)
+            return false;
+        return QuietButton::keyPressed (key);
     }
 
     void paintButton (Graphics& g, bool over, bool down) override
@@ -726,7 +843,10 @@ struct LaneRow : Component, FileDragAndDropTarget
     bool hovered = false;
     bool hot = false;
     bool sampleMissing = false;
+    bool laneOut = false;
+    int comesIn = 75;
     std::function<void (int)> onSelect;
+    std::function<void (int)> onNudge;
     IconButton mute { IconButton::mute, "Mute" };
     IconButton shuffle { IconButton::dice, "Shuffle" };
     IconButton keep { IconButton::lock, "Keep" };
@@ -735,10 +855,15 @@ struct LaneRow : Component, FileDragAndDropTarget
 
     LaneRow()
     {
+        setWantsKeyboardFocus (true);
+        setMouseCursor (MouseCursor::PointingHandCursor);
         addAndMakeVisible (strip);
         addAndMakeVisible (mute);
         addAndMakeVisible (shuffle);
         addAndMakeVisible (keep);
+        mute.setMouseCursor (MouseCursor::NormalCursor);
+        shuffle.setMouseCursor (MouseCursor::NormalCursor);
+        keep.setMouseCursor (MouseCursor::NormalCursor);
         strip.setInterceptsMouseClicks (false, false);
         mute.setClickingTogglesState (true);
         keep.setClickingTogglesState (true);
@@ -784,6 +909,42 @@ struct LaneRow : Component, FileDragAndDropTarget
             onSelect (part);
     }
 
+    bool keyPressed (const KeyPress& key) override
+    {
+        if (key == KeyPress::spaceKey)
+            return false;
+        if (key == KeyPress::returnKey)
+        {
+            if (onSelect)
+                onSelect (part);
+            return true;
+        }
+        if (key == KeyPress::upKey || key == KeyPress::downKey)
+        {
+            if (onNudge)
+                onNudge (key == KeyPress::downKey ? 1 : -1);
+            return true;
+        }
+        const auto ch = key.getTextCharacter();
+        if (ch == 'm' || ch == 'M')
+        {
+            mute.triggerClick();
+            return true;
+        }
+        if (ch == 'd' || ch == 'D')
+        {
+            if (shuffle.isEnabled())
+                shuffle.triggerClick();
+            return true;
+        }
+        if (ch == 'l' || ch == 'L')
+        {
+            keep.triggerClick();
+            return true;
+        }
+        return false;
+    }
+
     void paint (Graphics& g) override
     {
         const float rowH = (float) getHeight();
@@ -819,12 +980,17 @@ struct LaneRow : Component, FileDragAndDropTarget
         }
 
         const bool muted = mute.getToggleState();
-        g.setColour (laneColour (part).withAlpha (muted ? Theme::alphaMuted : 1.f));
+        float dotA = muted ? Theme::alphaMuted : 1.f;
+        if (laneOut && ! muted)
+            dotA = 0.35f;
+        g.setColour (laneColour (part).withAlpha (dotA));
         g.fillEllipse (16.f, 16.f + (float) y0, 8.f, 8.f);
         const auto name = String (laneShortName (part));
         const auto nameFont = Theme::font (Theme::Role::lane);
-        g.setColour (muted ? col (kInk2).withAlpha (Theme::alphaMutedText)
-                           : (selected || hovered ? col (kInk) : col (kInk2)));
+        const auto nameCol = muted ? col (kInk2).withAlpha (Theme::alphaMutedText)
+                                   : ((selected || hovered) ? col (kInk)
+                                                            : (laneOut ? col (kInk3) : col (kInk2)));
+        g.setColour (nameCol);
         g.setFont (nameFont);
         g.drawText (name, 32, 12 + y0, 72, 16, Justification::centredLeft, false);
         if (sampleMissing)
@@ -835,10 +1001,27 @@ struct LaneRow : Component, FileDragAndDropTarget
             paintMissingIcon (g, x, 14.f + (float) y0, 12.f);
         }
 
+        if (laneOut)
+        {
+            const float stripH = 24.f + ((float) getHeight() - 40.f) * (24.f / 40.f);
+            const int sh = jmax (1, roundToInt (stripH));
+            const int sy = jmax (0, roundToInt (((float) getHeight() - (float) sh) * 0.5f));
+            g.setColour (col (kInk3));
+            g.setFont (Theme::font (Theme::Role::meta));
+            g.drawText ("out " + String (utf8 ("·")) + " comes in at " + String (comesIn) + "%",
+                        112, sy, 384, sh, Justification::centredLeft, false);
+        }
+
         if (hot)
         {
             g.setColour (col (kInk));
             g.drawRect (b.reduced (0.5f), 1.f);
+        }
+
+        if (hasKeyboardFocus (false))
+        {
+            g.setColour (col (kInk));
+            g.drawRoundedRectangle (b.reduced (2.f), 4.f, Theme::strokeFocus);
         }
     }
 
@@ -879,7 +1062,7 @@ struct LaneRow : Component, FileDragAndDropTarget
         const float stripH = 24.f + (rh - 40.f) * (24.f / 40.f);
         const int sh = jmax (1, roundToInt (stripH));
         const int sy = jmax (0, roundToInt ((rh - (float) sh) * 0.5f));
-        strip.setBounds (104, sy, 408, sh);
+        strip.setBounds (112, sy, 384, sh);
         const int yIcon = jmax (0, roundToInt ((rh - 32.f) * 0.5f));
         mute.setBounds (520, yIcon, 32, 32);
         shuffle.setBounds (560, yIcon, 32, 32);
@@ -1946,6 +2129,7 @@ struct RollaEditor::Content : Component
     RollaEditor& editor;
     LogoButton logo;
     DialectBar dialects;
+    IntensitySlider intensity;
     Stepper keyStep;
     BpmReadout bpm;
     HistoryButton undoBtn { false }, redoBtn { true };
@@ -1974,13 +2158,18 @@ struct RollaEditor::Content : Component
     bool panelRun = false;
     bool panelOpening = false;
     bool panelClockOn = false;
+    bool switchRun = false;
+    bool switchIn = false;
+    int switchPart = 0;
+    double switchT0 = 0.0;
+    int seenIntensity = -1;
     VBlankAttachment panelVblank;
     Groove groove;
     uint32_t seenGen = 0;
     bool haveGroove = false;
 
     std::unique_ptr<AudioProcessorValueTreeState::SliderAttachment> toneA, punchA, levelA;
-    std::unique_ptr<AudioProcessorValueTreeState::SliderAttachment> darkA, busyA, bounceA, stabA, swingA;
+    std::unique_ptr<AudioProcessorValueTreeState::SliderAttachment> darkA, busyA, bounceA, stabA, swingA, intensityA;
     std::unique_ptr<AudioProcessorValueTreeState::ButtonAttachment> duckA, inStabA;
 
     Content (RollaProcessor& p, Look& lf, RollaEditor& ed)
@@ -1991,7 +2180,9 @@ struct RollaEditor::Content : Component
 
         addAndMakeVisible (logo);
         addAndMakeVisible (dialects);
+        addAndMakeVisible (intensity);
         addAndMakeVisible (keyStep);
+        intensityA = std::make_unique<AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "intensity", intensity);
         addAndMakeVisible (bpm);
         addAndMakeVisible (undoBtn);
         addAndMakeVisible (redoBtn);
@@ -2009,6 +2200,7 @@ struct RollaEditor::Content : Component
         {
             rows[i].configure (proc, i);
             rows[i].onSelect = [this] (int part) { select (part); };
+            rows[i].onNudge = [this] (int dir) { nudgeRow (dir); };
             rows[i].strip.groove = &groove;
             addAndMakeVisible (rows[i]);
         }
@@ -2089,6 +2281,7 @@ struct RollaEditor::Content : Component
         bindHelp (logo, "Menu. Window scale, reduce motion, and the samples folder.");
         bindHelp (dialects, "Style. Each pill sets the groove, the sounds, and which lanes play.");
         bindHelp (keyStep, "Key. Every lane follows this minor key.");
+        bindHelp (intensity, "INTENSITY 75\t" + String (dialectName (0)));
         bindHelp (bpm, "Host tempo, in beats per minute.");
         bindHelp (undoBtn, "Undo the last edit.");
         bindHelp (redoBtn, "Redo the edit you just undid.");
@@ -2194,64 +2387,121 @@ struct RollaEditor::Content : Component
     void showLane (int part)
     {
         selected = juce::jlimit (0, NumParts - 1, part);
-        setOpen (true, false, true);
+        setOpen (true, false);
     }
 
     void closeSound()
     {
         if (soundIsOpen())
-            setOpen (false, true, true);
+            setOpen (false, true);
     }
 
     void restorePanel()
     {
-        selected = juce::jlimit (0, NumParts - 1, proc.soundPanelLane());
-        setOpen (proc.soundPanelOpen(), false, false);
+        setOpen (false, false);
+    }
+
+    void clearSelection()
+    {
+        for (int i = 0; i < NumParts; ++i)
+        {
+            if (! rows[i].selected)
+                continue;
+            rows[i].selected = false;
+            rows[i].repaint();
+        }
+    }
+
+    void markSelection()
+    {
+        for (int i = 0; i < NumParts; ++i)
+        {
+            const bool on = i == selected;
+            if (rows[i].selected == on)
+                continue;
+            rows[i].selected = on;
+            rows[i].repaint();
+        }
+    }
+
+    bool motionReduced() const
+    {
+        return paramRaw (proc.apvts, "reduceMotion") >= 0.5f;
     }
 
     void select (int part)
     {
-        editor.grabKeyboardFocus();
-        if (soundIsOpen() && part == selected)
+        if (soundIsOpen() && part == selected && ! switchRun)
         {
-            setOpen (false, true, true);
+            setOpen (false, true);
             return;
         }
-        selected = part;
-        if (soundIsOpen())
+        if (! soundIsOpen())
         {
-            for (int i = 0; i < NumParts; ++i)
-            {
-                rows[i].selected = i == part;
-                rows[i].repaint();
-            }
-            proc.setSoundPanel (true, selected);
+            selected = part;
+            setOpen (true, true);
+            return;
+        }
+        beginSwitch (part);
+    }
+
+    void nudgeRow (int dir)
+    {
+        int cur = -1;
+        for (int i = 0; i < NumParts; ++i)
+            if (rows[i].hasKeyboardFocus (true))
+                cur = i;
+        if (cur < 0)
+            cur = soundIsOpen() ? selected : 0;
+        const int next = jlimit (0, NumParts - 1, cur + dir);
+        rows[next].grabKeyboardFocus();
+        if (soundIsOpen() && next != selected)
+            beginSwitch (next);
+    }
+
+    void beginSwitch (int part)
+    {
+        if (part == selected && ! switchRun)
+            return;
+        if (motionReduced() || panelRun)
+        {
+            switchRun = false;
+            selected = part;
+            markSelection();
+            if (! panelRun)
+                contentAlpha = 1.f;
             source.setCurrent (samples.mode (selected));
             bindSound();
             repaint();
             return;
         }
-        setOpen (true, true, true);
+        switchPart = part;
+        if (! switchRun || switchIn)
+        {
+            alphaFrom = contentAlpha;
+            switchIn = false;
+            switchT0 = Time::getMillisecondCounterHiRes();
+            switchRun = true;
+            armPanelClock();
+        }
     }
 
-    void setOpen (bool open, bool animate, bool persist)
+    void setOpen (bool open, bool animate)
     {
-        for (int i = 0; i < NumParts; ++i)
-        {
-            rows[i].selected = open && i == selected;
-            rows[i].repaint();
-        }
-        if (persist)
-            proc.setSoundPanel (open, selected);
+        switchRun = false;
+        if (open)
+            markSelection();
 
         const float target = open ? 1.f : 0.f;
-        const bool reduced = paramRaw (proc.apvts, "reduceMotion") >= 0.5f;
+        const bool reduced = motionReduced();
         panelTarget = target;
         if (! animate || reduced || std::abs (panelAmt - target) < 0.001f)
         {
             panelAmt = target;
             contentAlpha = target;
             panelRun = false;
+            if (! open)
+                clearSelection();
             disarmPanelClock();
         }
         else
@@ -2275,10 +2525,19 @@ struct RollaEditor::Content : Component
     {
         if (getPeer() == nullptr)
         {
+            if (switchRun)
+            {
+                selected = switchPart;
+                switchRun = false;
+                markSelection();
+                bindSound();
+            }
             panelAmt = panelTarget;
             contentAlpha = panelTarget;
             panelRun = false;
             panelClockOn = false;
+            if (panelTarget < 0.5f)
+                clearSelection();
             return;
         }
         if (panelClockOn && ! panelVblank.isEmpty())
@@ -2308,22 +2567,60 @@ struct RollaEditor::Content : Component
         }
     }
 
+    void advanceSwitch()
+    {
+        const double elapsed = Time::getMillisecondCounterHiRes() - switchT0;
+        if (! switchIn)
+        {
+            contentAlpha = jmax (0.f, alphaFrom - (float) (elapsed / 40.0));
+            if (elapsed >= 40.0)
+            {
+                selected = switchPart;
+                contentAlpha = 0.f;
+                switchIn = true;
+                switchT0 = Time::getMillisecondCounterHiRes();
+                markSelection();
+                source.setCurrent (samples.mode (selected));
+                bindSound();
+            }
+        }
+        else
+        {
+            contentAlpha = jmin (1.f, (float) (elapsed / 40.0));
+            if (elapsed >= 40.0)
+            {
+                contentAlpha = 1.f;
+                switchRun = false;
+            }
+        }
+        applyContentFade();
+        repaint();
+    }
+
     void advancePanel()
     {
-        if (! panelRun)
+        if (! panelRun && ! switchRun)
         {
             disarmPanelClock();
             return;
         }
+        if (switchRun)
+            advanceSwitch();
+        if (! panelRun)
+            return;
         const double elapsed = Time::getMillisecondCounterHiRes() - panelT0;
         const double dur = panelOpening ? 180.0 : 140.0;
         const float u = (float) (elapsed / dur);
         if (u >= 1.f)
         {
             panelAmt = panelTarget;
-            contentAlpha = panelTarget;
+            if (! switchRun)
+                contentAlpha = panelTarget;
             panelRun = false;
-            disarmPanelClock();
+            if (panelTarget < 0.5f)
+                clearSelection();
+            if (! switchRun)
+                disarmPanelClock();
         }
         else
         {
@@ -2331,17 +2628,20 @@ struct RollaEditor::Content : Component
             const float eased = panelOpening ? bezierEase (u, 0.2f, 0.f, 0.f, 1.f)
                                              : bezierEase (u, 1.f, 0.f, 0.8f, 1.f);
             panelAmt = panelFrom + (panelTarget - panelFrom) * eased;
-            if (panelOpening)
+            if (! switchRun)
             {
-                const double fadeDur = (1.0 - (double) alphaFrom) * 100.0;
-                const double fadeStart = 180.0 - fadeDur;
-                contentAlpha = elapsed <= fadeStart
-                                 ? alphaFrom
-                                 : jlimit (0.f, 1.f, alphaFrom + (float) ((elapsed - fadeStart) / 100.0));
-            }
-            else
-            {
-                contentAlpha = jmax (0.f, alphaFrom - (float) (elapsed / 100.0));
+                if (panelOpening)
+                {
+                    const double fadeDur = (1.0 - (double) alphaFrom) * 100.0;
+                    const double fadeStart = 180.0 - fadeDur;
+                    contentAlpha = elapsed <= fadeStart
+                                     ? alphaFrom
+                                     : jlimit (0.f, 1.f, alphaFrom + (float) ((elapsed - fadeStart) / 100.0));
+                }
+                else
+                {
+                    contentAlpha = jmax (0.f, alphaFrom - (float) (elapsed / 78.0));
+                }
             }
         }
         resized();
@@ -2350,19 +2650,16 @@ struct RollaEditor::Content : Component
 
     void layoutLeft()
     {
-        constexpr int kTop = 64;
-        constexpr int kBottom = 624;
-        constexpr int kSpan = kBottom - kTop;
-        const int lanePx = roundToInt (kSpan - panelAmt * 280.f);
-        int y = kTop;
+        constexpr float kTop = 64.f;
+        const float H = 80.f - 40.f * panelAmt;
         for (int i = 0; i < NumParts; ++i)
         {
-            const int h = (kTop + lanePx - y) / (NumParts - i);
-            rows[i].setBounds (16, y, 640, h);
-            y += h;
+            const int y0 = roundToInt (kTop + H * (float) i);
+            const int y1 = roundToInt (kTop + H * (float) (i + 1));
+            rows[i].setBounds (16, y0, 640, jmax (1, y1 - y0));
         }
-        const int panelY = y + roundToInt (panelAmt * 8.f);
-        const int panelH = jmax (0, kBottom - panelY);
+        const int panelY = roundToInt (kTop + 7.f * H + 8.f * panelAmt);
+        const int panelH = jmax (0, 624 - panelY);
         sound.setBounds (16, panelY, 640, panelH);
         sound.setVisible (panelH > 2);
         applyContentFade();
@@ -2470,9 +2767,16 @@ struct RollaEditor::Content : Component
         const double pos16 = proc.getPlayPpq() * 4.0;
         const float swingNow = paramRaw (proc.apvts, "swing");
         const bool genChanged = ! haveGroove || next.generation != seenGen;
+        const int intensityNow = roundToInt (paramRaw (proc.apvts, "intensity"));
+        const bool intensityChanged = intensityNow != seenIntensity;
+        seenIntensity = intensityNow;
+        const int dialectNow = choiceIndex (proc.apvts, "dialect");
+        const float stabNow = paramRaw (proc.apvts, "stab");
+        const auto plan = planIntensity (dialectNow, intensityNow, stabNow);
         groove = std::move (next);
         haveGroove = true;
         seenGen = groove.generation;
+        intensity.word = plan.word;
         for (int i = 0; i < NumParts; ++i)
         {
             rows[i].strip.swing = swingNow;
@@ -2480,19 +2784,37 @@ struct RollaEditor::Content : Component
             rows[i].strip.pos16 = pos16;
             rows[i].syncHover();
             const bool muted = rows[i].mute.getToggleState();
+            const bool kept = paramRaw (proc.apvts, String (partId (i)) + "Keep") >= 0.5f;
+            const bool sampled = i < Drums && proc.userSlotMode (i) != 0;
+            const bool inLane = intensityLaneIn (plan, i, kept, sampled);
+            const bool out = ! inLane;
+            const int comes = plan.comesInAt[i] < 0 ? 0 : plan.comesInAt[i];
+            if (out != rows[i].laneOut || comes != rows[i].comesIn)
+            {
+                rows[i].laneOut = out;
+                rows[i].comesIn = comes;
+                rows[i].repaint();
+            }
+            rows[i].strip.setVisible (! out);
             rows[i].strip.setAlpha (muted ? Theme::alphaMuted : 1.f);
-            rows[i].shuffle.setEnabled (true);
-            rows[i].shuffle.setAlpha (1.f);
+            rows[i].shuffle.setEnabled (! out);
+            rows[i].shuffle.setAlpha (out ? 0.35f : 1.f);
+            const auto tip = String (rows[i].selected ? "Close " : "Open ")
+                           + laneShortName (i) + " sound";
+            if (rows[i].getProperties()["rollaHelp"].toString() != tip)
+                bindHelp (rows[i], tip);
             const bool miss = samples.missing (i);
             if (miss != rows[i].sampleMissing)
             {
                 rows[i].sampleMissing = miss;
                 rows[i].repaint();
             }
-            if (genChanged || playing)
+            if (genChanged || playing || intensityChanged)
                 rows[i].strip.repaint();
             rows[i].keep.repaint();
         }
+        if (intensityChanged)
+            intensity.repaint();
         source.setCurrent (samples.mode (selected));
 
         bpm.setBpm (proc.getPlayBpm() > 1.f ? proc.getPlayBpm() : 130.f);
@@ -2542,25 +2864,55 @@ struct RollaEditor::Content : Component
                 col.sync();
 
         int rolling = 0;
-        StringArray kept;
+        StringArray keptNames, mutedNames, sampleNames;
         int tracks = 0;
         for (int i = 0; i < NumParts; ++i)
         {
             const bool k = paramRaw (proc.apvts, String (partId (i)) + "Keep") >= 0.5f;
             const bool m = paramRaw (proc.apvts, String (partId (i)) + "Mute") >= 0.5f;
+            const bool sampled = i < Drums && proc.userSlotMode (i) != 0;
+            const bool inLane = intensityLaneIn (plan, i, k, sampled);
             if (k)
-                kept.add (laneShortName (i));
-            if (! k && ! m)
+                keptNames.add (laneShortName (i));
+            if (m)
+                mutedNames.add (laneShortName (i));
+            if (sampled)
+                sampleNames.add (laneShortName (i));
+            if (! k && ! m && inLane)
                 ++rolling;
-            if (! m)
+            if (! m && inLane)
                 ++tracks;
+        }
+        {
+            String fixed;
+            if (keptNames.isEmpty() && mutedNames.isEmpty() && sampleNames.isEmpty())
+                fixed = "kept, muted and samples stay as they are";
+            else
+            {
+                if (! keptNames.isEmpty())
+                    fixed << "kept " << keptNames.joinIntoString (" ");
+                if (! mutedNames.isEmpty())
+                    fixed << (fixed.isEmpty() ? "" : utf8 (" · ")) << "muted " << mutedNames.joinIntoString (" ");
+                if (! sampleNames.isEmpty())
+                    fixed << (fixed.isEmpty() ? "" : utf8 (" · ")) << "sample " << sampleNames.joinIntoString (" ");
+            }
+            const auto tip = "INTENSITY " + String (intensityNow) + "\t"
+                           + String (plan.word) + utf8 (" · ") + dialectName (dialectNow) + "\n"
+                           + "LANES IN\t" + String (plan.lanesIn) + "\n"
+                           + "NEXT\t" + String (plan.nextIn) + "\n"
+                           + "ARRANGE\t" + String (plan.arrange) + "\n"
+                           + "POLY\t" + String (plan.poly) + "\n"
+                           + "FIXED\t" + fixed + "\n"
+                           + "\tBUSY and STAB still set notes and answers.";
+            if (intensity.getProperties()["rollaHelp"].toString() != tip)
+                bindHelp (intensity, tip);
         }
         if (allKept())
             face.setCaption ("all kept", {}, true);
         else
         {
             const auto count = String (rolling) + (rolling == 1 ? " lane" : " lanes");
-            const auto tail = kept.isEmpty() ? String() : utf8 ("  ·  ") + kept.joinIntoString (" + ") + " kept";
+            const auto tail = keptNames.isEmpty() ? String() : utf8 ("  ·  ") + keptNames.joinIntoString (" + ") + " kept";
             face.setCaption (count, tail, false);
         }
         drag.caption = String (tracks) + (tracks == 1 ? utf8 (" track · ") : utf8 (" tracks · "))
@@ -2608,7 +2960,8 @@ struct RollaEditor::Content : Component
     {
         logo.setBounds (16, 16, 76, 24);
         dialects.setBounds (100, 8, Theme::segmentLarge * NumDialects + Theme::space8, Theme::heightControl);
-        keyStep.setBounds (508, 8, Theme::stepperKey, Theme::heightControl);
+        intensity.setBounds (504, 8, 176, Theme::heightControl);
+        keyStep.setBounds (688, 8, Theme::stepperKey, Theme::heightControl);
         bpm.setBounds (832, 20, 72, 16);
         undoBtn.setBounds (912, 8, 40, 40);
         redoBtn.setBounds (968, 8, 40, 40);
@@ -2872,11 +3225,17 @@ bool RollaEditor::keyPressed (const KeyPress& key)
             proc.triggerRoll();
         return true;
     }
+    if ((key == KeyPress::upKey || key == KeyPress::downKey) && hasKeyboardFocus (true) && content != nullptr)
+    {
+        content->nudgeRow (key == KeyPress::downKey ? 1 : -1);
+        return true;
+    }
     return false;
 }
 
 void RollaEditor::mouseDown (const MouseEvent& e)
 {
+    grabKeyboardFocus();
     if (e.mods.isPopupMenu() && content != nullptr)
     {
         const auto* hit = e.eventComponent;
@@ -2887,8 +3246,6 @@ void RollaEditor::mouseDown (const MouseEvent& e)
             return;
         }
     }
-    if (e.eventComponent == this)
-        grabKeyboardFocus();
 }
 
 void RollaEditor::mouseMove (const MouseEvent& e)

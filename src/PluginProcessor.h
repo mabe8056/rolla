@@ -122,11 +122,6 @@ public:
     int getEditorHeight() const noexcept { return editorHeight.load (std::memory_order_relaxed); }
     std::uint32_t getProjectEditorSerial() const noexcept { return projectEditorSerial.load (std::memory_order_relaxed); }
 
-    // Sound panel under the lanes. Closed until a lane row is opened. Saved with the project.
-    void setSoundPanel (bool open, int lane) noexcept;
-    bool soundPanelOpen() const noexcept { return soundOpen.load (std::memory_order_relaxed); }
-    int soundPanelLane() const noexcept { return soundLane.load (std::memory_order_relaxed); }
-
 private:
     void parameterChanged (const juce::String& parameterID, float newValue) override;
     void applyDialect (int dialect);
@@ -134,6 +129,11 @@ private:
     Settings currentSettings() const;
     void publish (const Groove& g);
     void publishInitial (const Groove& g);
+    void publishDerived();
+    void reapplyIntensity();
+    void storeSource (const Groove& g);
+    Groove copySource() const;
+    void post (std::function<void (RollaProcessor&)> fn);
     void deferredStartup();
     void rememberSample (int voice, const float* mono, int n, double rate, const juce::String& name);
     void applyRememberedSamples();
@@ -154,6 +154,8 @@ private:
 
     mutable std::mutex grooveMu;
     Groove groove {};
+    Groove sourceGroove {};
+    std::atomic<bool> sourceReady { false };
 
     struct Remembered
     {
@@ -172,8 +174,6 @@ private:
     std::atomic<int> editorWidth { 0 };
     std::atomic<int> editorHeight { 0 };
     std::atomic<std::uint32_t> projectEditorSerial { 0 };
-    std::atomic<bool> soundOpen { false };
-    std::atomic<int> soundLane { 0 };
 
     std::atomic<bool> startupStop { false };
     std::atomic<bool> rootChosen { false };

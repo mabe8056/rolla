@@ -121,8 +121,12 @@ inline const char* dialectId (int d) noexcept
     return ids[d];
 }
 
-// Display names and the hover card for the four style pills. Rename here;
-// the ids above stay put. Final names are still open.
+// Provisional until Melak signs off. This one line renames the pills,
+// the dialect parameter, and the preset line together.
+inline constexpr const char* kStyleLabels[NumDialects] = { "ROLLER", "DEEP", "BOUNCY", "JACKIN" };
+
+// Display names and the hover card for the four style pills.
+// The ids above stay put.
 struct StyleCopy
 {
     const char* name;
@@ -132,28 +136,28 @@ struct StyleCopy
 inline const StyleCopy& styleCopy (int d) noexcept
 {
     static const StyleCopy rows[] = {
-        { "UK MIN",
+        { kStyleLabels[UkMin],
           "Groove\tswing 52%\n"
           "Notes\t1-4.5 sixteenths\n"
           "Bass\tpluck\n"
           "Stab\tdub\n"
           "Pad\tair\n"
           "Plays\tbass, stab, pluck, pad, vox, drums" },
-        { "LONG",
+        { kStyleLabels[Long],
           "Groove\tswing 51%\n"
           "Notes\t2-8 sixteenths\n"
           "Bass\tround\n"
           "Stab\tswell\n"
           "Pad\twide\n"
           "Plays\tbass, stab, pluck, pad, vox, drums" },
-        { "POP",
+        { kStyleLabels[Pop],
           "Groove\tswing 50%\n"
           "Notes\t1-1.25 sixteenths\n"
           "Bass\tclick\n"
           "Stab\tclick\n"
           "Pad\tair\n"
           "Plays\tbass, stab, pluck, pad, vox, drums" },
-        { "GASKIN 90s",
+        { kStyleLabels[Gaskin],
           "Groove\tstraight, swing 50%\n"
           "Notes\t2 sixteenths\n"
           "Bass\tround\n"
