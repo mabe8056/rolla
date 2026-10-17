@@ -60,6 +60,21 @@ FileState probeFile (const SampleLibrary* library, const char* file, const Sampl
     audio = nullptr;
     if (library->missing (file))
         return FileState::Absent;
+    library->request (file);
+    return FileState::Pending;
+}
+
+FileState peekFile (const SampleLibrary* library, const char* file, const SampleAudio*& audio) noexcept
+{
+    audio = nullptr;
+    if (library == nullptr || file == nullptr || file[0] == 0)
+        return FileState::Absent;
+    audio = library->tryGet (file);
+    if (audio != nullptr && audio->frames >= 8)
+        return FileState::Ready;
+    audio = nullptr;
+    if (library->missing (file))
+        return FileState::Absent;
     return FileState::Pending;
 }
 
@@ -70,6 +85,101 @@ struct LaneHit
     const SampleAudio* audio = nullptr;
     bool pending = false;
 };
+
+PoolFilter filterFor (const SampleSpec& spec, int part, int voice) noexcept
+{
+    PoolFilter filter = spec.filter;
+    filter.on = true;
+    if (filter.lane < 0)
+        filter.lane = part;
+    if (voice >= 0)
+        filter.voice = (voice == TomLow || voice == TomMid) ? Perc : voice;
+    return filter;
+}
+
+// Preferred file is requested. Already-loaded neighbours can play immediately.
+// A still-loading preferred file does not fall through to the synth.
+bool readyFromIndex (const SampleLibrary* library, const SampleIndex* index, int part,
+                     const SampleSpec& spec, int pick, int voice, LaneHit& hit) noexcept
+{
+    if (library == nullptr || index == nullptr)
+        return false;
+    if (voice < 0 && ! spec.filter.on)
+        return false;
+    const PoolFilter filter = voice >= 0 ? filterFor (spec, part, voice) : filterFor (spec, part, spec.filter.voice);
+    const int n = sampleIndexCount (*index, part, filter);
+    if (n <= 0)
+        return false;
+    if (pick < 0)
+        pick = 0;
+    const int start = pick % n;
+    const SampleAudio* audio = nullptr;
+    const auto* preferred = sampleIndexAt (*index, part, filter, start);
+    if (preferred != nullptr)
+    {
+        const auto state = peekFile (library, preferred->path, audio);
+        if (state == FileState::Ready)
+        {
+            hit.spec = &spec;
+            hit.choice.file = preferred->path;
+            hit.choice.root = preferred->root > 0 ? preferred->root : 60;
+            hit.audio = audio;
+            return true;
+        }
+        if (state == FileState::Pending)
+        {
+            library->request (preferred->path);
+            hit.pending = true;
+        }
+    }
+    const int window = n < 32 ? n : 32;
+    for (int i = 1; i < window; ++i)
+    {
+        const auto* entry = sampleIndexAt (*index, part, filter, (start + i) % n);
+        if (entry == nullptr)
+            continue;
+        const auto state = peekFile (library, entry->path, audio);
+        if (state == FileState::Ready)
+        {
+            hit.spec = &spec;
+            hit.choice.file = entry->path;
+            hit.choice.root = entry->root > 0 ? entry->root : 60;
+            hit.audio = audio;
+            hit.pending = false;
+            return true;
+        }
+    }
+    if (hit.pending)
+    {
+        hit.spec = &spec;
+        return false;
+    }
+    bool requested = false;
+    const int limit = n < 64 ? n : 64;
+    for (int i = 1; i < limit; ++i)
+    {
+        const auto* entry = sampleIndexAt (*index, part, filter, (start + i) % n);
+        if (entry == nullptr)
+            continue;
+        const auto state = peekFile (library, entry->path, audio);
+        if (state == FileState::Ready)
+        {
+            hit.spec = &spec;
+            hit.choice.file = entry->path;
+            hit.choice.root = entry->root > 0 ? entry->root : 60;
+            hit.audio = audio;
+            return true;
+        }
+        if (state == FileState::Pending && ! requested)
+        {
+            library->request (entry->path);
+            hit.pending = true;
+            hit.spec = &spec;
+            requested = true;
+        }
+    }
+    return false;
+}
 
 bool readyChoice (const SampleLibrary* library, const SampleSpec& spec, int midiNote,
                   int pick, int sliceIndex, LaneHit& hit) noexcept
@@ -532,7 +642,12 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     }
 
     const int sliceIndex = sliceCursor[part]++;
-    const auto hit = resolveLane (bank, params, part, midiNote, sliceIndex);
+    LaneHit hit;
+    const bool recipe = spec.filter.on && params.sampleIndex != nullptr;
+    if (recipe)
+        readyFromIndex (params.library, params.sampleIndex, part, spec, params.samplePick[part], -1, hit);
+    if (hit.audio == nullptr && ! hit.pending)
+        hit = resolveLane (bank, params, part, midiNote, sliceIndex);
     const SampleSpec& played = hit.spec != nullptr ? *hit.spec : spec;
     SampleChoice choice = hit.choice;
     const SampleAudio* audio = hit.audio;
@@ -567,6 +682,23 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
                 }
                 if (audio != nullptr)
                     break;
+            }
+            if (audio == nullptr && params.sampleIndex != nullptr)
+            {
+                for (int alt : kPack)
+                {
+                    LaneHit packHit;
+                    const int shifted = pick + (alt == TomMid ? 1 : alt == TomLow ? 2 : 0);
+                    if (readyFromIndex (params.library, params.sampleIndex, Drums, drum.sample, shifted, alt, packHit)
+                        && packHit.audio != nullptr)
+                    {
+                        audio = packHit.audio;
+                        choice.file = packHit.choice.file;
+                        choice.root = packHit.choice.root > 0 ? packHit.choice.root : 60;
+                        fromPack = true;
+                        break;
+                    }
+                }
             }
         }
     }
@@ -705,15 +837,26 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
     const auto& own = drum.voicePool[voice];
     if (! own.empty())
         scanPool (own, pick + shift, true);
-    else
+    else if (params.sampleIndex != nullptr)
+    {
+        LaneHit indexed;
+        if (readyFromIndex (params.library, params.sampleIndex, Drums, spec, pick + shift, voice, indexed))
+            audio = indexed.audio;
+        else if (indexed.pending)
+            pending = true;
+    }
+    if (audio == nullptr && ! pending && own.empty())
     {
         const char* file = spec.voiceFile[voice][0] != 0 ? spec.voiceFile[voice] : spec.file;
         const SampleAudio* got = nullptr;
-        const auto state = probeFile (params.library, file, got);
+        const auto state = peekFile (params.library, file, got);
         if (state == FileState::Ready)
             audio = got;
         else if (state == FileState::Pending)
+        {
+            params.library->request (file);
             pending = true;
+        }
     }
     if (audio == nullptr && ! pending)
     {
@@ -724,6 +867,23 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
             if (alt == voice || audio != nullptr)
                 continue;
             scanPool (drum.voicePool[alt], pick, false);
+        }
+        if (audio == nullptr && ! pending && params.sampleIndex != nullptr)
+        {
+            for (int alt : kPack)
+            {
+                if (alt == voice || audio != nullptr)
+                    continue;
+                LaneHit indexed;
+                const int shifted = pick + (alt == TomMid ? 1 : alt == TomLow ? 2 : 0);
+                if (readyFromIndex (params.library, params.sampleIndex, Drums, spec, shifted, alt, indexed))
+                    audio = indexed.audio;
+                else if (indexed.pending)
+                {
+                    pending = true;
+                    break;
+                }
+            }
         }
     }
     if (audio == nullptr || audio->frames < 8)

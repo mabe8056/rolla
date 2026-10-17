@@ -215,6 +215,44 @@ void readSample (SampleSpec& spec, const juce::var& preset)
     spec.layerMix = std::clamp (num (s, "layerMix", spec.layerMix), 0.f, 1.f);
     if (auto* sampleObj = s.getDynamicObject())
     {
+        if (sampleObj->hasProperty ("poolFilter"))
+        {
+            const auto filter = sampleObj->getProperty ("poolFilter");
+            spec.filter.on = true;
+            const auto lane = str (filter, "lane", "");
+            if (lane.isNotEmpty())
+                spec.filter.lane = partFromLaneName (lane.toRawUTF8());
+            const auto voice = str (filter, "voice", "");
+            if (voice.isNotEmpty())
+                spec.filter.voice = voiceFromFolderName (voice.toRawUTF8());
+            copySamplePath (spec.filter.pack, 64, str (filter, "pack", "").toRawUTF8());
+            copySamplePath (spec.filter.category, 32, str (filter, "category", "").toRawUTF8());
+            if (auto* filterObj = filter.getDynamicObject())
+            {
+                if (filterObj->hasProperty ("root"))
+                {
+                    const auto root = filterObj->getProperty ("root");
+                    if (root.isString())
+                    {
+                        const auto text = root.toString();
+                        int midi = midiFromNoteName (text.toRawUTF8(), -1);
+                        if (midi < 0 && text.isNotEmpty())
+                            midi = midiFromNoteName ((text + "3").toRawUTF8(), -1);
+                        if (midi >= 0)
+                            spec.filter.rootPc = midi % 12;
+                    }
+                    else if (! root.isVoid())
+                    {
+                        const int pc = (int) root;
+                        if (pc >= 0)
+                            spec.filter.rootPc = pc % 12;
+                    }
+                }
+            }
+        }
+    }
+    if (auto* sampleObj = s.getDynamicObject())
+    {
         if (sampleObj->hasProperty ("loop"))
         {
             const auto loop = sampleObj->getProperty ("loop");

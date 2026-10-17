@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Grow resources/presets.json so every manifest file is referenced.
+"""Turn factory presets into sound recipes.
 
-Hero presets stay first (dialect defaults). Each melodic file then gets its
-own SAMPLE preset. There is no pure-synth preset in a melodic lane.
-Drum kits give every voice a pool from its manifest folder. There is no
-synth drum kit. A missing hit uses another file from the pack.
+Hero presets stay first so dialect ids still resolve. Each one is SAMPLE mode
+with a pool filter over its whole lane, so ROLL draws from whatever the
+scanner finds. A single file hint remains for the moment the folder is empty.
+VOX gains phrase and chop recipes. PAD gains an atmosphere recipe.
+Drum kits do not embed voice pools; the DRUMS scan is the pool.
 """
 
 import copy
@@ -14,7 +15,6 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PRESETS = os.path.join(ROOT, "resources", "presets.json")
-MANIFEST = os.path.join(ROOT, "resources", "SAMPLE_MANIFEST.json")
 
 HERO_STYLES = {
     ("bass", "pluck"): ["ukmin"],
@@ -49,195 +49,92 @@ LANE_ID = {
 }
 
 MELODIC = ("bass", "stab", "hits", "pluck", "pad", "vox")
-LANE_FOLDER = {p: p.upper() for p in MELODIC}
-
-VOICE_KEYS = {
-    "KICK": ("kick",),
-    "SNARE": ("snare",),
-    "CLAP": ("clap",),
-    "RIM": ("rim",),
-    "CH": ("hatC",),
-    "OH": ("hatO",),
-    "RIDE": ("ride",),
-    "PERC": ("perc", "tomLow", "tomMid"),
-}
+EXTRA_IDS = {"phrases", "chops", "atmospheres"}
 
 
-def styles_from_tags(tags):
-    found = []
-    for tag in tags or []:
-        parts = str(tag).split(".")
-        if len(parts) >= 2 and parts[1] in ("ukmin", "long", "pop", "gaskin"):
-            if parts[1] not in found:
-                found.append(parts[1])
-    return found
+def is_generated(preset, lane):
+    if preset.get("library"):
+        return True
+    ident = str(preset.get("id") or "")
+    if ident in EXTRA_IDS or ident == "synth":
+        return True
+    prefix = LANE_ID[lane]
+    return len(ident) == len(prefix) + 2 and ident.startswith(prefix) and ident[-2:].isdigit()
 
 
-def clip_name(text):
-    text = " ".join(text.split())
-    if len(text) <= 31:
-        return text
-    return text[:31].rstrip()
+def recipe(preset, lane, category=None):
+    sample = preset.setdefault("sample", {})
+    sample["mode"] = "SAMPLE"
+    sample["pool"] = []
+    filt = {"lane": lane.upper()}
+    if category:
+        filt["category"] = category
+    sample["poolFilter"] = filt
+    preset.pop("library", None)
+    return preset
 
 
-def sample_block(meta, lane):
-    prep = meta.get("prep") or {}
-    length = float(prep.get("length_ms") or 0)
-    frames = int(prep.get("frames") or 0)
-    sr = int(prep.get("sr") or 44100)
-    lead = float(prep.get("lead_ms_at_-60dBFS") or 0)
-    start = round(max(0.0, lead) / 1000.0, 4)
-    root = meta.get("root") or "C3"
-    # Factory one-shots are the sound. LAYER (synth blended under the file)
-    # is opt-in from the lane control; the stored mix is what that opt-in uses.
-    mode = "SAMPLE"
-    mix = 1.0
-    loop_on = False
-    slice_on = False
-    if lane == "bass":
-        mix = 0.45 if length < 400 else (0.6 if length >= 800 else 0.55)
-        loop_on = length >= 800
-    elif lane == "stab":
-        mix = 0.6 if length >= 700 else 1.0
-        loop_on = length >= 1200
-    elif lane == "hits":
-        mix = 1.0
-    elif lane == "pluck":
-        mix = 0.55 if length >= 800 else 1.0
-    elif lane == "pad":
-        mix = 0.6
-        loop_on = True
-    elif lane == "vox":
-        mix = 1.0
-        slice_on = length >= 600
-
-    loop = {"on": False, "start": 0, "end": 0, "xfade": 0}
-    if loop_on and frames > 128 and sr > 1000:
-        fade_fr = int(sr * float(prep.get("fadeOut_ms") or 12) / 1000.0)
-        end = max(64, frames - max(fade_fr, 1))
-        start_fr = max(48, int(frames * 0.18))
-        if start_fr >= end - 64:
-            start_fr = max(48, end // 3)
-        xfade = max(48, int(sr * 0.04))
-        xfade = min(xfade, max(48, (end - start_fr) // 4))
-        loop = {"on": True, "start": int(start_fr), "end": int(end), "xfade": int(xfade)}
-
-    return {
-        "mode": mode,
-        "file": meta["file"],
-        "root": root,
-        "start": start,
-        "reverse": False,
-        "slice": slice_on,
-        "loop": loop,
-        "layerMix": mix,
-        "pool": [],
-    }
-
-
-def order_pool(files, primary):
-    ordered = []
-    if primary:
-        ordered.append(primary)
-    for path in files:
-        if path not in ordered:
-            ordered.append(path)
-    return ordered
+def clone_recipe(source, ident, name, lane, category):
+    preset = copy.deepcopy(source)
+    preset["id"] = ident
+    preset["name"] = name
+    preset.pop("styles", None)
+    preset.pop("library", None)
+    return recipe(preset, lane, category)
 
 
 def main():
     with open(PRESETS, encoding="utf-8") as handle:
         doc = json.load(handle)
-    with open(MANIFEST, encoding="utf-8") as handle:
-        manifest = json.load(handle)
-
-    by_lane = {lane: [] for lane in MELODIC}
-    drums = {folder: [] for folder in VOICE_KEYS}
-    for entry in manifest["files"]:
-        lane = str(entry.get("lane") or "").lower()
-        if lane in by_lane:
-            by_lane[lane].append(entry)
-        elif lane == "drums":
-            folder = (entry.get("voice") or "").upper()
-            if folder in drums:
-                drums[folder].append(entry["file"])
 
     parts = doc["parts"]
     for lane in MELODIC:
         kept = []
         for preset in parts[lane]["presets"]:
-            if preset.get("library"):
-                continue
-            if preset.get("id") == "synth":
+            if is_generated(preset, lane):
                 continue
             styles = HERO_STYLES.get((lane, preset.get("id")))
             if styles:
                 preset["styles"] = styles
-            sample = preset.get("sample") or {}
-            if sample.get("file") and str(sample.get("mode", "")).upper() != "SYNTH":
-                sample["mode"] = "SAMPLE"
-                preset["sample"] = sample
-            kept.append(preset)
-        if not kept:
-            raise SystemExit(f"{lane} has no hero preset to copy")
-        template = copy.deepcopy(kept[0])
-        used_names = {p.get("name") for p in kept}
-        for index, meta in enumerate(by_lane[lane]):
-            preset = copy.deepcopy(template)
-            preset["id"] = f"{LANE_ID[lane]}{index:02d}"
-            preset["library"] = True
-            base = os.path.splitext(os.path.basename(meta["file"]))[0].replace("_", " ")
-            name = clip_name(base)
-            if name in used_names:
-                name = clip_name(f"{index:02d} {base}")
-            used_names.add(name)
-            preset["name"] = name
-            preset["sample"] = sample_block(meta, lane)
-            styles = styles_from_tags(meta.get("presets"))
-            if styles:
-                preset["styles"] = styles
-            else:
-                preset.pop("styles", None)
-            kept.append(preset)
+            kept.append(recipe(preset, lane))
+        if len(kept) < 1:
+            raise SystemExit(f"{lane} has no hero preset")
+        if lane == "vox":
+            kept.append(clone_recipe(kept[0], "phrases", "Phrases", lane, "phrase"))
+            kept.append(clone_recipe(kept[0], "chops", "Chops", lane, "chop"))
+        elif lane == "pad":
+            kept.append(clone_recipe(kept[0], "atmospheres", "Atmospheres", lane, "atmosphere"))
         parts[lane]["presets"] = kept
 
-    sample_kits = []
+    kits = []
     for preset in parts["drums"]["presets"]:
         ident = preset.get("id")
         if ident in ("dry", "synth") or preset.get("name") in ("909 Dry", "909 SYNTH"):
             continue
-        sample_kits.append(preset)
+        if preset.get("library"):
+            continue
         styles = HERO_STYLES.get(("drums", ident))
         if styles:
             preset["styles"] = styles
         sample = preset.setdefault("sample", {})
-        # His kit is the voice. A missing file tries the rest of this folder,
-        # then PERC, OH and RIDE. Nothing in this bank is a synth drum.
         sample["mode"] = "SAMPLE"
         sample["layerMix"] = 1.0
-        voices = sample.setdefault("voices", {})
-        pools = {}
-        for folder, keys in VOICE_KEYS.items():
-            files = drums.get(folder) or []
-            for key in keys:
-                primary = voices.get(key) or ""
-                if not isinstance(primary, str):
-                    primary = ""
-                pool = order_pool(files, primary)
-                if not pool:
-                    continue
-                voices[key] = pool[0]
-                pools[key] = pool
-        sample["voicePools"] = pools
-    parts["drums"]["presets"] = sample_kits
+        sample.pop("voicePools", None)
+        sample["pool"] = []
+        sample["poolFilter"] = {"lane": "DRUMS"}
+        kits.append(preset)
+    if len(kits) < 1:
+        raise SystemExit("no sample drum kit")
+    parts["drums"]["presets"] = kits
 
     doc["notes"] = (
-        "Schema v3. Every default preset references one of his samples. "
-        "Melodic lanes are SAMPLE. LAYER is opt-in and there is no pure-synth "
-        "factory preset. Every drum voice comes from "
-        "DRUMS/{KICK,SNARE,CLAP,RIM,CH,OH,RIDE,PERC}. A missing or uncovered "
-        "hit plays another file from that pack. There is no synth drum kit. "
-        "Do not commit audio."
+        "Schema v3. Factory presets are sample recipes. Each melodic recipe "
+        "filters the scanned lane folder (root, pack and category when set) "
+        "so ROLL draws from every file in that pool. VOX has phrase and chop "
+        "recipes. PAD has an atmosphere recipe. Drum kits read "
+        "DRUMS/<voice>/ from the index and do not embed file lists. "
+        "A missing hit stays on another of his samples. There is no synth "
+        "drum kit. Do not commit audio."
     )
 
     with open(PRESETS, "w", encoding="utf-8") as handle:
@@ -246,7 +143,6 @@ def main():
 
     counts = {lane: len(parts[lane]["presets"]) for lane in list(MELODIC) + ["drums"]}
     print("preset counts", counts)
-    print("max", max(counts.values()))
 
 
 if __name__ == "__main__":

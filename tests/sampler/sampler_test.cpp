@@ -9,6 +9,7 @@
 #include <juce_events/juce_events.h>
 
 #include <cstdio>
+#include <cstring>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -400,39 +401,53 @@ int main()
         expect (factory.count[rolla::Drums] == 2, "factory drums are the two sample kits");
         for (int i = 0; i < factory.count[rolla::Drums]; ++i)
             expect (factory.drums[i].sample.mode == rolla::SampleMode::Sample, "no synth drum kit");
-        expect (factory.drums[0].voicePool[rolla::Kick].size() >= 20, "kick pool");
-        expect (factory.drums[0].voicePool[rolla::Snare].size() >= 10, "snare pool");
-        expect (factory.drums[0].voicePool[rolla::Clap].size() >= 16, "clap pool");
-        expect (factory.drums[0].voicePool[rolla::Rim].size() >= 8, "rim pool");
-        expect (factory.drums[0].voicePool[rolla::HatC].size() >= 14, "closed hat pool");
-        expect (factory.drums[0].voicePool[rolla::HatO].size() >= 14, "open hat pool");
-        expect (factory.drums[0].voicePool[rolla::Ride].size() >= 6, "ride pool");
-        expect (factory.drums[0].voicePool[rolla::Perc].size() >= 12, "perc pool");
+        expect (factory.drums[0].voicePool[rolla::Kick].empty(), "kick pool is the scanned folder");
+        expect (factory.drums[0].voicePool[rolla::Perc].empty(), "perc pool is the scanned folder");
+        expect (factory.drums[0].sample.filter.on && factory.drums[0].sample.filter.lane == rolla::Drums,
+                "tight kit filters the drum pack");
         expect (std::string (rolla::drumVoiceChoice (factory.drums[0], rolla::Kick, 0))
                     == "DRUMS/KICK/CD_Kick_06.wav",
-                "pick 0 is the hero kick");
-        expect (std::string (rolla::drumVoiceChoice (factory.drums[0], rolla::Kick, 1))
-                    != "DRUMS/KICK/CD_Kick_06.wav",
-                "the next roll picks another kick");
+                "the hero kick is only a hint until the index is up");
         expect (factory.bass[0].sample.styles != 0, "pluck is tagged to a dialect");
+        expect (factory.bass[0].sample.filter.on && factory.bass[0].sample.filter.lane == rolla::Bass,
+                "pluck draws from the bass folder");
         int bare = 0;
         for (int part = rolla::Bass; part <= rolla::Vox; ++part)
             for (int i = 0; i < factory.count[part]; ++i)
             {
                 const auto& spec = rolla::specAt (factory, part, i);
-                if (spec.mode != rolla::SampleMode::Sample || spec.file[0] == 0)
+                if (spec.mode != rolla::SampleMode::Sample || ! spec.filter.on || spec.filter.lane != part)
                     ++bare;
             }
-        expect (factory.count[rolla::Bass] > 3, "bass bank grew past the three heroes");
-        expect (bare == 0, "every default melodic preset references a sample");
+        expect (factory.count[rolla::Bass] == 3, "bass stays three lane recipes");
+        expect (factory.count[rolla::Bass] <= 16, "bass did not grow one preset per file");
+        expect (bare == 0, "every default melodic preset is a sample recipe");
+        bool phrases = false;
+        bool chops = false;
+        bool atmospheres = false;
+        for (int i = 0; i < factory.count[rolla::Vox]; ++i)
+        {
+            if (std::string (factory.vox[i].id) == "phrases"
+                && std::string (factory.vox[i].sample.filter.category) == "phrase")
+                phrases = true;
+            if (std::string (factory.vox[i].id) == "chops"
+                && std::string (factory.vox[i].sample.filter.category) == "chop")
+                chops = true;
+        }
+        for (int i = 0; i < factory.count[rolla::Pad]; ++i)
+            if (std::string (factory.pad[i].id) == "atmospheres"
+                && std::string (factory.pad[i].sample.filter.category) == "atmosphere")
+                atmospheres = true;
+        expect (phrases && chops, "vox recipes include phrases and chops");
+        expect (atmospheres, "pad recipes include atmospheres");
         const int first = rolla::pickPresetForRoll (factory, rolla::Bass, rolla::UkMin, 1);
-        expect (first >= 0 && factory.bass[first].sample.file[0] != 0,
-                "roll picks a sampled bass");
-        bool varied = false;
+        expect (first == 0 && factory.bass[first].sample.filter.on,
+                "uk min roll stays on the pluck recipe");
+        bool sameRecipe = true;
         for (std::uint32_t seed = 2; seed < 24; ++seed)
             if (rolla::pickPresetForRoll (factory, rolla::Bass, rolla::UkMin, seed) != first)
-                varied = true;
-        expect (varied, "roll preset pick changes with the seed");
+                sameRecipe = false;
+        expect (sameRecipe, "the dialect picks the recipe; the folder scan picks the file");
         expect (rolla::pickPresetForRoll (factory, rolla::Drums, rolla::Gaskin, 3) == 1,
                 "gaskin roll stays on the sample kit");
         for (int dialect = 0; dialect < rolla::NumDialects; ++dialect)
@@ -556,6 +571,181 @@ int main()
             lanePack = std::max (lanePack, std::fabs (laneL[rolla::Bass]));
         }
         expect (lanePack > 0.01f, "the drum-pack substitute is audible on the lane");
+    }
+
+    {
+        const auto scanRoot = rootDir.getChildFile ("scan");
+        scanRoot.deleteRecursively();
+        writeTone (scanRoot.getChildFile ("BASS/a_low.wav"), 0.2, 0.85f, 110.f, false);
+        writeTone (scanRoot.getChildFile ("BASS/b_high.wav"), 0.2, 0.2f, 220.f, false);
+        writeTone (scanRoot.getChildFile ("BASS/extra.wav"), 0.15, 0.4f, 130.f, false);
+        writeTone (scanRoot.getChildFile ("VOX/phrases/ah.wav"), 0.2, 0.5f, 440.f, false);
+        writeTone (scanRoot.getChildFile ("VOX/chops/uh.wav"), 0.2, 0.5f, 523.f, false);
+        writeTone (scanRoot.getChildFile ("PAD/atmospheres/bed.wav"), 0.3, 0.3f, 196.f, false);
+        writeTone (scanRoot.getChildFile ("DRUMS/KICK/k1.wav"), 0.12, 0.8f, 70.f, false);
+        writeTone (scanRoot.getChildFile ("DRUMS/KICK/k2.wav"), 0.12, 0.25f, 90.f, false);
+        writeTone (scanRoot.getChildFile ("DRUMS/PERC/shaker.wav"), 0.12, 0.45f, 800.f, false);
+        writeTone (scanRoot.getChildFile ("DRUMS/SHAKER/noise.wav"), 0.1, 0.3f, 1000.f, false);
+        const char* manifest = R"JSON({
+          "count": 4,
+          "files": [
+            {"file":"BASS/a_low.wav","lane":"BASS","root":"F1","source_pack":"Phantom","artist":"Julian Fijma","category":"one-shot","source":"Phantom/Julian Fijma/a.wav","presets":["bass.ukmin.pluck"]},
+            {"file":"BASS/b_high.wav","lane":"BASS","root":"C2","source_pack":"Phantom","artist":"Julian Fijma","category":"one-shot"},
+            {"file":"BASS/gone.wav","lane":"BASS","root":"D1","source_pack":"UNDRGRND","category":"one-shot"},
+            {"file":"VOX/phrases/ah.wav","lane":"VOX","category":"phrase","source_pack":"Minimal Tech Vocals","artist":"Sine"},
+            {"file":"VOX/chops/uh.wav","lane":"VOX","category":"chop","source_pack":"Minimal Tech Vocals"},
+            {"file":"PAD/atmospheres/bed.wav","lane":"PAD","category":"atmosphere","source_pack":"Sine Artist Series"}
+          ]
+        })JSON";
+
+        rolla::SampleLibrary scan;
+        scan.setRoot (scanRoot);
+        scan.startIndex (manifest, (int) std::strlen (manifest));
+        expect (waitUntil ([&] { return scan.indexedFound() >= 0; }), "index publishes");
+        expect (! scan.ready ("BASS/a_low.wav") && ! scan.missing ("BASS/a_low.wav"),
+                "the scan does not preload audio");
+        const auto snap = scan.index();
+        expect (snap != nullptr && snap->found >= 9, "disk files are indexed");
+        expect (snap->missing >= 1, "a manifest file that is not on disk counts as missing");
+        rolla::PoolFilter bass;
+        bass.on = true;
+        bass.lane = rolla::Bass;
+        const int bassCount = rolla::sampleIndexCount (*snap, rolla::Bass, bass);
+        expect (bassCount >= 3, "the bass recipe sees the whole folder");
+        const auto* firstBass = rolla::sampleIndexAt (*snap, rolla::Bass, bass, 0);
+        const auto* secondBass = rolla::sampleIndexAt (*snap, rolla::Bass, bass, 1);
+        expect (firstBass != nullptr && secondBass != nullptr
+                    && std::strcmp (firstBass->path, secondBass->path) != 0,
+                "roll ordinals are different files");
+        expect (std::string (firstBass->pack) == "Phantom", "v2 pack metadata is kept");
+        expect (std::string (firstBass->artist) == "Julian Fijma", "v2 artist metadata is kept");
+        expect (firstBass->rootPc == 5, "manifest root wins");
+        bool extra = false;
+        bool shaker = false;
+        for (const auto& entry : snap->entries)
+        {
+            if (std::string (entry.path) == "BASS/extra.wav" && entry.onDisk)
+                extra = true;
+            if (std::string (entry.path) == "DRUMS/SHAKER/noise.wav" && entry.voice == rolla::Perc && entry.onDisk)
+                shaker = true;
+        }
+        expect (extra, "a file that is not in the manifest is still scanned");
+        expect (shaker, "an unknown drum folder stays in the perc pool");
+        rolla::PoolFilter phrase;
+        phrase.on = true;
+        phrase.lane = rolla::Vox;
+        std::snprintf (phrase.category, sizeof phrase.category, "phrase");
+        expect (rolla::sampleIndexCount (*snap, rolla::Vox, phrase) == 1, "phrase filter");
+        rolla::PoolFilter chop;
+        chop.on = true;
+        chop.lane = rolla::Vox;
+        std::snprintf (chop.category, sizeof chop.category, "chop");
+        expect (rolla::sampleIndexCount (*snap, rolla::Vox, chop) == 1, "chop filter");
+        rolla::PoolFilter atmosphere;
+        atmosphere.on = true;
+        atmosphere.lane = rolla::Pad;
+        std::snprintf (atmosphere.category, sizeof atmosphere.category, "atmosphere");
+        expect (rolla::sampleIndexCount (*snap, rolla::Pad, atmosphere) == 1, "atmosphere filter");
+
+        rolla::PresetBank recipes;
+        rolla::loadDefaultPresets (recipes);
+        recipes.count[rolla::Bass] = 1;
+        recipes.bass[0].sample.mode = rolla::SampleMode::Sample;
+        recipes.bass[0].sample.filter.on = true;
+        recipes.bass[0].sample.filter.lane = rolla::Bass;
+        recipes.bass[0].sample.file[0] = 0;
+        recipes.count[rolla::Drums] = 1;
+        recipes.drums[0].sample.mode = rolla::SampleMode::Sample;
+        recipes.drums[0].sample.filter.on = true;
+        recipes.drums[0].sample.filter.lane = rolla::Drums;
+        rolla::Sampler recipeSampler;
+        recipeSampler.prepare (48000.0);
+        rolla::EngineParams recipeParams;
+        recipeParams.presets = &recipes;
+        recipeParams.library = &scan;
+        recipeParams.sampleIndex = snap.get();
+        recipes.bass[0].sample.filter.rootPc = firstBass->rootPc;
+        recipeParams.samplePick[rolla::Bass] = 0;
+        const auto low = recipeSampler.take (rolla::Bass, 41, 110, 4.f, recipes, recipeParams);
+        expect (low.kind == 1 && std::fabs (low.synthGain) < 1.0e-6f, "a recipe plays a scanned bass");
+        expect (waitUntil ([&] { return scan.ready (firstBass->path); }), "the chosen bass loads on demand");
+        expect (! scan.ready (secondBass->path), "the other bass stays unloaded");
+        recipeSampler.take (rolla::Bass, 41, 110, 4.f, recipes, recipeParams);
+        float lowPeak = 0.f;
+        for (int i = 0; i < 1500; ++i)
+        {
+            float laneL[rolla::NumParts] {};
+            float laneR[rolla::NumParts] {};
+            recipeSampler.render (laneL, laneR, 0.f, 0.f, false);
+            lowPeak = std::max (lowPeak, std::fabs (laneL[rolla::Bass]));
+        }
+        recipeSampler.reset();
+        recipes.bass[0].sample.filter.rootPc = secondBass->rootPc;
+        recipeSampler.take (rolla::Bass, 41, 110, 4.f, recipes, recipeParams);
+        expect (waitUntil ([&] { return scan.ready (secondBass->path); }), "the next roll loads the other bass");
+        recipeSampler.take (rolla::Bass, 41, 110, 4.f, recipes, recipeParams);
+        float highPeak = 0.f;
+        for (int i = 0; i < 1500; ++i)
+        {
+            float laneL[rolla::NumParts] {};
+            float laneR[rolla::NumParts] {};
+            recipeSampler.render (laneL, laneR, 0.f, 0.f, false);
+            highPeak = std::max (highPeak, std::fabs (laneL[rolla::Bass]));
+        }
+        expect (lowPeak > 0.02f && highPeak > 0.005f && lowPeak > highPeak * 2.f,
+                "two rolls draw different files from the lane");
+
+        recipeSampler.reset();
+        recipeParams.samplePick[rolla::Drums] = 0;
+        expect (recipeSampler.takeDrum (rolla::Kick, 100, recipes, recipeParams) < 0.001f,
+                "a scanned kick does not play the circuit model");
+        expect (waitUntil ([&] { return scan.ready ("DRUMS/KICK/k1.wav"); }), "kick loads on demand");
+        expect (! scan.ready ("DRUMS/KICK/k2.wav"), "the other kick stays unloaded");
+        recipeSampler.takeDrum (rolla::Kick, 100, recipes, recipeParams);
+        float scannedKick = 0.f;
+        for (int i = 0; i < 1200; ++i)
+        {
+            float laneL[rolla::NumParts] {};
+            float laneR[rolla::NumParts] {};
+            recipeSampler.render (laneL, laneR, 0.f, 0.f, false);
+            scannedKick = std::max (scannedKick, std::fabs (laneL[rolla::Drums]));
+        }
+        expect (scannedKick > 0.01f, "the scanned kick is audible");
+
+        const auto cache = scanRoot.getChildFile (".rolla-index.json");
+        expect (cache.existsAsFile(), "the index is cached beside the samples");
+        auto cachedText = cache.loadFileAsString();
+        expect (cachedText.contains ("Phantom"), "cache keeps pack metadata");
+        cachedText = cachedText.replace ("Phantom", "CachedPack");
+        cache.replaceWithText (cachedText);
+        rolla::SampleLibrary again;
+        again.setRoot (scanRoot);
+        again.startIndex (manifest, (int) std::strlen (manifest));
+        expect (waitUntil ([&] { return again.indexedFound() >= 0; }), "cached index publishes");
+        const auto cachedSnap = again.index();
+        bool cachedPack = false;
+        if (cachedSnap != nullptr)
+            for (const auto& entry : cachedSnap->entries)
+                if (std::string (entry.pack) == "CachedPack")
+                    cachedPack = true;
+        expect (cachedPack, "a matching signature reuses the cache");
+        expect (again.indexedFound() == scan.indexedFound(), "the cached scan counts the same files");
+
+        scanRoot.getChildFile ("SAMPLE_MANIFEST_v2.json").replaceWithText (
+            R"JSON({"files":[{"file":"BASS/a_low.wav","lane":"BASS","root":"F1","source_pack":"Override","artist":"Disk","category":"phrase"}]})JSON");
+        rolla::SampleLibrary disk;
+        disk.setRoot (scanRoot);
+        disk.startIndex (manifest, (int) std::strlen (manifest));
+        expect (waitUntil ([&] { return disk.indexedFound() >= 0; }), "disk manifest is indexed");
+        const auto diskSnap = disk.index();
+        bool overridden = false;
+        if (diskSnap != nullptr)
+            for (const auto& entry : diskSnap->entries)
+                if (std::string (entry.path) == "BASS/a_low.wav"
+                    && std::string (entry.pack) == "Override"
+                    && std::string (entry.category) == "phrase")
+                    overridden = true;
+        expect (overridden, "SAMPLE_MANIFEST_v2.json overrides the embedded manifest");
     }
 
     {

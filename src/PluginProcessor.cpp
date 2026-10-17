@@ -317,7 +317,7 @@ void RollaProcessor::deferredStartup()
             if (! rootChosen.load())
             {
                 library.setRoot (samples);
-                library.watch (copyPresets());
+                library.startIndex (BinaryData::SAMPLE_MANIFEST_json, BinaryData::SAMPLE_MANIFEST_jsonSize);
                 slots.setRoot (samples);
                 refreshSampleInventory();
             }
@@ -613,6 +613,8 @@ void RollaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     params.key = (int) raw (apvts, "key");
     params.dialect = (int) raw (apvts, "dialect");
     params.library = &library;
+    const auto indexHold = library.index();
+    params.sampleIndex = indexHold.get();
     params.userSlots = slots.published();
     for (int i = 0; i < NumParts; ++i)
     {
@@ -801,7 +803,7 @@ bool RollaProcessor::laneSampleMissing (int part) const
     const auto bank = copyPresets();
     const int preset = presetSlot (bank, part, (int) raw (apvts, (juce::String (partId (part)) + "Preset").toRawUTF8()));
     const auto& spec = sampleSpecFor (bank, part, preset);
-    if (spec.mode == SampleMode::Synth)
+    if (spec.mode == SampleMode::Synth || spec.filter.on)
         return false;
 
     auto absent = [&] (const char* file)
@@ -848,7 +850,7 @@ void RollaProcessor::setSamplesRoot (const juce::File& folder)
     rootChosen.store (true);
     std::lock_guard<std::mutex> lock (rootSetupMu);
     library.setRoot (folder);
-    library.watch (copyPresets());
+    library.startIndex (BinaryData::SAMPLE_MANIFEST_json, BinaryData::SAMPLE_MANIFEST_jsonSize);
     slots.setRoot (folder);
     refreshSampleInventory();
     juce::PropertiesFile::Options options;
@@ -869,23 +871,11 @@ juce::File RollaProcessor::samplesRoot() const
 
 void RollaProcessor::refreshSampleInventory()
 {
-    std::vector<std::string> paths;
-    collectReferencedSamples (copyPresets(), paths);
-    const auto folder = library.root();
-    int found = 0;
-    int missing = 0;
-    for (const auto& relative : paths)
-    {
-        if (folder.getChildFile (juce::String (relative)).existsAsFile())
-            ++found;
-        else
-            ++missing;
-    }
+    const int found = library.indexedFound();
+    if (found < 0)
+        return;
     samplesFoundCount.store (found, std::memory_order_relaxed);
-    samplesMissingCount.store (missing, std::memory_order_relaxed);
-    const auto line = "ROLLA samples: " + std::to_string (found) + " found, " + std::to_string (missing) + " missing";
-    juce::Logger::writeToLog (juce::String (line));
-    std::fprintf (stderr, "%s\n", line.c_str());
+    samplesMissingCount.store (library.indexedMissing(), std::memory_order_relaxed);
 }
 
 juce::String RollaProcessor::sampleInventoryText() const

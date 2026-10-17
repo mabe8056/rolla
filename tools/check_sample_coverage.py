@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""Fail if a factory preset names a file outside SAMPLE_MANIFEST.json, or if
-any manifest file is unused. Every default preset must reference a sample.
-A synth drum kit is a failure.
+"""Factory recipes must be sample filters, not one preset per file.
+
+Every melodic lane and every drum voice is reachable from a broad recipe.
+An explicit path, when a recipe still names one, has to be in the manifest.
+Files that are only on disk are reached by the folder scan, so the manifest
+does not have to be copied into presets.json.
 """
 
 import json
@@ -13,8 +16,21 @@ PRESETS = os.path.join(ROOT, "resources", "presets.json")
 MANIFEST = os.path.join(ROOT, "resources", "SAMPLE_MANIFEST.json")
 
 MELODIC = ("bass", "stab", "hits", "pluck", "pad", "vox")
-DRUM_VOICES = ("kick", "snare", "clap", "rim", "hatC", "hatO", "ride", "perc")
+LANE_FOLDER = {lane: lane.upper() for lane in MELODIC}
+DRUM_VOICES = {
+    "KICK": "kick",
+    "SNARE": "snare",
+    "CLAP": "clap",
+    "RIM": "rim",
+    "CH": "hatC",
+    "OH": "hatO",
+    "RIDE": "ride",
+    "PERC": "perc",
+}
 AUDIO = (".wav", ".aif", ".aiff", ".flac")
+MAX_PRESETS = 16
+MAX_LIST = 8
+MAX_EXPLICIT = 96
 
 
 def walk_paths(node, found):
@@ -28,6 +44,50 @@ def walk_paths(node, found):
     elif isinstance(node, list):
         for value in node:
             walk_paths(value, found)
+
+
+def sample_of(preset):
+    return preset.get("sample") or {}
+
+
+def filt_of(preset):
+    return sample_of(preset).get("poolFilter") or {}
+
+
+def is_broad(preset, lane_folder):
+    filt = filt_of(preset)
+    if str(filt.get("lane") or "").upper() != lane_folder:
+        return False
+    if filt.get("category") or filt.get("pack") or filt.get("voice"):
+        return False
+    root = filt.get("root")
+    if root not in (None, ""):
+        return False
+    return True
+
+
+def has_category(presets, category):
+    want = category.lower()
+    for preset in presets:
+        if str(filt_of(preset).get("category") or "").lower() == want:
+            return True
+    return False
+
+
+def list_too_long(node, where, failed):
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key in ("pool", "voicePools") and isinstance(value, list) and len(value) > MAX_LIST:
+                failed.append(f"FAIL {where} {key} lists {len(value)} files")
+            elif key == "voicePools" and isinstance(value, dict):
+                for voice, pool in value.items():
+                    if isinstance(pool, list) and len(pool) > MAX_LIST:
+                        failed.append(f"FAIL {where} {voice} lists {len(pool)} files")
+            else:
+                list_too_long(value, where, failed)
+    elif isinstance(node, list):
+        for value in node:
+            list_too_long(value, where, failed)
 
 
 def main():
@@ -48,69 +108,85 @@ def main():
 
     referenced = set()
     walk_paths(presets.get("parts", {}), referenced)
-
     unknown = sorted(referenced - manifest_set)
-    unused = sorted(manifest_set - referenced)
     print(f"manifest {len(manifest_set)}")
-    print(f"referenced {len(referenced)}")
-    print(f"used {len(manifest_set & referenced)}")
+    print(f"explicit {len(referenced)}")
     print(f"unknown {len(unknown)}")
-    print(f"unused {len(unused)}")
 
-    failed = False
+    failed = []
     if unknown:
-        failed = True
-        print("FAIL preset files missing from SAMPLE_MANIFEST.json:")
-        for path in unknown:
-            print(f"  {path}")
-    if unused:
-        failed = True
-        print("FAIL manifest files not used by any preset:")
-        for path in unused:
-            print(f"  {path}")
+        failed.append("FAIL preset files missing from SAMPLE_MANIFEST.json")
+        failed.extend(f"  {path}" for path in unknown)
+    if len(referenced) > MAX_EXPLICIT:
+        failed.append(f"FAIL {len(referenced)} explicit files; recipes must scan pools")
 
     parts = presets["parts"]
-    for lane in MELODIC:
-        synths = 0
-        for preset in parts[lane]["presets"]:
-            sample = preset.get("sample") or {}
-            mode = str(sample.get("mode", "SYNTH")).upper()
-            if mode != "SAMPLE" or not sample.get("file"):
-                failed = True
-                synths += 1 if mode == "SYNTH" else 0
-                print(f"FAIL {lane} preset {preset.get('id')} lacks a sample reference ({mode})")
-        print(f"{lane} presets {len(parts[lane]['presets'])} synth {synths}")
+    lanes_in_manifest = {}
+    voices_in_manifest = set()
+    for entry in manifest["files"]:
+        lane = str(entry.get("lane") or "").upper()
+        lanes_in_manifest.setdefault(lane, 0)
+        lanes_in_manifest[lane] += 1
+        if lane == "DRUMS":
+            voices_in_manifest.add(str(entry.get("voice") or "").upper())
 
-    sampled = 0
-    default_kit = parts["drums"]["presets"][0]
-    default_mode = str((default_kit.get("sample") or {}).get("mode", "SYNTH")).upper()
-    if default_mode != "SAMPLE":
-        failed = True
-        print(f"FAIL default drum kit {default_kit.get('id')} is {default_mode}, not SAMPLE")
-    for preset in parts["drums"]["presets"]:
-        sample = preset.get("sample") or {}
+    for lane in MELODIC:
+        rows = parts[lane]["presets"]
+        print(f"{lane} presets {len(rows)}")
+        if len(rows) > MAX_PRESETS:
+            failed.append(f"FAIL {lane} has {len(rows)} presets (one-per-file regression)")
+        if not any(is_broad(preset, LANE_FOLDER[lane]) for preset in rows):
+            failed.append(f"FAIL {lane} has no recipe over the whole lane")
+        list_too_long(rows, lane, failed)
+        for preset in rows:
+            sample = sample_of(preset)
+            mode = str(sample.get("mode", "SYNTH")).upper()
+            filt = filt_of(preset)
+            if mode != "SAMPLE" or not str(filt.get("lane") or ""):
+                failed.append(f"FAIL {lane} preset {preset.get('id')} is not a sample recipe ({mode})")
+
+    if not has_category(parts["vox"]["presets"], "phrase"):
+        failed.append("FAIL vox has no phrase recipe")
+    if not has_category(parts["vox"]["presets"], "chop"):
+        failed.append("FAIL vox has no chop recipe")
+    if not has_category(parts["pad"]["presets"], "atmosphere"):
+        failed.append("FAIL pad has no atmosphere recipe")
+
+    kits = parts["drums"]["presets"]
+    print(f"drums presets {len(kits)}")
+    if len(kits) > MAX_PRESETS:
+        failed.append(f"FAIL drums has {len(kits)} presets")
+    if not kits or str(sample_of(kits[0]).get("mode", "SYNTH")).upper() != "SAMPLE":
+        failed.append("FAIL default drum kit is not SAMPLE")
+    if not any(is_broad(preset, "DRUMS") for preset in kits):
+        failed.append("FAIL drums has no recipe over the whole pack")
+    list_too_long(kits, "drums", failed)
+    for preset in kits:
+        sample = sample_of(preset)
         mode = str(sample.get("mode", "SYNTH")).upper()
         if mode != "SAMPLE":
-            failed = True
-            print(f"FAIL kit {preset.get('id')} is {mode}; factory drums are samples")
-            continue
-        sampled += 1
-        pools = sample.get("voicePools") or {}
-        for voice in DRUM_VOICES:
-            pool = pools.get(voice) or []
-            primary = (sample.get("voices") or {}).get(voice) or ""
-            if not pool or not primary:
-                failed = True
-                print(f"FAIL kit {preset.get('id')} voice {voice} has no sample pool")
-        for voice in ("tomLow", "tomMid"):
-            pool = pools.get(voice) or []
-            if not pool:
-                failed = True
-                print(f"FAIL kit {preset.get('id')} {voice} is not covered by the perc pool")
-    print(f"drums sample kits {sampled}")
+            failed.append(f"FAIL kit {preset.get('id')} is {mode}; factory drums are samples")
+        if sample.get("voicePools"):
+            failed.append(f"FAIL kit {preset.get('id')} embeds voicePools")
 
+    for lane, count in lanes_in_manifest.items():
+        if lane in LANE_FOLDER.values() and not any(
+            is_broad(preset, lane) for preset in parts[lane.lower()]["presets"]
+        ):
+            failed.append(f"FAIL manifest lane {lane} ({count} files) is not covered by a recipe")
+        if lane == "DRUMS":
+            for folder in voices_in_manifest:
+                if folder and folder not in DRUM_VOICES and folder not in ("", "NONE", "NULL"):
+                    # Unknown voice folders are still inside the broad DRUMS recipe.
+                    pass
+            if not any(is_broad(preset, "DRUMS") for preset in kits):
+                failed.append("FAIL drum manifest is not covered by a recipe")
+
+    for line in failed:
+        print(line)
     if failed:
         return 1
+    print("phrase chop atmosphere recipes ok")
     print("sample coverage ok")
     return 0
 

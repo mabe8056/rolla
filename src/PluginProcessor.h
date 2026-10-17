@@ -104,9 +104,19 @@ public:
     juce::File samplesRoot() const;
     SampleLibrary& sampleLibrary() noexcept { return library; }
 
-    // Disk check of every file the factory presets name. -1 until the first scan.
-    int samplesFound() const noexcept { return samplesFoundCount.load (std::memory_order_relaxed); }
-    int samplesMissing() const noexcept { return samplesMissingCount.load (std::memory_order_relaxed); }
+    // Files the background index found on disk, and manifest entries that are absent.
+    // -1 until the first scan is published.
+    int samplesFound() const noexcept
+    {
+        const int n = library.indexedFound();
+        return n >= 0 ? n : samplesFoundCount.load (std::memory_order_relaxed);
+    }
+    int samplesMissing() const noexcept
+    {
+        if (library.indexedFound() >= 0)
+            return library.indexedMissing();
+        return samplesMissingCount.load (std::memory_order_relaxed);
+    }
     juce::String sampleInventoryText() const;
 
     // 14 session slots (6 lanes + 8 drum voices). Paths persist; audio does not.

@@ -41,6 +41,8 @@ struct EngineParams
     int dialect = UkMin;
     const PresetBank* presets = nullptr;
     const SampleLibrary* library = nullptr;
+    // Published sample-folder index. Null until the background scan finishes.
+    const SampleIndex* sampleIndex = nullptr;
     // Published by UserSlots. Null keeps the preset sample block only.
     const UserSlotView* userSlots = nullptr;
     int samplePick[NumParts] {};

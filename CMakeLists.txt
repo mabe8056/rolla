@@ -18,6 +18,7 @@ FetchContent_MakeAvailable(juce)
 juce_add_binary_data(RollaData
     SOURCES
         resources/presets.json
+        resources/SAMPLE_MANIFEST.json
         resources/mix_profiles.json
         resources/main_sum_trim.json
         resources/mix_makeup.json
@@ -96,6 +97,7 @@ add_executable(rolla-render
     src/Engine/Engine.cpp
     src/Engine/Sampler.cpp
     src/Engine/SampleLibrary.cpp
+    src/Sampler/SamplePrep.cpp
     src/Generator/Generator.cpp
     src/Generator/Presets.cpp
     src/Generator/MidiFile.cpp
@@ -130,6 +132,7 @@ add_executable(rolla-sample-check
     src/Engine/Engine.cpp
     src/Engine/Sampler.cpp
     src/Engine/SampleLibrary.cpp
+    src/Sampler/SamplePrep.cpp
     src/Generator/Generator.cpp
     src/Generator/Presets.cpp
     src/Drums/DrumMachine.cpp
