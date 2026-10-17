@@ -241,7 +241,9 @@ struct Duck
         const float floor = dbToGain (-std::clamp (depthDb, 0.f, 48.f));
         target = floor;
         c = coefFromMs (gate ? 0.1f : 0.2f, sr);
-        hold = (int) ((gate ? 0.040f : 0.020f) * sr);
+        // 20 ms was gone before an off-kick bass note. Hold long enough that
+        // the next 16th is still down.
+        hold = (int) ((gate ? 0.060f : 0.048f) * sr);
         arm = true;
         recover = std::max (20.f, recoverMs);
         gateMode = gate;
@@ -1244,6 +1246,9 @@ void Engine::process (const Groove& groove,
                 {
                     const float depth = std::max (0.f, bp.duckDb + punchB * 8.f);
                     const float rec = bp.duckRecoverMs;
+                    // Bass attacks sit off the kick. Hold through the next 16th.
+                    // The preset recover stays as written: stretching it past the
+                    // UK MIN bass note drops that lane out of its loudness window.
                     E.duckB.trigger (depth, rec, srF, bp.gate);
                     E.duckP.trigger (padP.ex.duckDb >= 0.f ? padP.ex.duckDb : std::min (depth, 6.f),
                                     padP.ex.duckDb >= 0.f ? padP.ex.duckRecoverMs : rec, srF, false);

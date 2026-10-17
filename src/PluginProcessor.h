@@ -92,7 +92,17 @@ public:
     bool isHostOrPreviewPlaying() const noexcept { return uiPlaying.load (std::memory_order_relaxed); }
 
     juce::String exportMidiToDocuments();
+    // One type-1 MIDI file: tempo track, then one track per lane.
     juce::StringArray writeTempMidi();
+    // One 8-bar WAV stem per lane. Same cache and drag path as the MIDI file.
+    juce::StringArray writeStemAudio();
+    juce::String exportStemsTo (const juce::File& dir);
+
+    // Drag-out files live here so FL Studio on macOS can read them after
+    // performExternalDragDropOfFiles.
+    juce::File exportCache() const;
+    juce::StringArray writeLaneMidi (int part);
+    juce::StringArray writeLaneAudio (int part);
     bool loadDrumFile (int voice, const juce::File& file, juce::String& error);
     void clearDrumVoice (int voice);
     void setDrumSampleSlot (DrumSampleSlot* slot) noexcept;
@@ -144,8 +154,16 @@ private:
     void parameterChanged (const juce::String& parameterID, float newValue) override;
     void applyDialect (int dialect);
     void regenerate (int onlyPart);
+    void requestReshape();
+    void reshapeUnkept();
+    EngineParams readParams (std::shared_ptr<const PresetBank>& hold) const;
     void refreshSampleInventory();
     Settings currentSettings() const;
+    void prepareOffline (Engine& offline, double rate) const;
+    juce::AudioBuffer<float> bounceLane (Engine& offline, int part, double rate, double bpm) const;
+    juce::File laneExportFile (int part, const char* extension) const;
+    void pruneExportCache (const juce::File& keep) const;
+    bool writeWav (const juce::File& file, const juce::AudioBuffer<float>& audio, double sampleRate) const;
     void publish (const Groove& g);
     void publishInitial (const Groove& g);
     void publishDerived();
@@ -201,6 +219,8 @@ private:
     std::mutex rootSetupMu;
     std::atomic<bool> startupDone { false };
     std::atomic<double> startupMs { 0.0 };
+    std::atomic<bool> reshapePending { false };
+    std::atomic<bool> reshapeAfterStartup { false };
     double startupT0 = 0.0;
     std::thread startupThread;
     std::atomic<std::uint32_t> grooveEpoch { 0 };
