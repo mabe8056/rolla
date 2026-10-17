@@ -111,28 +111,33 @@ String signed1 (float v)
 
 String darkCaption (float dark)
 {
-    static const char* names[] = { "b7", "2nd", "b3", "3rd", "b2" };
+    static const char* steps[] = { "5", "2", "b7", "b3", "b2" };
     const int i = jlimit (0, 4, roundToInt (dark * 4.f));
-    return String (names[i]) + " lift";
+    return "2nd bass note " + String (utf8 ("·")) + " " + steps[i];
 }
 
 String busyCaption (float busy)
 {
-    return String (roundToInt (2.f + 5.f * busy)) + " hits / bar";
+    const int notes = jlimit (3, 7, roundToInt (3.f + 4.f * busy));
+    return "notes per bar " + String (utf8 ("·")) + " " + String (notes);
 }
 
 String bounceCaption (float bounce)
 {
-    return "flip slot " + String (roundToInt (4.f + 10.f * bounce));
+    static const char* slot[] = { "2&", "2a", "3", "3e", "3&", "3a", "4" };
+    const int i = jlimit (0, 6, roundToInt (13.f - 6.f * bounce) - 7);
+    return "groove flips on " + String (slot[i]);
 }
 
 String stabCaption (float stab)
 {
+    if (stab <= 0.02f)
+        return "bass only";
     if (stab > 0.66f)
-        return "every 1 bar";
+        return "answers 4/4 bars";
     if (stab > 0.33f)
-        return "every 2 bars";
-    return "every 4 bars";
+        return "answers 2/4 bars";
+    return "answers 1/4 bars";
 }
 
 void focusRing (Graphics& g, Component& c, float controlRadius = -1.f)
@@ -209,6 +214,90 @@ struct Look : LookAndFeel_V4
             tick.lineTo (18.f, (float) area.getCentreY() - 4.f);
             g.strokePath (tick, PathStrokeType (Theme::strokeIcon, PathStrokeType::curved, PathStrokeType::rounded));
         }
+    }
+
+    Rectangle<int> getTooltipBounds (const String& tip, Point<int> pos, Rectangle<int> parent) override
+    {
+        const bool rich = tip.containsChar ('\t');
+        const int maxW = rich ? 352 : 240;
+        const int padX = 12;
+        const int padY = 8;
+        const auto font = Theme::font (Theme::Role::meta);
+        int lines = 1;
+        int textW = 0;
+        if (rich)
+        {
+            lines = 0;
+            for (auto line : StringArray::fromLines (tip))
+            {
+                if (line.isEmpty())
+                    continue;
+                const auto value = line.fromFirstOccurrenceOf ("\t", false, false);
+                GlyphArrangement row;
+                row.addLineOfText (font, value, 0.f, 0.f);
+                textW = jmax (textW, 64 + 8 + (int) std::ceil (row.getBoundingBox (0, -1, true).getWidth()));
+                ++lines;
+            }
+            lines = jmax (1, lines);
+        }
+        else
+        {
+            AttributedString sentence;
+            sentence.append (tip, font, col (kInk));
+            TextLayout layout;
+            layout.createLayout (sentence, (float) (maxW - padX * 2));
+            textW = (int) std::ceil (layout.getWidth());
+            lines = jlimit (1, 2, ((int) std::ceil (layout.getHeight()) + 15) / 16);
+        }
+        auto b = Rectangle<int> (pos.x, pos.y + 8, jlimit (48, maxW, textW + padX * 2), lines * 16 + padY * 2);
+        if (b.getRight() > parent.getRight())
+            b.setX (parent.getRight() - b.getWidth());
+        if (b.getX() < parent.getX())
+            b.setX (parent.getX());
+        if (b.getBottom() > parent.getBottom())
+            b.setY (pos.y - 8 - b.getHeight());
+        if (b.getY() < parent.getY())
+            b.setY (parent.getY());
+        return b;
+    }
+
+    void drawTooltip (Graphics& g, const String& text, int width, int height) override
+    {
+        auto b = Rectangle<float> (0.f, 0.f, (float) width, (float) height);
+        g.setColour (col (kHov));
+        g.fillRoundedRectangle (b, Theme::radiusPanel);
+        g.setColour (col (kLine2));
+        g.drawRoundedRectangle (b.reduced (0.5f), Theme::radiusPanel - 0.5f, Theme::strokeHair);
+
+        auto inner = b.reduced (12.f, 8.f);
+        if (text.containsChar ('\t'))
+        {
+            StringArray lines;
+            for (auto line : StringArray::fromLines (text))
+                if (line.isNotEmpty())
+                    lines.add (line);
+            const float rowH = inner.getHeight() / (float) jmax (1, lines.size());
+            for (int i = 0; i < lines.size(); ++i)
+            {
+                auto row = inner.withY (inner.getY() + rowH * (float) i).withHeight (rowH);
+                const auto key = lines[i].upToFirstOccurrenceOf ("\t", false, false);
+                const auto value = lines[i].fromFirstOccurrenceOf ("\t", false, false);
+                g.setColour (col (kInk3));
+                g.setFont (Theme::font (Theme::Role::caption));
+                g.drawText (key, row.removeFromLeft (64.f), Justification::centredLeft, false);
+                g.setColour (col (kInk));
+                g.setFont (Theme::font (Theme::Role::meta));
+                g.drawText (value, row.withTrimmedLeft (8.f), Justification::centredLeft, false);
+            }
+            return;
+        }
+
+        AttributedString sentence;
+        sentence.setJustification (Justification::centredLeft);
+        sentence.append (text, Theme::font (Theme::Role::meta), col (kInk));
+        TextLayout layout;
+        layout.createLayout (sentence, inner.getWidth());
+        layout.draw (g, inner);
     }
 };
 
@@ -386,6 +475,7 @@ struct LabeledKnob : Component
 
     LabeledKnob()
     {
+        setPaintingIsUnclipped (true);
         addAndMakeVisible (slider);
     }
 
@@ -410,7 +500,9 @@ struct LabeledKnob : Component
 
     void paint (Graphics& g) override
     {
-        auto top = getLocalBounds().toFloat().removeFromTop (compact ? 12.f : 16.f);
+        const float capW = macro ? 136.f : (float) getWidth();
+        const float capX = macro ? ((float) getWidth() - capW) * 0.5f : 0.f;
+        auto top = Rectangle<float> (capX, 0.f, capW, compact ? 12.f : 16.f);
         g.setColour (col (kInk2));
         g.setFont (Theme::font (compact ? Theme::Role::micro
                                          : (macro ? Theme::Role::macro : Theme::Role::caption)));
@@ -418,12 +510,14 @@ struct LabeledKnob : Component
 
         if (macro)
         {
+            const float valueW = 96.f;
+            const float valueX = ((float) getWidth() - valueW) * 0.5f;
             g.setColour (col (kInk));
             g.setFont (Theme::font (Theme::Role::macroval));
-            g.drawText (readout, Rectangle<float> (0.f, 96.f, (float) getWidth(), 16.f), Justification::centred, false);
+            g.drawText (readout, Rectangle<float> (valueX, 96.f, valueW, 16.f), Justification::centred, false);
             g.setColour (col (kInk2));
             g.setFont (Theme::font (Theme::Role::meta));
-            g.drawText (detail, Rectangle<float> (0.f, 112.f, (float) getWidth(), 14.f), Justification::centred, false);
+            g.drawText (detail, Rectangle<float> (capX, 112.f, capW, 16.f), Justification::centred, false);
         }
         else
         {
@@ -916,13 +1010,13 @@ struct DialectBar : Component
 
     DialectBar()
     {
-        const char* names[] = { "UK MIN", "LONG", "POP", "GASKIN 90s" };
         for (int i = 0; i < NumDialects; ++i)
         {
-            buttons[i].setButtonText (names[i]);
+            buttons[i].setButtonText (dialectName (i));
             buttons[i].setWantsKeyboardFocus (true);
             buttons[i].setMouseCursor (MouseCursor::PointingHandCursor);
             addAndMakeVisible (buttons[i]);
+            bindHelp (buttons[i], styleCopy (i).tip);
             buttons[i].onClick = [this, i] { if (onPick) onPick (i); };
             buttons[i].onStateChange = [this] { repaint(); };
         }
@@ -1602,6 +1696,9 @@ struct DrumColumn : Component
         decay.slider.onDragEnd = edited;
         level.onDragEnd = edited;
         accent.onClick = edited;
+        bindHelp (tune, "Pitch of this voice in semitones.");
+        bindHelp (decay, "How long this voice rings.");
+        bindHelp (level, "This voice's volume.");
     }
 
     void sync()
@@ -1964,7 +2061,7 @@ struct RollaEditor::Content : Component
         addAndMakeVisible (status);
 
         bindHelp (logo, "Menu. Window scale, reduce motion, and the samples folder.");
-        bindHelp (dialects, "Style. Picks the preset and swing for every lane.");
+        bindHelp (dialects, "Style. Each pill sets the groove, the sounds, and which lanes play.");
         bindHelp (keyStep, "Key. Every lane follows this minor key.");
         bindHelp (bpm, "Host tempo, in beats per minute.");
         bindHelp (undoBtn, "Undo the last edit.");
@@ -1972,13 +2069,13 @@ struct RollaEditor::Content : Component
         bindHelp (presetStep, "Preset for this lane. Click the name to see only this lane's presets.");
         bindHelp (kitStep, "Drum kit. Click the name to choose another kit.");
         bindHelp (source, "Source. Synth, a sample, or both layered.");
-        bindHelp (tone, "Tone. Brighter towards the right.");
-        bindHelp (punch, "Punch. Shorter and snappier towards the right.");
-        bindHelp (level, "Level, in decibels.");
-        bindHelp (dark, "Dark. How minor the harmony sits.");
-        bindHelp (busy, "Busy. How many hits land in a bar.");
-        bindHelp (bounce, "Bounce. Where the offbeat flip sits.");
-        bindHelp (stab, "Stab. How often the stab answers.");
+        bindHelp (tone, "Brightness; the top third adds drive.");
+        bindHelp (punch, "From round and lazy to snappy and pumping.");
+        bindHelp (level, "This lane's volume.");
+        bindHelp (dark, "Sets how dark the bass's second note is: 5, 2, b7, b3, then b2.");
+        bindHelp (busy, "Sets how many bass notes play per bar (3 to 7); higher leaves fewer gaps.");
+        bindHelp (bounce, "Sets how early in the bar the groove changes, and adds glides on pickups.");
+        bindHelp (stab, "Sets how often the stab answers the bass; 0 means bass only.");
         bindHelp (swing, "Swing, from 50 to 57 percent.");
         bindHelp (duck, "Duck. The bass dips under the stab.");
         bindHelp (face, "Roll. Re-rolls every lane that is not kept.");
@@ -2208,7 +2305,10 @@ struct RollaEditor::Content : Component
 
         tone.setReadout (String (tone.slider.getValue() * 10.0, 1));
         punch.setReadout (String (punch.slider.getValue() * 10.0, 1));
-        level.setReadout (String (level.slider.getValue(), 1) + " dB");
+        auto db = String (level.slider.getValue(), 1);
+        if (db.startsWithChar ('-'))
+            db = String::charToString (juce::juce_wchar (0x2212)) + db.substring (1);
+        level.setReadout (db + " dB");
         dark.setReadout (String (dark.slider.getValue() * 10.0, 1), darkCaption ((float) dark.slider.getValue()));
         busy.setReadout (String (busy.slider.getValue() * 10.0, 1), busyCaption ((float) busy.slider.getValue()));
         bounce.setReadout (String (bounce.slider.getValue() * 10.0, 1), bounceCaption ((float) bounce.slider.getValue()));
@@ -2425,11 +2525,14 @@ RollaEditor::RollaEditor (RollaProcessor& p)
         using TooltipWindow::TooltipWindow;
         String getTipFor (Component& c) override
         {
+            if (ModifierKeys::getCurrentModifiers().isAnyMouseButtonDown())
+                return {};
             const auto text = helpUnder (&c);
             return text.isNotEmpty() ? text : TooltipWindow::getTipFor (c);
         }
     };
     tooltip = std::make_unique<HelpWindow> (this, 600);
+    tooltip->setLookAndFeel (look.get());
     proc.apvts.addParameterListener ("roll", this);
     startTimerHz (30);
 }

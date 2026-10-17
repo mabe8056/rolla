@@ -36,9 +36,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout (const PresetBa
     add (std::make_unique<AudioParameterFloat> (ParameterID { "bounce", 1 }, "Bounce", unit, 0.45f));
     add (std::make_unique<AudioParameterFloat> (ParameterID { "stab", 1 }, "Stab", unit, 0.55f));
 
+    StringArray styleNames;
+    for (int i = 0; i < NumDialects; ++i)
+        styleNames.add (dialectName (i));
     add (std::make_unique<AudioParameterChoice> (
-        ParameterID { "dialect", 1 }, "Dialect",
-        StringArray { "UK MIN", "LONG", "POP", "GASKIN 90s" }, 0));
+        ParameterID { "dialect", 1 }, "Dialect", styleNames, 0));
 
     add (std::make_unique<AudioParameterChoice> (
         ParameterID { "key", 1 }, "Key",

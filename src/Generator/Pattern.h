@@ -121,10 +121,52 @@ inline const char* dialectId (int d) noexcept
     return ids[d];
 }
 
+// Display names and the hover card for the four style pills. Rename here;
+// the ids above stay put. Final names are still open.
+struct StyleCopy
+{
+    const char* name;
+    const char* tip;
+};
+
+inline const StyleCopy& styleCopy (int d) noexcept
+{
+    static const StyleCopy rows[] = {
+        { "UK MIN",
+          "Groove\tswing 52%\n"
+          "Notes\t1-4.5 sixteenths\n"
+          "Bass\tpluck\n"
+          "Stab\tdub\n"
+          "Pad\tair\n"
+          "Plays\tbass, stab, pluck, pad, vox, drums" },
+        { "LONG",
+          "Groove\tswing 51%\n"
+          "Notes\t2-8 sixteenths\n"
+          "Bass\tround\n"
+          "Stab\tswell\n"
+          "Pad\twide\n"
+          "Plays\tbass, stab, pluck, pad, vox, drums" },
+        { "POP",
+          "Groove\tswing 50%\n"
+          "Notes\t1-1.25 sixteenths\n"
+          "Bass\tclick\n"
+          "Stab\tclick\n"
+          "Pad\tair\n"
+          "Plays\tbass, stab, pluck, pad, vox, drums" },
+        { "GASKIN 90s",
+          "Groove\tstraight, swing 50%\n"
+          "Notes\t2 sixteenths\n"
+          "Bass\tround\n"
+          "Stab\tswell\n"
+          "Pad\tdark\n"
+          "Plays\tbass, stab, hits, pluck, pad, vox, drums" },
+    };
+    return rows[d < 0 ? 0 : (d >= NumDialects ? NumDialects - 1 : d)];
+}
+
 inline const char* dialectName (int d) noexcept
 {
-    static const char* names[] = { "UK MIN", "LONG", "POP", "GASKIN 90s" };
-    return names[d];
+    return styleCopy (d).name;
 }
 
 inline const char* drumName (int v) noexcept
