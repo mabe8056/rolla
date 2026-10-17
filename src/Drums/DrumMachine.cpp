@@ -157,8 +157,11 @@ struct Click
             w = 0.5f * (1.f - std::cos (2.f * kPi * t));
             ++age;
         }
-        const float x = w * (1.f + noise.next() * 0.35f);
-        const float y = hp.highpass (x, 4200.f, 0.85f, sr) * env;
+        // A noisy highpass on this window is a one-sample step of a few
+        // percent. The hann itself is the beater.
+        (void) noise;
+        (void) sr;
+        const float y = w * env;
         env *= coef;
         return y;
     }

@@ -240,6 +240,7 @@ int main (int argc, char** argv)
     constexpr double bpm = 130.0;
     int midis = 0;
     int wavs = 0;
+    bool toldSilence = false;
     std::vector<rolla::Groove> seen[rolla::NumDialects];
     for (int style = 0; style < rolla::NumDialects; ++style)
     {
@@ -284,6 +285,12 @@ int main (int argc, char** argv)
             const float peak = renderWav (bank, groove, style, wav);
             if (peak < 0.01f)
             {
+                wav.deleteFile();
+                if (! toldSilence)
+                {
+                    std::cerr << "WAV skipped: factory presets are sample-only and no sample library is loaded.\n";
+                    toldSilence = true;
+                }
                 std::cerr << "FAIL silence " << wav.getFullPathName() << "\n";
                 ++failures;
             }

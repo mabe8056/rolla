@@ -29,14 +29,23 @@ float expDecay (float ms, float sr) noexcept
 struct Env
 {
     int stage = 0;
+    int atkAge = 0, atkN = 1;
+    bool cosineAtk = false;
     float amp = 0, sustain = 0, attInc = 0, decC = 0, relC = 0;
 
     void start (float aMs, float dMs, float sGain, float rMs, float sr) noexcept
     {
         stage = 1;
         amp = 0.f;
+        atkAge = 0;
         sustain = std::clamp (sGain, 0.f, 1.f);
-        attInc = 1.f / std::max (1.f, aMs * 0.001f * sr);
+        // A 1 ms linear attack opens as one sample step of the whole voice.
+        // Stretch only those short attacks into a 6 ms raised cosine. Longer
+        // attacks stay linear, which is already under the click floor.
+        cosineAtk = aMs < 6.f;
+        const float atkMs = cosineAtk ? 6.f : aMs;
+        atkN = std::max (1, (int) std::lround (atkMs * 0.001f * sr));
+        attInc = 1.f / std::max (1.f, atkMs * 0.001f * sr);
         decC = coefFromMs (std::max (5.f, dMs) / 3.f, sr);
         relC = coefFromMs (std::max (5.f, rMs) / 3.f, sr);
     }
@@ -51,11 +60,28 @@ struct Env
     {
         if (stage == 1)
         {
-            amp += attInc;
-            if (amp >= 1.f)
+            if (cosineAtk)
             {
-                amp = 1.f;
-                stage = 2;
+                ++atkAge;
+                if (atkAge >= atkN)
+                {
+                    amp = 1.f;
+                    stage = 2;
+                }
+                else
+                {
+                    const float t = (float) atkAge / (float) atkN;
+                    amp = 0.5f * (1.f - std::cos (kPi * t));
+                }
+            }
+            else
+            {
+                amp += attInc;
+                if (amp >= 1.f)
+                {
+                    amp = 1.f;
+                    stage = 2;
+                }
             }
         }
         else if (stage == 2)
