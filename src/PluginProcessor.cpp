@@ -857,6 +857,11 @@ void RollaProcessor::applyRememberedSamples()
     }
 }
 
+void RollaProcessor::setDrumSampleSlot (DrumSampleSlot* slot) noexcept
+{
+    engine.setDrumSampleSlot (slot);
+}
+
 bool RollaProcessor::loadDrumFile (int voice, const juce::File& file, juce::String& error)
 {
     juce::AudioFormatManager formats;

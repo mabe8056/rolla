@@ -1,6 +1,7 @@
 #include "Engine.h"
 
 #include "../DspUtil.h"
+#include "../Drums/DrumMachine.h"
 #include "../Sampler/UserSlots.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
@@ -13,8 +14,6 @@ namespace rolla
 {
 namespace
 {
-
-constexpr float kMetal[6] = { 263.f, 400.f, 421.f, 474.f, 587.f, 845.f };
 
 float coefFromMs (float ms, float sr) noexcept
 {
@@ -230,55 +229,6 @@ struct VoxV
     }
 };
 
-struct KickV
-{
-    bool on = false;
-    float y1 = 0, y2 = 0, amp = 0, ampC = 0, pitch = 0, pitchC = 0, click = 0, clickC = 0, clickPrev = 0;
-    float tune = 52, sweep = 1.6f, gain = 0.8f;
-    void kill() noexcept { on = false; y1 = y2 = amp = click = 0; }
-};
-
-struct SnareV
-{
-    bool on = false;
-    float a1 = 0, a2 = 0, b1 = 0, b2 = 0;
-    float body = 0, bodyC = 0, noise = 0, noiseC = 0;
-    float f1 = 180, f2 = 330, tone = 0.5f, snap = 0.5f, gain = 0.4f;
-    Svf hp;
-    Lfsr lfsr;
-    void kill() noexcept { on = false; a1 = a2 = b1 = b2 = body = noise = 0; hp.reset(); }
-};
-
-struct ClapV
-{
-    bool on = false;
-    int age = 0;
-    int burstAt[4] {};
-    int burstW = 100;
-    int tailAt = 1000;
-    float tail = 0, tailC = 0, burst = 0;
-    float gain = 0.35f;
-    float ring = 0.f, last = 0.f;
-    Svf bp;
-    Lfsr lfsr;
-    void kill() noexcept { on = false; age = 0; tail = burst = 0; bp.reset(); }
-};
-
-struct MetalV
-{
-    bool on = false;
-    float phase[6] {};
-    float env = 0, envC = 0, hpHz = 6000, gain = 0.25f;
-    float tune = 1.f;
-    Svf hp, bp;
-    void kill() noexcept { on = false; env = 0; hp.reset(); bp.reset(); }
-};
-
-struct TomV
-{
-    KickV body;
-};
-
 struct Duck
 {
     float g = 1, target = 1, c = 0.1f;
@@ -357,12 +307,7 @@ struct Engine::Impl
     PolyV stab[8], pluck[4], pad[6];
     HitV hits[6];
     VoxV vox[4];
-    KickV kick;
-    SnareV snare;
-    ClapV clap;
-    MetalV hatC, hatO, ride;
-    TomV tomL, tomM;
-    KickV rimA, rimB;
+    DrumMachine drums;
     Duck duckB, duckP, duckS, duckH, duckPl, duckV;
     Smooth level[NumParts], outGain;
     std::vector<float> dL, dR;
@@ -372,7 +317,6 @@ struct Engine::Impl
     juce::Reverb reverb;
     int reverbIdle = 1000000;
     DcBlock mainDc, drumDc;
-    Lfsr hatNoise;
     bool primed = false;
     bool fxHeld = false;
     double lastPos = -1.0;
@@ -419,6 +363,7 @@ struct Engine::Impl
         outGain.setTime (20.f, sr);
         mainDc.setCutoff (20.f, sr);
         drumDc.setCutoff (25.f, sr);
+        drums.prepare (sr);
         reset();
         primed = true;
     }
@@ -432,16 +377,7 @@ struct Engine::Impl
         for (auto& v : pad) v.kill();
         for (auto& v : hits) v.kill();
         for (auto& v : vox) v.kill();
-        kick.kill();
-        snare.kill();
-        clap.kill();
-        hatC.kill();
-        hatO.kill();
-        ride.kill();
-        tomL.body.kill();
-        tomM.body.kill();
-        rimA.kill();
-        rimB.kill();
+        drums.reset();
         duckB.g = duckP.g = duckS.g = duckH.g = duckPl.g = duckV.g = 1.f;
         std::fill (dL.begin(), dL.end(), 0.f);
         std::fill (dR.begin(), dR.end(), 0.f);
@@ -451,7 +387,6 @@ struct Engine::Impl
         reverbIdle = 1000000;
         fxHeld = false;
         bass.ring = bass.last = live.ring = live.last = 0.f;
-        clap.ring = clap.last = 0.f;
         mainDc.reset();
         drumDc.reset();
         lastPos = -1.0;
@@ -525,6 +460,12 @@ void Engine::reset() noexcept
         impl->reset();
     sampler.reset();
     wasPlaying = false;
+}
+
+void Engine::setDrumSampleSlot (DrumSampleSlot* slot) noexcept
+{
+    if (impl != nullptr)
+        impl->drums.setSampleSlot (slot);
 }
 
 bool Engine::hasDrumSample (int voice) const noexcept
@@ -1284,7 +1225,7 @@ void Engine::process (const Groove& groove,
                                : 1.f;
                 };
 
-                auto startSample = [&] (int voice, int vel) -> bool
+                auto startSample = [&] (int voice, int vel, float stepGain) -> bool
                 {
                     if (vel <= 0 || voice < 0 || voice >= NumDrumVoices)
                         return false;
@@ -1309,7 +1250,7 @@ void Engine::process (const Groove& groove,
                     pl.buf = b;
                     pl.pos = 0;
                     pl.len = len;
-                    pl.gain = acc * (vel / 127.f) * dbToGain (dp.trimDb) * levelOf (voice) * accentOf (voice);
+                    pl.gain = stepGain * (vel / 127.f) * dbToGain (dp.trimDb) * levelOf (voice) * accentOf (voice);
                     return true;
                 };
 
@@ -1324,30 +1265,48 @@ void Engine::process (const Groove& groove,
                     E.scheduleOff (10, note, std::max (1, (int) (seconds * srF)));
                 };
 
-                const int kv = groove.drums.vel[Kick][t];
-                if (kv > 0)
+                auto patchDecay = [&] (int voice) noexcept
                 {
-                    if (! startSample (Kick, kv))
+                    switch (voice)
                     {
-                        const float keep = sampler.takeDrum (Kick, kv, bank, params);
-                        if (keep <= 0.001f)
-                            goto kickDone;
-                        E.kick.on = true;
-                        E.kick.tune = dp.kickHz * std::pow (2.f, tone * 0.4f) * tuneOf (Kick);
-                        E.kick.sweep = dp.kickSweep;
-                        E.kick.y1 = 0.f;
-                        E.kick.y2 = 0.85f;
-                        E.kick.amp = acc * (kv / 127.f);
-                        E.kick.ampC = expDecay (dp.kickDecayMs * std::pow (2.f, -punch * 0.7f) * decayOf (Kick), srF);
-                        E.kick.pitch = 1.f;
-                        E.kick.pitchC = expDecay (20.f, srF);
-                        E.kick.click = dp.kickClick * acc;
-                        E.kick.clickC = expDecay (4.5f, srF);
-                        E.kick.clickPrev = 0.f;
-                        E.kick.gain = dbToGain (dp.trimDb) * 0.9f * levelOf (Kick) * accentOf (Kick) * keep;
+                        case Kick: return dp.kickDecayMs / 280.f;
+                        case Snare: return dp.snareDecayMs / 160.f;
+                        case Clap: return dp.clapDecayMs / 180.f;
+                        case HatC: return dp.hatDecayMs / 45.f;
+                        case HatO:
+                        case Ride: return dp.hatOpenDecayMs / 280.f;
+                        case TomLow:
+                        case TomMid: return dp.tomDecayMs / 260.f;
+                        default: return 1.f;
                     }
-                    kickDone:
-                    if (params.duck && ! params.mute[Drums])
+                };
+                auto midiHold = [] (int voice) noexcept
+                {
+                    switch (voice)
+                    {
+                        case Kick: return 0.18f;
+                        case Snare: return 0.14f;
+                        case Clap: return 0.16f;
+                        case Rim: return 0.04f;
+                        case TomLow: return 0.20f;
+                        case TomMid: return 0.18f;
+                        case HatC: return 0.05f;
+                        case HatO: return 0.22f;
+                        case Ride: return 0.28f;
+                        case Perc: return 0.08f;
+                        default: return 0.12f;
+                    }
+                };
+
+                // Closed hat last so it chokes the open hat. Step accent is kick and clap only.
+                const int drumOrder[] = { Kick, Snare, Clap, Rim, TomLow, TomMid, Perc, Ride, HatO, HatC };
+                for (int voice : drumOrder)
+                {
+                    const int vel = groove.drums.vel[voice][t];
+                    if (vel <= 0)
+                        continue;
+                    const float stepAcc = (voice == Kick || voice == Clap) ? acc : 1.f;
+                    if (voice == Kick && params.duck && ! params.mute[Drums])
                     {
                         const float depth = std::max (0.f, bp.duckDb + punchB * 8.f);
                         const float rec = bp.duckRecoverMs;
@@ -1363,128 +1322,49 @@ void Engine::process (const Groove& groove,
                         if (vp.ex.duckDb >= 0.f)
                             E.duckV.trigger (vp.ex.duckDb, vp.ex.duckRecoverMs, srF, vp.ex.duckGate);
                     }
-                    drumOn (drumMidiNote (Kick), kv, 0.18f);
-                }
-                // Hats and ride are a synthesized six-square metal bank. A user WAV replaces one voice.
-                auto metalTrig = [&] (MetalV& m, int voice, int vel, bool open, float decayMs)
-                {
-                    if (vel <= 0 || startSample (voice, vel))
-                        return;
-                    const float keep = sampler.takeDrum (voice, vel, bank, params);
-                    if (keep <= 0.001f)
-                        return;
-                    m.on = true;
-                    m.env = acc * (vel / 127.f);
-                    m.envC = expDecay (decayMs * std::pow (2.f, -punch * 0.5f) * decayOf (voice), srF);
-                    m.hpHz = dp.hatHpHz * std::pow (2.f, tone * 0.8f);
-                    m.tune = std::pow (2.f, tone * 0.15f) * tuneOf (voice);
-                    m.gain = dbToGain (dp.trimDb) * (open ? 0.28f : 0.22f) * levelOf (voice) * accentOf (voice) * keep;
-                    if (! open)
-                        E.hatO.envC = expDecay (2.f, srF);
-                };
-                metalTrig (E.hatC, HatC, groove.drums.vel[HatC][t], false, dp.hatDecayMs);
-                metalTrig (E.hatO, HatO, groove.drums.vel[HatO][t], true, dp.hatOpenDecayMs);
-                metalTrig (E.ride, Ride, groove.drums.vel[Ride][t], true, dp.hatOpenDecayMs * 1.6f);
-                if (groove.drums.vel[HatC][t] > 0)
-                    drumOn (42, groove.drums.vel[HatC][t], 0.05f);
-                if (groove.drums.vel[HatO][t] > 0)
-                    drumOn (46, groove.drums.vel[HatO][t], 0.22f);
-                if (groove.drums.vel[Ride][t] > 0)
-                    drumOn (51, groove.drums.vel[Ride][t], 0.28f);
+                    drumOn (drumMidiNote (voice), vel, midiHold (voice));
 
-                const int sv = groove.drums.vel[Snare][t];
-                if (sv > 0 && ! startSample (Snare, sv))
-                {
-                    const float keep = sampler.takeDrum (Snare, sv, bank, params);
+                    float keep = 1.f;
+                    if (startSample (voice, vel, stepAcc))
+                        keep = 0.f;
+                    else if (DrumSampleSlot* slot = E.drums.sampleSlot())
+                    {
+                        DrumSampleRequest req;
+                        req.voice = voice;
+                        req.velocity = vel;
+                        req.tuneRatio = tuneOf (voice);
+                        req.decayScale = decayOf (voice);
+                        req.levelGain = levelOf (voice) * accentOf (voice) * stepAcc * dbToGain (dp.trimDb);
+                        req.folder = drumSampleFolder (voice);
+                        req.key = drumVoiceKey (voice);
+                        req.midiNote = drumMidiNote (voice);
+                        keep = slot->trigger (req);
+                    }
+                    else
+                        keep = sampler.takeDrum (voice, vel, bank, params);
+
                     if (keep > 0.001f)
                     {
-                    E.snare.on = true;
-                    E.snare.body = acc * (sv / 127.f);
-                    E.snare.bodyC = expDecay (dp.snareDecayMs * std::pow (2.f, -punch * 0.4f) * decayOf (Snare), srF);
-                    E.snare.noise = E.snare.body * dp.snareSnap;
-                    E.snare.noiseC = expDecay (dp.snareDecayMs * 0.55f, srF);
-                    E.snare.tone = std::clamp (dp.snareTone + tone * 0.3f, 0.f, 1.f);
-                    E.snare.f1 = 175.f * std::pow (2.f, tone * 0.2f) * tuneOf (Snare);
-                    E.snare.f2 = 330.f * std::pow (2.f, tone * 0.25f) * tuneOf (Snare);
-                    E.snare.a1 = 0.4f;
-                    E.snare.b1 = 0.4f;
-                    E.snare.gain = dbToGain (dp.trimDb) * 0.45f * levelOf (Snare) * accentOf (Snare) * keep;
+                        DrumHit hit;
+                        hit.voice = voice;
+                        hit.velocity = vel;
+                        hit.synthKeep = keep;
+                        hit.tuneRatio = tuneOf (voice);
+                        hit.decayScale = decayOf (voice);
+                        hit.patchDecay = patchDecay (voice);
+                        hit.levelGain = levelOf (voice) * accentOf (voice) * dbToGain (dp.trimDb);
+                        hit.stepAccent = stepAcc;
+                        hit.tone = tone;
+                        hit.punch = punch;
+                        hit.clickScale = dp.kickClick / 0.45f;
+                        hit.hatHpScale = dp.hatHpHz / 6500.f;
+                        hit.snareTone = dp.snareTone;
+                        hit.snareSnap = dp.snareSnap;
+                        hit.key = params.key;
+                        hit.dialect = params.dialect;
+                        E.drums.trigger (hit);
                     }
                 }
-                if (sv > 0)
-                    drumOn (38, sv, 0.14f);
-                const int cv = groove.drums.vel[Clap][t];
-                if (cv > 0 && ! startSample (Clap, cv))
-                {
-                    const float keep = sampler.takeDrum (Clap, cv, bank, params);
-                    if (keep > 0.001f)
-                    {
-                    if (E.clap.on || std::fabs (E.clap.last) > 1.0e-4f)
-                        E.clap.ring = E.clap.last;
-                    E.clap.on = true;
-                    E.clap.age = 0;
-                    const float ms = srF / 1000.f;
-                    E.clap.burstAt[0] = 0;
-                    E.clap.burstAt[1] = (int) (11.f * ms);
-                    E.clap.burstAt[2] = (int) (22.f * ms);
-                    E.clap.burstAt[3] = (int) (33.f * ms);
-                    E.clap.burstW = (int) (3.2f * ms);
-                    E.clap.tailAt = (int) (42.f * ms);
-                    E.clap.tail = 0.f;
-                    E.clap.tailC = expDecay (dp.clapDecayMs * decayOf (Clap), srF);
-                    E.clap.burst = 1.f;
-                    E.clap.gain = dbToGain (dp.trimDb) * 0.4f * acc * (cv / 127.f) * levelOf (Clap) * accentOf (Clap) * keep;
-                    }
-                }
-                if (cv > 0)
-                    drumOn (39, cv, 0.16f);
-                auto tomTrig = [&] (KickV& tom, int voice, int vel, float hz)
-                {
-                    if (vel <= 0 || startSample (voice, vel))
-                        return;
-                    const float keep = sampler.takeDrum (voice, vel, bank, params);
-                    if (keep <= 0.001f)
-                        return;
-                    tom.on = true;
-                    tom.tune = hz * tuneOf (voice);
-                    tom.sweep = 0.35f;
-                    tom.y1 = 0;
-                    tom.y2 = 0.8f;
-                    tom.amp = (vel / 127.f) * acc;
-                    tom.ampC = expDecay (dp.tomDecayMs * decayOf (voice), srF);
-                    tom.pitch = 1;
-                    tom.pitchC = expDecay (30.f, srF);
-                    tom.click = 0.08f;
-                    tom.clickC = expDecay (6.f, srF);
-                    tom.gain = dbToGain (dp.trimDb) * 0.55f * levelOf (voice) * accentOf (voice) * keep;
-                };
-                tomTrig (E.tomL.body, TomLow, groove.drums.vel[TomLow][t], 96.f);
-                tomTrig (E.tomM.body, TomMid, groove.drums.vel[TomMid][t], 150.f);
-                if (groove.drums.vel[TomLow][t] > 0)
-                    drumOn (45, groove.drums.vel[TomLow][t], 0.2f);
-                if (groove.drums.vel[TomMid][t] > 0)
-                    drumOn (47, groove.drums.vel[TomMid][t], 0.18f);
-                if (groove.drums.vel[Rim][t] > 0 && ! startSample (Rim, groove.drums.vel[Rim][t]))
-                {
-                    const float keep = sampler.takeDrum (Rim, groove.drums.vel[Rim][t], bank, params);
-                    if (keep > 0.001f)
-                    {
-                    const float rv = groove.drums.vel[Rim][t] / 127.f;
-                    E.rimA.on = E.rimB.on = true;
-                    E.rimA.tune = 455.f * tuneOf (Rim);
-                    E.rimB.tune = 1660.f * tuneOf (Rim);
-                    E.rimA.sweep = E.rimB.sweep = 0.f;
-                    E.rimA.y2 = E.rimB.y2 = 0.7f;
-                    E.rimA.amp = E.rimB.amp = rv;
-                    E.rimA.ampC = E.rimB.ampC = expDecay (35.f * decayOf (Rim), srF);
-                    E.rimA.pitch = E.rimB.pitch = 0;
-                    E.rimA.click = 0.2f;
-                    E.rimA.clickC = expDecay (3.f, srF);
-                    E.rimA.gain = E.rimB.gain = dbToGain (dp.trimDb) * 0.3f * levelOf (Rim) * accentOf (Rim) * keep;
-                    }
-                }
-                if (groove.drums.vel[Rim][t] > 0)
-                    drumOn (37, groove.drums.vel[Rim][t], 0.04f);
                 juce::ignoreUnused (prevStep, step);
             };
 
@@ -1960,129 +1840,8 @@ void Engine::process (const Groove& groove,
         voxR = (voxR + playR[Vox]) * vLvl;
         voxRev *= vLvl;
 
-        auto renderKickLike = [&] (KickV& k) -> float
-        {
-            if (! k.on)
-                return 0.f;
-            const float f = std::clamp (k.tune * (1.f + k.pitch * k.sweep), 20.f, srF * 0.45f);
-            const float w = 2.f * kPi * f / srF;
-            const float c = std::cos (w), s = std::sin (w);
-            const float ny1 = k.y1 * c - k.y2 * s;
-            const float ny2 = k.y1 * s + k.y2 * c;
-            k.y1 = flush (ny1);
-            k.y2 = flush (ny2);
-            k.pitch *= k.pitchC;
-            const float body = k.y1 * k.amp;
-            k.amp *= k.ampC;
-            const float imp = k.click;
-            k.click *= k.clickC;
-            const float clk = imp - k.clickPrev;
-            k.clickPrev = imp;
-            if (k.amp < 1.0e-5f && k.click < 1.0e-5f)
-                k.kill();
-            return flush ((body + clk * 0.45f) * k.gain);
-        };
-
-        float drum = 0.f;
-        drum += renderKickLike (E.kick);
-        drum += renderKickLike (E.tomL.body);
-        drum += renderKickLike (E.tomM.body);
-        drum += renderKickLike (E.rimA) + renderKickLike (E.rimB);
-
-        if (E.snare.on)
-        {
-            const float w1 = 2.f * kPi * E.snare.f1 / srF;
-            const float w2 = 2.f * kPi * E.snare.f2 / srF;
-            auto rot = [] (float& a, float& b, float w)
-            {
-                const float c = std::cos (w), s = std::sin (w);
-                const float na = a * c - b * s;
-                const float nb = a * s + b * c;
-                a = flush (na);
-                b = flush (nb);
-            };
-            rot (E.snare.a1, E.snare.a2, w1);
-            rot (E.snare.b1, E.snare.b2, w2);
-            const float body = (E.snare.a1 * (1.f - E.snare.tone) + E.snare.b1 * E.snare.tone) * E.snare.body;
-            const float nz = E.snare.hp.highpass (E.snare.lfsr.next(), 1800.f, 0.7f, srF) * E.snare.noise;
-            E.snare.body *= E.snare.bodyC;
-            E.snare.noise *= E.snare.noiseC;
-            if (E.snare.body < 1.0e-5f && E.snare.noise < 1.0e-5f)
-                E.snare.kill();
-            drum += flush ((body + nz) * E.snare.gain);
-        }
-        if (E.clap.on)
-        {
-            auto hann = [] (int age, int at, int w) noexcept
-            {
-                if (w < 2 || age < at || age >= at + w)
-                    return 0.f;
-                const float t = (age - at) / (float) w;
-                return 0.5f * (1.f - std::cos (2.f * kPi * t));
-            };
-            float env = 0.f;
-            bool shaped = false;
-            for (int b = 0; b < 3; ++b)
-            {
-                const float h = hann (E.clap.age, E.clap.burstAt[b], E.clap.burstW);
-                if (h > 0.f)
-                    shaped = true;
-                env += h;
-            }
-            if (E.clap.age >= E.clap.burstAt[3])
-            {
-                if (E.clap.tail <= 0.f)
-                    E.clap.tail = 1.f;
-                float fade = 1.f;
-                if (E.clap.age < E.clap.burstAt[3] + E.clap.burstW)
-                {
-                    const float t = (E.clap.age - E.clap.burstAt[3]) / (float) std::max (1, E.clap.burstW);
-                    fade = 0.5f * (1.f - std::cos (kPi * t));
-                    shaped = true;
-                }
-                env += E.clap.tail * fade;
-                E.clap.tail *= E.clap.tailC;
-            }
-            const float nz = E.clap.bp.bandpass (E.clap.lfsr.next(), 1100.f, 1.4f, srF);
-            float y = nz * env * E.clap.gain + E.clap.ring;
-            E.clap.ring = flush (E.clap.ring * ringC);
-            y = flush (y);
-            E.clap.last = y;
-            drum += y;
-            ++E.clap.age;
-            if (! shaped && E.clap.age > E.clap.burstAt[3] + E.clap.burstW
-                && E.clap.tail < 0.001f && std::fabs (E.clap.ring) < 0.001f)
-                E.clap.kill();
-        }
-        else if (std::fabs (E.clap.ring) > 1.0e-6f)
-        {
-            drum += E.clap.ring;
-            E.clap.ring = flush (E.clap.ring * ringC);
-            E.clap.last = E.clap.ring;
-        }
-        auto renderMetal = [&] (MetalV& m, float bpHz) -> float
-        {
-            if (! m.on)
-                return 0.f;
-            float x = 0.f;
-            for (int k = 0; k < 6; ++k)
-            {
-                const float f = kMetal[k] * m.tune;
-                const float dt = std::min (f / srF, 0.45f);
-                x += blepSquare (m.phase[k], dt);
-                advancePhase (m.phase[k], dt);
-            }
-            x *= (1.f / 6.f);
-            float hp = m.hp.highpass (x, m.hpHz, 0.7f, srF);
-            float bp = m.bp.bandpass (x, bpHz, 1.2f, srF);
-            float y = (hp * 0.75f + bp * 0.35f) * m.env * m.gain;
-            m.env *= m.envC;
-            if (m.env < 1.0e-5f)
-                m.kill();
-            return flush (y);
-        };
-        const float hats = renderMetal (E.hatC, 7500.f) + renderMetal (E.hatO, 6200.f);
-        const float ride = renderMetal (E.ride, 4200.f);
+        float synthL = 0.f, synthR = 0.f;
+        E.drums.process (synthL, synthR);
         float samp = 0.f;
         for (int v = 0; v < NumDrumVoices; ++v)
         {
@@ -2121,8 +1880,8 @@ void Engine::process (const Groove& groove,
                 pl.on = false;
         }
         samp = flush (samp);
-        float drumLft = drum + hats * 0.92f + ride * 0.8f + samp + playL[Drums];
-        float drumRgt = drum + hats * 1.0f + ride * 1.05f + samp + playR[Drums];
+        float drumLft = synthL + samp + playL[Drums];
+        float drumRgt = synthR + samp + playR[Drums];
         const float dLvl = E.level[Drums].next();
         const float dDrive = 1.f + dp.drive * 2.f;
         drumLft = fastTanh (drumLft * dDrive) * dLvl;
