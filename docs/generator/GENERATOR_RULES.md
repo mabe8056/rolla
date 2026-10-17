@@ -300,7 +300,18 @@ dialects:
 ```
 
 ---
-## 6. AVOID checks (run on every roll; FAIL = reject, FLAG = down-weight in sampling)
+## 6. AVOID checks
+
+The producer split these. Only four checks reject a roll. The other thirteen are weighted biases and a penalty, not filters. A high hard-reject rate means the vocabulary is too narrow.
+
+Hard:
+
+- Out-of-key notes (a chromatic neighbour of an in-scale note is allowed).
+- A bass attack on the same 16th as a kick, once that low-end stack is more than 35% of the bass attacks.
+- Clearly broken rhythm: an empty bar in the bass or the kick lane, or a note running past the loop.
+- The originality gate, including banned figures.
+
+Soft: slot weights, density ranges, stab-vs-bass placement, phrase plans, contour templates, rest rules, and every other AVOID id. Freedom (default 0.35) widens the bands. BUSY and BOUNCE extremes, a hidden per-roll bump, and an optional chaos value raise it. Candidates are ranked by the soft penalty and sampled with temperature, not taken as the single best.
 
 ```yaml
 avoid:

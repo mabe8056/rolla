@@ -87,9 +87,12 @@ struct Groove
     float guardScore = 0.f;
     int guardLevel = 0; // 0 pass, 1 flag, 2 fail
     char guardRef[24] = "ORIGINAL";
-    // Soft-rule breaks freedom asked for on this roll (comma-separated ids). Empty if none landed.
-    char brokenRules[128] = "";
+    // plan|contour|cells|soft breaks. Soft breaks are the freedom budget, not a reject.
+    char brokenRules[192] = "";
     float penalty = 0.f;
+    // Candidates drawn this call, and how many a hard rule threw out.
+    int draws = 0;
+    int hardDraws = 0;
     Lane lane[NumParts] {};
     DrumLane drums {};
 };
@@ -104,9 +107,11 @@ struct Settings
     int key = 2;
     int bars = 8;
     bool fill = false;
-    // GENERATOR_RULES v2 freedom. 0 hugs the soft bands, 0.35 is the normal lane, 0.6 is wild.
-    // There is no intensity knob yet; hosts map one onto this field. The default is the normal lane.
+    // 0 hugs the soft bands, 0.35 is the normal lane, 0.6 is wild.
+    // BUSY and BOUNCE extremes raise the effective value. Soft rules never reject.
     float freedom = 0.35f;
+    // Optional global chaos. 0 leaves the hidden per-roll bump as the only extra.
+    float chaos = 0.f;
 };
 
 inline const char* partId (int p) noexcept

@@ -23,6 +23,30 @@ bool kickSlot (int slot) noexcept
     return slot == 0 || slot == 4 || slot == 8 || slot == 12;
 }
 
+bool scalePc (int dialect, int semi) noexcept
+{
+    int pc = semi % 12;
+    if (pc < 0)
+        pc += 12;
+    if (dialect == Gaskin)
+        return pc == 0 || pc == 1 || pc == 2 || pc == 3 || pc == 5 || pc == 7 || pc == 8 || pc == 10;
+    return pc != 4 && pc != 6 && pc != 11;
+}
+
+int snapScale (int dialect, int semi) noexcept
+{
+    if (scalePc (dialect, semi))
+        return semi;
+    for (int d = 1; d <= 6; ++d)
+    {
+        if (scalePc (dialect, semi - d))
+            return semi - d;
+        if (scalePc (dialect, semi + d))
+            return semi + d;
+    }
+    return 0;
+}
+
 bool genericSet (const int* slots, int n) noexcept
 {
     bool on[16] {};
@@ -120,8 +144,15 @@ void clampLane (Lane& lane, int bars)
 // Phrase plans from GENERATOR_RULES §2. Roles: A B B' A' A'' C D D'.
 enum Role : int { RA = 0, RB, RBp, RAp, RApp, RC, RD, RDp };
 
-Role planOf (int dialect, Rng& rng, const char*& name)
+Role planOf (int dialect, Rng& rng, const char*& name, float freedom, bool& offPlan)
 {
+    offPlan = freedom > 0.f && rng.next() < 0.22 * (double) freedom;
+    if (offPlan)
+    {
+        const char* any[] = { "P1", "P2", "P3", "P4", "P5" };
+        name = any[(int) (rng.next() * 5.0) % 5];
+        return RA;
+    }
     const double x = rng.next();
     if (dialect == Gaskin)
     {
@@ -178,8 +209,14 @@ void rolesFor (const char* plan, Role out[8])
     }
 }
 
-const char* contourFor (int dialect, Rng& rng)
+const char* contourFor (int dialect, Rng& rng, float freedom, bool& offContour)
 {
+    offContour = freedom > 0.f && rng.next() < 0.22 * (double) freedom;
+    if (offContour)
+    {
+        const char* any[] = { "pedal", "neighbour", "ladder_down", "fifth_pop", "step_up", "call_answer_2bar" };
+        return any[(int) (rng.next() * 6.0) % 6];
+    }
     if (dialect == Gaskin)
         return rng.next() < 0.7 ? "call_answer_2bar" : "neighbour";
     if (dialect == Pop)
@@ -442,15 +479,17 @@ int assignSemi (const char* contour, int dialect, Role role, int index, int coun
 }
 
 void commitBar (Lane& lane, int bar, const int* slots, int n, float wantLen, bool hole,
-                const char* contour, int dialect, Role role, int partner, Rng& rng, float ghostP)
+                const char* contour, int dialect, Role role, int partner, Rng& rng, float ghostP,
+                float freedom, char* breaks, int breaksN)
 {
-    int ord[12];
-    const int m = std::min (n, 12);
+    int ord[16];
+    const int m = std::min (n, 16);
     for (int i = 0; i < m; ++i)
         ord[i] = slots[i];
     std::sort (ord, ord + m);
     const int limit = hole ? 12 : 16;
     bool rootAt1 = false;
+    int prevSemi = 0;
     for (int i = 0; i < m; ++i)
     {
         if (ord[i] >= limit)
@@ -464,15 +503,40 @@ void commitBar (Lane& lane, int bar, const int* slots, int n, float wantLen, boo
             len = std::max (len, 2.f);
         else
             len = std::max (1.f, std::min (len, wantLen + 0.5f));
+        if (rng.next() < 0.12 * (double) freedom)
+            len = 0.5f + (float) (rng.next() * 3.5);
         len = std::min (len, (float) (next - ord[i]));
         if (len < 0.5f)
             continue;
         const bool oct = dialect == Pop && i == m - 1;
         int semi = assignSemi (contour, dialect, role, i, m, partner, oct);
+        if (i == 0 && rng.next() < 0.18 * (double) freedom)
+        {
+            const int surprise[] = { 1, 2, 3, 5, 8, 10, 7 };
+            semi = surprise[(int) (rng.next() * 7.0) % 7];
+            if (breaks != nullptr && breaksN > 0 && std::strstr (breaks, "iv") == nullptr)
+            {
+                const int lenB = (int) std::strlen (breaks);
+                if (lenB + 3 < breaksN)
+                    std::strncat (breaks, lenB ? ",iv" : "iv", (size_t) (breaksN - lenB - 1));
+            }
+        }
+        else if (i > 0 && rng.next() < 0.04 * (double) freedom)
+        {
+            const int step = rng.next() < 0.5 ? -1 : 1;
+            semi = prevSemi + step;
+            if (breaks != nullptr && breaksN > 0 && std::strstr (breaks, "iv") == nullptr)
+            {
+                const int lenB = (int) std::strlen (breaks);
+                if (lenB + 3 < breaksN)
+                    std::strncat (breaks, lenB ? ",iv" : "iv", (size_t) (breaksN - lenB - 1));
+            }
+        }
         if (ord[i] == 3 && rootAt1 && (semi % 12) == 0)
             semi = partner == 0 ? 7 : partner;
         if (ord[i] == 1 && (semi % 12) == 0)
             rootAt1 = true;
+        prevSemi = semi;
         if (semi == 1 && i + 1 < m)
         {
             // Leave toward root on the next note when the contour did not.
@@ -494,8 +558,21 @@ void commitBar (Lane& lane, int bar, const int* slots, int n, float wantLen, boo
 // The Ev helper above used a bogus method. Notes are filled in commitBar directly.
 // (semiStored was a draft; the real fields are set below.)
 
+void noteBreak (char* breaks, int breaksN, const char* id)
+{
+    if (breaks == nullptr || breaksN <= 0 || id == nullptr || std::strstr (breaks, id) != nullptr)
+        return;
+    const int lenB = (int) std::strlen (breaks);
+    const int need = (int) std::strlen (id) + (lenB ? 1 : 0);
+    if (lenB + need + 1 >= breaksN)
+        return;
+    if (lenB)
+        std::strncat (breaks, ",", (size_t) (breaksN - lenB - 1));
+    std::strncat (breaks, id, (size_t) (breaksN - std::strlen (breaks) - 1));
+}
+
 void writeBass (Lane& lane, const Settings& s, Rng& rng, const char* plan, const char* contour,
-                int partner, char* cells, int cellsN)
+                int partner, char* cells, int cellsN, float freedom, char* breaks, int breaksN)
 {
     clearLane (lane, lane.seed);
     Role roles[8];
@@ -523,19 +600,22 @@ void writeBass (Lane& lane, const Settings& s, Rng& rng, const char* plan, const
                 if ((slots[i] & 1) == 0 && slots[i] < 15 && ! kickSlot (slots[i] + 1))
                     slots[i] += 1;
         }
-        if (role == RC || role == RDp || bar == s.bars - 1)
+        const bool turn = role == RC || role == RDp || bar == s.bars - 1;
+        if (turn && rng.next() > 0.55 * (double) freedom)
             enforceHole (slots, n);
+        else if (turn)
+            noteBreak (breaks, breaksN, "rest");
         for (int i = 0; i < n; ++i)
         {
-            if (rng.next() < 0.45)
+            if (rng.next() < 0.20 + 0.50 * (double) freedom)
                 continue;
             const int dir = rng.next() < 0.5 ? -1 : 1;
             const int moved = slots[i] + dir;
             if (moved < 0 || moved > 15)
                 continue;
-            if ((role == RC || role == RDp || bar == s.bars - 1) && moved > 11)
+            if (turn && moved > 11 && rng.next() > 0.55 * (double) freedom)
                 continue;
-            if (! (allowKick && role != RC) && kickSlot (moved))
+            if (! (allowKick && role != RC) && kickSlot (moved) && rng.next() > 0.40 * (double) freedom)
                 continue;
             bool clash = false;
             for (int k = 0; k < n; ++k)
@@ -544,11 +624,59 @@ void writeBass (Lane& lane, const Settings& s, Rng& rng, const char* plan, const
             if (! clash)
                 slots[i] = moved;
         }
-        stripKick (slots, n, allowKick && role != RC);
+        stripKick (slots, n, (allowKick && role != RC) || rng.next() < 0.20 * (double) freedom);
+        if (rng.next() < 0.10 * (double) freedom && n > 0 && n < 12)
+        {
+            const int odd[] = { 1, 3, 7, 11, 13, 15 };
+            const int sslot = odd[(int) (rng.next() * 6.0) % 6];
+            bool clash = false;
+            for (int i = 0; i < n; ++i)
+                if (slots[i] == sslot)
+                    clash = true;
+            if (! clash)
+            {
+                slots[n++] = sslot;
+                noteBreak (breaks, breaksN, "slot");
+            }
+        }
         breakRuns (slots, n);
         ungeneric (slots, n, allowKick);
-        if (role == RC || bar == s.bars - 1)
+        if (turn && rng.next() > 0.55 * (double) freedom)
             enforceHole (slots, n);
+        int kicks = 0;
+        for (int i = 0; i < n; ++i)
+            if (kickSlot (slots[i]))
+                ++kicks;
+        while (n > 1 && kicks > 0 && (float) kicks / (float) n > 0.35f)
+        {
+            for (int i = n - 1; i >= 0; --i)
+            {
+                if (! kickSlot (slots[i]))
+                    continue;
+                const int alt = slots[i] < 15 ? slots[i] + 1 : slots[i] - 1;
+                bool clash = false;
+                for (int j = 0; j < n; ++j)
+                    if (slots[j] == alt)
+                        clash = true;
+                if (! clash)
+                    slots[i] = alt;
+                else
+                {
+                    slots[i] = slots[n - 1];
+                    --n;
+                }
+                break;
+            }
+            kicks = 0;
+            for (int i = 0; i < n; ++i)
+                if (kickSlot (slots[i]))
+                    ++kicks;
+        }
+        if (n == 0)
+        {
+            slots[n++] = 2;
+            slots[n++] = 6;
+        }
         if (inbeatUsed (slots, n) < 3)
         {
             const int add[] = { 1, 6, 11 };
@@ -562,10 +690,11 @@ void writeBass (Lane& lane, const Settings& s, Rng& rng, const char* plan, const
                     slots[n++] = sslot;
             }
         }
-        if (n > 8)
-            n = 8;
-        commitBar (lane, bar, slots, n, want, role == RC || role == RDp || bar == s.bars - 1,
-                   contour, s.dialect, role, partner, rng, ghostP);
+        if (n > 10)
+            n = 10;
+        const bool wantHole = turn && (breaks == nullptr || std::strstr (breaks, "rest") == nullptr);
+        commitBar (lane, bar, slots, n, want, wantHole,
+                   contour, s.dialect, role, partner, rng, ghostP, freedom, breaks, breaksN);
     }
     std::snprintf (cells, (size_t) cellsN, "%s",
                    s.dialect == Pop ? "off_8th_pump,fifth_pop,rest"
@@ -594,7 +723,7 @@ bool bassOnset (const Lane& lane, int slot)
     return false;
 }
 
-void writeStab (Lane& lane, const Lane& bass, const Settings& s, Rng& rng)
+void writeStab (Lane& lane, const Lane& bass, const Settings& s, Rng& rng, float freedom, char* breaks, int breaksN)
 {
     clearLane (lane, lane.seed);
     const int per = s.dialect == Pop ? 8 : s.dialect == Gaskin ? 6 : s.dialect == Long ? 3 : (s.stab > 0.66f ? 2 : 1);
@@ -612,12 +741,13 @@ void writeStab (Lane& lane, const Lane& bass, const Settings& s, Rng& rng)
                 continue;
             const int abs = bar * 16 + slot;
             const bool onBass = bassOnset (bass, abs);
-            if (s.dialect == UkMin && onBass)
+            const double keepOnBass = std::min (0.70, 0.25 * (double) freedom);
+            if (onBass && rng.next() > keepOnBass)
                 continue;
-            if (onBass && total > 0 && (float) (overlaps + 1) / (float) (total + 1) > 0.15f)
+            if (s.dialect == UkMin && bassSounds (bass, abs) && ! onBass && rng.next() > std::min (0.80, 0.40 * (double) freedom))
                 continue;
-            if (s.dialect == UkMin && bassSounds (bass, abs))
-                continue;
+            if (onBass)
+                noteBreak (breaks, breaksN, "stab");
             float len = s.dialect == Gaskin ? 8.f : s.dialect == Pop ? 1.f : 2.f;
             const float barEnd = (float) ((bar + 1) * 16);
             if ((float) abs + len > barEnd)
@@ -680,7 +810,8 @@ void writeHits (Lane& lane, const Groove& g, const Settings& s, Rng& rng)
             e.start = (float) abs;
             e.len = len;
             e.nChord = 1;
-            e.chord[0] = (std::int8_t) ((int) (rng.next() * 6) * 2);
+            const int degs[] = { 0, 2, 3, 5, 7, 10 };
+            e.chord[0] = (std::int8_t) degs[(int) (rng.next() * 6.0) % 6];
             e.vel = 90;
             pushEv (lane, e, s.bars);
             break;
@@ -770,7 +901,8 @@ void writeVox (Lane& lane, const Settings& s, Rng& rng)
             if (e.start + e.len > (float) ((bar + 1) * 16))
                 e.len = (float) ((bar + 1) * 16) - e.start;
             e.nChord = 1;
-            e.chord[0] = (std::int8_t) shift;
+            // chord is an offset from MIDI 64, so subtract that bias before storing a scale degree.
+            e.chord[0] = (std::int8_t) (snapScale (s.dialect, shift) - 4);
             e.vel = ghost && i > 0 ? 80 : 100;
             e.flags = ghost && i > 0 ? (std::uint8_t) NoteGhost : 0;
             pushEv (lane, e, s.bars);
@@ -822,58 +954,282 @@ void writeDrums (DrumLane& drums, std::uint32_t seed, const Settings& s, Rng& rn
     }
 }
 
-int failCount (const Groove& g)
+bool neighbourPc (int a, int b) noexcept
+{
+    int d = std::abs (a - b) % 12;
+    if (d > 6)
+        d = 12 - d;
+    return d == 1;
+}
+
+int soundingPc (int part, int semi) noexcept
+{
+    // Vox is written from MIDI 64, four semitones above the key, so chord 0 is a major third.
+    const int bias = part == Vox ? 4 : 0;
+    int pc = (bias + semi) % 12;
+    if (pc < 0)
+        pc += 12;
+    return pc;
+}
+
+bool laneInKey (const Lane& lane, int part, int dialect) noexcept
+{
+    for (int i = 0; i < lane.count; ++i)
+    {
+        const int nc = clampi ((int) lane.notes[i].nChord, 1, 4);
+        for (int c = 0; c < nc; ++c)
+        {
+            const int pc = soundingPc (part, lane.notes[i].chord[c]);
+            if (scalePc (dialect, pc))
+                continue;
+            bool ok = false;
+            auto near = [&] (int other)
+            {
+                const int opc = soundingPc (part, other);
+                return neighbourPc (pc, opc) && scalePc (dialect, opc);
+            };
+            for (int k = 0; k < nc; ++k)
+                if (k != c && near (lane.notes[i].chord[k]))
+                    ok = true;
+            if (i > 0)
+            {
+                const int pn = clampi ((int) lane.notes[i - 1].nChord, 1, 4);
+                for (int k = 0; k < pn; ++k)
+                    if (near (lane.notes[i - 1].chord[k]))
+                        ok = true;
+            }
+            if (i + 1 < lane.count)
+            {
+                const int nn = clampi ((int) lane.notes[i + 1].nChord, 1, 4);
+                for (int k = 0; k < nn; ++k)
+                    if (near (lane.notes[i + 1].chord[k]))
+                        ok = true;
+            }
+            if (! ok)
+                return false;
+        }
+    }
+    return true;
+}
+
+// Hard rejects only. Soft taste (density, rests, plans, stabs on the bass) is a penalty.
+bool hardFail (const Groove& g) noexcept
 {
     const int bars = g.bars;
     const int nslots = bars * 16;
+    if (bars < 1 || nslots > 128)
+        return true;
+    for (int p = 0; p < Drums; ++p)
+        if (! laneInKey (g.lane[p], p, g.dialect))
+            return true;
+
     const Lane& bass = g.lane[Bass];
-    if (bass.count < bars * 3)
-        return 8;
+    bool sound[128] {};
+    bool onsetBar[8] {};
+    int onsets = 0;
+    int onKick = 0;
+    int rootPair = 0;
+    int tie = 0;
+    for (int i = 0; i < bass.count; ++i)
+    {
+        const auto& n = bass.notes[i];
+        if (n.length < 0.25f || n.start < 0.f || n.start + n.length > (float) nslots + 0.01f)
+            return true;
+        const int s = (int) std::lround (n.start);
+        if (s < 0 || s >= nslots)
+            return true;
+        const int bar = s / 16;
+        const int slot = s % 16;
+        if (bar >= 0 && bar < 8)
+            onsetBar[bar] = true;
+        const int last = (int) std::floor (n.start + n.length - 0.001f);
+        for (int k = s; k <= last && k < nslots; ++k)
+            sound[k] = true;
+        ++onsets;
+        if (kickSlot (slot))
+            ++onKick;
+        const int pc = ((int) n.chord[0] % 12 + 12) % 12;
+        if (slot == 14 && pc == 3 && n.start + n.length > (float) ((bar + 1) * 16) + 0.01f)
+            ++tie;
+    }
+    if (onsets > 0 && (float) onKick / (float) onsets > 0.35f)
+        return true;
+    for (int b = 0; b < bars && b < 8; ++b)
+    {
+        bool any = onsetBar[b];
+        for (int k = 0; k < 16 && ! any; ++k)
+            any = sound[b * 16 + k];
+        if (! any)
+            return true;
+        bool kick = false;
+        for (int k = 0; k < 16; ++k)
+            if (g.drums.vel[Kick][b * 16 + k] > 0)
+                kick = true;
+        if (! kick)
+            return true;
+        bool s1 = false, s3 = false;
+        for (int i = 0; i < bass.count; ++i)
+        {
+            const int s = (int) std::lround (bass.notes[i].start);
+            if (s / 16 != b)
+                continue;
+            const int pc = ((int) bass.notes[i].chord[0] % 12 + 12) % 12;
+            if (s % 16 == 1 && pc == 0)
+                s1 = true;
+            if (s % 16 == 3 && pc == 0)
+                s3 = true;
+        }
+        if (s1 && s3)
+            ++rootPair;
+    }
+    if (rootPair > 4 || tie > 4)
+        return true;
+    for (int p = 0; p < Drums; ++p)
+        for (int i = 0; i < g.lane[p].count; ++i)
+            if (g.lane[p].notes[i].start + g.lane[p].notes[i].length > (float) nslots + 0.01f)
+                return true;
+    return false;
+}
+
+float bandPenalty (float x, float lo, float hi, float tol, float w, float stick, float f) noexcept
+{
+    const float tolE = std::max (0.05f, tol * (1.f + 2.f * f));
+    const float wE = w * (1.f - f * (1.f - stick));
+    const float d = std::max (0.f, std::max (lo - x, x - hi)) / tolE;
+    const float c = d <= 1.f ? d * d : std::min (4.f, 2.f * d - 1.f);
+    return std::max (0.f, wE) * c;
+}
+
+float softPenalty (const Groove& g, float freedom, const char* plan, bool offPlan, bool offContour) noexcept
+{
+    const int bars = std::max (1, g.bars);
+    const int nslots = bars * 16;
+    const Lane& bass = g.lane[Bass];
     int per[8] {};
-    bool snd[128] {};
-    int steps[96];
+    bool sound[128] {};
+    float lens[kMaxNotes];
     int n = 0;
-    for (int i = 0; i < bass.count && n < 96; ++i)
+    int onKick = 0;
+    int root = 0;
+    int pcs[12] {};
+    for (int i = 0; i < bass.count && n < kMaxNotes; ++i)
     {
         const int s = (int) std::lround (bass.notes[i].start);
         if (s < 0 || s >= nslots)
             continue;
-        steps[n++] = s;
-        const int bar = s / 16;
-        if (bar >= 0 && bar < 8)
-            ++per[bar];
+        lens[n] = bass.notes[i].length;
+        if (s / 16 < 8)
+            ++per[s / 16];
+        if (kickSlot (s % 16))
+            ++onKick;
+        const int pc = ((int) bass.notes[i].chord[0] % 12 + 12) % 12;
+        ++pcs[pc];
+        if (pc == 0)
+            ++root;
         const int last = (int) std::floor (bass.notes[i].start + bass.notes[i].length - 0.001f);
         for (int k = s; k <= last && k < nslots; ++k)
-            snd[k] = true;
+            sound[k] = true;
+        ++n;
     }
-    int fails = 0;
+    float npbLo = 4.5f, npbHi = 7.5f, lenLo = 1.4f, lenHi = 2.2f;
+    float rootLo = 0.35f, rootHi = 0.76f, topLo = 0.63f, topHi = 0.98f;
+    float sndLo = 0.50f, sndHi = 0.85f, kickSoft = 0.10f;
+    float stabLo = 0.5f, stabHi = 3.f;
+    if (g.dialect == Long)
+    {
+        npbLo = 6.5f; npbHi = 8.f; lenLo = 2.f; lenHi = 2.4f;
+        rootLo = 0.30f; rootHi = 0.45f; topLo = 0.75f; topHi = 0.85f;
+        sndLo = 0.75f; sndHi = 0.90f; kickSoft = 0.30f;
+        stabLo = 2.5f; stabHi = 4.5f;
+    }
+    else if (g.dialect == Pop)
+    {
+        npbLo = 4.5f; npbHi = 6.f; lenLo = 1.f; lenHi = 1.25f;
+        rootLo = 0.30f; rootHi = 0.42f; topLo = 0.94f; topHi = 0.99f;
+        sndLo = 0.28f; sndHi = 0.40f; kickSoft = 0.05f;
+        stabLo = 9.f; stabHi = 11.f;
+    }
+    else if (g.dialect == Gaskin)
+    {
+        npbLo = 6.f; npbHi = 8.f; lenLo = 1.9f; lenHi = 2.3f;
+        rootLo = 0.28f; rootHi = 0.40f; topLo = 0.55f; topHi = 0.70f;
+        sndLo = 0.75f; sndHi = 0.85f; kickSoft = 0.35f;
+        stabLo = 5.5f; stabHi = 6.5f;
+    }
+    const float npb = (float) n / (float) bars;
+    std::sort (lens, lens + n);
+    const float lenMed = n ? lens[n / 2] : 0.f;
+    int occupied = 0;
+    for (int i = 0; i < nslots; ++i)
+        if (sound[i])
+            ++occupied;
+    const float sounding = (float) occupied / (float) nslots;
+    const float rootShare = n ? (float) root / (float) n : 0.f;
+    int best = 0, second = 0;
+    for (int c : pcs)
+    {
+        if (c > best)
+        {
+            second = best;
+            best = c;
+        }
+        else if (c > second)
+            second = c;
+    }
+    const float top2 = n ? (float) (best + second) / (float) n : 0.f;
+    const float kick = n ? (float) onKick / (float) n : 0.f;
     int mn = 99, mx = 0;
     for (int b = 0; b < bars && b < 8; ++b)
     {
         mn = std::min (mn, per[b]);
         mx = std::max (mx, per[b]);
-        if (per[b] > 9)
-            ++fails;
     }
+    const float stabPb = (float) g.lane[Stab].count / (float) bars;
+    int stabOnBass = 0;
+    for (int i = 0; i < g.lane[Stab].count; ++i)
+    {
+        const int s = (int) std::lround (g.lane[Stab].notes[i].start);
+        for (int b = 0; b < bass.count; ++b)
+            if ((int) std::lround (bass.notes[b].start) == s)
+                ++stabOnBass;
+    }
+    const float stabOn = g.lane[Stab].count ? (float) stabOnBass / (float) g.lane[Stab].count : 0.f;
+    const float f = freedom;
+    float p = 0.f;
+    p += bandPenalty (npb, npbLo, npbHi, 1.f, 1.f, 0.3f, f);
+    p += bandPenalty (lenMed, lenLo, lenHi, 0.4f, 1.f, 0.3f, f);
+    p += bandPenalty (rootShare, rootLo, rootHi, 0.08f, 0.7f, 0.3f, f);
+    p += bandPenalty (top2, topLo, topHi, 0.08f, 1.f, 0.3f, f);
+    p += bandPenalty (sounding, sndLo, sndHi, 0.10f, 1.f, 0.3f, f);
+    p += bandPenalty (kick, 0.f, kickSoft, 0.05f, 2.f, 0.6f, f);
+    p += bandPenalty (stabPb, stabLo, stabHi, 1.f, 0.8f, 0.3f, f);
+    p += bandPenalty (stabOn, 0.f, 0.80f, 0.10f, 0.4f, 0.1f, f);
     if (mx - mn < 2)
-        ++fails;
+        p += bandPenalty ((float) (mx - mn), 2.f, 8.f, 1.f, 1.5f, 0.5f, f);
     bool endHole = true;
     for (int k = (bars - 1) * 16 + 12; k < nslots; ++k)
-        if (snd[k])
+        if (sound[k])
             endHole = false;
     if (! endHole)
-        ++fails;
-    int onKick = 0;
-    for (int i = 0; i < n; ++i)
-        if (kickSlot (steps[i] % 16))
-            ++onKick;
-    const float kickMax = g.dialect == UkMin ? 0.10f : g.dialect == Pop ? 0.05f : g.dialect == Long ? 0.30f : 0.35f;
-    if (n > 0 && (float) onKick / (float) n > kickMax)
-        ++fails;
-    for (int i = 0; i < g.lane[Bass].count; ++i)
-        if (g.lane[Bass].notes[i].start + g.lane[Bass].notes[i].length > (float) nslots + 0.01f)
-            ++fails;
-    return fails;
+        p += 0.5f * (1.f - f * 0.9f);
+    if (offPlan)
+        p += 0.5f * (1.f - f * 0.8f);
+    if (offContour)
+        p += 0.4f * (1.f - f * 0.8f);
+    (void) plan;
+    return p;
+}
+
+float effectiveFreedom (const Settings& s, Rng& rng) noexcept
+{
+    float f = std::clamp (s.freedom, 0.f, 1.f);
+    const float busyExt = std::fabs (s.busy - 0.5f) * 2.f;
+    const float bounceExt = std::fabs (s.bounce - 0.5f) * 2.f;
+    f += 0.20f * std::max (busyExt, bounceExt);
+    f += std::clamp (s.chaos, 0.f, 1.f);
+    if (rng.next() < 0.12)
+        f += 0.25f;
+    return std::clamp (f, 0.f, 1.f);
 }
 
 } // namespace
@@ -1002,13 +1358,24 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
     g.dialect = s.dialect;
 
     const std::uint32_t bassSeed = seeds[Bass] ? seeds[Bass] : 1u;
-    Groove best = g;
-    int bestFail = 1000;
-    const char* planName = "P1";
-    const char* contour = "pedal";
-    char cells[64] = "rest";
+    Rng freedomRng (bassSeed ^ 0xC0FFEEu);
+    const float freedom = effectiveFreedom (s, freedomRng);
+    Rng pickRng (bassSeed ^ 0xA11CEu);
 
-    for (int attempt = 0; attempt < 24; ++attempt)
+    struct Cand
+    {
+        Groove g;
+        float penalty = 0.f;
+        char tag[192] = "";
+    };
+    Cand pool[6];
+    int nPool = 0;
+    int draws = 0;
+    int hardDraws = 0;
+    Cand last {};
+    bool haveLast = false;
+
+    for (int attempt = 0; attempt < 24 && nPool < 6; ++attempt)
     {
         for (int p = 0; p < NumParts; ++p)
             if (! regen (p))
@@ -1017,14 +1384,24 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
             g.drums = keptDrums;
 
         Rng rng (bassSeed + (std::uint32_t) attempt * 0x9E3779B9u);
-        planOf (s.dialect, rng, planName);
-        contour = contourFor (s.dialect, rng);
+        const char* planName = "P1";
+        bool offPlan = false;
+        bool offContour = false;
+        planOf (s.dialect, rng, planName, freedom, offPlan);
+        const char* contour = contourFor (s.dialect, rng, freedom, offContour);
         const int partner = partnerFor (s.dialect, s.dark, rng);
+        char cells[64] = "rest";
+        char breaks[48] = "";
+        if (offPlan)
+            noteBreak (breaks, (int) sizeof breaks, "plan");
+        if (offContour)
+            noteBreak (breaks, (int) sizeof breaks, "contour");
 
         if (regen (Bass))
         {
             g.lane[Bass].seed = bassSeed;
-            writeBass (g.lane[Bass], s, rng, planName, contour, partner, cells, (int) sizeof cells);
+            writeBass (g.lane[Bass], s, rng, planName, contour, partner, cells, (int) sizeof cells,
+                       freedom, breaks, (int) sizeof breaks);
             g.lane[Bass].seed = bassSeed;
         }
         else
@@ -1034,7 +1411,7 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
         {
             Rng rs ( (seeds[Stab] ? seeds[Stab] : 1u) + (std::uint32_t) attempt * 17u);
             g.lane[Stab].seed = seeds[Stab] ? seeds[Stab] : 1u;
-            writeStab (g.lane[Stab], g.lane[Bass], s, rs);
+            writeStab (g.lane[Stab], g.lane[Bass], s, rs, freedom, breaks, (int) sizeof breaks);
         }
         else
             clampLane (g.lane[Stab], s.bars);
@@ -1081,25 +1458,72 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
             writeDrums (g.drums, seeds[Drums], s, rd);
         }
 
-        const int fails = regen (Bass) ? failCount (g) : 0;
-        if (fails < bestFail)
+        ++draws;
+        std::snprintf (g.brokenRules, sizeof g.brokenRules, "%s|%s|%s|%s", planName, contour, cells, breaks);
+        last.g = g;
+        last.penalty = softPenalty (g, freedom, planName, offPlan, offContour);
+        std::snprintf (last.tag, sizeof last.tag, "%s", g.brokenRules);
+        haveLast = true;
+        if (hardFail (g))
         {
-            best = g;
-            bestFail = fails;
-            std::snprintf (best.brokenRules, sizeof best.brokenRules, "%s|%s|%s", planName, contour, cells);
+            ++hardDraws;
+            continue;
         }
-        if (fails == 0)
-            break;
+        pool[nPool].g = g;
+        pool[nPool].penalty = last.penalty;
+        std::snprintf (pool[nPool].tag, sizeof pool[nPool].tag, "%s", g.brokenRules);
+        ++nPool;
     }
 
-    g = best;
+    int chosen = 0;
+    bool shippedHard = nPool == 0;
+    if (nPool == 0 && haveLast)
+    {
+        pool[0] = last;
+        nPool = 1;
+    }
+    if (nPool > 1)
+    {
+        int order[6];
+        for (int i = 0; i < nPool; ++i)
+            order[i] = i;
+        std::sort (order, order + nPool, [&] (int a, int b) { return pool[a].penalty < pool[b].penalty; });
+        const float temperature = 1.f + 4.f * freedom;
+        const int topN = std::min (nPool, std::max (2, (int) std::lround (2.f + 3.f * freedom)));
+        double weight[6] {};
+        double sum = 0.0;
+        const float bestP = pool[order[0]].penalty;
+        for (int i = 0; i < topN; ++i)
+        {
+            weight[i] = std::exp (-(double) (pool[order[i]].penalty - bestP) / (double) temperature);
+            sum += weight[i];
+        }
+        double needle = pickRng.next() * sum;
+        chosen = order[0];
+        for (int i = 0; i < topN; ++i)
+        {
+            needle -= weight[i];
+            if (needle <= 0.0)
+            {
+                chosen = order[i];
+                break;
+            }
+        }
+    }
+
+    if (nPool > 0)
+        g = pool[chosen].g;
     g.bars = s.bars;
     g.key = s.key;
     g.dialect = s.dialect;
-    g.penalty = (float) bestFail;
-    g.guardScore = bestFail == 0 ? 1.f : 0.5f;
-    g.guardLevel = bestFail == 0 ? 0 : 1;
-    std::snprintf (g.guardRef, sizeof g.guardRef, "%s", bestFail == 0 ? "ORIGINAL" : "NEAR");
+    g.draws = draws;
+    g.hardDraws = hardDraws;
+    g.penalty = nPool > 0 ? pool[chosen].penalty : 0.f;
+    if (nPool > 0)
+        std::snprintf (g.brokenRules, sizeof g.brokenRules, "%s", pool[chosen].tag);
+    g.guardScore = shippedHard ? 0.f : 1.f;
+    g.guardLevel = shippedHard ? 2 : 0;
+    std::snprintf (g.guardRef, sizeof g.guardRef, "%s", shippedHard ? "HARD" : "ORIGINAL");
     ++g.generation;
 }
 

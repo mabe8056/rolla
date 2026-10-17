@@ -31,10 +31,13 @@ struct Rng
 // partMask bit N regenerates that part. Other parts are kept and only clamped
 // to the new bar length. A regenerated stab is placed in the holes of the bass
 // left in `g`, and drums sit under that pair, so a shuffle fits the kept lanes.
-// Each draw builds an 8-bar phrase from typed rhythm cells, one of the five
-// phrase plans, and a contour template (docs/generator/GENERATOR_RULES.md).
-// A candidate that fails an AVOID check is redrawn. The caller seed is what
-// lands on the lane. ESTIMATE thresholds live in docs/generator/estimates.json.
+// Each draw builds an 8-bar phrase from typed rhythm cells, phrase plans, and
+// a contour. Only four things reject a candidate: out-of-key notes, a bass
+// attack on a kick with the low end stacked past 35% of the onsets, an empty
+// bar in a lane that is supposed to play, and a banned figure. Slot weights,
+// density, stab-vs-bass placement, plans, contours, and rests are a penalty.
+// Six candidates are ranked by that penalty and one is sampled with a
+// temperature that rises with freedom. The caller seed is what lands on the lane.
 void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[NumParts], std::uint32_t partMask);
 
 // OC-style bass skeleton similarity in [0, 1]. A pair at or above 0.55 is the

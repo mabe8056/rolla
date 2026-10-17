@@ -6,8 +6,9 @@
 Input is JSON lines from tools/dump_grooves.cpp. One object per roll:
 style, key, bars, tag (plan|contour|cells), lanes, drums.
 
-AV01–AV17 are soft flags. They are reported, and they do not reject a roll.
-The merge gate is the v2.1 listening set (80% per style), not these checks.
+Four checks reject a roll: out of key, a bass attack stacked on a kick past 35%,
+an empty bass or kick bar (or a note past the loop), and originality (AV13, AV14).
+Every other AVOID id is a flag. Freedom samples those as a penalty, not a filter.
 Diversity metrics run once per style when the batch has at least the configured
 minimum. ESTIMATE thresholds are read from docs/generator/estimates.json.
 """
@@ -68,6 +69,34 @@ GENERIC = [
 ]
 KICK = frozenset({0, 4, 8, 12})
 HAT_VOICES = {6, 7}  # HatC, HatO
+
+
+def in_scale(style, pc):
+    if style == "gaskin":
+        return pc in {0, 1, 2, 3, 5, 7, 8, 10}
+    return pc in {0, 1, 2, 3, 5, 7, 8, 9, 10}
+
+
+def neighbour(a, b):
+    d = abs(a - b) % 12
+    return d == 1 or d == 11
+
+
+def lane_out_of_key(notes, key, style):
+    pcs = []
+    for note in notes or []:
+        for pitch in note.get("pitches") or [60]:
+            pcs.append(degree(pitch, key))
+    for i, pc in enumerate(pcs):
+        if in_scale(style, pc):
+            continue
+        ok = False
+        for j in (i - 1, i + 1):
+            if 0 <= j < len(pcs) and neighbour(pc, pcs[j]) and in_scale(style, pcs[j]):
+                ok = True
+        if not ok:
+            return True
+    return False
 
 
 def degree(midi, key):
@@ -273,10 +302,12 @@ def score_roll(roll, preset):
     if best16 > AV["machinegun_run"] or npb > AV["machinegun_npb"] or len_med < AV["machinegun_len_median"]:
         fails.append("AV15_machinegun")
 
-    # AV16 on kick
-    cap = min(float(preset["on_kick"]), float(AV["on_kick_hard_cap"]))
-    if on_kick > cap + 1e-9:
-        fails.append("AV16_on_kick_bass")
+    # Low-end clash is hard only once bass attacks sit on the kick past 35%.
+    # A thinner stack is a soft bias (the dialect cap).
+    if on_kick > 0.35 + 1e-9:
+        fails.append("H2_low_end_clash")
+    elif on_kick > float(preset["on_kick"]) + 1e-9:
+        flags.append("AV16_on_kick_bass")
 
     # AV14 banned figures
     root_24 = 0
@@ -365,10 +396,23 @@ def score_roll(roll, preset):
         if 0 <= s < 128:
             mask |= 1 << s
     metrics["onset_mask"] = mask
-    # AVOID is a listening note, not a reject. v2.1 at 80% per style is the gate.
+    style = roll.get("style", "")
+    for name in ("bass", "stab", "hits", "pluck", "pad", "vox"):
+        if lane_out_of_key(roll["lanes"].get(name, []), key, style):
+            fails.append("H1_out_of_key")
+            break
+    for b in range(bars):
+        onset = any(s // 16 == b for s in steps)
+        sounding_bar = any(g[b * 16 + i] is not None for i in range(16))
+        kicks = [h for h in roll.get("drums", []) if h.get("voice") == 0 and h.get("step", -1) // 16 == b]
+        if (not onset and not sounding_bar) or (roll.get("drums") and not kicks):
+            fails.append("H3_empty_bar")
+            break
+    # Out of key, the low-end stack, a broken bar, a note past the loop, and
+    # originality reject. Every other AVOID id is a penalty flag.
     kept = []
     for code in fails:
-        if code.startswith("AV"):
+        if code.startswith("AV") and not code.startswith(("AV12", "AV13", "AV14")):
             flags.append(code)
         else:
             kept.append(code)
@@ -577,12 +621,12 @@ def summarise(style, rolls, refs, mod, originality_n):
     preset = PRESET[style]
     rows = []
     fail_c, flag_c = Counter(), Counter()
-    passed = 0
-    for roll in rolls:
+    passed_idx = set()
+    for i, roll in enumerate(rolls):
         fails, flags, metrics = score_roll(roll, preset)
         rows.append((fails, flags, metrics))
         if not fails:
-            passed += 1
+            passed_idx.add(i)
         for f in fails:
             fail_c[f] += 1
         for f in flags:
@@ -590,12 +634,17 @@ def summarise(style, rolls, refs, mod, originality_n):
     oc = originality_fails(rolls, refs, mod, originality_n) if originality_n else None
     oc_fail = 0
     if oc:
-        for idx, verdict in oc:
+        for i, (idx, verdict) in enumerate(oc):
             if verdict == "FAIL":
                 oc_fail += 1
-                flag_c["AV13_reference_skeleton_copy"] += 1
+                fail_c["AV13_reference_skeleton_copy"] += 1
+                passed_idx.discard(i)
             elif verdict == "FLAG":
                 flag_c["AV13_reference_skeleton_copy"] += 1
+    passed = len(passed_idx)
+    draws = sum(int(r.get("draws") or 0) for r in rolls)
+    hard_draws = sum(int(r.get("hardDraws") or 0) for r in rolls)
+    shipped_hard = sum(1 for r in rolls if r.get("guard") == "HARD")
     div = diversity(rolls, [m for _, _, m in rows], preset)
     return {
         "style": style,
@@ -607,6 +656,9 @@ def summarise(style, rolls, refs, mod, originality_n):
         "diversity": div,
         "originality_n": 0 if oc is None else len(oc),
         "originality_fail": oc_fail,
+        "draws": draws,
+        "hard_draws": hard_draws,
+        "shipped_hard": shipped_hard,
     }
 
 
@@ -664,7 +716,13 @@ def main():
         if div.get("range_coverage"):
             lines.append("range coverage: " + ", ".join(f"{k} {v}" for k, v in div["range_coverage"].items()))
         if rep["originality_n"]:
-            lines.append(f"AV13 on {rep['originality_n']} rolls: {rep['originality_fail']} FAIL")
+            lines.append(f"originality on {rep['originality_n']} rolls: {rep['originality_fail']} HARD")
+        if rep.get("draws"):
+            rate = rep["hard_draws"] / rep["draws"]
+            lines.append(
+                f"hard-reject rate {rate:.1%} ({rep['hard_draws']}/{rep['draws']} candidates),"
+                f" shipped {rep['shipped_hard']}/{rep['n']}"
+            )
         lines.append("")
     text = "\n".join(lines)
     print(text)

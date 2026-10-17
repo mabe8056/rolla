@@ -81,7 +81,10 @@ int main (int argc, char** argv)
                 << ",\"key\":" << g.key
                 << ",\"bars\":" << g.bars
                 << ",\"guard\":\"" << g.guardRef
-                << "\",\"tag\":\"" << g.brokenRules
+                << "\",\"penalty\":" << g.penalty
+                << ",\"draws\":" << g.draws
+                << ",\"hardDraws\":" << g.hardDraws
+                << ",\"tag\":\"" << g.brokenRules
                 << "\",\"lanes\":{";
             for (int p = 0; p < rolla::Drums; ++p)
             {
