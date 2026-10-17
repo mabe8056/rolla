@@ -485,12 +485,12 @@ void RollaProcessor::regenerate (int onlyPart)
             seeds[i] = freshSeed();
             mask |= 1u << (unsigned) i;
             samplePick[i].store ((int) (seeds[i] % 10007u), std::memory_order_relaxed);
-            const int next = pickPresetForRoll (sound, i, s.dialect, seeds[i]);
-            if (next >= 0)
+            const int picked = pickPresetForRoll (sound, i, s.dialect, seeds[i]);
+            if (picked >= 0)
             {
                 if (auto* param = apvts.getParameter (juce::String (partId (i)) + "Preset"))
                 {
-                    const float norm = param->convertTo0to1 ((float) next);
+                    const float norm = param->convertTo0to1 ((float) picked);
                     if (std::fabs (param->getValue() - norm) >= 1.0e-4f)
                         param->setValueNotifyingHost (norm);
                 }

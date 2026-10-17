@@ -691,7 +691,7 @@ void Engine::process (const Groove& groove,
     {
         auto idOf = [&] (int part) -> const char*
         {
-            const int idx = std::clamp (params.preset[part], 0, PresetBank::kPer - 1);
+            const int idx = presetSlot (bank, part, params.preset[part]);
             switch (part)
             {
                 case Bass: return bank.bass[idx].id;
