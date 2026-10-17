@@ -36,6 +36,8 @@ struct PoolFilter
     int lane = -1;
     int voice = -1;
     int rootPc = -1;
+    // -1 any, 1 only tempo-locked phrase loops, 0 excludes them.
+    int loop = -1;
     char pack[64] {};
     char category[32] {};
 };
@@ -212,7 +214,22 @@ struct SampleChoice
     int root = 60;
     bool slice = false;
     int sliceIndex = 0;
+    bool phraseLoop = false;
+    int fileBpm = 0;
 };
+
+// Host tempo divided by the loop's tempo. 1 keeps the file's own speed.
+inline float phraseTempoStretch (int fileBpm, float hostBpm) noexcept
+{
+    if (fileBpm < 40 || hostBpm < 20.f)
+        return 1.f;
+    const float ratio = hostBpm / (float) fileBpm;
+    if (ratio < 0.25f)
+        return 0.25f;
+    if (ratio > 4.f)
+        return 4.f;
+    return ratio;
+}
 
 inline SampleChoice chooseSample (const SampleSpec& spec, int midiNote, int pick, int sliceIndex) noexcept
 {

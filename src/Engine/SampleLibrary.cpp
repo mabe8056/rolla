@@ -3,6 +3,7 @@
 #include "../Sampler/SamplePrep.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <map>
@@ -134,6 +135,11 @@ void SampleLibrary::setRoot (const juce::File& root)
     }
     indexedFoundCount.store (-1, std::memory_order_release);
     indexedMissingCount.store (-1, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lock (gainMu);
+        gains.clear();
+        gainsLoaded = false;
+    }
     ensureSampleFolders (root);
 }
 
@@ -359,6 +365,23 @@ void SampleLibrary::loadOne (const std::string& relative)
         audio->left[(size_t) i] = l[i];
         audio->right[(size_t) i] = r[i];
     }
+    // Raw copies stay on disk. The gain lives only in this buffer and in the cache.
+    const auto bytes = file.getSize();
+    float gainDb = 0.f;
+    if (! cachedGain (relative, bytes, gainDb))
+    {
+        gainDb = loudnessGainDb (audio->left, audio->right, audio->rate);
+        rememberGain (relative, bytes, gainDb);
+    }
+    const float lin = std::pow (10.f, gainDb / 20.f);
+    if (std::isfinite (lin) && std::fabs (lin - 1.f) > 1.0e-4f)
+    {
+        for (int i = 0; i < cap; ++i)
+        {
+            audio->left[(size_t) i] *= lin;
+            audio->right[(size_t) i] *= lin;
+        }
+    }
     findSlices (*audio);
 
     {
@@ -367,6 +390,69 @@ void SampleLibrary::loadOne (const std::string& relative)
         slot->audio.store (kept.back().get(), std::memory_order_release);
     }
     slot->status.store (2, std::memory_order_release);
+}
+
+bool SampleLibrary::cachedGain (const std::string& relative, juce::int64 bytes, float& gainDb)
+{
+    juce::File file;
+    {
+        std::lock_guard<std::mutex> rootLock (rootMu);
+        file = rootDir.getChildFile (".rolla-loudness.json");
+    }
+    std::lock_guard<std::mutex> lock (gainMu);
+    if (! gainsLoaded)
+    {
+        gainsLoaded = true;
+        if (file.existsAsFile())
+        {
+            const auto parsed = juce::JSON::parse (file);
+            if (auto* arr = parsed.getProperty ("entries", juce::var()).getArray())
+            {
+                for (const auto& item : *arr)
+                {
+                    const auto path = item.getProperty ("path", "").toString();
+                    if (path.isEmpty())
+                        continue;
+                    GainRow row;
+                    row.bytes = (juce::int64) (double) item.getProperty ("bytes", 0.0);
+                    row.gainDb = (float) (double) item.getProperty ("gainDb", 0.0);
+                    gains[path.toStdString()] = row;
+                }
+            }
+        }
+    }
+    const auto found = gains.find (relative);
+    if (found == gains.end() || found->second.bytes != bytes)
+        return false;
+    gainDb = found->second.gainDb;
+    return true;
+}
+
+void SampleLibrary::rememberGain (const std::string& relative, juce::int64 bytes, float gainDb)
+{
+    juce::File file;
+    {
+        std::lock_guard<std::mutex> rootLock (rootMu);
+        file = rootDir.getChildFile (".rolla-loudness.json");
+    }
+    std::lock_guard<std::mutex> lock (gainMu);
+    GainRow row;
+    row.bytes = bytes;
+    row.gainDb = gainDb;
+    gains[relative] = row;
+    gainsLoaded = true;
+    juce::Array<juce::var> entries;
+    for (const auto& item : gains)
+    {
+        auto* obj = new juce::DynamicObject();
+        obj->setProperty ("path", juce::String (item.first));
+        obj->setProperty ("bytes", (double) item.second.bytes);
+        obj->setProperty ("gainDb", (double) item.second.gainDb);
+        entries.add (juce::var (obj));
+    }
+    auto* root = new juce::DynamicObject();
+    root->setProperty ("entries", juce::var (entries));
+    file.replaceWithText (juce::JSON::toString (juce::var (root)));
 }
 
 namespace
@@ -417,13 +503,92 @@ struct ManifestMeta
 {
     int lane = -1;
     int voice = -1;
+    int altLane = -1;
+    int altVoice = -1;
     int root = -1;
+    int fileBpm = 0;
+    bool phraseLoop = false;
     std::uint8_t styles = 0;
     std::string pack;
     std::string artist;
     std::string category;
     std::string blob;
 };
+
+int bpmFromFilename (const std::string& path)
+{
+    int found = 0;
+    const auto slash = path.rfind ('/');
+    const auto name = slash == std::string::npos ? path : path.substr (slash + 1);
+    for (size_t i = 0; i < name.size(); )
+    {
+        if (! std::isdigit ((unsigned char) name[i]))
+        {
+            ++i;
+            continue;
+        }
+        int value = 0;
+        const size_t start = i;
+        while (i < name.size() && std::isdigit ((unsigned char) name[i]))
+        {
+            value = value * 10 + (name[i] - '0');
+            ++i;
+        }
+        const bool boundary = start == 0 || name[start - 1] == '_' || name[start - 1] == '-';
+        const bool tail = i >= name.size() || name[i] == '_' || name[i] == '-' || name[i] == '.';
+        if (boundary && tail && value >= 70 && value <= 190)
+            found = value;
+    }
+    return found;
+}
+
+void classifyCategory (ManifestMeta& row, const std::string& raw)
+{
+    if (raw == "vox_phrase_loop")
+    {
+        row.phraseLoop = true;
+        row.category = "phrase";
+    }
+    else if (raw == "vox_phrase")
+        row.category = "phrase";
+    else if (raw == "vox_shot")
+        row.category = "chop";
+    else if (raw == "atmos" || raw == "texture_loop" || raw == "atmosphere")
+        row.category = "atmosphere";
+    else if (raw == "v1_preset" || raw.empty())
+        row.category.clear();
+    else
+        row.category = raw;
+}
+
+void applyAltLanes (ManifestMeta& row, const juce::var& alts)
+{
+    auto* arr = alts.getArray();
+    if (arr == nullptr)
+        return;
+    for (const auto& item : *arr)
+    {
+        const auto text = item.toString().trim();
+        if (text.isEmpty())
+            continue;
+        int lane = -1;
+        int voice = -1;
+        const auto slash = text.indexOfChar ('/');
+        if (slash >= 0)
+        {
+            lane = partFromLaneName (text.substring (0, slash).toRawUTF8());
+            voice = voiceFromFolderName (text.substring (slash + 1).toRawUTF8());
+        }
+        else
+            lane = partFromLaneName (text.toRawUTF8());
+        if (lane < 0)
+            continue;
+        if (lane == row.lane && (voice < 0 || voice == row.voice))
+            continue;
+        row.altLane = lane;
+        row.altVoice = voice;
+    }
+}
 
 std::uint8_t stylesFromTags (const juce::var& presets)
 {
@@ -562,6 +727,10 @@ SampleEntry entryFromCache (const juce::var& item)
     copyField (entry.artist, 64, item.getProperty ("artist", "").toString());
     copyField (entry.category, 32, item.getProperty ("category", "").toString());
     entry.onDisk = (bool) item.getProperty ("onDisk", false);
+    entry.altLane = (int) item.getProperty ("altLane", -1);
+    entry.altVoice = (int) item.getProperty ("altVoice", -1);
+    entry.fileBpm = (int) item.getProperty ("fileBpm", 0);
+    entry.phraseLoop = (bool) item.getProperty ("phraseLoop", false);
     return entry;
 }
 
@@ -578,6 +747,10 @@ juce::var entryToVar (const SampleEntry& entry)
     obj->setProperty ("artist", juce::String (entry.artist));
     obj->setProperty ("category", juce::String (entry.category));
     obj->setProperty ("onDisk", entry.onDisk);
+    obj->setProperty ("altLane", entry.altLane);
+    obj->setProperty ("altVoice", entry.altVoice);
+    obj->setProperty ("fileBpm", entry.fileBpm);
+    obj->setProperty ("phraseLoop", entry.phraseLoop);
     return juce::var (obj);
 }
 
@@ -615,7 +788,7 @@ void SampleLibrary::buildIndex()
     }
 
     std::uint64_t signature = 14695981039346656037ull;
-    signature = fnv1a (signature, "rolla-index-v1");
+    signature = fnv1a (signature, "rolla-index-v3");
     for (const auto& path : disk)
         signature = fnv1a (signature, path);
     signature = fnv1a (signature, manifestText);
@@ -696,7 +869,10 @@ void SampleLibrary::buildIndex()
             if (artist.isEmpty())
                 artist = juce::String (artistFromSource (item.getProperty ("source", "").toString()));
             row.artist = artist.toStdString();
-            row.category = item.getProperty ("category", "").toString().toStdString();
+            classifyCategory (row, item.getProperty ("category", "").toString().toLowerCase().toStdString());
+            applyAltLanes (row, item.getProperty ("alt_lanes", juce::var()));
+            if (row.phraseLoop)
+                row.fileBpm = bpmFromFilename (path.toStdString());
             juce::String blob = path + " " + item.getProperty ("category", "").toString();
             if (auto* tags = item.getProperty ("presets", juce::var()).getArray())
                 for (const auto& tag : *tags)
@@ -739,6 +915,10 @@ void SampleLibrary::buildIndex()
             copyField (entry.pack, 64, juce::String (row.pack));
             copyField (entry.artist, 64, juce::String (row.artist));
             copyField (entry.category, 32, juce::String (row.category));
+            entry.altLane = row.altLane;
+            entry.altVoice = row.altVoice;
+            entry.phraseLoop = row.phraseLoop;
+            entry.fileBpm = row.fileBpm;
             blob = row.blob;
         }
         if (entry.rootPc < 0)
@@ -801,6 +981,10 @@ void SampleLibrary::buildIndex()
         copyField (entry.pack, 64, juce::String (item.second.pack));
         copyField (entry.artist, 64, juce::String (item.second.artist));
         copyField (entry.category, 32, juce::String (item.second.category));
+        entry.altLane = item.second.altLane;
+        entry.altVoice = item.second.altVoice;
+        entry.phraseLoop = item.second.phraseLoop;
+        entry.fileBpm = item.second.fileBpm;
         inferCategory (entry, item.second.blob);
         snap->entries.push_back (entry);
         ++snap->missing;
@@ -832,6 +1016,72 @@ void SampleLibrary::buildIndex()
                     + std::to_string (snap->missing) + " missing";
     juce::Logger::writeToLog (juce::String (line));
     std::fprintf (stderr, "%s\n", line.c_str());
+}
+
+namespace
+{
+
+bool directoryHasAudio (const juce::File& dir)
+{
+    if (! dir.isDirectory())
+        return false;
+    for (const auto& entry : juce::RangedDirectoryIterator (dir, true, "*.wav;*.aif;*.aiff;*.flac", juce::File::findFiles))
+    {
+        juce::ignoreUnused (entry);
+        return true;
+    }
+    return false;
+}
+
+void requestOrdinal (SampleLibrary& library, const SampleIndex& index, int part, int voice, std::vector<std::string>& paths)
+{
+    PoolFilter filter;
+    filter.on = true;
+    filter.lane = part;
+    filter.voice = voice;
+    if (const auto* entry = sampleIndexAt (index, part, filter, 0))
+    {
+        library.request (entry->path);
+        paths.emplace_back (entry->path);
+    }
+}
+
+} // namespace
+
+InstalledPack openInstalledPack (const char* manifestJson, int manifestSize)
+{
+    InstalledPack pack;
+    const auto root = SampleLibrary::defaultRoot();
+    if (! directoryHasAudio (root) || manifestJson == nullptr || manifestSize <= 0)
+        return pack;
+    pack.library = std::make_unique<SampleLibrary>();
+    pack.library->setRoot (root);
+    pack.library->startIndex (manifestJson, manifestSize);
+    const auto indexedBy = juce::Time::getMillisecondCounter() + 20000;
+    while (pack.library->indexedFound() < 0 && juce::Time::getMillisecondCounter() < indexedBy)
+        juce::Thread::sleep (20);
+    pack.index = pack.library->index();
+    if (pack.index == nullptr)
+        return pack;
+    std::vector<std::string> paths;
+    const int parts[] = { Bass, Stab, Hits, Pluck, Pad, Vox };
+    for (int part : parts)
+        requestOrdinal (*pack.library, *pack.index, part, -1, paths);
+    const int voices[] = { Kick, Snare, Clap, Rim, HatC, HatO, Ride, Perc };
+    for (int voice : voices)
+        requestOrdinal (*pack.library, *pack.index, Drums, voice, paths);
+    const auto readyBy = juce::Time::getMillisecondCounter() + 15000;
+    while (juce::Time::getMillisecondCounter() < readyBy)
+    {
+        bool waiting = false;
+        for (const auto& path : paths)
+            if (! pack.library->ready (path.c_str()) && ! pack.library->missing (path.c_str()))
+                waiting = true;
+        if (! waiting)
+            break;
+        juce::Thread::sleep (20);
+    }
+    return pack;
 }
 
 } // namespace rolla

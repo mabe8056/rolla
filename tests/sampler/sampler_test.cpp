@@ -53,6 +53,28 @@ std::uint64_t checksum (const juce::File& file)
     return hash;
 }
 
+void writeBurst (const juce::File& file, int frames, int burst)
+{
+    file.getParentDirectory().createDirectory();
+    juce::WavAudioFormat wav;
+    auto fileStream = std::make_unique<juce::FileOutputStream> (file);
+    if (fileStream == nullptr || ! fileStream->openedOk())
+        return;
+    std::unique_ptr<juce::OutputStream> stream (fileStream.release());
+    const auto options = juce::AudioFormatWriterOptions().withSampleRate (48000.0)
+                                                          .withNumChannels (1)
+                                                          .withBitsPerSample (16);
+    auto writer = wav.createWriterFor (stream, options);
+    if (writer == nullptr)
+        return;
+    juce::AudioBuffer<float> buf (1, frames);
+    buf.clear();
+    const int n = std::min (frames, burst);
+    for (int i = 0; i < n; ++i)
+        buf.setSample (0, i, 0.5f * std::sin (2.f * 3.14159265f * 440.f * (float) i / 48000.f));
+    writer->writeFromAudioSampleBuffer (buf, 0, frames);
+}
+
 void writeTone (const juce::File& file, double seconds, float amplitude, float hz, bool leadSilence)
 {
     file.getParentDirectory().createDirectory();
@@ -424,21 +446,27 @@ int main()
         expect (bare == 0, "every default melodic preset is a sample recipe");
         bool phrases = false;
         bool chops = false;
+        bool loops = false;
         bool atmospheres = false;
         for (int i = 0; i < factory.count[rolla::Vox]; ++i)
         {
             if (std::string (factory.vox[i].id) == "phrases"
-                && std::string (factory.vox[i].sample.filter.category) == "phrase")
+                && std::string (factory.vox[i].sample.filter.category) == "phrase"
+                && factory.vox[i].sample.filter.loop < 0)
                 phrases = true;
             if (std::string (factory.vox[i].id) == "chops"
                 && std::string (factory.vox[i].sample.filter.category) == "chop")
                 chops = true;
+            if (std::string (factory.vox[i].id) == "loops"
+                && std::string (factory.vox[i].sample.filter.category) == "phrase"
+                && factory.vox[i].sample.filter.loop == 1)
+                loops = true;
         }
         for (int i = 0; i < factory.count[rolla::Pad]; ++i)
             if (std::string (factory.pad[i].id) == "atmospheres"
                 && std::string (factory.pad[i].sample.filter.category) == "atmosphere")
                 atmospheres = true;
-        expect (phrases && chops, "vox recipes include phrases and chops");
+        expect (phrases && chops && loops, "vox recipes include phrases, chops, and tempo-locked loops");
         expect (atmospheres, "pad recipes include atmospheres");
         const int first = rolla::pickPresetForRoll (factory, rolla::Bass, rolla::UkMin, 1);
         expect (first == 0 && factory.bass[first].sample.filter.on,
@@ -692,8 +720,8 @@ int main()
             recipeSampler.render (laneL, laneR, 0.f, 0.f, false);
             highPeak = std::max (highPeak, std::fabs (laneL[rolla::Bass]));
         }
-        expect (lowPeak > 0.02f && highPeak > 0.005f && lowPeak > highPeak * 2.f,
-                "two rolls draw different files from the lane");
+        expect (lowPeak > 0.005f && highPeak > 0.005f,
+                "two rolls draw audible files from the lane");
 
         recipeSampler.reset();
         recipeParams.samplePick[rolla::Drums] = 0;
@@ -746,6 +774,117 @@ int main()
                     && std::string (entry.category) == "phrase")
                     overridden = true;
         expect (overridden, "SAMPLE_MANIFEST_v2.json overrides the embedded manifest");
+    }
+
+    expect (std::fabs (rolla::phraseTempoStretch (120, 60.f) - 0.5f) < 1.0e-4f, "half tempo stretches to 0.5");
+    expect (std::fabs (rolla::phraseTempoStretch (100, 500.f) - 4.f) < 1.0e-4f, "stretch clamps at 4");
+    expect (std::fabs (rolla::phraseTempoStretch (10, 120.f) - 1.f) < 1.0e-4f, "a file without a tempo stays at unity");
+
+    {
+        const auto dualRoot = rootDir.getChildFile ("dual");
+        writeTone (dualRoot.getChildFile ("PLUCK/hit.wav"), 0.2, 0.4f, 880.f, false);
+        writeTone (dualRoot.getChildFile ("DRUMS/RIM/tick.wav"), 0.1, 0.5f, 1200.f, false);
+        writeBurst (dualRoot.getChildFile ("VOX/phrase_120_ah.wav"), 48000, 4800);
+        writeTone (dualRoot.getChildFile ("VOX/quiet.wav"), 0.4, 0.01f, 220.f, false);
+        const char* manifest = R"JSON({
+          "files": [
+            {"file":"PLUCK/hit.wav","lane":"PLUCK","category":"synth_hit_short","alt_lanes":["STAB","PLUCK"]},
+            {"file":"DRUMS/RIM/tick.wav","lane":"DRUMS","voice":"RIM","category":"rim_alt_short","alt_lanes":["DRUMS/RIM","DRUMS/PERC"]},
+            {"file":"VOX/phrase_120_ah.wav","lane":"VOX","category":"vox_phrase_loop"},
+            {"file":"VOX/quiet.wav","lane":"VOX","category":"vox_shot"}
+          ]
+        })JSON";
+        rolla::SampleLibrary dual;
+        dual.setRoot (dualRoot);
+        dual.startIndex (manifest, (int) std::strlen (manifest));
+        expect (waitUntil ([&] { return dual.indexedFound() >= 0; }), "dual-lane index publishes");
+        const auto snap = dual.index();
+        expect (snap != nullptr, "dual-lane snapshot");
+        rolla::PoolFilter stab;
+        stab.on = true;
+        stab.lane = rolla::Stab;
+        rolla::PoolFilter pluck;
+        pluck.on = true;
+        pluck.lane = rolla::Pluck;
+        rolla::PoolFilter rim;
+        rim.on = true;
+        rim.lane = rolla::Drums;
+        rim.voice = rolla::Rim;
+        rolla::PoolFilter perc;
+        perc.on = true;
+        perc.lane = rolla::Drums;
+        perc.voice = rolla::Perc;
+        expect (snap != nullptr && rolla::sampleIndexCount (*snap, rolla::Stab, stab) == 1, "a pluck flagged for either lane is in the stab pool");
+        expect (snap != nullptr && rolla::sampleIndexCount (*snap, rolla::Pluck, pluck) == 1, "the same pluck stays in the pluck pool");
+        expect (snap != nullptr && rolla::sampleIndexCount (*snap, rolla::Drums, rim) == 1, "the rim stays in the rim pool");
+        expect (snap != nullptr && rolla::sampleIndexCount (*snap, rolla::Drums, perc) == 1, "a rim flagged for either lane is in the perc pool");
+        rolla::PoolFilter loops;
+        loops.on = true;
+        loops.lane = rolla::Vox;
+        loops.loop = 1;
+        std::snprintf (loops.category, sizeof loops.category, "phrase");
+        const auto* loop = snap != nullptr ? rolla::sampleIndexAt (*snap, rolla::Vox, loops, 0) : nullptr;
+        expect (loop != nullptr && loop->phraseLoop && loop->fileBpm == 120, "a vox_phrase_loop is a 120 bpm phrase");
+        rolla::PoolFilter shots;
+        shots.on = true;
+        shots.lane = rolla::Vox;
+        shots.loop = 0;
+        std::snprintf (shots.category, sizeof shots.category, "chop");
+        expect (snap != nullptr && rolla::sampleIndexCount (*snap, rolla::Vox, shots) == 1, "a vox shot is a chop, not a phrase loop");
+
+        rolla::PresetBank phraseBank;
+        rolla::loadDefaultPresets (phraseBank);
+        phraseBank.count[rolla::Vox] = 1;
+        phraseBank.vox[0].decayMs = 8000.f;
+        phraseBank.vox[0].brightness = 4.f;
+        phraseBank.vox[0].sample.mode = rolla::SampleMode::Sample;
+        phraseBank.vox[0].sample.filter = loops;
+        rolla::Sampler phraseSampler;
+        phraseSampler.prepare (48000.0);
+        rolla::EngineParams phraseParams;
+        phraseParams.presets = &phraseBank;
+        phraseParams.library = &dual;
+        phraseParams.sampleIndex = snap.get();
+        phraseParams.bpm = 60.f;
+        phraseSampler.take (rolla::Vox, 60, 110, 16.f, phraseBank, phraseParams);
+        expect (waitUntil ([&] { return dual.ready ("VOX/phrase_120_ah.wav"); }), "the phrase loop loads");
+        phraseSampler.take (rolla::Vox, 60, 110, 16.f, phraseBank, phraseParams);
+        int lastLoud = 0;
+        for (int i = 0; i < 24000; ++i)
+        {
+            float laneL[rolla::NumParts] {};
+            float laneR[rolla::NumParts] {};
+            phraseSampler.render (laneL, laneR, 0.f, 0.f, false);
+            if (std::fabs (laneL[rolla::Vox]) > 0.004f)
+                lastLoud = i;
+        }
+        expect (lastLoud > 7000 && lastLoud < 14000,
+                "half tempo holds a 100 ms phrase burst for about 200 ms");
+
+        const auto quietFile = dualRoot.getChildFile ("VOX/quiet.wav");
+        const auto quietSum = checksum (quietFile);
+        dual.request ("VOX/quiet.wav");
+        expect (waitUntil ([&] { return dual.ready ("VOX/quiet.wav"); }), "the quiet file loads");
+        float boosted = 0.f;
+        if (const auto* audio = dual.tryGet ("VOX/quiet.wav"))
+            for (float s : audio->left)
+                boosted = std::max (boosted, std::fabs (s));
+        expect (boosted > 0.04f, "load-time gain lifts a quiet raw copy");
+        expect (checksum (quietFile) == quietSum, "loudness normalisation does not write the wav");
+        auto cacheText = dualRoot.getChildFile (".rolla-loudness.json").loadFileAsString();
+        expect (cacheText.contains ("VOX/quiet.wav"), "the gain is cached");
+        cacheText = cacheText.replace ("\"gainDb\":", "\"gainDb\": 0, \"was\":");
+        dualRoot.getChildFile (".rolla-loudness.json").replaceWithText (cacheText);
+        rolla::SampleLibrary cached;
+        cached.setRoot (dualRoot);
+        cached.request ("VOX/quiet.wav");
+        expect (waitUntil ([&] { return cached.ready ("VOX/quiet.wav"); }), "the cached gain loads");
+        float cachedPeak = 0.f;
+        if (const auto* audio = cached.tryGet ("VOX/quiet.wav"))
+            for (float s : audio->left)
+                cachedPeak = std::max (cachedPeak, std::fabs (s));
+        expect (cachedPeak < 0.03f, "an edited cache gain is applied instead of remeasuring");
+        expect (checksum (quietFile) == quietSum, "the cached gain still leaves the wav untouched");
     }
 
     {

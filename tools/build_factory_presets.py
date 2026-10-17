@@ -4,7 +4,7 @@
 Hero presets stay first so dialect ids still resolve. Each one is SAMPLE mode
 with a pool filter over its whole lane, so ROLL draws from whatever the
 scanner finds. A single file hint remains for the moment the folder is empty.
-VOX gains phrase and chop recipes. PAD gains an atmosphere recipe.
+VOX gains phrase, chop, and tempo-locked loop recipes. PAD gains an atmosphere recipe.
 Drum kits do not embed voice pools; the DRUMS scan is the pool.
 """
 
@@ -49,7 +49,7 @@ LANE_ID = {
 }
 
 MELODIC = ("bass", "stab", "hits", "pluck", "pad", "vox")
-EXTRA_IDS = {"phrases", "chops", "atmospheres"}
+EXTRA_IDS = {"phrases", "chops", "loops", "atmospheres"}
 
 
 def is_generated(preset, lane):
@@ -74,13 +74,16 @@ def recipe(preset, lane, category=None):
     return preset
 
 
-def clone_recipe(source, ident, name, lane, category):
+def clone_recipe(source, ident, name, lane, category, loop=None):
     preset = copy.deepcopy(source)
     preset["id"] = ident
     preset["name"] = name
     preset.pop("styles", None)
     preset.pop("library", None)
-    return recipe(preset, lane, category)
+    preset = recipe(preset, lane, category)
+    if loop is not None:
+        preset["sample"]["poolFilter"]["loop"] = loop
+    return preset
 
 
 def main():
@@ -102,6 +105,7 @@ def main():
         if lane == "vox":
             kept.append(clone_recipe(kept[0], "phrases", "Phrases", lane, "phrase"))
             kept.append(clone_recipe(kept[0], "chops", "Chops", lane, "chop"))
+            kept.append(clone_recipe(kept[0], "loops", "Loops", lane, "phrase", loop=1))
         elif lane == "pad":
             kept.append(clone_recipe(kept[0], "atmospheres", "Atmospheres", lane, "atmosphere"))
         parts[lane]["presets"] = kept
@@ -130,8 +134,8 @@ def main():
     doc["notes"] = (
         "Schema v3. Factory presets are sample recipes. Each melodic recipe "
         "filters the scanned lane folder (root, pack and category when set) "
-        "so ROLL draws from every file in that pool. VOX has phrase and chop "
-        "recipes. PAD has an atmosphere recipe. Drum kits read "
+        "so ROLL draws from every file in that pool. VOX has phrase, chop, and "
+        "tempo-locked loop recipes. PAD has an atmosphere recipe. Drum kits read "
         "DRUMS/<voice>/ from the index and do not embed file lists. "
         "A missing hit stays on another of his samples. There is no synth "
         "drum kit. Do not commit audio."

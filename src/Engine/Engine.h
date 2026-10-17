@@ -46,6 +46,7 @@ struct EngineParams
     // Published by UserSlots. Null keeps the preset sample block only.
     const UserSlotView* userSlots = nullptr;
     int samplePick[NumParts] {};
+    float bpm = 130.f;
     // Baked mix strip (MIX_SPEC). Null keeps the legacy sum.
     const MixProgram* mix = nullptr;
     // Per-909-voice mute used by the offline render set. The lane mute still silences every voice.

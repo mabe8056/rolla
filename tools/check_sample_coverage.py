@@ -74,6 +74,24 @@ def has_category(presets, category):
     return False
 
 
+def has_phrase_pool(presets, loops_only):
+    for preset in presets:
+        filt = filt_of(preset)
+        if str(filt.get("category") or "").lower() != "phrase":
+            continue
+        marked = "loop" in filt
+        only = int(filt.get("loop") or 0) == 1
+        if loops_only and only:
+            return True
+        if not loops_only and not marked:
+            return True
+    return False
+
+
+def alt_names(entry):
+    return [str(item).upper() for item in (entry.get("alt_lanes") or [])]
+
+
 def list_too_long(node, where, failed):
     if isinstance(node, dict):
         for key, value in node.items():
@@ -96,14 +114,41 @@ def main():
     with open(MANIFEST, encoding="utf-8") as handle:
         manifest = json.load(handle)
 
-    manifest_files = [entry["file"].replace("\\", "/") for entry in manifest["files"]]
+    files = manifest["files"]
+    manifest_files = [entry["file"].replace("\\", "/") for entry in files]
     manifest_set = set(manifest_files)
     if len(manifest_files) != len(manifest_set):
         print("FAIL duplicate paths in SAMPLE_MANIFEST.json")
         return 1
     declared = manifest.get("count")
-    if declared is not None and declared != len(manifest_set):
-        print(f"FAIL manifest count {declared} != {len(manifest_set)} files")
+    if declared != 2697 or len(manifest_set) != 2697:
+        print(f"FAIL manifest v2 count {declared} / {len(manifest_set)}, want 2697")
+        return 1
+    if manifest.get("version") != 2:
+        print(f"FAIL manifest version {manifest.get('version')}, want 2")
+        return 1
+    phrase_loops = sum(1 for entry in files if entry.get("category") == "vox_phrase_loop")
+    stab_as_pluck = sum(
+        1 for entry in files
+        if str(entry.get("lane") or "").upper() == "STAB" and "PLUCK" in alt_names(entry)
+    )
+    pluck_as_stab = sum(
+        1 for entry in files
+        if str(entry.get("lane") or "").upper() == "PLUCK" and "STAB" in alt_names(entry)
+    )
+    rim_as_perc = sum(
+        1 for entry in files
+        if str(entry.get("lane") or "").upper() == "DRUMS"
+        and str(entry.get("voice") or "").upper() == "RIM"
+        and any("PERC" in name for name in alt_names(entry))
+    )
+    print(f"vox_phrase_loop {phrase_loops}")
+    print(f"alt stab/pluck {stab_as_pluck} pluck/stab {pluck_as_stab} rim/perc {rim_as_perc}")
+    if phrase_loops < 140:
+        print(f"FAIL vox_phrase_loop {phrase_loops}, want at least 140")
+        return 1
+    if stab_as_pluck < 50 or pluck_as_stab < 50 or rim_as_perc < 20:
+        print("FAIL alt_lanes did not mark both STAB/PLUCK and RIM/PERC")
         return 1
 
     referenced = set()
@@ -145,8 +190,10 @@ def main():
             if mode != "SAMPLE" or not str(filt.get("lane") or ""):
                 failed.append(f"FAIL {lane} preset {preset.get('id')} is not a sample recipe ({mode})")
 
-    if not has_category(parts["vox"]["presets"], "phrase"):
-        failed.append("FAIL vox has no phrase recipe")
+    if not has_phrase_pool(parts["vox"]["presets"], False):
+        failed.append("FAIL vox has no phrase recipe that includes one-shots")
+    if not has_phrase_pool(parts["vox"]["presets"], True):
+        failed.append("FAIL vox has no tempo-locked phrase-loop recipe")
     if not has_category(parts["vox"]["presets"], "chop"):
         failed.append("FAIL vox has no chop recipe")
     if not has_category(parts["pad"]["presets"], "atmosphere"):
@@ -186,7 +233,7 @@ def main():
         print(line)
     if failed:
         return 1
-    print("phrase chop atmosphere recipes ok")
+    print("phrase chop loop atmosphere recipes ok")
     print("sample coverage ok")
     return 0
 

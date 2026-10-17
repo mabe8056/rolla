@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstdint>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -73,7 +74,8 @@ bool loadProgram (rolla::MixProgram& program, const juce::File& makeupFile)
                                    makeup, makeupBytes);
 }
 
-rolla::EngineParams makeParams (const rolla::PresetBank& bank, const rolla::MixProgram& mix, int dialect, bool bypassSum)
+rolla::EngineParams makeParams (const rolla::PresetBank& bank, const rolla::MixProgram& mix, int dialect, bool bypassSum,
+                              rolla::SampleLibrary* library, const rolla::SampleIndex* index)
 {
     rolla::EngineParams params;
     const auto& row = bank.dialect[dialect];
@@ -94,6 +96,9 @@ rolla::EngineParams makeParams (const rolla::PresetBank& bank, const rolla::MixP
     params.key = 2;
     params.dialect = dialect;
     params.presets = &bank;
+    params.library = library;
+    params.sampleIndex = index;
+    params.bpm = (float) kBpm;
     params.mix = &mix;
     // FULL unmutes every MAIN lane, so the frozen mask is all six bits.
     params.sumMask = 63;
@@ -241,11 +246,12 @@ double bandRmsDb (const Take& a, const Take& b, const Take& c)
     return 10.0 * std::log10 (std::max (mean, 1.0e-20));
 }
 
-int selfTest (const rolla::PresetBank& bank, const rolla::MixProgram& mix)
+int selfTest (const rolla::PresetBank& bank, const rolla::MixProgram& mix,
+              rolla::SampleLibrary* library, const rolla::SampleIndex* index)
 {
     const int dialect = rolla::UkMin;
     const auto groove = makeGroove (bank, dialect);
-    auto fullP = makeParams (bank, mix, dialect, false);
+    auto fullP = makeParams (bank, mix, dialect, false, library, index);
     const auto full = renderTake (groove, fullP, 4);
     const LaneId probe[] = { kLanes[8], kLanes[0], kLanes[1] }; // BASS, KICK, CLAP
     int rc = 0;
@@ -285,14 +291,15 @@ int selfTest (const rolla::PresetBank& bank, const rolla::MixProgram& mix)
     return rc;
 }
 
-int renderSet (const rolla::PresetBank& bank, const rolla::MixProgram& mix, const juce::File& dir, bool solosOnly, bool bypassSum, int onlyDialect)
+int renderSet (const rolla::PresetBank& bank, const rolla::MixProgram& mix, const juce::File& dir, bool solosOnly, bool bypassSum, int onlyDialect,
+              rolla::SampleLibrary* library, const rolla::SampleIndex* index)
 {
     for (int d = 0; d < rolla::NumDialects; ++d)
     {
         if (onlyDialect >= 0 && d != onlyDialect)
             continue;
         const auto groove = makeGroove (bank, d);
-        auto base = makeParams (bank, mix, d, bypassSum);
+        auto base = makeParams (bank, mix, d, bypassSum, library, index);
         const auto folder = dir.getChildFile (kStyle[d]);
         const auto full = renderTake (groove, base, kBars);
         if (! writeWav (folder.getChildFile ("FULL.wav"), full))
@@ -365,9 +372,12 @@ int main (int argc, char** argv)
     if (! loadProgram (mix, makeup))
         return fail ("mix profile");
 
+    const auto pack = rolla::openInstalledPack (BinaryData::SAMPLE_MANIFEST_json, BinaryData::SAMPLE_MANIFEST_jsonSize);
+    if (! (pack.library != nullptr && pack.index != nullptr))
+        std::cout << "no sample pack; mix renders stay silent\n";
     if (doSelf)
-        return selfTest (bank, mix);
+        return selfTest (bank, mix, pack.library.get(), pack.index.get());
     if (outDir == juce::File())
         return fail ("need an output directory or --self-test");
-    return renderSet (bank, mix, outDir, solosOnly, bypassSum, onlyDialect);
+    return renderSet (bank, mix, outDir, solosOnly, bypassSum, onlyDialect, pack.library.get(), pack.index.get());
 }

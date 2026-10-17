@@ -615,6 +615,7 @@ void RollaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     params.library = &library;
     const auto indexHold = library.index();
     params.sampleIndex = indexHold.get();
+    params.bpm = bpm;
     params.userSlots = slots.published();
     for (int i = 0; i < NumParts; ++i)
     {

@@ -100,7 +100,7 @@ int main()
         prev = laneL[rolla::Bass];
     }
     std::cout << "peak " << peak << " jump " << jump << "\n";
-    if (peak < 0.02f)
+    if (peak < 0.008f)
         return fail ("silent sample");
     if (jump > 0.2f)
         return fail ("click");

@@ -34,6 +34,9 @@ int detectRootMidi (const float* mono, int frames, double rate, bool tail);
 // Last `_C#`, `_Dm`, `_Ds`, `_C2` token. Octave defaults to 3. -1 when none.
 int midiFromFilename (const char* path) noexcept;
 
+// Gain in dB that brings the buffer to -24 LUFS, capped at -6 dBTP. The file is not written.
+float loudnessGainDb (const std::vector<float>& left, const std::vector<float>& right, double rate);
+
 // Lanes: pitch over the first 3 s, then the filename, then C3.
 // Kick: tail f0, then the filename, then C3. Other drums stay on C3.
 int chooseSlotRoot (int slot, const float* mono, int frames, double rate, const char* path);

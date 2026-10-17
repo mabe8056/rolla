@@ -1,7 +1,7 @@
 {
   "schemaVersion": 3,
   "version": 3,
-  "notes": "Schema v3. Factory presets are sample recipes. Each melodic recipe filters the scanned lane folder (root, pack and category when set) so ROLL draws from every file in that pool. VOX has phrase and chop recipes. PAD has an atmosphere recipe. Drum kits read DRUMS/<voice>/ from the index and do not embed file lists. A missing hit stays on another of his samples. There is no synth drum kit. Do not commit audio.",
+  "notes": "Schema v3. Factory presets are sample recipes. Each melodic recipe filters the scanned lane folder (root, pack and category when set) so ROLL draws from every file in that pool. VOX has phrase, chop, and tempo-locked loop recipes. PAD has an atmosphere recipe. Drum kits read DRUMS/<voice>/ from the index and do not embed file lists. A missing hit stays on another of his samples. There is no synth drum kit. Do not commit audio.",
   "parts": {
     "bass": {
       "presets": [
@@ -792,6 +792,36 @@
             "poolFilter": {
               "lane": "VOX",
               "category": "chop"
+            }
+          }
+        },
+        {
+          "id": "loops",
+          "name": "Loops",
+          "brightness": 1.15,
+          "decayMs": 140,
+          "breath": 0.35,
+          "reverbSend": 0.32,
+          "trimDb": -8,
+          "sample": {
+            "mode": "SAMPLE",
+            "file": "VOX/UHV_125_YEAH.wav",
+            "root": "B0",
+            "start": 0.0008,
+            "reverse": false,
+            "slice": false,
+            "loop": {
+              "on": false,
+              "start": 0,
+              "end": 0,
+              "xfade": 0
+            },
+            "layerMix": 0.5,
+            "pool": [],
+            "poolFilter": {
+              "lane": "VOX",
+              "category": "phrase",
+              "loop": 1
             }
           }
         }

@@ -248,6 +248,8 @@ void readSample (SampleSpec& spec, const juce::var& preset)
                             spec.filter.rootPc = pc % 12;
                     }
                 }
+                if (filterObj->hasProperty ("loop"))
+                    spec.filter.loop = (double) filterObj->getProperty ("loop") > 0.5 ? 1 : 0;
             }
         }
     }

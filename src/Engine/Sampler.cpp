@@ -114,16 +114,23 @@ bool readyFromIndex (const SampleLibrary* library, const SampleIndex* index, int
         pick = 0;
     const int start = pick % n;
     const SampleAudio* audio = nullptr;
+    auto adopt = [&] (const SampleEntry* entry, const SampleAudio* got) noexcept
+    {
+        hit.spec = &spec;
+        hit.choice.file = entry->path;
+        hit.choice.root = entry->root > 0 ? entry->root : 60;
+        hit.choice.phraseLoop = entry->phraseLoop;
+        hit.choice.fileBpm = entry->fileBpm;
+        hit.audio = got;
+        hit.pending = false;
+    };
     const auto* preferred = sampleIndexAt (*index, part, filter, start);
     if (preferred != nullptr)
     {
         const auto state = peekFile (library, preferred->path, audio);
         if (state == FileState::Ready)
         {
-            hit.spec = &spec;
-            hit.choice.file = preferred->path;
-            hit.choice.root = preferred->root > 0 ? preferred->root : 60;
-            hit.audio = audio;
+            adopt (preferred, audio);
             return true;
         }
         if (state == FileState::Pending)
@@ -141,11 +148,7 @@ bool readyFromIndex (const SampleLibrary* library, const SampleIndex* index, int
         const auto state = peekFile (library, entry->path, audio);
         if (state == FileState::Ready)
         {
-            hit.spec = &spec;
-            hit.choice.file = entry->path;
-            hit.choice.root = entry->root > 0 ? entry->root : 60;
-            hit.audio = audio;
-            hit.pending = false;
+            adopt (entry, audio);
             return true;
         }
     }
@@ -164,10 +167,7 @@ bool readyFromIndex (const SampleLibrary* library, const SampleIndex* index, int
         const auto state = peekFile (library, entry->path, audio);
         if (state == FileState::Ready)
         {
-            hit.spec = &spec;
-            hit.choice.file = entry->path;
-            hit.choice.root = entry->root > 0 ? entry->root : 60;
-            hit.audio = audio;
+            adopt (entry, audio);
             return true;
         }
         if (state == FileState::Pending && ! requested)
@@ -408,19 +408,50 @@ void Sampler::readVoice (Voice& v, float& l, float& r) noexcept
     }
 
     const double n = (double) v.audio->frames;
-    double index = v.reverse ? (n - 1.0 - v.pos) : v.pos;
-    if (v.loop && v.loopB > v.loopA + 8.0)
+    auto filePos = [&] (double p) noexcept -> double
     {
-        const double span = v.loopB - v.loopA;
-        if (v.pos >= v.loopB)
+        if (v.loop && v.loopB > v.loopA + 8.0)
+        {
+            const double span = v.loopB - v.loopA;
+            double x = std::fmod (p - v.loopA, span);
+            if (x < 0.0)
+                x += span;
+            p = v.loopA + x;
+        }
+        if (p < 0.0)
+            p = 0.0;
+        if (p > n - 1.0)
+            p = n - 1.0;
+        return v.reverse ? (n - 1.0 - p) : p;
+    };
+
+    double index = 0.0;
+    const double unity = v.audio->rate > 1.0 ? v.audio->rate / sr : 1.0;
+    if (v.tempoSync)
+    {
+        const double grain = std::max (64.0, 0.030 * v.audio->rate);
+        if (v.spliceLeft <= 0 && std::fabs (v.pos - v.anchor) > grain)
+        {
+            v.splicePos = v.pos;
+            v.spliceLeft = std::max (8, (int) (0.008 * sr));
+            v.pos = v.anchor;
+        }
+        index = filePos (v.pos);
+    }
+    else
+    {
+        if (v.loop && v.loopB > v.loopA + 8.0 && v.pos >= v.loopB)
+        {
+            const double span = v.loopB - v.loopA;
             v.pos = v.loopA + std::fmod (v.pos - v.loopA, span);
+        }
         index = v.reverse ? (n - 1.0 - v.pos) : v.pos;
     }
 
     float ls = readSinc (v.audio->left, index);
     float rs = readSinc (v.audio->right, index);
 
-    if (v.loop && v.xfade > 4.0 && v.pos > v.loopB - v.xfade && v.pos < v.loopB)
+    if (! v.tempoSync && v.loop && v.xfade > 4.0 && v.pos > v.loopB - v.xfade && v.pos < v.loopB)
     {
         const float t = (float) ((v.pos - (v.loopB - v.xfade)) / v.xfade);
         const double head = v.loopA + (v.pos - (v.loopB - v.xfade));
@@ -430,8 +461,26 @@ void Sampler::readVoice (Voice& v, float& l, float& r) noexcept
         ls = ls * u + readSinc (v.audio->left, hi) * w;
         rs = rs * u + readSinc (v.audio->right, hi) * w;
     }
+    else if (v.tempoSync && v.spliceLeft > 0)
+    {
+        const int fadeN = std::max (8, (int) (0.008 * sr));
+        const float t = std::clamp (1.f - (float) v.spliceLeft / (float) fadeN, 0.f, 1.f);
+        const float w = std::sin (t * 0.5f * kSincPi);
+        const float u = std::cos (t * 0.5f * kSincPi);
+        const double si = filePos (v.splicePos);
+        ls = readSinc (v.audio->left, si) * u + ls * w;
+        rs = readSinc (v.audio->right, si) * u + rs * w;
+        v.splicePos += unity;
+        --v.spliceLeft;
+    }
 
-    v.pos += v.ratio;
+    if (v.tempoSync)
+    {
+        v.pos += unity;
+        v.anchor += unity * (double) v.stretch;
+    }
+    else
+        v.pos += v.ratio;
     if (! v.loop && v.pos >= n - 1.0)
         v.env.release();
 
@@ -695,6 +744,8 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
                         audio = packHit.audio;
                         choice.file = packHit.choice.file;
                         choice.root = packHit.choice.root > 0 ? packHit.choice.root : 60;
+                        choice.phraseLoop = packHit.choice.phraseLoop;
+                        choice.fileBpm = packHit.choice.fileBpm;
                         fromPack = true;
                         break;
                     }
@@ -760,6 +811,21 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     fresh.xfade = region.xfade;
     if (fresh.loopB > audio->frames - 1)
         fresh.loopB = (double) audio->frames - 1.0;
+    if (choice.phraseLoop && choice.fileBpm > 0)
+    {
+        const float host = params.bpm >= 20.f ? params.bpm : 130.f;
+        fresh.tempoSync = true;
+        fresh.stretch = phraseTempoStretch (choice.fileBpm, host);
+        fresh.ratio = audio->rate / sr;
+        fresh.reverse = false;
+        fresh.loop = true;
+        fresh.loopA = 0.0;
+        fresh.loopB = std::max (8.0, (double) audio->frames - 1.0);
+        fresh.xfade = 0.0;
+        fresh.pos = 0.0;
+        fresh.anchor = 0.0;
+        fresh.spliceLeft = 0;
+    }
 
     *slot = fresh;
     if (layered)

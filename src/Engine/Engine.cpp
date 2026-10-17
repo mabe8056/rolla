@@ -573,6 +573,8 @@ void Engine::process (const Groove& groove,
     const int bars = std::clamp (params.bars, 2, kMaxBars);
     const double loop16 = (double) bars * 16.0;
     const double bpm = std::clamp (transport.bpm, 20.0, 400.0);
+    EngineParams play = params;
+    play.bpm = (float) bpm;
     const double d16 = (bpm / 60.0) * 4.0 / sr;
     const bool justStarted = transport.playing && ! wasPlaying;
     double pos = transport.playing ? wrapLoop (transport.ppqStart * 4.0, loop16) : 0.0;
@@ -764,7 +766,7 @@ void Engine::process (const Groove& groove,
                 for (int c = 0; c < nIv; ++c)
                 {
                     const int note = std::clamp (incoming[e].note + (nIv == 1 ? 0 : sp.chordIv[c]), 0, 127);
-                    const auto taken = sampler.take (Stab, note, incoming[e].vel, 1.0e9f, bank, params);
+                    const auto taken = sampler.take (Stab, note, incoming[e].vel, 1.0e9f, bank, play);
                     if (taken.kind == 1)
                     {
                         midi.addEvent (juce::MidiMessage::noteOn (Stab + 1, note, (juce::uint8) std::clamp (incoming[e].vel, 1, 127)), i);
@@ -850,7 +852,7 @@ void Engine::process (const Groove& groove,
             {
                 const int note = incoming[e].note;
                 const float hz = std::clamp (midiHz (note), 10.f, srF * 0.45f);
-                const auto taken = sampler.take (Bass, note, incoming[e].vel, 1.0e9f, bank, params);
+                const auto taken = sampler.take (Bass, note, incoming[e].vel, 1.0e9f, bank, play);
                 if (taken.kind == 1)
                 {
                     if (E.live.midiOn)
@@ -933,7 +935,7 @@ void Engine::process (const Groove& groove,
                     continue;
                 const int semi = bassBase + n.chord[0];
                 const float hz = std::clamp (midiHz (semi), 10.f, srF * 0.22f);
-                const auto taken = sampler.take (Bass, semi, n.vel, en, bank, params);
+                const auto taken = sampler.take (Bass, semi, n.vel, en, bank, play);
                 if (taken.kind == 1)
                 {
                     if (E.bass.midiOn)
@@ -1010,7 +1012,7 @@ void Engine::process (const Groove& groove,
                     for (int c = 0; c < count; ++c)
                     {
                         const int note = std::clamp (base + iv[c], 0, 127);
-                        const auto taken = sampler.take (part, note, n.vel, en, bank, params);
+                        const auto taken = sampler.take (part, note, n.vel, en, bank, play);
                         if (taken.kind == 1)
                         {
                             emitHeld (part, note, n.vel, st, en);
@@ -1092,7 +1094,7 @@ void Engine::process (const Groove& groove,
                 if (! crossedNote (n.start, n.length, st, en) || ! crossed (prev, pos, st, loop16))
                     continue;
                 const int primary = std::clamp (hitBase + n.chord[0], 0, 127);
-                const auto taken = sampler.take (Hits, primary, n.vel, en, bank, params);
+                const auto taken = sampler.take (Hits, primary, n.vel, en, bank, play);
                 if (taken.kind == 1)
                 {
                     const int count = std::clamp ((int) n.nChord, 1, 4);
@@ -1183,7 +1185,7 @@ void Engine::process (const Groove& groove,
                 if (! crossedNote (n.start, n.length, st, en) || ! crossed (prev, pos, st, loop16))
                     continue;
                 const int note = std::clamp (voxBase + n.chord[0], 0, 127);
-                const auto taken = sampler.take (Vox, note, n.vel, en, bank, params);
+                const auto taken = sampler.take (Vox, note, n.vel, en, bank, play);
                 if (taken.kind == 1)
                 {
                     emitHeld (Vox, note, n.vel, st, en);
@@ -1393,12 +1395,12 @@ void Engine::process (const Groove& groove,
                         if (circuitKit)
                             keep = slotKeep;
                         else if (slotKeep > 0.001f)
-                            sampler.takeDrum (voice, vel, bank, params);
+                            sampler.takeDrum (voice, vel, bank, play);
                     }
                     else if (circuitKit)
                         keep = 1.f;
                     else
-                        sampler.takeDrum (voice, vel, bank, params);
+                        sampler.takeDrum (voice, vel, bank, play);
 
                     if (circuitKit && keep > 0.001f)
                     {

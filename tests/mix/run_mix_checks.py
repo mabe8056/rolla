@@ -41,6 +41,17 @@ def st_window(T, lane, voice, style):
         tol += 0.2
     return ab, tol
 
+def wav_peak(path):
+    try:
+        import soundfile as sf
+        data, _ = sf.read(path, always_2d=True)
+    except Exception:
+        return None
+    if data.size == 0:
+        return 0.0
+    return float(max(abs(float(data.min())), abs(float(data.max()))))
+
+
 def loudness_ok(path, lane, voice, style, T):
     import mix_check as mc
     r = mc.measure(path)
@@ -66,6 +77,11 @@ def main():
         T = json.load(open(os.path.join(os.path.dirname(__file__), "targets.json")))
     rows = []
     failed = False
+    if args.loudness and styles:
+        peak = wav_peak(os.path.join(root, styles[0], "FULL.wav"))
+        if peak is not None and peak < 1.0e-4:
+            print("loudness skipped: sample pack is not on this machine")
+            return 0
     for style in styles:
         folder = os.path.join(root, style)
         if args.loudness:

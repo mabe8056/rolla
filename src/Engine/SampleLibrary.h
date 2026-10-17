@@ -5,6 +5,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -31,6 +32,11 @@ struct SampleEntry
     char artist[64] {};
     char category[32] {};
     bool onDisk = false;
+    // A second pool for files flagged usable in either lane (PLUCK/STAB, RIM/PERC).
+    int altLane = -1;
+    int altVoice = -1;
+    bool phraseLoop = false;
+    int fileBpm = 0;
 };
 
 // Directory listing joined with manifest metadata. Audio is not loaded here.
@@ -66,9 +72,13 @@ inline bool sampleEntryMatches (const SampleEntry& entry, int part, const PoolFi
     if (! entry.onDisk || entry.path[0] == 0)
         return false;
     const int lane = filter.lane >= 0 ? filter.lane : part;
-    if (entry.lane != lane)
+    const bool primary = entry.lane == lane && (filter.voice < 0 || entry.voice == filter.voice);
+    const bool alternate = entry.altLane == lane && (filter.voice < 0 || entry.altVoice == filter.voice);
+    if (! primary && ! alternate)
         return false;
-    if (filter.voice >= 0 && entry.voice != filter.voice)
+    if (filter.loop == 1 && ! entry.phraseLoop)
+        return false;
+    if (filter.loop == 0 && entry.phraseLoop)
         return false;
     if (filter.rootPc >= 0 && entry.rootPc != filter.rootPc)
         return false;
@@ -166,6 +176,8 @@ private:
     void enqueue (const std::string& relative);
     void loadOne (const std::string& relative);
     void buildIndex();
+    bool cachedGain (const std::string& relative, juce::int64 bytes, float& gainDb);
+    void rememberGain (const std::string& relative, juce::int64 bytes, float gainDb);
     Slot* slotFor (const char* relative) noexcept;
     const Slot* slotFor (const char* relative) const noexcept;
 
@@ -182,6 +194,15 @@ private:
     std::mutex manifestMu;
     std::string embeddedManifest;
 
+    std::mutex gainMu;
+    bool gainsLoaded = false;
+    struct GainRow
+    {
+        juce::int64 bytes = 0;
+        float gainDb = 0.f;
+    };
+    std::map<std::string, GainRow> gains;
+
     mutable std::mutex indexMu;
     std::shared_ptr<const SampleIndex> indexSnap;
     std::atomic<int> indexedFoundCount { -1 };
@@ -197,6 +218,15 @@ private:
     std::mutex slotMu;
     std::vector<std::unique_ptr<SampleAudio>> kept;
 };
+
+struct InstalledPack
+{
+    std::unique_ptr<SampleLibrary> library;
+    std::shared_ptr<const SampleIndex> index;
+};
+
+// Scans the default sample root when it already holds audio. Empty when this machine has no pack.
+InstalledPack openInstalledPack (const char* manifestJson, int manifestSize);
 
 void ensureSampleFolders (const juce::File& root);
 
