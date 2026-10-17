@@ -15,6 +15,7 @@ int main (int argc, char** argv)
 
     const juce::String outPath = argc > 1 ? juce::String (argv[1]) : juce::String ("editor@2x.png");
     bool showMissing = false;
+    bool openLane = false;
     int lane = 0;
     float scale = 2.f;
     for (int i = 2; i < argc; ++i)
@@ -23,7 +24,10 @@ int main (int argc, char** argv)
         if (arg == "--missing")
             showMissing = true;
         else if (arg.startsWith ("--lane="))
+        {
+            openLane = true;
             lane = arg.substring (7).getIntValue();
+        }
         else if (arg.startsWith ("--scale="))
             scale = (float) arg.substring (8).getDoubleValue();
     }
@@ -100,7 +104,7 @@ int main (int argc, char** argv)
 
     rolla::RollaEditor editor (processor);
     editor.setSize (1024, 640);
-    if (lane != 0)
+    if (openLane)
         editor.selectLane (lane);
 
     {

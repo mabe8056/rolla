@@ -786,11 +786,13 @@ struct LaneRow : Component, FileDragAndDropTarget
 
     void paint (Graphics& g) override
     {
+        const float rowH = (float) getHeight();
         Path clip;
-        clip.addRoundedRectangle (0.f, (float) (-40 * part), 640.f, 280.f, 8.f);
+        clip.addRoundedRectangle (0.f, -rowH * (float) part, (float) getWidth(), rowH * (float) NumParts, Theme::radiusPanel);
         g.reduceClipRegion (clip);
 
         auto b = getLocalBounds().toFloat();
+        const int y0 = jmax (0, (getHeight() - 40) / 2);
         if (selected)
         {
             g.setColour (col (kSel));
@@ -818,19 +820,19 @@ struct LaneRow : Component, FileDragAndDropTarget
 
         const bool muted = mute.getToggleState();
         g.setColour (laneColour (part).withAlpha (muted ? Theme::alphaMuted : 1.f));
-        g.fillEllipse (16.f, 16.f, 8.f, 8.f);
+        g.fillEllipse (16.f, 16.f + (float) y0, 8.f, 8.f);
         const auto name = String (laneShortName (part));
         const auto nameFont = Theme::font (Theme::Role::lane);
         g.setColour (muted ? col (kInk2).withAlpha (Theme::alphaMutedText)
                            : (selected || hovered ? col (kInk) : col (kInk2)));
         g.setFont (nameFont);
-        g.drawText (name, 32, 12, 72, 16, Justification::centredLeft, false);
+        g.drawText (name, 32, 12 + y0, 72, 16, Justification::centredLeft, false);
         if (sampleMissing)
         {
             float x = 32.f + textWidth (nameFont, name) + 4.f;
             if (x > 92.f)
                 x = 92.f;
-            paintMissingIcon (g, x, 14.f, 12.f);
+            paintMissingIcon (g, x, 14.f + (float) y0, 12.f);
         }
 
         if (hot)
@@ -872,10 +874,11 @@ struct LaneRow : Component, FileDragAndDropTarget
 
     void resized() override
     {
-        strip.setBounds (104, 8, 408, 24);
-        mute.setBounds (520, 4, 32, 32);
-        shuffle.setBounds (560, 4, 32, 32);
-        keep.setBounds (600, 4, 32, 32);
+        const int y0 = jmax (0, (getHeight() - 40) / 2);
+        strip.setBounds (104, y0 + 8, 408, 24);
+        mute.setBounds (520, y0 + 4, 32, 32);
+        shuffle.setBounds (560, y0 + 4, 32, 32);
+        keep.setBounds (600, y0 + 4, 32, 32);
     }
 };
 
@@ -1927,8 +1930,13 @@ struct StatusStrip : Component
 
 } // namespace
 
-struct RollaEditor::Content : Component
+struct RollaEditor::Content : Component, private Timer
 {
+    struct SoundBody : Component
+    {
+        Content* host = nullptr;
+        void paint (Graphics& g) override;
+    };
     RollaProcessor& proc;
     RollaEditor& editor;
     LogoButton logo;
@@ -1942,6 +1950,7 @@ struct RollaEditor::Content : Component
     Stepper presetStep, kitStep;
     ModeBar source;
     LaneSampleProbe samples;
+    SoundBody sound;
     SampleSlot voxSlot;
     SwitchButton inStab, duck;
     DrumColumn drums[7];
@@ -1951,6 +1960,11 @@ struct RollaEditor::Content : Component
     StatusStrip status;
     std::unique_ptr<FileChooser> sampleChooser;
     int selected = Bass;
+    float panelAmt = 0.f;
+    float panelFrom = 0.f;
+    float panelTarget = 0.f;
+    double panelT0 = 0.0;
+    bool panelRun = false;
     Groove groove;
     uint32_t seenGen = 0;
     bool haveGroove = false;
@@ -1993,14 +2007,16 @@ struct RollaEditor::Content : Component
         punch.caption = "PUNCH";
         level.caption = "LEVEL";
         tone.slider.getProperties().set ("bipolar", true);
+        sound.host = this;
+        addAndMakeVisible (sound);
         for (auto* k : { &tone, &punch, &level })
-            addAndMakeVisible (k);
+            sound.addAndMakeVisible (k);
         presetStep.onStep = [this] (int dir) { stepPreset (dir); };
         presetStep.onBrowse = [this] { browseLanePresets (presetStep); };
-        addAndMakeVisible (presetStep);
+        sound.addAndMakeVisible (presetStep);
         kitStep.onStep = [this] (int dir) { stepPreset (dir); };
         kitStep.onBrowse = [this] { browseLanePresets (kitStep); };
-        addAndMakeVisible (kitStep);
+        sound.addAndMakeVisible (kitStep);
         source.onPick = [this] (int mode)
         {
             if (samples.mode (selected) == mode)
@@ -2009,21 +2025,21 @@ struct RollaEditor::Content : Component
             proc.markEdited (selected);
             sync();
         };
-        addAndMakeVisible (source);
+        sound.addAndMakeVisible (source);
 
         voxSlot.proc = &proc;
         voxSlot.voice = -1;
         voxSlot.onLoaded = [this] { repaint(); };
-        addAndMakeVisible (voxSlot);
+        sound.addAndMakeVisible (voxSlot);
         inStab.onClick = [this] { proc.markEdited (Hits); };
-        addAndMakeVisible (inStab);
+        sound.addAndMakeVisible (inStab);
         inStabA = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, "hitsInStab", inStab);
 
         const int voices[] = { Kick, Snare, Clap, Rim, HatC, HatO, Ride };
         for (int i = 0; i < 7; ++i)
         {
             drums[i].configure (proc, voices[i]);
-            addAndMakeVisible (drums[i]);
+            sound.addAndMakeVisible (drums[i]);
         }
 
         dark.caption = "DARK";
@@ -2083,12 +2099,12 @@ struct RollaEditor::Content : Component
         bindHelp (voxSlot, "Vox sample. Drop a file to override the preset.");
         bindHelp (inStab, "In stab. Hits land on the stab's answer slots.");
         for (int i = 0; i < NumParts; ++i)
-            bindHelp (rows[i], String (laneShortName (i)) + ". Click to edit. Mute, shuffle, or keep it from here.");
+            bindHelp (rows[i], String (laneShortName (i)) + ". Click to open this lane. Click again to close it. Mute, shuffle, or keep it from here.");
 
         groove = proc.copyGroove();
         haveGroove = true;
         seenGen = groove.generation;
-        select (Bass);
+        restorePanel();
         sync();
     }
 
@@ -2162,17 +2178,127 @@ struct RollaEditor::Content : Component
                                      });
     }
 
+    bool soundIsOpen() const noexcept { return panelTarget > 0.5f; }
+
+    void showLane (int part)
+    {
+        selected = juce::jlimit (0, NumParts - 1, part);
+        setOpen (true, false, true);
+    }
+
+    void closeSound()
+    {
+        if (soundIsOpen())
+            setOpen (false, true, true);
+    }
+
+    void restorePanel()
+    {
+        selected = juce::jlimit (0, NumParts - 1, proc.soundPanelLane());
+        setOpen (proc.soundPanelOpen(), false, false);
+    }
+
     void select (int part)
     {
+        editor.grabKeyboardFocus();
+        if (soundIsOpen() && part == selected)
+        {
+            setOpen (false, true, true);
+            return;
+        }
         selected = part;
+        setOpen (true, true, true);
+    }
+
+    void setOpen (bool open, bool animate, bool persist)
+    {
         for (int i = 0; i < NumParts; ++i)
         {
-            rows[i].selected = i == part;
+            rows[i].selected = open && i == selected;
             rows[i].repaint();
         }
-        bindSound();
+        if (persist)
+            proc.setSoundPanel (open, selected);
+
+        const float target = open ? 1.f : 0.f;
+        const bool reduced = paramRaw (proc.apvts, "reduceMotion") >= 0.5f;
+        if (! animate || reduced || std::abs (panelAmt - target) < 0.001f)
+        {
+            panelAmt = target;
+            panelTarget = target;
+            panelRun = false;
+            stopTimer();
+        }
+        else
+        {
+            panelFrom = panelAmt;
+            panelTarget = target;
+            panelT0 = Time::getMillisecondCounterHiRes();
+            panelRun = true;
+            startTimer (8);
+        }
         source.setCurrent (samples.mode (selected));
+        if (open)
+            bindSound();
+        else
+            layoutLeft();
         repaint();
+    }
+
+    void timerCallback() override
+    {
+        if (! panelRun)
+        {
+            stopTimer();
+            return;
+        }
+        float u = (float) ((Time::getMillisecondCounterHiRes() - panelT0) / 120.0);
+        if (u >= 1.f)
+        {
+            panelAmt = panelTarget;
+            panelRun = false;
+            stopTimer();
+        }
+        else
+        {
+            u = u * u * (3.f - 2.f * u);
+            panelAmt = panelFrom + (panelTarget - panelFrom) * u;
+        }
+        layoutLeft();
+        repaint();
+    }
+
+    void layoutLeft()
+    {
+        constexpr int kTop = 64;
+        constexpr int kBottom = 624;
+        constexpr int kSpan = kBottom - kTop;
+        const int lanePx = roundToInt (kSpan - panelAmt * 280.f);
+        int y = kTop;
+        for (int i = 0; i < NumParts; ++i)
+        {
+            const int h = (kTop + lanePx - y) / (NumParts - i);
+            rows[i].setBounds (16, y, 640, h);
+            y += h;
+        }
+        const int panelY = y + roundToInt (panelAmt * 8.f);
+        const int panelH = jmax (0, kBottom - panelY);
+        sound.setBounds (16, panelY, 640, panelH);
+        sound.setVisible (panelH > 2);
+    }
+
+    void placeSound()
+    {
+        presetStep.setBounds (16, 112, 256, 40);
+        tone.setBounds (312, 88, 64, 112);
+        punch.setBounds (408, 88, 64, 112);
+        level.setBounds (504, 88, 64, 112);
+        voxSlot.setBounds (16, 192, 240, 56);
+        inStab.setBounds (184, 200, 40, Theme::heightSmall);
+        kitStep.setBounds (248, 8, 176, 32);
+        source.setBounds (440, 8, 184, 32);
+        for (int i = 0; i < 7; ++i)
+            drums[i].setBounds (16 + 88 * i, 64, 80, 188);
     }
 
     void stepPreset (int dir)
@@ -2359,62 +2485,12 @@ struct RollaEditor::Content : Component
             g.setColour (col (kLine));
             g.drawRoundedRectangle (r.reduced (0.5f), Theme::radiusPanel, 1.f);
         };
-        card ({ 16.f, 64.f, 640.f, 280.f });
-        card ({ 16.f, 352.f, 640.f, 272.f });
+        const float laneBottom = rows[NumParts - 1].getBottom() > 64
+                                    ? (float) rows[NumParts - 1].getBottom()
+                                    : 624.f;
+        card ({ 16.f, 64.f, 640.f, laneBottom - 64.f });
         card ({ 672.f, 200.f, 336.f, 272.f });
         card ({ 672.f, 480.f, 336.f, 48.f });
-
-        g.setColour (col (kLine));
-        g.fillRect (16, 399, 640, 1);
-
-        g.setColour (laneColour (selected));
-        g.fillEllipse (32.f, 371.f, 10.f, 10.f);
-        const auto nameFont = Theme::font (Theme::Role::section);
-        g.setColour (col (kInk));
-        g.setFont (nameFont);
-        const auto panelName = String (laneShortName (selected));
-        g.drawText (panelName, 48, 364, 120, 24, Justification::centredLeft, false);
-        if (samples.missing (selected))
-        {
-            float x = 48.f + textWidth (nameFont, panelName) + 6.f;
-            if (selected == Drums && x > 112.f)
-                x = 112.f;
-            paintMissingIcon (g, x, 370.f, 12.f);
-        }
-        if (selected != Drums)
-        {
-            g.setColour (col (kInk2));
-            g.setFont (Theme::font (Theme::Role::meta));
-            g.drawText (channelLine (selected), 168, 364, 160, 24, Justification::centredLeft, false);
-        }
-        if (proc.laneEdited (selected))
-        {
-            g.setColour (col (kMark));
-            g.setFont (Theme::font (Theme::Role::micro));
-            g.drawText ("EDITED",
-                        selected == Drums ? Rectangle<int> (128, 364, 120, 24)
-                                          : Rectangle<int> (336, 364, 112, 24),
-                        Justification::centredLeft, false);
-        }
-
-        if (selected != Drums)
-        {
-            g.setColour (col (kInk2));
-            g.setFont (Theme::font (Theme::Role::caption));
-            g.drawText ("PRESET", 32, 440, 80, 16, Justification::centredLeft, false);
-            if (selected == Vox)
-                g.drawText ("SAMPLE", 32, 520, 80, 16, Justification::centredLeft, false);
-            if (selected == Hits)
-            {
-                g.drawText ("PLACEMENT", 32, 520, 100, 16, Justification::centredLeft, false);
-                g.setFont (Theme::font (Theme::Role::pill));
-                g.setColour (col (kInk));
-                g.drawText ("In stab", 48, 544, 120, 40, Justification::centredLeft, false);
-                g.setColour (col (kInk2));
-                g.setFont (Theme::font (Theme::Role::meta));
-                g.drawText ("Hits land on the stab's answer slots.", 32, 592, 280, 16, Justification::centredLeft, true);
-            }
-        }
 
         g.setColour (col (kInk2));
         g.setFont (Theme::font (Theme::Role::caption));
@@ -2439,19 +2515,8 @@ struct RollaEditor::Content : Component
         undoBtn.setBounds (912, 8, 40, 40);
         redoBtn.setBounds (968, 8, 40, 40);
 
-        for (int i = 0; i < NumParts; ++i)
-            rows[i].setBounds (16, 64 + 40 * i, 640, 40);
-
-        presetStep.setBounds (32, 464, 256, 40);
-        tone.setBounds (328, 440, 64, 112);
-        punch.setBounds (424, 440, 64, 112);
-        level.setBounds (520, 440, 64, 112);
-        voxSlot.setBounds (32, 544, 240, 56);
-        inStab.setBounds (200, 552, 40, Theme::heightSmall);
-        kitStep.setBounds (264, 360, 176, 32);
-        source.setBounds (456, 360, 184, 32);
-        for (int i = 0; i < 7; ++i)
-            drums[i].setBounds (32 + 88 * i, 416, 80, 188);
+        layoutLeft();
+        placeSound();
 
         face.setBounds (672, 64, 336, 128);
         dark.setBounds (724, 204, 64, 128);
@@ -2463,7 +2528,74 @@ struct RollaEditor::Content : Component
         drag.setBounds (672, 536, 336, 88);
         status.setBounds (Theme::space16, 624, 992, Theme::space16);
     }
+
+    void paintSound (Graphics& g)
+    {
+        auto b = sound.getLocalBounds().toFloat();
+        g.setColour (col (kCard));
+        g.fillRoundedRectangle (b, Theme::radiusPanel);
+        g.setColour (col (kLine));
+        g.drawRoundedRectangle (b.reduced (0.5f), Theme::radiusPanel, 1.f);
+
+        g.setColour (col (kLine));
+        g.fillRect (0, 47, 640, 1);
+
+        g.setColour (laneColour (selected));
+        g.fillEllipse (16.f, 19.f, 10.f, 10.f);
+        const auto nameFont = Theme::font (Theme::Role::section);
+        g.setColour (col (kInk));
+        g.setFont (nameFont);
+        const auto panelName = String (laneShortName (selected));
+        g.drawText (panelName, 32, 12, 120, 24, Justification::centredLeft, false);
+        if (samples.missing (selected))
+        {
+            float x = 32.f + textWidth (nameFont, panelName) + 6.f;
+            if (selected == Drums && x > 96.f)
+                x = 96.f;
+            paintMissingIcon (g, x, 18.f, 12.f);
+        }
+        if (selected != Drums)
+        {
+            g.setColour (col (kInk2));
+            g.setFont (Theme::font (Theme::Role::meta));
+            g.drawText (channelLine (selected), 152, 12, 160, 24, Justification::centredLeft, false);
+        }
+        if (proc.laneEdited (selected))
+        {
+            g.setColour (col (kMark));
+            g.setFont (Theme::font (Theme::Role::micro));
+            g.drawText ("EDITED",
+                        selected == Drums ? Rectangle<int> (112, 12, 120, 24)
+                                          : Rectangle<int> (320, 12, 112, 24),
+                        Justification::centredLeft, false);
+        }
+
+        if (selected != Drums)
+        {
+            g.setColour (col (kInk2));
+            g.setFont (Theme::font (Theme::Role::caption));
+            g.drawText ("PRESET", 16, 88, 80, 16, Justification::centredLeft, false);
+            if (selected == Vox)
+                g.drawText ("SAMPLE", 16, 168, 80, 16, Justification::centredLeft, false);
+            if (selected == Hits)
+            {
+                g.drawText ("PLACEMENT", 16, 168, 100, 16, Justification::centredLeft, false);
+                g.setFont (Theme::font (Theme::Role::pill));
+                g.setColour (col (kInk));
+                g.drawText ("In stab", 32, 192, 120, 40, Justification::centredLeft, false);
+                g.setColour (col (kInk2));
+                g.setFont (Theme::font (Theme::Role::meta));
+                g.drawText ("Hits land on the stab's answer slots.", 16, 240, 280, 16, Justification::centredLeft, true);
+            }
+        }
+    }
 };
+
+void RollaEditor::Content::SoundBody::paint (Graphics& g)
+{
+    if (host != nullptr)
+        host->paintSound (g);
+}
 
 struct RollaEditor::SizeConstrainer : juce::ComponentBoundsConstrainer
 {
@@ -2608,7 +2740,7 @@ void RollaEditor::resized()
 void RollaEditor::selectLane (int part)
 {
     if (content != nullptr)
-        content->select (juce::jlimit (0, NumParts - 1, part));
+        content->showLane (part);
 }
 
 void RollaEditor::setEditorScale (float scale)
@@ -2627,6 +2759,11 @@ bool RollaEditor::everyLaneKept() const
 
 bool RollaEditor::keyPressed (const KeyPress& key)
 {
+    if (key == KeyPress::escapeKey && content != nullptr && content->soundIsOpen())
+    {
+        content->closeSound();
+        return true;
+    }
     if (key == KeyPress::spaceKey && hasKeyboardFocus (true))
     {
         if (! everyLaneKept())
@@ -2673,6 +2810,7 @@ void RollaEditor::timerCallback()
     if (serial != appliedProjectSerial)
     {
         appliedProjectSerial = serial;
+        content->restorePanel();
         const int w = proc.getEditorWidth();
         const int h = proc.getEditorHeight();
         if (w >= 768 && h >= 480 && (w != getWidth() || h != getHeight()))

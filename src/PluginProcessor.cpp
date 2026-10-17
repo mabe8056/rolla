@@ -669,6 +669,8 @@ void RollaProcessor::getStateInformation (juce::MemoryBlock& destData)
         for (int i = 0; i < NumParts; ++i)
             tree.setProperty ("samplePick" + juce::String (i), samplePick[i].load(), nullptr);
     }
+    tree.setProperty ("soundOpen", soundOpen.load (std::memory_order_relaxed) ? 1 : 0, nullptr);
+    tree.setProperty ("soundLane", soundLane.load (std::memory_order_relaxed), nullptr);
 
     {
         std::lock_guard<std::mutex> lock (sampleMu);
@@ -769,6 +771,15 @@ void RollaProcessor::setStateInformation (const void* data, int sizeInBytes)
             samplePick[i].store ((int) tree.getProperty ("samplePick" + juce::String (i)), std::memory_order_relaxed);
 
     slots.readState (tree);
+
+    if (tree.hasProperty ("soundOpen"))
+        soundOpen.store ((int) tree.getProperty ("soundOpen") != 0, std::memory_order_relaxed);
+    else
+        soundOpen.store (false, std::memory_order_relaxed);
+    if (tree.hasProperty ("soundLane"))
+        soundLane.store (juce::jlimit (0, NumParts - 1, (int) tree.getProperty ("soundLane")), std::memory_order_relaxed);
+    projectEditorSerial.fetch_add (1, std::memory_order_relaxed);
+
     restoring.store (false);
 }
 
@@ -855,6 +866,12 @@ void RollaProcessor::setEditorSize (int width, int height) noexcept
 {
     editorWidth.store (width, std::memory_order_relaxed);
     editorHeight.store (height, std::memory_order_relaxed);
+}
+
+void RollaProcessor::setSoundPanel (bool open, int lane) noexcept
+{
+    soundOpen.store (open, std::memory_order_relaxed);
+    soundLane.store (juce::jlimit (0, NumParts - 1, lane), std::memory_order_relaxed);
 }
 
 juce::AudioProcessorEditor* RollaProcessor::createEditor()
