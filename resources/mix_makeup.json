@@ -1,0 +1,80 @@
+{
+ "dialects": {
+  "UKMIN": {
+   "sum_align_db": 0.58,
+   "lanes": {
+    "KICK": -6.4,
+    "CLAP": -3.18,
+    "SNARE": -7.75,
+    "RIM": -0.86,
+    "CH": 7.53,
+    "OH": 13.5,
+    "RIDE": -2.13,
+    "PERC": 0.08,
+    "BASS": 4.42,
+    "STAB": 12.25,
+    "PLUCK": 13.31,
+    "HITS": 5.01,
+    "PAD": -0.21,
+    "VOX": 2.73
+   }
+  },
+  "LONG": {
+   "sum_align_db": 0.57,
+   "lanes": {
+    "KICK": -6.4,
+    "CLAP": -2.68,
+    "SNARE": -7.26,
+    "RIM": -0.36,
+    "CH": 9.95,
+    "OH": 15.17,
+    "RIDE": 0.27,
+    "PERC": -0.71,
+    "BASS": 12.73,
+    "STAB": 8.46,
+    "PLUCK": 10.12,
+    "HITS": 15.25,
+    "PAD": 0.48,
+    "VOX": -0.35
+   }
+  },
+  "POP": {
+   "sum_align_db": 0.99,
+   "lanes": {
+    "KICK": -6.4,
+    "CLAP": -4.18,
+    "SNARE": -8.8,
+    "RIM": -1.87,
+    "CH": 7.34,
+    "OH": 11.79,
+    "RIDE": -2.33,
+    "PERC": -3.02,
+    "BASS": 6.48,
+    "STAB": 18.24,
+    "PLUCK": 16.23,
+    "HITS": 11.5,
+    "PAD": -0.41,
+    "VOX": 4.38
+   }
+  },
+  "GASKIN": {
+   "sum_align_db": 0.61,
+   "lanes": {
+    "KICK": -5.56,
+    "CLAP": -8.14,
+    "SNARE": -11.23,
+    "RIM": -4.1,
+    "CH": 5.55,
+    "OH": 11.09,
+    "RIDE": -5.03,
+    "PERC": -4.29,
+    "BASS": 9.19,
+    "STAB": 17.1,
+    "PLUCK": 14.79,
+    "HITS": 3.97,
+    "PAD": 0.21,
+    "VOX": -0.97
+   }
+  }
+ }
+}
