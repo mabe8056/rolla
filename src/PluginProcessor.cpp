@@ -1,6 +1,7 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "DspUtil.h"
+#include "Generator/Intensity.h"
 #include "Generator/MidiFile.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -35,10 +36,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout (const PresetBa
     add (std::make_unique<AudioParameterFloat> (ParameterID { "busy", 1 }, "Busy", unit, 0.40f));
     add (std::make_unique<AudioParameterFloat> (ParameterID { "bounce", 1 }, "Bounce", unit, 0.45f));
     add (std::make_unique<AudioParameterFloat> (ParameterID { "stab", 1 }, "Stab", unit, 0.55f));
+    add (std::make_unique<AudioParameterInt> (
+        ParameterID { "intensity", 1 }, "Intensity", 0, 100, 75));
 
+    StringArray styleNames;
+    for (int i = 0; i < NumDialects; ++i)
+        styleNames.add (dialectName (i));
     add (std::make_unique<AudioParameterChoice> (
-        ParameterID { "dialect", 1 }, "Dialect",
-        StringArray { "UK MIN", "LONG", "POP", "GASKIN 90s" }, 0));
+        ParameterID { "dialect", 1 }, "Dialect", styleNames, 0));
 
     add (std::make_unique<AudioParameterChoice> (
         ParameterID { "key", 1 }, "Key",
@@ -218,8 +223,13 @@ RollaProcessor::RollaProcessor()
 {
     apvts.addParameterListener ("roll", this);
     apvts.addParameterListener ("dialect", this);
+    apvts.addParameterListener ("intensity", this);
+    apvts.addParameterListener ("stab", this);
     for (int i = 0; i < NumParts; ++i)
+    {
         apvts.addParameterListener (juce::String (partId (i)) + "Shuffle", this);
+        apvts.addParameterListener (juce::String (partId (i)) + "Keep", this);
+    }
 
     mixProgram.loadFromMemory (BinaryData::mix_profiles_json, BinaryData::mix_profiles_jsonSize,
                                BinaryData::main_sum_trim_json, BinaryData::main_sum_trim_jsonSize,
@@ -236,8 +246,13 @@ RollaProcessor::~RollaProcessor()
 
     apvts.removeParameterListener ("roll", this);
     apvts.removeParameterListener ("dialect", this);
+    apvts.removeParameterListener ("intensity", this);
+    apvts.removeParameterListener ("stab", this);
     for (int i = 0; i < NumParts; ++i)
+    {
         apvts.removeParameterListener (juce::String (partId (i)) + "Shuffle", this);
+        apvts.removeParameterListener (juce::String (partId (i)) + "Keep", this);
+    }
 
     std::lock_guard<std::mutex> lock (async->mu);
     async->alive.store (false);
@@ -267,11 +282,76 @@ void RollaProcessor::waitUntilReady()
 
 void RollaProcessor::publishInitial (const Groove& g)
 {
+    {
+        std::lock_guard<std::mutex> lock (grooveMu);
+        if (grooveEpoch.load (std::memory_order_relaxed) != 0)
+            return;
+        sourceGroove = g;
+        sourceReady.store (true, std::memory_order_relaxed);
+    }
+    publishDerived();
+}
+
+void RollaProcessor::storeSource (const Groove& g)
+{
     std::lock_guard<std::mutex> lock (grooveMu);
-    if (grooveEpoch.load (std::memory_order_relaxed) != 0)
+    sourceGroove = g;
+    sourceReady.store (true, std::memory_order_relaxed);
+}
+
+Groove RollaProcessor::copySource() const
+{
+    std::lock_guard<std::mutex> lock (grooveMu);
+    return sourceReady.load (std::memory_order_relaxed) ? sourceGroove : groove;
+}
+
+void RollaProcessor::publishDerived()
+{
+    if (! sourceReady.load (std::memory_order_relaxed))
         return;
-    groove = g;
-    grooveEpoch.store (1, std::memory_order_relaxed);
+    const Groove src = copySource();
+    std::uint32_t keep = 0;
+    std::uint32_t sample = 0;
+    for (int i = 0; i < NumParts; ++i)
+    {
+        if (raw (apvts, (juce::String (partId (i)) + "Keep").toRawUTF8()) >= 0.5f)
+            keep |= 1u << i;
+        if (i < Drums && slots.mode (i) != 0)
+            sample |= 1u << i;
+    }
+    const auto plan = planIntensity ((int) raw (apvts, "dialect"),
+                                     (int) raw (apvts, "intensity"),
+                                     raw (apvts, "stab"));
+    Groove dst;
+    applyIntensity (src, dst, plan, keep, sample);
+    publish (dst);
+}
+
+void RollaProcessor::reapplyIntensity()
+{
+    publishDerived();
+}
+
+void RollaProcessor::post (std::function<void (RollaProcessor&)> fn)
+{
+    auto* mm = juce::MessageManager::getInstanceWithoutCreating();
+    if (mm == nullptr || ! fn)
+        return;
+    std::weak_ptr<AsyncState> weak = async;
+    const uint32_t epoch = async->epoch.load (std::memory_order_acquire);
+    auto* self = this;
+    mm->callAsync ([weak, epoch, self, fn]
+    {
+        auto locked = weak.lock();
+        if (locked == nullptr)
+            return;
+        std::lock_guard<std::mutex> guard (locked->mu);
+        if (! locked->alive.load() || locked->epoch.load() != epoch)
+            return;
+        if (self->restoring.load (std::memory_order_acquire))
+            return;
+        fn (*self);
+    });
 }
 
 void RollaProcessor::deferredStartup()
@@ -363,25 +443,18 @@ void RollaProcessor::parameterChanged (const juce::String& parameterID, float ne
 
     if (parameterID == "dialect")
     {
-        auto* mm = juce::MessageManager::getInstanceWithoutCreating();
-        if (mm == nullptr)
-            return;
-        std::weak_ptr<AsyncState> weak = async;
-        const uint32_t epoch = async->epoch.load (std::memory_order_acquire);
         const int dialect = (int) newValue;
-        auto* self = this;
-        mm->callAsync ([weak, epoch, self, dialect]
+        post ([dialect] (RollaProcessor& self)
         {
-            auto locked = weak.lock();
-            if (locked == nullptr)
-                return;
-            std::lock_guard<std::mutex> guard (locked->mu);
-            if (! locked->alive.load() || locked->epoch.load() != epoch)
-                return;
-            if (self->restoring.load (std::memory_order_acquire))
-                return;
-            self->applyDialect (dialect);
+            self.applyDialect (dialect);
+            self.reapplyIntensity();
         });
+        return;
+    }
+
+    if (parameterID == "intensity" || parameterID == "stab" || parameterID.endsWith ("Keep"))
+    {
+        post ([] (RollaProcessor& self) { self.reapplyIntensity(); });
         return;
     }
 
@@ -398,24 +471,11 @@ void RollaProcessor::parameterChanged (const juce::String& parameterID, float ne
             return;
     }
 
-    auto* mm = juce::MessageManager::getInstanceWithoutCreating();
-    if (mm == nullptr)
-        return;
-
-    std::weak_ptr<AsyncState> weak = async;
-    const uint32_t epoch = async->epoch.load (std::memory_order_acquire);
-    auto* self = this;
-    mm->callAsync ([weak, epoch, self, part]
+    post ([part] (RollaProcessor& self)
     {
-        auto locked = weak.lock();
-        if (locked == nullptr)
-            return;
-        std::lock_guard<std::mutex> guard (locked->mu);
-        if (! locked->alive.load() || locked->epoch.load() != epoch)
-            return;
         if (part >= 0)
-            self->clearAutoKeep (part);
-        self->regenerate (part);
+            self.clearAutoKeep (part);
+        self.regenerate (part);
     });
 }
 
@@ -460,7 +520,7 @@ Settings RollaProcessor::currentSettings() const
 void RollaProcessor::regenerate (int onlyPart)
 {
     Settings s = currentSettings();
-    Groove next = copyGroove();
+    Groove next = copySource();
     uint32_t seeds[NumParts] {};
     uint32_t mask = 0;
 
@@ -487,7 +547,8 @@ void RollaProcessor::regenerate (int onlyPart)
         return;
 
     generate (next, s, seeds, mask);
-    publish (next);
+    storeSource (next);
+    publishDerived();
 }
 
 void RollaProcessor::publish (const Groove& g)
@@ -647,7 +708,7 @@ void RollaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
 void RollaProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     juce::ValueTree tree = apvts.copyState();
-    const Groove local = copyGroove();
+    const Groove local = sourceReady.load (std::memory_order_relaxed) ? copySource() : copyGroove();
     tree.setProperty ("grooveBytes", (int) sizeof (Groove), nullptr);
     tree.setProperty ("groove", encodeBlock (&local, sizeof (Groove)), nullptr);
     int editedMask = 0;
@@ -667,7 +728,6 @@ void RollaProcessor::getStateInformation (juce::MemoryBlock& destData)
         for (int i = 0; i < NumParts; ++i)
             tree.setProperty ("samplePick" + juce::String (i), samplePick[i].load(), nullptr);
     }
-
     {
         std::lock_guard<std::mutex> lock (sampleMu);
         for (int v = 0; v < NumDrumVoices; ++v)
@@ -715,7 +775,7 @@ void RollaProcessor::setStateInformation (const void* data, int sizeInBytes)
     {
         Groove restored {};
         if (decodeBlock (tree.getProperty ("groove").toString(), &restored, sizeof (Groove)))
-            publish (restored);
+            storeSource (restored);
     }
 
     {
@@ -767,7 +827,12 @@ void RollaProcessor::setStateInformation (const void* data, int sizeInBytes)
             samplePick[i].store ((int) tree.getProperty ("samplePick" + juce::String (i)), std::memory_order_relaxed);
 
     slots.readState (tree);
+    // The sound panel is editor-only. A project load closes it; it is not restored.
+    projectEditorSerial.fetch_add (1, std::memory_order_relaxed);
+
     restoring.store (false);
+    if (sourceReady.load (std::memory_order_relaxed))
+        publishDerived();
 }
 
 bool RollaProcessor::laneSampleMissing (int part) const
@@ -925,17 +990,24 @@ void RollaProcessor::clearVoxSample()
 
 bool RollaProcessor::loadUserSlot (int slot, const juce::File& file, juce::String& error)
 {
-    return slots.assign (slot, file, error);
+    const bool ok = slots.assign (slot, file, error);
+    if (ok && ! restoring.load (std::memory_order_acquire))
+        reapplyIntensity();
+    return ok;
 }
 
 void RollaProcessor::clearUserSlot (int slot)
 {
     slots.clear (slot);
+    if (! restoring.load (std::memory_order_acquire))
+        reapplyIntensity();
 }
 
 void RollaProcessor::setUserSlotMode (int slot, int mode)
 {
     slots.setMode (slot, mode);
+    if (! restoring.load (std::memory_order_acquire))
+        reapplyIntensity();
 }
 
 int RollaProcessor::userSlotMode (int slot) const noexcept

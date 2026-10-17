@@ -129,6 +129,11 @@ private:
     Settings currentSettings() const;
     void publish (const Groove& g);
     void publishInitial (const Groove& g);
+    void publishDerived();
+    void reapplyIntensity();
+    void storeSource (const Groove& g);
+    Groove copySource() const;
+    void post (std::function<void (RollaProcessor&)> fn);
     void deferredStartup();
     void rememberSample (int voice, const float* mono, int n, double rate, const juce::String& name);
     void applyRememberedSamples();
@@ -149,6 +154,8 @@ private:
 
     mutable std::mutex grooveMu;
     Groove groove {};
+    Groove sourceGroove {};
+    std::atomic<bool> sourceReady { false };
 
     struct Remembered
     {
