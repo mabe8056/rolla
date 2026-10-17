@@ -406,17 +406,24 @@ bool SampleLibrary::cachedGain (const std::string& relative, juce::int64 bytes, 
         if (file.existsAsFile())
         {
             const auto parsed = juce::JSON::parse (file);
-            if (auto* arr = parsed.getProperty ("entries", juce::var()).getArray())
+            const double cachedLufs = (double) parsed.getProperty ("lufsTarget", 0.0);
+            const double cachedTp = (double) parsed.getProperty ("tpCap", 0.0);
+            const bool targetsMatch = std::fabs (cachedLufs - (double) kLoadLufsTarget) < 0.01
+                                    && std::fabs (cachedTp - (double) kLoadTruePeakCapDb) < 0.01;
+            if (targetsMatch)
             {
-                for (const auto& item : *arr)
+                if (auto* arr = parsed.getProperty ("entries", juce::var()).getArray())
                 {
-                    const auto path = item.getProperty ("path", "").toString();
-                    if (path.isEmpty())
-                        continue;
-                    GainRow row;
-                    row.bytes = (juce::int64) (double) item.getProperty ("bytes", 0.0);
-                    row.gainDb = (float) (double) item.getProperty ("gainDb", 0.0);
-                    gains[path.toStdString()] = row;
+                    for (const auto& item : *arr)
+                    {
+                        const auto path = item.getProperty ("path", "").toString();
+                        if (path.isEmpty())
+                            continue;
+                        GainRow row;
+                        row.bytes = (juce::int64) (double) item.getProperty ("bytes", 0.0);
+                        row.gainDb = (float) (double) item.getProperty ("gainDb", 0.0);
+                        gains[path.toStdString()] = row;
+                    }
                 }
             }
         }
@@ -451,6 +458,8 @@ void SampleLibrary::rememberGain (const std::string& relative, juce::int64 bytes
         entries.add (juce::var (obj));
     }
     auto* root = new juce::DynamicObject();
+    root->setProperty ("lufsTarget", (double) kLoadLufsTarget);
+    root->setProperty ("tpCap", (double) kLoadTruePeakCapDb);
     root->setProperty ("entries", juce::var (entries));
     file.replaceWithText (juce::JSON::toString (juce::var (root)));
 }

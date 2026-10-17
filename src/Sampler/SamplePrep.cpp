@@ -550,8 +550,8 @@ float loudnessGainDb (const std::vector<float>& left, const std::vector<float>& 
     const bool mono = right.size() != left.size();
     const float lufs = integratedLufs (left, right, rate, mono);
     const float peak = std::max (peakOf (left, right), std::max (truePeak (left), right.empty() ? 0.f : truePeak (right)));
-    const float ceiling = std::pow (10.f, -6.05f / 20.f);
-    float gain = std::pow (10.f, (-24.f - lufs) / 20.f);
+    const float ceiling = std::pow (10.f, kLoadTruePeakCapDb / 20.f);
+    float gain = std::pow (10.f, (kLoadLufsTarget - lufs) / 20.f);
     if (peak > 1.0e-8f && peak * gain > ceiling)
         gain = ceiling / peak;
     if (! std::isfinite (gain) || gain <= 0.f)

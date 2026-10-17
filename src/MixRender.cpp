@@ -3,6 +3,7 @@
 #include "Generator/Generator.h"
 #include "Generator/Presets.h"
 #include "Mix/MixProgram.h"
+#include "Mix/MixRuntime.h"
 
 #include <BinaryData.h>
 
@@ -10,8 +11,10 @@
 #include <juce_core/juce_core.h>
 #include <juce_events/juce_events.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -291,6 +294,62 @@ int selfTest (const rolla::PresetBank& bank, const rolla::MixProgram& mix,
     return rc;
 }
 
+int renderSwitch (const rolla::PresetBank& bank, const rolla::MixProgram& mix, const juce::File& stim,
+                  const juce::File& out, int fromDialect, int toDialect, double atSec, int lane)
+{
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (stim));
+    if (reader == nullptr)
+        return fail ("could not read stimulus");
+    if (std::abs (reader->sampleRate - kSr) > 1.0)
+        return fail ("stimulus must be 48 kHz");
+    const int n = (int) reader->lengthInSamples;
+    if (n < (int) (1.5 * kSr))
+        return fail ("stimulus shorter than 1.5 s");
+    juce::AudioBuffer<float> in (2, n);
+    reader->read (&in, 0, n, 0, true, true);
+    if (reader->numChannels < 2)
+        in.copyFrom (1, 0, in, 0, 0, n);
+
+    rolla::MixRuntime rt;
+    rt.prepare (kSr);
+    auto infoFor = [&] (int dialect)
+    {
+        rolla::MixBlockInfo info;
+        info.dialect = dialect;
+        info.sumMask = 63;
+        info.bypassSumTrim = true;
+        info.activeMask = 63;
+        for (int p = 0; p < rolla::kMixMelodic; ++p)
+        {
+            info.presetIndex[p] = bank.dialect[dialect].presetIndex[p];
+            info.presetId[p] = bank.dialect[dialect].presetId[p];
+        }
+        return info;
+    };
+    rt.beginBlock (mix, infoFor (fromDialect));
+    const int at = std::clamp ((int) std::llround (atSec * kSr), 0, n - 1);
+    Take take;
+    take.l.resize ((size_t) n);
+    take.r.resize ((size_t) n);
+    for (int i = 0; i < n; ++i)
+    {
+        if (i == at)
+            rt.beginBlock (mix, infoFor (toDialect));
+        float l = in.getSample (0, i);
+        float r = in.getSample (1, i);
+        rt.process (lane, l, r);
+        take.l[(size_t) i] = l;
+        take.r[(size_t) i] = r;
+    }
+    if (! writeWav (out, take))
+        return fail ("could not write switch render");
+    std::cout << "switch " << kStyle[fromDialect] << "->" << kStyle[toDialect]
+              << " " << rolla::mixLaneName (lane) << " at " << atSec << "\n";
+    return 0;
+}
+
 int renderSet (const rolla::PresetBank& bank, const rolla::MixProgram& mix, const juce::File& dir, bool solosOnly, bool bypassSum, int onlyDialect,
               rolla::SampleLibrary* library, const rolla::SampleIndex* index)
 {
@@ -326,6 +385,16 @@ int renderSet (const rolla::PresetBank& bank, const rolla::MixProgram& mix, cons
 
 } // namespace
 
+int dialectIndex (const std::string& name)
+{
+    const char* names[] = { "UKMIN", "LONG", "POP", "GASKIN" };
+    const juce::String n (name);
+    for (int d = 0; d < 4; ++d)
+        if (n.equalsIgnoreCase (names[d]))
+            return d;
+    return -1;
+}
+
 int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI juceInit;
@@ -333,8 +402,10 @@ int main (int argc, char** argv)
     bool solosOnly = false;
     bool bypassSum = false;
     int onlyDialect = -1;
-    juce::File outDir;
-    juce::File makeup;
+    bool doSwitch = false;
+    int fromDialect = -1, toDialect = -1, switchLane = rolla::mixLaneIndex ("STAB");
+    double switchAt = 1.0;
+    juce::File outDir, makeup, stim;
     for (int i = 1; i < argc; ++i)
     {
         const std::string a = argv[i];
@@ -344,21 +415,34 @@ int main (int argc, char** argv)
             solosOnly = true;
         else if (a == "--bypass-sum")
             bypassSum = true;
+        else if (a == "--switch")
+            doSwitch = true;
+        else if (a == "--stim" && i + 1 < argc)
+            stim = juce::File (argv[++i]);
+        else if (a == "--from" && i + 1 < argc)
+            fromDialect = dialectIndex (argv[++i]);
+        else if (a == "--to" && i + 1 < argc)
+            toDialect = dialectIndex (argv[++i]);
+        else if (a == "--at" && i + 1 < argc)
+            switchAt = std::atof (argv[++i]);
+        else if (a == "--lane" && i + 1 < argc)
+        {
+            switchLane = rolla::mixLaneIndex (argv[++i]);
+            if (switchLane < 0)
+                return fail ("unknown lane");
+        }
         else if (a == "--makeup" && i + 1 < argc)
             makeup = juce::File (argv[++i]);
         else if (a == "--dialect" && i + 1 < argc)
         {
-            const juce::String name (argv[++i]);
-            onlyDialect = -1;
-            for (int d = 0; d < rolla::NumDialects; ++d)
-                if (name.equalsIgnoreCase (kStyle[d]))
-                    onlyDialect = d;
+            onlyDialect = dialectIndex (argv[++i]);
             if (onlyDialect < 0)
                 return fail ("unknown dialect");
         }
         else if (a == "--help")
         {
-            std::cout << "rolla-mix-render [--self-test] [--solos] [--bypass-sum] [--makeup file] <outDir>\n";
+            std::cout << "rolla-mix-render [--self-test] [--solos] [--bypass-sum] [--makeup file] [--dialect NAME] <outDir>\n"
+                      << "rolla-mix-render --switch --stim in.wav --from UKMIN --to LONG --at 1.0 --lane STAB <out.wav>\n";
             return 0;
         }
         else
@@ -377,6 +461,14 @@ int main (int argc, char** argv)
         std::cout << "no sample pack; mix renders stay silent\n";
     if (doSelf)
         return selfTest (bank, mix, pack.library.get(), pack.index.get());
+    if (doSwitch)
+    {
+        if (fromDialect < 0 || toDialect < 0)
+            return fail ("switch needs --from and --to");
+        if (stim == juce::File() || outDir == juce::File())
+            return fail ("switch needs --stim and an output wav");
+        return renderSwitch (bank, mix, stim, outDir, fromDialect, toDialect, switchAt, switchLane);
+    }
     if (outDir == juce::File())
         return fail ("need an output directory or --self-test");
     return renderSet (bank, mix, outDir, solosOnly, bypassSum, onlyDialect, pack.library.get(), pack.index.get());

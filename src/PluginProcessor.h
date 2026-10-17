@@ -50,6 +50,9 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
+    // Snapshot. A PresetBank is about a megabyte; copying it by value overflows the
+    // 512 KB macOS thread pluginval uses to open the plugin.
+    std::shared_ptr<const PresetBank> sharePresets() const;
     PresetBank copyPresets() const;
     void modifyPresets (const std::function<void (PresetBank&)>& edit);
     std::uint32_t presetGeneration() const noexcept { return presetGen.load (std::memory_order_acquire); }
@@ -145,6 +148,11 @@ private:
     Settings currentSettings() const;
     void publish (const Groove& g);
     void publishInitial (const Groove& g);
+    void publishDerived();
+    void reapplyIntensity();
+    void storeSource (const Groove& g);
+    Groove copySource() const;
+    void post (std::function<void (RollaProcessor&)> fn);
     void deferredStartup();
     void rememberSample (int voice, const float* mono, int n, double rate, const juce::String& name);
     void applyRememberedSamples();
@@ -165,6 +173,8 @@ private:
 
     mutable std::mutex grooveMu;
     Groove groove {};
+    Groove sourceGroove {};
+    std::atomic<bool> sourceReady { false };
 
     struct Remembered
     {

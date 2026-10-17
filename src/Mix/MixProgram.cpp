@@ -266,6 +266,9 @@ bool MixProgram::loadFromMemory (const char* profilesJson, int profilesBytes,
                                  const char* makeupJson, int makeupBytes)
 {
     *this = MixProgram {};
+    for (int d = 0; d < kMixDialects; ++d)
+        for (int lane = 0; lane < kMixLanes; ++lane)
+            tpCeilDb[d][lane] = 24.f;
     if (profilesJson == nullptr || profilesBytes <= 0)
         return false;
     const auto root = juce::JSON::parse (juce::String::fromUTF8 (profilesJson, profilesBytes));
@@ -340,6 +343,13 @@ bool MixProgram::loadFromMemory (const char* profilesJson, int profilesBytes,
         {
             const auto row = md.getProperty (kDialects[d], {});
             sumAlignDb[d] = num (row, "sum_align_db", 0.f);
+            const auto ceils = row.getProperty ("tp_ceil_db", {});
+            if (auto* ceilObj = ceils.getDynamicObject())
+            {
+                for (int lane = 0; lane < kMixLanes; ++lane)
+                    if (ceilObj->hasProperty (kLaneNames[lane]))
+                        tpCeilDb[d][lane] = num (ceils, kLaneNames[lane], 24.f);
+            }
             const auto lanes = row.getProperty ("lanes", {});
             if (! lanes.isObject())
                 continue;

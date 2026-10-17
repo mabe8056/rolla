@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <memory>
 
 #include <juce_core/juce_core.h>
 
@@ -369,7 +370,10 @@ const juce::var* presetAt (const juce::var& root, const char* part, int index)
 
 void loadDefaultPresets (PresetBank& bank)
 {
-    bank = PresetBank {};
+    // A PresetBank temporary is about a megabyte. Construct the blank on the heap so
+    // pluginval's 512 KB macOS test thread can open the plugin.
+    auto blank = std::make_unique<PresetBank>();
+    bank = std::move (*blank);
     fillDialect (bank.dialect[UkMin], "pluck", "dub", "warehouse", "hook", "air", "close", "tight", true, 0.52f);
     fillDialect (bank.dialect[Long], "round", "swell", "dusty", "bright", "wide", "booth", "tight", true, 0.51f);
     fillDialect (bank.dialect[Pop], "click", "click", "rave", "soft", "air", "chop", "tight", true, 0.50f);

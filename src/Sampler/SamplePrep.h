@@ -34,7 +34,12 @@ int detectRootMidi (const float* mono, int frames, double rate, bool tail);
 // Last `_C#`, `_Dm`, `_Ds`, `_C2` token. Octave defaults to 3. -1 when none.
 int midiFromFilename (const char* path) noexcept;
 
-// Gain in dB that brings the buffer to -24 LUFS, capped at -6 dBTP. The file is not written.
+// Load-time targets from MIX_SPEC §4 and the mix gate: prep.lufs_target and
+// prep.tp_cap / invariants.sum_tp (sum held at -6 dBTP). The file is not written.
+inline constexpr float kLoadLufsTarget = -24.f;
+inline constexpr float kLoadTruePeakCapDb = -6.f;
+
+// Gain in dB that brings the buffer to kLoadLufsTarget, capped at kLoadTruePeakCapDb.
 float loudnessGainDb (const std::vector<float>& left, const std::vector<float>& right, double rate);
 
 // Lanes: pitch over the first 3 s, then the filename, then C3.

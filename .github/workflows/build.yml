@@ -286,10 +286,14 @@ jobs:
       - name: Validate profiles
         run: python3 tests/mix/validate_profiles.py
 
-      - name: UK MIN mute regression and loudness
+      - name: Full mix renders, true peak, and style switches
         run: |
           set -euo pipefail
           ./build/rolla-mix-render --self-test
-          ./build/rolla-mix-render --dialect UKMIN "$GITHUB_WORKSPACE/mix-renders"
+          ./build/rolla-mix-render "$GITHUB_WORKSPACE/mix-renders"
           python3 -m pip install --user --break-system-packages numpy scipy soundfile pyloudnorm
-          python3 tests/mix/run_mix_checks.py --style UKMIN --loudness "$GITHUB_WORKSPACE/mix-renders"
+          python3 tests/mix/mix_check.py stimulus "$GITHUB_WORKSPACE/mix-renders/stimulus.wav" --seconds 4
+          ./build/rolla-mix-render --switch --stim "$GITHUB_WORKSPACE/mix-renders/stimulus.wav" --from UKMIN --to LONG --at 1.0 --lane STAB "$GITHUB_WORKSPACE/mix-renders/switch/UKMIN_LONG.wav"
+          ./build/rolla-mix-render --switch --stim "$GITHUB_WORKSPACE/mix-renders/stimulus.wav" --from LONG --to POP --at 1.0 --lane STAB "$GITHUB_WORKSPACE/mix-renders/switch/LONG_POP.wav"
+          ./build/rolla-mix-render --switch --stim "$GITHUB_WORKSPACE/mix-renders/stimulus.wav" --from POP --to GASKIN --at 1.0 --lane STAB "$GITHUB_WORKSPACE/mix-renders/switch/POP_GASKIN.wav"
+          python3 tests/mix/run_mix_checks.py --gate --switch-dir "$GITHUB_WORKSPACE/mix-renders/switch" "$GITHUB_WORKSPACE/mix-renders"

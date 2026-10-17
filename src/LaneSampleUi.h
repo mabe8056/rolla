@@ -74,8 +74,8 @@ inline int stubMode (const RollaProcessor& proc, int part)
     const auto key = laneModeProperty (part);
     if (proc.apvts.state.hasProperty (key))
         return juce::jlimit (0, 2, (int) proc.apvts.state.getProperty (key));
-    const auto bank = proc.copyPresets();
-    const auto& spec = sampleSpecFor (bank, part, presetIndexOf (proc, part));
+    const auto bank = proc.sharePresets();
+    const auto& spec = sampleSpecFor (*bank, part, presetIndexOf (proc, part));
     return juce::jlimit (0, 2, (int) spec.mode);
 }
 
@@ -125,7 +125,7 @@ void writeMode (Proc& proc, int part, int mode)
         proc.undo.beginNewTransaction();
         proc.apvts.state.setProperty (laneModeProperty (part), mode, &proc.undo);
         if (applyStubMode (proc, part, mode))
-            proc.sampleLibrary().watch (proc.copyPresets());
+            proc.sampleLibrary().watch (*proc.sharePresets());
     }
 }
 
@@ -152,11 +152,11 @@ public:
 
     void captureFactory()
     {
-        const auto bank = proc.copyPresets();
+        const auto bank = proc.sharePresets();
         for (int part = 0; part < NumParts; ++part)
             if (! touched[part])
                 for (int i = 0; i < PresetBank::kPer; ++i)
-                    factory[part][i] = (int) sampleSpecFor (bank, part, i).mode;
+                    factory[part][i] = (int) sampleSpecFor (*bank, part, i).mode;
         seenGen = proc.presetGeneration();
     }
 
@@ -225,7 +225,7 @@ public:
             }
         }
         if (changed)
-            proc.sampleLibrary().watch (proc.copyPresets());
+            proc.sampleLibrary().watch (*proc.sharePresets());
     }
 
     bool engineModeApi() const noexcept
