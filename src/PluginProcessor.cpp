@@ -7,7 +7,10 @@
 
 #include <BinaryData.h>
 
+#include "ui/Theme.h"
+
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <random>
 #include <vector>
@@ -115,11 +118,57 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout (const PresetBa
     return { p.begin(), p.end() };
 }
 
-PresetBank loadBank()
+const char* factoryPresetName (int part, int index) noexcept
+{
+    static const char* names[NumParts][PresetBank::kPer] = {
+        { "Pluck", "Round", "Click" },
+        { "Dub", "Swell", "Click" },
+        { "Warehouse", "Piano Hit", "Hoover" },
+        { "Hook", "Soft", "Bright" },
+        { "Air", "Wide", "Dark" },
+        { "Close", "Booth", "Chop" },
+        { "909 Tight", "909 Room", "909 Dry" },
+    };
+    if (part < 0 || part >= NumParts || index < 0 || index >= PresetBank::kPer)
+        return "Preset";
+    return names[part][index];
+}
+
+void writePresetName (char* dest, int size, const char* name)
+{
+    if (dest == nullptr || size <= 0)
+        return;
+    std::snprintf (dest, (size_t) size, "%s", name != nullptr ? name : "");
+}
+
+PresetBank makeStartupBank()
 {
     PresetBank bank;
-    loadPresetsFromJson (bank, BinaryData::presets_json, BinaryData::presets_jsonSize);
+    loadDefaultPresets (bank);
+    for (int i = 0; i < PresetBank::kPer; ++i)
+    {
+        writePresetName (bank.bass[i].name, (int) sizeof bank.bass[i].name, factoryPresetName (Bass, i));
+        writePresetName (bank.stab[i].name, (int) sizeof bank.stab[i].name, factoryPresetName (Stab, i));
+        writePresetName (bank.hits[i].name, (int) sizeof bank.hits[i].name, factoryPresetName (Hits, i));
+        writePresetName (bank.pluck[i].name, (int) sizeof bank.pluck[i].name, factoryPresetName (Pluck, i));
+        writePresetName (bank.pad[i].name, (int) sizeof bank.pad[i].name, factoryPresetName (Pad, i));
+        writePresetName (bank.vox[i].name, (int) sizeof bank.vox[i].name, factoryPresetName (Vox, i));
+        writePresetName (bank.drums[i].name, (int) sizeof bank.drums[i].name, factoryPresetName (Drums, i));
+    }
     return bank;
+}
+
+std::shared_ptr<PresetBank> cachedParsedBank()
+{
+    static std::mutex mu;
+    static std::shared_ptr<PresetBank> cache;
+    std::lock_guard<std::mutex> lock (mu);
+    if (cache == nullptr)
+    {
+        cache = std::make_shared<PresetBank>();
+        loadPresetsFromJson (*cache, BinaryData::presets_json, BinaryData::presets_jsonSize);
+    }
+    return cache;
 }
 
 float raw (const juce::AudioProcessorValueTreeState& tree, const char* id)
@@ -164,35 +213,24 @@ RollaProcessor::RollaProcessor()
     : juce::AudioProcessor (BusesProperties()
                                 .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
                                 .withOutput ("Drums", juce::AudioChannelSet::stereo(), true)),
-      bank (loadBank()),
-      apvts (*this, &undo, "ROLLA", createLayout (bank))
+      presets (std::make_shared<PresetBank> (makeStartupBank())),
+      apvts (*this, &undo, "ROLLA", createLayout (*presets))
 {
-    const uint32_t seeds[NumParts] = { 0x0B17u, 0x51ABu, 0x19C3u, 0x77E1u, 0x0A11u, 0xBEEFu, 0x0909u };
-    Groove initial {};
-    generate (initial, currentSettings(), seeds, 0x7fu);
-    publish (initial);
-
     apvts.addParameterListener ("roll", this);
     apvts.addParameterListener ("dialect", this);
     for (int i = 0; i < NumParts; ++i)
         apvts.addParameterListener (juce::String (partId (i)) + "Shuffle", this);
 
-    juce::PropertiesFile::Options options;
-    options.applicationName = "ROLLA";
-    options.filenameSuffix = "settings";
-    options.osxLibrarySubFolder = "Application Support";
-    options.folderName = "ROLLA";
-    options.storageFormat = juce::PropertiesFile::storeAsXML;
-    juce::PropertiesFile props (options);
-    const auto saved = props.getValue ("samplesRoot");
-    const auto samples = saved.isNotEmpty() ? juce::File (saved) : SampleLibrary::defaultRoot();
-    library.setRoot (samples);
-    library.watch (bank);
-    slots.setRoot (samples);
+    startupT0 = juce::Time::getMillisecondCounterHiRes();
+    startupThread = std::thread ([this] { deferredStartup(); });
 }
 
 RollaProcessor::~RollaProcessor()
 {
+    startupStop.store (true);
+    if (startupThread.joinable())
+        startupThread.join();
+
     apvts.removeParameterListener ("roll", this);
     apvts.removeParameterListener ("dialect", this);
     for (int i = 0; i < NumParts; ++i)
@@ -202,11 +240,97 @@ RollaProcessor::~RollaProcessor()
     async->alive.store (false);
 }
 
+PresetBank RollaProcessor::copyPresets() const
+{
+    std::lock_guard<std::mutex> lock (presetMu);
+    return *presets;
+}
+
+void RollaProcessor::modifyPresets (const std::function<void (PresetBank&)>& edit)
+{
+    std::lock_guard<std::mutex> lock (presetMu);
+    auto next = std::make_shared<PresetBank> (*presets);
+    if (edit)
+        edit (*next);
+    presets = std::move (next);
+    presetGen.fetch_add (1, std::memory_order_release);
+}
+
+void RollaProcessor::waitUntilReady()
+{
+    if (startupThread.joinable())
+        startupThread.join();
+}
+
+void RollaProcessor::publishInitial (const Groove& g)
+{
+    std::lock_guard<std::mutex> lock (grooveMu);
+    if (grooveEpoch.load (std::memory_order_relaxed) != 0)
+        return;
+    groove = g;
+    grooveEpoch.store (1, std::memory_order_relaxed);
+}
+
+void RollaProcessor::deferredStartup()
+{
+    const double started = startupT0;
+    try
+    {
+        Theme::warmTypefaces();
+        if (startupStop.load())
+            return;
+
+        auto parsed = cachedParsedBank();
+        if (startupStop.load())
+            return;
+        {
+            std::lock_guard<std::mutex> lock (presetMu);
+            if (presetGen.load (std::memory_order_relaxed) == 0 && parsed != nullptr)
+                presets = std::make_shared<PresetBank> (*parsed);
+        }
+        presetGen.fetch_add (1, std::memory_order_release);
+
+        if (! startupStop.load() && grooveEpoch.load (std::memory_order_relaxed) == 0)
+        {
+            const uint32_t seeds[NumParts] = { 0x0B17u, 0x51ABu, 0x19C3u, 0x77E1u, 0x0A11u, 0xBEEFu, 0x0909u };
+            Groove initial {};
+            generate (initial, currentSettings(), seeds, 0x7fu);
+            publishInitial (initial);
+        }
+
+        if (! startupStop.load() && ! rootChosen.load())
+        {
+            juce::PropertiesFile::Options options;
+            options.applicationName = "ROLLA";
+            options.filenameSuffix = "settings";
+            options.osxLibrarySubFolder = "Application Support";
+            options.folderName = "ROLLA";
+            options.storageFormat = juce::PropertiesFile::storeAsXML;
+            juce::PropertiesFile props (options);
+            const auto saved = props.getValue ("samplesRoot");
+            const auto samples = saved.isNotEmpty() ? juce::File (saved) : SampleLibrary::defaultRoot();
+            std::lock_guard<std::mutex> lock (rootSetupMu);
+            if (! rootChosen.load())
+            {
+                library.setRoot (samples);
+                library.watch (copyPresets());
+                slots.setRoot (samples);
+            }
+        }
+    }
+    catch (...)
+    {
+    }
+
+    startupMs.store (juce::Time::getMillisecondCounterHiRes() - started, std::memory_order_relaxed);
+    startupDone.store (true);
+}
+
 void RollaProcessor::applyDialect (int dialect)
 {
     if (dialect < 0 || dialect >= NumDialects)
         return;
-    const auto& row = bank.dialect[dialect];
+    const auto row = copyPresets().dialect[dialect];
     auto setDenorm = [this] (const juce::String& id, float denorm)
     {
         if (auto* p = apvts.getParameter (id))
@@ -287,7 +411,7 @@ void RollaProcessor::parameterChanged (const juce::String& parameterID, float ne
         if (! locked->alive.load() || locked->epoch.load() != epoch)
             return;
         if (part >= 0)
-            self->clearEdited (part);
+            self->clearAutoKeep (part);
         self->regenerate (part);
     });
 }
@@ -343,8 +467,11 @@ void RollaProcessor::regenerate (int onlyPart)
         if (seeds[i] == 0)
             seeds[i] = 1;
 
-        const bool keep = raw (apvts, (juce::String (partId (i)) + "Keep").toRawUTF8()) >= 0.5f;
-        const bool hit = onlyPart >= 0 ? (i == onlyPart) : ! keep;
+        const auto id = juce::String (partId (i));
+        const bool keep = raw (apvts, (id + "Keep").toRawUTF8()) >= 0.5f;
+        const bool mute = raw (apvts, (id + "Mute").toRawUTF8()) >= 0.5f;
+        // ROLL skips kept and muted lanes. A lane's own shuffle (onlyPart) does not.
+        const bool hit = onlyPart >= 0 ? (i == onlyPart) : (! keep && ! mute);
         if (hit)
         {
             seeds[i] = freshSeed();
@@ -364,6 +491,7 @@ void RollaProcessor::publish (const Groove& g)
 {
     std::lock_guard<std::mutex> lock (grooveMu);
     groove = g;
+    grooveEpoch.fetch_add (1, std::memory_order_relaxed);
 }
 
 Groove RollaProcessor::copyGroove() const
@@ -451,7 +579,12 @@ void RollaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     uiPlaying.store (transport.playing);
 
     EngineParams params;
-    params.presets = &bank;
+    std::shared_ptr<const PresetBank> heldPresets;
+    {
+        std::lock_guard<std::mutex> lock (presetMu);
+        heldPresets = presets;
+    }
+    params.presets = heldPresets.get();
     params.duck = raw (apvts, "duck") >= 0.5f;
     params.drumsToMain = raw (apvts, "drumsToMain") >= 0.5f;
     params.swing = raw (apvts, "swing");
@@ -647,6 +780,7 @@ bool RollaProcessor::laneSampleMissing (int part) const
         return slots.warning (part);
 
     const int preset = std::clamp ((int) raw (apvts, (juce::String (partId (part)) + "Preset").toRawUTF8()), 0, PresetBank::kPer - 1);
+    const auto bank = copyPresets();
     const auto& spec = sampleSpecFor (bank, part, preset);
     if (spec.mode == SampleMode::Synth)
         return false;
@@ -690,8 +824,10 @@ void RollaProcessor::setSamplesRoot (const juce::File& folder)
 {
     if (folder == juce::File())
         return;
+    rootChosen.store (true);
+    std::lock_guard<std::mutex> lock (rootSetupMu);
     library.setRoot (folder);
-    library.watch (bank);
+    library.watch (copyPresets());
     slots.setRoot (folder);
     juce::PropertiesFile::Options options;
     options.applicationName = "ROLLA";
@@ -745,6 +881,21 @@ void RollaProcessor::clearEdited (int part) noexcept
 {
     if (part >= 0 && part < NumParts)
         edited[part] = 0;
+}
+
+void RollaProcessor::clearAutoKeep (int part)
+{
+    if (part < 0 || part >= NumParts || ! laneEdited (part))
+        return;
+    clearEdited (part);
+    if (auto* keep = apvts.getParameter (juce::String (partId (part)) + "Keep"))
+    {
+        if (keep->getValue() < 0.5f)
+            return;
+        keep->beginChangeGesture();
+        keep->setValueNotifyingHost (0.f);
+        keep->endChangeGesture();
+    }
 }
 
 bool RollaProcessor::loadVoxFile (const juce::File& file, juce::String& error)

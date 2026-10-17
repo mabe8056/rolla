@@ -5,8 +5,6 @@
 #include "RollFace.h"
 #include "UiTokens.h"
 
-#include <BinaryData.h>
-
 #include <cmath>
 
 namespace rolla
@@ -15,6 +13,25 @@ using namespace juce;
 
 namespace
 {
+
+void bindHelp (Component& component, const String& text)
+{
+    component.getProperties().set ("rollaHelp", text);
+    if (auto* tip = dynamic_cast<SettableTooltipClient*> (&component))
+        tip->setTooltip (text);
+}
+
+String helpUnder (const Component* component)
+{
+    while (component != nullptr)
+    {
+        const auto text = component->getProperties()["rollaHelp"].toString();
+        if (text.isNotEmpty())
+            return text;
+        component = component->getParentComponent();
+    }
+    return {};
+}
 
 float paramRaw (const AudioProcessorValueTreeState& tree, const String& id)
 {
@@ -130,7 +147,7 @@ void focusRing (Graphics& g, Component& c)
         return;
     // 2 px stroke whose inner edge sits 2 px outside the control.
     g.setColour (col (kInk));
-    g.drawRoundedRectangle (c.getLocalBounds().toFloat().expanded (3.f), 4.f, 2.f);
+    g.drawRoundedRectangle (c.getLocalBounds().toFloat().expanded (3.f), Theme::radiusFocus, 2.f);
 }
 
 void paintMissingIcon (Graphics& g, float x, float y, float s)
@@ -150,23 +167,12 @@ struct Look : LookAndFeel_V4
     Font instSemi, instBold, mono, monoMed, monoSemi;
 
     Look()
+        : instSemi (Theme::sansSemi (Theme::typeControl)),
+          instBold (Theme::sansBold (Theme::typeControl)),
+          mono (Theme::mono (Theme::typeBody)),
+          monoMed (Theme::monoMed (Theme::typeBody)),
+          monoSemi (Theme::monoSemi (Theme::typeValue))
     {
-        auto semi = Typeface::createSystemTypefaceFor (BinaryData::InstrumentSansSemiBold_ttf,
-                                                        BinaryData::InstrumentSansSemiBold_ttfSize);
-        auto bold = Typeface::createSystemTypefaceFor (BinaryData::InstrumentSansBold_ttf,
-                                                        BinaryData::InstrumentSansBold_ttfSize);
-        auto reg = Typeface::createSystemTypefaceFor (BinaryData::GeistMonoRegular_ttf,
-                                                       BinaryData::GeistMonoRegular_ttfSize);
-        auto med = Typeface::createSystemTypefaceFor (BinaryData::GeistMonoMedium_ttf,
-                                                       BinaryData::GeistMonoMedium_ttfSize);
-        auto msemi = Typeface::createSystemTypefaceFor (BinaryData::GeistMonoSemiBold_ttf,
-                                                         BinaryData::GeistMonoSemiBold_ttfSize);
-        instSemi = Font (FontOptions (semi).withHeight (12.f));
-        instBold = Font (FontOptions (bold).withHeight (12.f));
-        mono = Font (FontOptions (reg).withHeight (11.f));
-        monoMed = Font (FontOptions (med).withHeight (11.f));
-        monoSemi = Font (FontOptions (msemi).withHeight (14.f));
-
         setColour (PopupMenu::backgroundColourId, col (kCard));
         setColour (PopupMenu::textColourId, col (kInk));
         setColour (PopupMenu::highlightedBackgroundColourId, col (kHov));
@@ -174,16 +180,16 @@ struct Look : LookAndFeel_V4
         setColour (ResizableWindow::backgroundColourId, col (kPaper));
     }
 
-    Font getPopupMenuFont() override { return instSemi.withHeight (12.f); }
+    Font getPopupMenuFont() override { return instSemi.withPointHeight (Theme::typeControl); }
     Font getLabelFont (Label&) override { return instSemi; }
     Font getTextButtonFont (TextButton&, int) override { return instSemi; }
 
     void drawPopupMenuBackground (Graphics& g, int width, int height) override
     {
         g.setColour (col (kCard));
-        g.fillRoundedRectangle (0.f, 0.f, (float) width, (float) height, 8.f);
+        g.fillRoundedRectangle (0.f, 0.f, (float) width, (float) height, Theme::radiusPanel);
         g.setColour (col (kLine2));
-        g.drawRoundedRectangle (0.5f, 0.5f, (float) width - 1.f, (float) height - 1.f, 8.f, 1.f);
+        g.drawRoundedRectangle (0.5f, 0.5f, (float) width - 1.f, (float) height - 1.f, Theme::radiusPanel, 1.f);
     }
 
     void drawPopupMenuItem (Graphics& g, const Rectangle<int>& area, bool isSeparator, bool isActive,
@@ -202,7 +208,7 @@ struct Look : LookAndFeel_V4
             g.fillRect (area);
         }
         g.setColour (isActive ? col (kInk) : col (kInk3));
-        g.setFont (instSemi.withHeight (12.f));
+        g.setFont (instSemi.withPointHeight (Theme::typeControl));
         auto textArea = area.reduced (28, 0);
         g.drawFittedText (text, textArea, Justification::centredLeft, 1);
         if (isTicked)
@@ -339,11 +345,11 @@ struct LevelSlider : Slider
         auto lf = dynamic_cast<Look*> (&getLookAndFeel());
         g.setColour (col (kInk2));
         if (lf != nullptr)
-            g.setFont (tracked (lf->instSemi.withHeight (9.f), 0.08f));
+            g.setFont (tracked (lf->instSemi.withPointHeight (Theme::typeMicro), 0.08f));
         g.drawText ("LVL", b.reduced (8.f, 0.f), Justification::centredLeft, false);
         g.setColour (col (kInk));
         if (lf != nullptr)
-            g.setFont (lf->mono.withHeight (10.f));
+            g.setFont (lf->mono.withPointHeight (Theme::typeCaption));
         g.drawText (String (getValue(), 1), b.reduced (8.f, 0.f), Justification::centredRight, false);
         focusRing (g, *this);
     }
@@ -421,22 +427,24 @@ struct LabeledKnob : Component
             return;
         auto top = getLocalBounds().toFloat().removeFromTop (compact ? 12.f : 16.f);
         g.setColour (col (kInk2));
-        g.setFont (tracked (lf->instSemi.withHeight (compact ? 9.f : (macro ? 12.f : 10.f)), macro ? 0.10f : 0.10f));
+        g.setFont (tracked (lf->instSemi.withPointHeight (compact ? Theme::typeMicro
+                                                                  : (macro ? Theme::typeControl : Theme::typeCaption)),
+                            macro ? 0.10f : 0.10f));
         g.drawText (caption, top, Justification::centred, false);
 
         if (macro)
         {
             g.setColour (col (kInk));
-            g.setFont (lf->monoSemi.withHeight (14.f));
+            g.setFont (lf->monoSemi.withPointHeight (Theme::typeValue));
             g.drawText (readout, Rectangle<float> (0.f, 96.f, (float) getWidth(), 16.f), Justification::centred, false);
             g.setColour (col (kInk2));
-            g.setFont (lf->mono.withHeight (10.f));
+            g.setFont (lf->mono.withPointHeight (Theme::typeCaption));
             g.drawText (detail, Rectangle<float> (0.f, 112.f, (float) getWidth(), 14.f), Justification::centred, false);
         }
         else
         {
             g.setColour (col (kInk));
-            g.setFont (lf->mono.withHeight (compact ? 10.f : 12.f));
+            g.setFont (lf->mono.withPointHeight (compact ? Theme::typeCaption : Theme::typeControl));
             auto bottom = getLocalBounds().toFloat().removeFromBottom (compact ? 12.f : 16.f);
             g.drawText (readout, bottom, Justification::centred, false);
         }
@@ -576,7 +584,7 @@ struct IconButton : QuietButton
         if (kind == mute)
         {
             if (lf != nullptr)
-                g.setFont (lf->instBold.withHeight (11.f));
+                g.setFont (lf->instBold.withPointHeight (Theme::typeBody));
             g.drawText ("M", getLocalBounds(), Justification::centred, false);
         }
         else if (kind == dice)
@@ -674,6 +682,9 @@ struct LaneRow : Component, FileDragAndDropTarget
         const auto id = String (partId (part));
         muteA = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (processor.apvts, id + "Mute", mute);
         keepA = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (processor.apvts, id + "Keep", keep);
+        bindHelp (mute, "Mute this lane. Roll leaves it alone, the same as Keep.");
+        bindHelp (shuffle, "Shuffle this lane only. Re-rolls it even if it is muted or kept, and clears an automatic keep.");
+        bindHelp (keep, "Keep this lane. Roll leaves a kept lane alone.");
         shuffle.onClick = [this] { if (proc != nullptr) proc->triggerShuffle (part); };
         keep.onClick = [this]
         {
@@ -737,7 +748,7 @@ struct LaneRow : Component, FileDragAndDropTarget
         g.setColour ((selected || hovered ? col (kInk) : col (kInk2)).withAlpha (muted ? 0.4f : 1.f));
         if (lf != nullptr)
         {
-            auto nameFont = tracked (lf->instBold.withHeight (12.f), 0.06f);
+            auto nameFont = tracked (lf->instBold.withPointHeight (Theme::typeControl), 0.06f);
             g.setFont (nameFont);
             g.drawText (name, 32, 12, 72, 16, Justification::centredLeft, false);
             if (sampleMissing)
@@ -877,7 +888,7 @@ struct Stepper : Component
             return;
         auto mid = getLocalBounds().reduced (40, 0).toFloat();
         g.setColour (strike ? col (kInk3) : col (kInk));
-        g.setFont (tracked (lf->instBold.withHeight (getHeight() < 36 ? 12.f : 13.f), 0.02f));
+        g.setFont (tracked (lf->instBold.withPointHeight (getHeight() < 36 ? Theme::typeControl : Theme::typePreset), 0.02f));
         if (sub.isEmpty())
             g.drawFittedText (title, mid.toNearestInt(), Justification::centred, 1);
         else
@@ -885,11 +896,11 @@ struct Stepper : Component
             g.drawText (title, mid.removeFromTop (mid.getHeight() * 0.58f), Justification::centred, false);
             if (strike)
             {
-                const float tw = textWidth (lf->instBold.withHeight (13.f), title);
+                const float tw = textWidth (lf->instBold.withPointHeight (Theme::typePreset), title);
                 g.drawLine (mid.getCentreX() - tw * 0.5f, mid.getY() - 1.f, mid.getCentreX() + tw * 0.5f, mid.getY() - 1.f, 1.f);
             }
             g.setColour (col (kInk3));
-            g.setFont (lf->mono.withHeight (10.f));
+            g.setFont (lf->mono.withPointHeight (Theme::typeCaption));
             g.drawText (sub, mid, Justification::centred, false);
         }
     }
@@ -989,7 +1000,7 @@ struct DialectBar : Component
                 g.fillRoundedRectangle (b, b.getHeight() * 0.5f);
             }
             if (lf != nullptr)
-                g.setFont (tracked (lf->instBold.withHeight (11.f), 0.04f));
+                g.setFont (tracked (lf->instBold.withPointHeight (Theme::typeBody), 0.04f));
             g.setColour (on ? col (kPaper) : (over ? col (kInk) : col (kInk2)));
             g.drawFittedText (buttons[i].getButtonText(), buttons[i].getBounds(), Justification::centred, 1);
         }
@@ -1068,7 +1079,7 @@ struct ModeBar : Component
                 g.fillRoundedRectangle (b, b.getHeight() * 0.5f);
             }
             if (lf != nullptr)
-                g.setFont (tracked (lf->instBold.withHeight (10.f), 0.06f));
+                g.setFont (tracked (lf->instBold.withPointHeight (Theme::typeCaption), 0.06f));
             g.setColour (on ? col (kPaper) : (over ? col (kInk) : col (kInk2)));
             g.drawFittedText (buttons[i].getButtonText(), buttons[i].getBounds(), Justification::centred, 1);
         }
@@ -1312,21 +1323,21 @@ struct FaceRollButton : QuietButton, private Timer
         if (lf != nullptr)
         {
             g.setColour (col (kInk));
-            g.setFont (tracked (lf->instBold.withHeight (40.f), -0.01f));
+            g.setFont (tracked (lf->instBold.withPointHeight (Theme::typeHero), -0.01f));
             g.drawText ("Roll", 128, 32, 150, 40, Justification::centredLeft, false);
 
             g.setColour (col (kInk2));
-            g.setFont (lf->mono.withHeight (10.f));
+            g.setFont (lf->mono.withPointHeight (Theme::typeCaption));
             g.drawRoundedRectangle (272.f, 40.f, 48.f, 20.f, 4.f, 1.f);
             g.drawText ("SPACE", 272, 40, 48, 20, Justification::centred, false);
 
-            g.setFont (lf->mono.withHeight (11.f));
-            const auto left = textWidth (lf->monoMed.withHeight (11.f), countText);
+            g.setFont (lf->mono.withPointHeight (Theme::typeBody));
+            const auto left = textWidth (lf->monoMed.withPointHeight (Theme::typeBody), countText);
             g.setColour (col (kInk));
-            g.setFont (lf->monoMed.withHeight (11.f));
+            g.setFont (lf->monoMed.withPointHeight (Theme::typeBody));
             g.drawText (countText, 128, 80, (int) std::ceil (left), 16, Justification::centredLeft, false);
             g.setColour (col (kInk2));
-            g.setFont (lf->mono.withHeight (11.f));
+            g.setFont (lf->mono.withPointHeight (Theme::typeBody));
             g.drawText (keptText, 128 + (int) std::ceil (left), 80, 190, 16, Justification::centredLeft, false);
         }
         focusRing (g, *this);
@@ -1399,12 +1410,12 @@ struct SampleSlot : Component, FileDragAndDropTarget
             if (loaded)
                 text.removeFromRight (32.f);
             g.setColour (col (kInk));
-            g.setFont (lf->monoMed.withHeight (12.f));
+            g.setFont (lf->monoMed.withPointHeight (Theme::typeControl));
             g.drawFittedText (fromSlot ? slotLabel() : (loaded ? proc->getVoxSampleName() : "drop"),
                               text.removeFromTop (b.getHeight() * 0.55f).toNearestInt(),
                               Justification::centredLeft, 1);
             g.setColour (col (kInk2));
-            g.setFont (lf->instSemi.withHeight (10.f));
+            g.setFont (lf->instSemi.withPointHeight (Theme::typeCaption));
             g.drawFittedText (loaded ? "overrides preset" : utf8 ("wav · aif · aiff · flac"),
                               text.toNearestInt(), Justification::centredLeft, 1);
             if (loaded)
@@ -1416,11 +1427,11 @@ struct SampleSlot : Component, FileDragAndDropTarget
         }
         else
         {
-            g.setFont (tracked (lf->instBold.withHeight (10.f), 0.04f));
+            g.setFont (tracked (lf->instBold.withPointHeight (Theme::typeCaption), 0.04f));
             g.setColour (col (kInk));
             auto top = b.reduced (6.f, 1.f).removeFromTop (b.getHeight() * 0.5f);
             g.drawText (loaded ? "YOUR WAV" : "909", top, Justification::centredLeft, false);
-            g.setFont (lf->mono.withHeight (10.f));
+            g.setFont (lf->mono.withPointHeight (Theme::typeCaption));
             g.setColour (col (kInk2));
             auto name = fromSlot ? slotLabel()
                                  : (loaded ? proc->getDrumSampleName (voice) : String (panelVoiceCode (voice)));
@@ -1510,7 +1521,7 @@ struct AccentButton : QuietButton
         auto* lf = dynamic_cast<Look*> (&getLookAndFeel());
         g.setColour (on ? col (kPaper) : (over ? col (kInk) : col (kInk2)));
         if (lf != nullptr)
-            g.setFont (tracked (lf->instBold.withHeight (10.f), 0.06f));
+            g.setFont (tracked (lf->instBold.withPointHeight (Theme::typeCaption), 0.06f));
         g.drawText ("ACCENT", getLocalBounds(), Justification::centred, false);
         focusRing (g, *this);
     }
@@ -1605,7 +1616,7 @@ struct DrumColumn : Component
         if (lf == nullptr)
             return;
         g.setColour (col (kInk));
-        g.setFont (tracked (lf->instBold.withHeight (11.f), 0.06f));
+        g.setFont (tracked (lf->instBold.withPointHeight (Theme::typeBody), 0.06f));
         g.drawText (panelVoiceLabel (voice), 0, 0, 80, 16, Justification::centredLeft, false);
     }
 };
@@ -1653,10 +1664,10 @@ struct DragTile : Component
         g.strokePath (arrow, PathStrokeType (1.6f, PathStrokeType::curved, PathStrokeType::rounded));
 
         g.setColour (col (kInk));
-        g.setFont (tracked (lf->instBold.withHeight (13.f), 0.08f));
+        g.setFont (tracked (lf->instBold.withPointHeight (Theme::typePreset), 0.08f));
         g.drawText ("DRAG MIDI", 48, 28, 160, 18, Justification::centredLeft, false);
         g.setColour (col (kInk2));
-        g.setFont (lf->mono.withHeight (11.f));
+        g.setFont (lf->mono.withPointHeight (Theme::typeBody));
         g.drawText (caption, 48, 48, 180, 16, Justification::centredLeft, false);
     }
 
@@ -1671,7 +1682,7 @@ struct DragTile : Component
         g.drawRoundedRectangle (b.reduced (0.5f), 16.f, 1.f);
         g.setColour (over ? col (kPaper) : col (kInk));
         if (lf != nullptr)
-            g.setFont (tracked (lf->instBold.withHeight (10.f), 0.06f));
+            g.setFont (tracked (lf->instBold.withPointHeight (Theme::typeCaption), 0.06f));
         g.drawText ("EXPORT", exportBtn.getBounds(), Justification::centred, false);
     }
 
@@ -1753,12 +1764,12 @@ struct BpmReadout : Component
         auto* lf = dynamic_cast<Look*> (&getLookAndFeel());
         if (lf == nullptr)
             return;
-        g.setFont (lf->monoMed.withHeight (11.f));
+        g.setFont (lf->monoMed.withPointHeight (Theme::typeBody));
         g.setColour (col (kInk));
-        const float w = textWidth (lf->monoMed.withHeight (11.f), bpm);
+        const float w = textWidth (lf->monoMed.withPointHeight (Theme::typeBody), bpm);
         g.drawText (bpm, 0, 0, (int) std::ceil (w), getHeight(), Justification::centredLeft, false);
         g.setColour (col (kInk2));
-        g.setFont (lf->mono.withHeight (11.f));
+        g.setFont (lf->mono.withPointHeight (Theme::typeBody));
         g.drawText (" BPM", (int) std::ceil (w), 0, getWidth(), getHeight(), Justification::centredLeft, false);
     }
 };
@@ -1777,8 +1788,31 @@ struct LogoButton : QuietButton
         if (lf == nullptr)
             return;
         g.setColour (over ? col (kInk) : col (kInk));
-        g.setFont (tracked (lf->instBold.withHeight (18.f), -0.01f));
+        g.setFont (tracked (lf->instBold.withPointHeight (Theme::typeLogo), -0.01f));
         g.drawText ("ROLLA", getLocalBounds(), Justification::centredLeft, false);
+    }
+};
+
+struct StatusStrip : Component
+{
+    String text { "Hover a control." };
+
+    void setHelp (const String& next)
+    {
+        const auto shown = next.isEmpty() ? String ("Hover a control.") : next;
+        if (shown == text)
+            return;
+        text = shown;
+        repaint();
+    }
+
+    void paint (Graphics& g) override
+    {
+        auto* lf = dynamic_cast<Look*> (&getLookAndFeel());
+        g.setColour (col (kInk2));
+        if (lf != nullptr)
+            g.setFont (lf->mono.withPointHeight (Theme::typeCaption));
+        g.drawFittedText (text, getLocalBounds(), Justification::centredLeft, 1);
     }
 };
 
@@ -1805,6 +1839,7 @@ struct RollaEditor::Content : Component
     FaceRollButton face;
     SwingSlider swing;
     DragTile drag;
+    StatusStrip status;
     std::unique_ptr<FileChooser> sampleChooser;
     int selected = Bass;
     Groove groove;
@@ -1914,6 +1949,32 @@ struct RollaEditor::Content : Component
 
         drag.proc = &proc;
         addAndMakeVisible (drag);
+        addAndMakeVisible (status);
+
+        bindHelp (logo, "Menu. Window scale, reduce motion, and the samples folder.");
+        bindHelp (dialects, "Style. Picks the preset and swing for every lane.");
+        bindHelp (keyStep, "Key. Every lane follows this minor key.");
+        bindHelp (bpm, "Host tempo, in beats per minute.");
+        bindHelp (undoBtn, "Undo the last edit.");
+        bindHelp (redoBtn, "Redo the edit you just undid.");
+        bindHelp (presetStep, "Preset for this lane. Click the name to see only this lane's presets.");
+        bindHelp (kitStep, "Drum kit. Click the name to choose another kit.");
+        bindHelp (source, "Source. Synth, a sample, or both layered.");
+        bindHelp (tone, "Tone. Brighter towards the right.");
+        bindHelp (punch, "Punch. Shorter and snappier towards the right.");
+        bindHelp (level, "Level, in decibels.");
+        bindHelp (dark, "Dark. How minor the harmony sits.");
+        bindHelp (busy, "Busy. How many hits land in a bar.");
+        bindHelp (bounce, "Bounce. Where the offbeat flip sits.");
+        bindHelp (stab, "Stab. How often the stab answers.");
+        bindHelp (swing, "Swing, from 50 to 57 percent.");
+        bindHelp (duck, "Duck. The bass dips under the stab.");
+        bindHelp (face, "Roll. Re-rolls every lane that is not kept.");
+        bindHelp (drag, "Drag MIDI. Pulls a clip of the current pattern.");
+        bindHelp (voxSlot, "Vox sample. Drop a file to override the preset.");
+        bindHelp (inStab, "In stab. Hits land on the stab's answer slots.");
+        for (int i = 0; i < NumParts; ++i)
+            bindHelp (rows[i], String (laneShortName (i)) + ". Click to edit. Mute, shuffle, or keep it from here.");
 
         groove = proc.copyGroove();
         haveGroove = true;
@@ -1933,6 +1994,11 @@ struct RollaEditor::Content : Component
             if (paramRaw (proc.apvts, String (partId (i)) + "Keep") < 0.5f)
                 return false;
         return true;
+    }
+
+    void showStatus (const String& text)
+    {
+        status.setHelp (text);
     }
 
     void notifyRoll()
@@ -2002,7 +2068,7 @@ struct RollaEditor::Content : Component
 
     void stepPreset (int dir)
     {
-        const auto names = presetsForLane (proc.bank, selected);
+        const auto names = presetsForLane (proc.copyPresets(), selected);
         const auto id = String (partId (selected)) + "Preset";
         if (auto* p = dynamic_cast<AudioParameterChoice*> (proc.apvts.getParameter (id)))
         {
@@ -2017,7 +2083,7 @@ struct RollaEditor::Content : Component
     void browseLanePresets (Stepper& step)
     {
         const int part = selected;
-        const auto names = presetsForLane (proc.bank, part);
+        const auto names = presetsForLane (proc.copyPresets(), part);
         const auto id = String (partId (part)) + "Preset";
         auto* param = dynamic_cast<AudioParameterChoice*> (proc.apvts.getParameter (id));
         if (param == nullptr || names.isEmpty())
@@ -2082,11 +2148,8 @@ struct RollaEditor::Content : Component
             rows[i].syncHover();
             const bool muted = rows[i].mute.getToggleState();
             rows[i].strip.setAlpha (muted ? 0.4f : 1.f);
-            const bool kept = rows[i].keep.getToggleState();
-            const bool edited = proc.laneEdited (i);
-            const bool manual = kept && ! edited;
-            rows[i].shuffle.setEnabled (! manual);
-            rows[i].shuffle.setAlpha (manual ? 0.35f : 1.f);
+            rows[i].shuffle.setEnabled (true);
+            rows[i].shuffle.setAlpha (1.f);
             const bool miss = samples.missing (i);
             if (miss != rows[i].sampleMissing)
             {
@@ -2115,7 +2178,7 @@ struct RollaEditor::Content : Component
 
         if (auto* preset = dynamic_cast<AudioParameterChoice*> (proc.apvts.getParameter (String (partId (selected)) + "Preset")))
         {
-            const auto names = presetsForLane (proc.bank, selected);
+            const auto names = presetsForLane (proc.copyPresets(), selected);
             const int index = names.isEmpty() ? 0 : jlimit (0, names.size() - 1, preset->getIndex());
             const auto name = names.isEmpty() ? String() : names[index];
             const auto sub = String (index + 1) + " / " + String (names.size())
@@ -2180,9 +2243,9 @@ struct RollaEditor::Content : Component
         auto card = [&] (Rectangle<float> r)
         {
             g.setColour (col (kCard));
-            g.fillRoundedRectangle (r, 8.f);
+            g.fillRoundedRectangle (r, Theme::radiusPanel);
             g.setColour (col (kLine));
-            g.drawRoundedRectangle (r.reduced (0.5f), 8.f, 1.f);
+            g.drawRoundedRectangle (r.reduced (0.5f), Theme::radiusPanel, 1.f);
         };
         card ({ 16.f, 64.f, 640.f, 280.f });
         card ({ 16.f, 352.f, 640.f, 272.f });
@@ -2198,7 +2261,7 @@ struct RollaEditor::Content : Component
 
         g.setColour (laneColour (selected));
         g.fillEllipse (32.f, 371.f, 10.f, 10.f);
-        auto nameFont = tracked (lf->instBold.withHeight (16.f), 0.02f);
+        auto nameFont = tracked (lf->instBold.withPointHeight (Theme::typeTitle), 0.02f);
         g.setColour (col (kInk));
         g.setFont (nameFont);
         const auto panelName = String (laneShortName (selected));
@@ -2213,13 +2276,13 @@ struct RollaEditor::Content : Component
         if (selected != Drums)
         {
             g.setColour (col (kInk2));
-            g.setFont (lf->mono.withHeight (11.f));
+            g.setFont (lf->mono.withPointHeight (Theme::typeBody));
             g.drawText (channelLine (selected), 168, 364, 160, 24, Justification::centredLeft, false);
         }
         if (proc.laneEdited (selected))
         {
             g.setColour (col (kMark));
-            g.setFont (lf->mono.withHeight (10.f));
+            g.setFont (lf->mono.withPointHeight (Theme::typeCaption));
             g.drawFittedText ("EDITED",
                               selected == Drums ? Rectangle<int> (128, 364, 120, 24)
                                                 : Rectangle<int> (336, 364, 112, 24),
@@ -2229,33 +2292,33 @@ struct RollaEditor::Content : Component
         if (selected != Drums)
         {
             g.setColour (col (kInk2));
-            g.setFont (tracked (lf->instSemi.withHeight (10.f), 0.10f));
+            g.setFont (tracked (lf->instSemi.withPointHeight (Theme::typeCaption), 0.10f));
             g.drawText ("PRESET", 32, 440, 80, 16, Justification::centredLeft, false);
             if (selected == Vox)
                 g.drawText ("SAMPLE", 32, 520, 80, 16, Justification::centredLeft, false);
             if (selected == Hits)
             {
                 g.drawText ("PLACEMENT", 32, 520, 100, 16, Justification::centredLeft, false);
-                g.setFont (lf->instSemi.withHeight (12.f));
+                g.setFont (lf->instSemi.withPointHeight (Theme::typeControl));
                 g.setColour (col (kInk));
                 g.drawText ("In stab", 48, 544, 120, 40, Justification::centredLeft, false);
                 g.setColour (col (kInk2));
-                g.setFont (lf->instSemi.withHeight (11.f));
+                g.setFont (lf->instSemi.withPointHeight (Theme::typeBody));
                 g.drawText ("Hits land on the stab's answer slots.", 32, 592, 280, 16, Justification::centredLeft, true);
             }
         }
 
         g.setColour (col (kInk2));
-        g.setFont (tracked (lf->instBold.withHeight (10.f), 0.10f));
+        g.setFont (tracked (lf->instBold.withPointHeight (Theme::typeCaption), 0.10f));
         g.drawText ("SWING", 688, 492, 52, 24, Justification::centredLeft, false);
         g.setColour (col (kInk));
-        g.setFont (lf->mono.withHeight (12.f));
+        g.setFont (lf->mono.withPointHeight (Theme::typeControl));
         g.drawText (String (roundToInt (paramRaw (proc.apvts, "swing") * 100.f)) + "%",
                     828, 492, 48, 24, Justification::centredLeft, false);
         g.setColour (col (kLine));
         g.fillRect (888, 492, 1, 24);
         g.setColour (col (kInk2));
-        g.setFont (tracked (lf->instBold.withHeight (10.f), 0.10f));
+        g.setFont (tracked (lf->instBold.withPointHeight (Theme::typeCaption), 0.10f));
         g.drawText ("DUCK", 904, 492, 48, 24, Justification::centredLeft, false);
     }
 
@@ -2290,6 +2353,7 @@ struct RollaEditor::Content : Component
         swing.setBounds (744, 492, 80, 24);
         duck.setBounds (956, 490, 44, 28);
         drag.setBounds (672, 536, 336, 88);
+        status.setBounds (Theme::space16, 624, 992, Theme::space16);
     }
 };
 
@@ -2348,6 +2412,16 @@ RollaEditor::RollaEditor (RollaProcessor& p)
         resizableCorner->toFront (false);
     setWantsKeyboardFocus (true);
     addMouseListener (this, true);
+    struct HelpWindow : TooltipWindow
+    {
+        using TooltipWindow::TooltipWindow;
+        String getTipFor (Component& c) override
+        {
+            const auto text = helpUnder (&c);
+            return text.isNotEmpty() ? text : TooltipWindow::getTipFor (c);
+        }
+    };
+    tooltip = std::make_unique<HelpWindow> (this, 600);
     proc.apvts.addParameterListener ("roll", this);
     startTimerHz (30);
 }
@@ -2465,6 +2539,12 @@ void RollaEditor::mouseDown (const MouseEvent& e)
     }
     if (e.eventComponent == this)
         grabKeyboardFocus();
+}
+
+void RollaEditor::mouseMove (const MouseEvent& e)
+{
+    if (content != nullptr)
+        content->showStatus (helpUnder (e.eventComponent));
 }
 
 void RollaEditor::parameterChanged (const String& parameterID, float newValue)

@@ -1,50 +1,42 @@
 #pragma once
 
 #include "Generator/Pattern.h"
+#include "ui/Theme.h"
 
 #include <juce_graphics/juce_graphics.h>
 
 namespace rolla
 {
 
-// concept_FINAL tokens. Accent is the face only.
-inline constexpr juce::uint32 kPaper = 0xff111214;
-inline constexpr juce::uint32 kCard = 0xff1a1b1e;
-inline constexpr juce::uint32 kHov = 0xff222427;
-inline constexpr juce::uint32 kSel = 0xff26282c;
-inline constexpr juce::uint32 kLine = 0xff2a2c30;
-inline constexpr juce::uint32 kLine2 = 0xff3a3d42;
-inline constexpr juce::uint32 kInk = 0xffeceae4;
-inline constexpr juce::uint32 kInk2 = 0xffadaaa3;
-inline constexpr juce::uint32 kInk3 = 0xff8e8b84;
-inline constexpr juce::uint32 kTrack = 0xff33363b;
-inline constexpr juce::uint32 kCap = 0xff2c2f34;
-inline constexpr juce::uint32 kCapHov = 0xff36393f;
-inline constexpr juce::uint32 kMark = 0xffe9b32a;
-inline constexpr juce::uint32 kMute = 0xffadaaa3;
-inline constexpr juce::uint32 kAcc = 0xffff6a3d;
-inline constexpr juce::uint32 kAcc2 = 0xffff7d55;
-inline constexpr juce::uint32 kFaceInk = 0xff111214;
-inline constexpr juce::uint32 kPress = 0xff1e2023;
+// Names kept for the editor. The values live in Theme.
+inline constexpr juce::uint32 kPaper = Theme::paper;
+inline constexpr juce::uint32 kCard = Theme::card;
+inline constexpr juce::uint32 kHov = Theme::hov;
+inline constexpr juce::uint32 kSel = Theme::sel;
+inline constexpr juce::uint32 kLine = Theme::line;
+inline constexpr juce::uint32 kLine2 = Theme::line2;
+inline constexpr juce::uint32 kInk = Theme::ink;
+inline constexpr juce::uint32 kInk2 = Theme::ink2;
+inline constexpr juce::uint32 kInk3 = Theme::ink3;
+inline constexpr juce::uint32 kTrack = Theme::track;
+inline constexpr juce::uint32 kCap = Theme::cap;
+inline constexpr juce::uint32 kCapHov = Theme::capHov;
+inline constexpr juce::uint32 kMark = Theme::mark;
+inline constexpr juce::uint32 kMute = Theme::mute;
+inline constexpr juce::uint32 kAcc = Theme::acc;
+inline constexpr juce::uint32 kAcc2 = Theme::acc2;
+inline constexpr juce::uint32 kFaceInk = Theme::faceInk;
+inline constexpr juce::uint32 kPress = Theme::press;
 
 inline juce::Colour col (juce::uint32 argb) noexcept
 {
-    return juce::Colour (argb);
+    return Theme::colour (argb);
 }
 
 inline juce::Colour laneColour (int part) noexcept
 {
-    static const juce::uint32 colours[] = {
-        0xff3cc49b, // bass
-        0xffb9d66b, // stab
-        0xffe9b32a, // hits
-        0xff6ea2e3, // pluck
-        0xff93a9b9, // pad
-        0xffe46ba4, // vox
-        0xffeceae4, // drums
-    };
-    const int n = (int) (sizeof (colours) / sizeof (colours[0]));
-    return col (colours[(part % n + n) % n]);
+    const int n = (int) (sizeof (Theme::lane) / sizeof (Theme::lane[0]));
+    return col (Theme::lane[(part % n + n) % n]);
 }
 
 inline const char* laneShortName (int part) noexcept

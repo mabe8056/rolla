@@ -73,24 +73,28 @@ inline int stubMode (const RollaProcessor& proc, int part)
     const auto key = laneModeProperty (part);
     if (proc.apvts.state.hasProperty (key))
         return juce::jlimit (0, 2, (int) proc.apvts.state.getProperty (key));
-    const auto& spec = sampleSpecFor (proc.bank, part, presetIndexOf (proc, part));
+    const auto bank = proc.copyPresets();
+    const auto& spec = sampleSpecFor (bank, part, presetIndexOf (proc, part));
     return juce::jlimit (0, 2, (int) spec.mode);
 }
 
 inline bool applyStubMode (RollaProcessor& proc, int part, int mode)
 {
     bool changed = false;
-    for (int i = 0; i < PresetBank::kPer; ++i)
+    proc.modifyPresets ([&] (PresetBank& bank)
     {
-        if (auto* spec = sampleSpecMutable (proc.bank, part, i))
+        for (int i = 0; i < PresetBank::kPer; ++i)
         {
-            if ((int) spec->mode != mode)
+            if (auto* spec = sampleSpecMutable (bank, part, i))
             {
-                spec->mode = (SampleMode) mode;
-                changed = true;
+                if ((int) spec->mode != mode)
+                {
+                    spec->mode = (SampleMode) mode;
+                    changed = true;
+                }
             }
         }
-    }
+    });
     return changed;
 }
 
@@ -119,7 +123,7 @@ void writeMode (Proc& proc, int part, int mode)
         proc.undo.beginNewTransaction();
         proc.apvts.state.setProperty (laneModeProperty (part), mode, &proc.undo);
         if (applyStubMode (proc, part, mode))
-            proc.sampleLibrary().watch (proc.bank);
+            proc.sampleLibrary().watch (proc.copyPresets());
     }
 }
 
@@ -141,9 +145,17 @@ public:
     explicit LaneSampleProbe (RollaProcessor& processor) noexcept
         : proc (processor)
     {
+        captureFactory();
+    }
+
+    void captureFactory()
+    {
+        const auto bank = proc.copyPresets();
         for (int part = 0; part < NumParts; ++part)
-            for (int i = 0; i < PresetBank::kPer; ++i)
-                factory[part][i] = (int) sampleSpecFor (proc.bank, part, i).mode;
+            if (! touched[part])
+                for (int i = 0; i < PresetBank::kPer; ++i)
+                    factory[part][i] = (int) sampleSpecFor (bank, part, i).mode;
+        seenGen = proc.presetGeneration();
     }
 
     int mode (int part) const
@@ -174,6 +186,9 @@ public:
         if constexpr (detail::HasLaneModeSet<RollaProcessor>::value)
             return;
 
+        if (proc.presetGeneration() != seenGen)
+            captureFactory();
+
         bool changed = false;
         for (int part = 0; part < NumParts; ++part)
         {
@@ -186,22 +201,28 @@ public:
             }
             else if (touched[part])
             {
-                for (int i = 0; i < PresetBank::kPer; ++i)
+                const int saved[PresetBank::kPer] = {
+                    factory[part][0], factory[part][1], factory[part][2]
+                };
+                proc.modifyPresets ([&] (PresetBank& bank)
                 {
-                    if (auto* spec = sampleSpecMutable (proc.bank, part, i))
+                    for (int i = 0; i < PresetBank::kPer; ++i)
                     {
-                        if ((int) spec->mode != factory[part][i])
+                        if (auto* spec = sampleSpecMutable (bank, part, i))
                         {
-                            spec->mode = (SampleMode) factory[part][i];
-                            changed = true;
+                            if ((int) spec->mode != saved[i])
+                            {
+                                spec->mode = (SampleMode) saved[i];
+                                changed = true;
+                            }
                         }
                     }
-                }
+                });
                 touched[part] = false;
             }
         }
         if (changed)
-            proc.sampleLibrary().watch (proc.bank);
+            proc.sampleLibrary().watch (proc.copyPresets());
     }
 
     bool engineModeApi() const noexcept
@@ -213,6 +234,7 @@ private:
     RollaProcessor& proc;
     int factory[NumParts][PresetBank::kPer] {};
     bool touched[NumParts] {};
+    std::uint32_t seenGen = 0;
 };
 
 } // namespace rolla

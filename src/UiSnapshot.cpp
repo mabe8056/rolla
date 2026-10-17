@@ -1,7 +1,11 @@
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
+#include "ui/Theme.h"
 
 #include <juce_graphics/juce_graphics.h>
+
+#include <cstdio>
+#include <memory>
 
 // Headless render of the 1024×640 editor. Pass an output path and, optionally,
 // "--missing" to force the stab lane into SAMPLE mode so the warning icon shows.
@@ -21,7 +25,71 @@ int main (int argc, char** argv)
             lane = arg.substring (7).getIntValue();
     }
 
+    const bool bench = outPath == "--bench" || outPath == "--bench-later";
+    if (outPath == "--bench-later")
+    {
+        const double t0 = juce::Time::getMillisecondCounterHiRes();
+        rolla::RollaProcessor later;
+        const double t1 = juce::Time::getMillisecondCounterHiRes();
+        later.waitUntilReady();
+        const double t2 = juce::Time::getMillisecondCounterHiRes();
+        rolla::RollaEditor laterEditor (later);
+        const double t3 = juce::Time::getMillisecondCounterHiRes();
+        std::printf ("instantiate_ms %.2f\nstartup_wait_ms %.2f\nstartup_work_ms %.2f\neditor_opened_later_ms %.2f\n",
+                     t1 - t0, t2 - t1, later.startupMillis(), t3 - t2);
+        return 0;
+    }
+    const int repeats = bench ? 4 : 1;
+    double instMs = 0.0;
+    double editMs = 0.0;
+    for (int n = 0; n < repeats; ++n)
+    {
+        const double t0 = juce::Time::getMillisecondCounterHiRes();
+        auto processor = std::make_unique<rolla::RollaProcessor>();
+        const double t1 = juce::Time::getMillisecondCounterHiRes();
+        if (showMissing)
+            processor->apvts.state.setProperty ("uiLaneMode1", 1, nullptr);
+        auto editor = std::make_unique<rolla::RollaEditor> (*processor);
+        const double t2 = juce::Time::getMillisecondCounterHiRes();
+        if (n == 0)
+        {
+            instMs = t1 - t0;
+            editMs = t2 - t1;
+        }
+        if (! bench)
+            break;
+        if (n == repeats - 1)
+        {
+            const double tReady0 = juce::Time::getMillisecondCounterHiRes();
+            processor->waitUntilReady();
+            const double readyMs = juce::Time::getMillisecondCounterHiRes() - tReady0;
+            editor.reset();
+            const double tEdit0 = juce::Time::getMillisecondCounterHiRes();
+            editor = std::make_unique<rolla::RollaEditor> (*processor);
+            const double editorReadyMs = juce::Time::getMillisecondCounterHiRes() - tEdit0;
+            const auto sample = rolla::Theme::sansBold (rolla::Theme::typeControl);
+            std::printf ("instantiate_ms %.2f\neditor_ms %.2f\n", instMs, editMs);
+            std::printf ("instantiate_warm_ms %.2f\neditor_warm_ms %.2f\n", t1 - t0, t2 - t1);
+            std::printf ("startup_wait_ms %.2f\nstartup_work_ms %.2f\n", readyMs, processor->startupMillis());
+            std::printf ("editor_after_ready_ms %.2f\n", editorReadyMs);
+            std::printf ("font12_height_px %.2f\nfont12_point_px %.2f\n",
+                         sample.getHeight(), sample.getHeightInPoints());
+        }
+        editor.reset();
+        processor.reset();
+    }
+    if (bench)
+    {
+        auto later = std::make_unique<rolla::RollaProcessor>();
+        later->waitUntilReady();
+        const double tOpen = juce::Time::getMillisecondCounterHiRes();
+        auto laterEditor = std::make_unique<rolla::RollaEditor> (*later);
+        std::printf ("editor_opened_later_ms %.2f\n", juce::Time::getMillisecondCounterHiRes() - tOpen);
+        return 0;
+    }
+
     rolla::RollaProcessor processor;
+    processor.waitUntilReady();
     if (showMissing)
         processor.apvts.state.setProperty ("uiLaneMode1", 1, nullptr);
 
