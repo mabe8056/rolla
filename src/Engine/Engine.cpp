@@ -283,9 +283,9 @@ struct Duck
     bool gateMode = false;
 };
 
-int clampPreset (int i) noexcept
+int clampPreset (const PresetBank& bank, int part, int i) noexcept
 {
-    return std::clamp (i, 0, PresetBank::kPer - 1);
+    return presetSlot (bank, part, i);
 }
 
 float velGainOf (int vel) noexcept
@@ -573,6 +573,8 @@ void Engine::process (const Groove& groove,
     const int bars = std::clamp (params.bars, 2, kMaxBars);
     const double loop16 = (double) bars * 16.0;
     const double bpm = std::clamp (transport.bpm, 20.0, 400.0);
+    EngineParams play = params;
+    play.bpm = (float) bpm;
     const double d16 = (bpm / 60.0) * 4.0 / sr;
     const bool justStarted = transport.playing && ! wasPlaying;
     double pos = transport.playing ? wrapLoop (transport.ppqStart * 4.0, loop16) : 0.0;
@@ -606,15 +608,15 @@ void Engine::process (const Groove& groove,
 
     const float toneB = params.tone[Bass] - 0.5f;
     const float punchB = params.punch[Bass] - 0.5f;
-    BassPatch bassPatch = bank.bass[clampPreset (params.preset[Bass])];
+    BassPatch bassPatch = bank.bass[clampPreset (bank, Bass, params.preset[Bass])];
     applyDialectBass (bank, params.dialect, bassPatch);
     const auto& bp = bassPatch;
-    const auto& sp = bank.stab[clampPreset (params.preset[Stab])];
-    const auto& hp = bank.hits[clampPreset (params.preset[Hits])];
-    const auto& pp = bank.pluck[clampPreset (params.preset[Pluck])];
-    const auto& padP = bank.pad[clampPreset (params.preset[Pad])];
-    const auto& vp = bank.vox[clampPreset (params.preset[Vox])];
-    const auto& dp = bank.drums[clampPreset (params.preset[Drums])];
+    const auto& sp = bank.stab[clampPreset (bank, Stab, params.preset[Stab])];
+    const auto& hp = bank.hits[clampPreset (bank, Hits, params.preset[Hits])];
+    const auto& pp = bank.pluck[clampPreset (bank, Pluck, params.preset[Pluck])];
+    const auto& padP = bank.pad[clampPreset (bank, Pad, params.preset[Pad])];
+    const auto& vp = bank.vox[clampPreset (bank, Vox, params.preset[Vox])];
+    const auto& dp = bank.drums[clampPreset (bank, Drums, params.preset[Drums])];
 
     for (int i = 0; i < NumParts; ++i)
     {
@@ -691,7 +693,7 @@ void Engine::process (const Groove& groove,
     {
         auto idOf = [&] (int part) -> const char*
         {
-            const int idx = std::clamp (params.preset[part], 0, PresetBank::kPer - 1);
+            const int idx = presetSlot (bank, part, params.preset[part]);
             switch (part)
             {
                 case Bass: return bank.bass[idx].id;
@@ -764,7 +766,7 @@ void Engine::process (const Groove& groove,
                 for (int c = 0; c < nIv; ++c)
                 {
                     const int note = std::clamp (incoming[e].note + (nIv == 1 ? 0 : sp.chordIv[c]), 0, 127);
-                    const auto taken = sampler.take (Stab, note, incoming[e].vel, 1.0e9f, bank, params);
+                    const auto taken = sampler.take (Stab, note, incoming[e].vel, 1.0e9f, bank, play);
                     if (taken.kind == 1)
                     {
                         midi.addEvent (juce::MidiMessage::noteOn (Stab + 1, note, (juce::uint8) std::clamp (incoming[e].vel, 1, 127)), i);
@@ -850,7 +852,7 @@ void Engine::process (const Groove& groove,
             {
                 const int note = incoming[e].note;
                 const float hz = std::clamp (midiHz (note), 10.f, srF * 0.45f);
-                const auto taken = sampler.take (Bass, note, incoming[e].vel, 1.0e9f, bank, params);
+                const auto taken = sampler.take (Bass, note, incoming[e].vel, 1.0e9f, bank, play);
                 if (taken.kind == 1)
                 {
                     if (E.live.midiOn)
@@ -933,7 +935,7 @@ void Engine::process (const Groove& groove,
                     continue;
                 const int semi = bassBase + n.chord[0];
                 const float hz = std::clamp (midiHz (semi), 10.f, srF * 0.22f);
-                const auto taken = sampler.take (Bass, semi, n.vel, en, bank, params);
+                const auto taken = sampler.take (Bass, semi, n.vel, en, bank, play);
                 if (taken.kind == 1)
                 {
                     if (E.bass.midiOn)
@@ -1010,7 +1012,7 @@ void Engine::process (const Groove& groove,
                     for (int c = 0; c < count; ++c)
                     {
                         const int note = std::clamp (base + iv[c], 0, 127);
-                        const auto taken = sampler.take (part, note, n.vel, en, bank, params);
+                        const auto taken = sampler.take (part, note, n.vel, en, bank, play);
                         if (taken.kind == 1)
                         {
                             emitHeld (part, note, n.vel, st, en);
@@ -1092,7 +1094,7 @@ void Engine::process (const Groove& groove,
                 if (! crossedNote (n.start, n.length, st, en) || ! crossed (prev, pos, st, loop16))
                     continue;
                 const int primary = std::clamp (hitBase + n.chord[0], 0, 127);
-                const auto taken = sampler.take (Hits, primary, n.vel, en, bank, params);
+                const auto taken = sampler.take (Hits, primary, n.vel, en, bank, play);
                 if (taken.kind == 1)
                 {
                     const int count = std::clamp ((int) n.nChord, 1, 4);
@@ -1183,7 +1185,7 @@ void Engine::process (const Groove& groove,
                 if (! crossedNote (n.start, n.length, st, en) || ! crossed (prev, pos, st, loop16))
                     continue;
                 const int note = std::clamp (voxBase + n.chord[0], 0, 127);
-                const auto taken = sampler.take (Vox, note, n.vel, en, bank, params);
+                const auto taken = sampler.take (Vox, note, n.vel, en, bank, play);
                 if (taken.kind == 1)
                 {
                     emitHeld (Vox, note, n.vel, st, en);
@@ -1372,7 +1374,10 @@ void Engine::process (const Groove& groove,
                     }
                     drumOn (drumMidiNote (voice), vel, midiHold (voice));
 
-                    float keep = 1.f;
+                    // Sample kits never feed the circuit model. A missing file is
+                    // another hit from the DRUMS pack, inside takeDrum.
+                    const bool circuitKit = dp.sample.mode == SampleMode::Synth;
+                    float keep = 0.f;
                     if (startSample (voice, vel, stepAcc))
                         keep = 0.f;
                     else if (DrumSampleSlot* slot = E.drums.sampleSlot())
@@ -1386,12 +1391,18 @@ void Engine::process (const Groove& groove,
                         req.folder = drumSampleFolder (voice);
                         req.key = drumVoiceKey (voice);
                         req.midiNote = drumMidiNote (voice);
-                        keep = slot->trigger (req);
+                        const float slotKeep = slot->trigger (req);
+                        if (circuitKit)
+                            keep = slotKeep;
+                        else if (slotKeep > 0.001f)
+                            sampler.takeDrum (voice, vel, bank, play);
                     }
+                    else if (circuitKit)
+                        keep = 1.f;
                     else
-                        keep = sampler.takeDrum (voice, vel, bank, params);
+                        sampler.takeDrum (voice, vel, bank, play);
 
-                    if (keep > 0.001f)
+                    if (circuitKit && keep > 0.001f)
                     {
                         DrumHit hit;
                         hit.voice = voice;
@@ -1861,7 +1872,7 @@ void Engine::process (const Groove& groove,
                 voxR += v.ring * 0.92f;
                 continue;
             }
-            const float bright = bank.vox[clampPreset (params.preset[Vox])].brightness * std::pow (2.f, (params.tone[Vox] - 0.5f) * 0.6f);
+            const float bright = bank.vox[clampPreset (bank, Vox, params.preset[Vox])].brightness * std::pow (2.f, (params.tone[Vox] - 0.5f) * 0.6f);
             v.vib += 5.f / srF;
             if (v.vib >= 1.f)
                 v.vib -= 1.f;

@@ -83,7 +83,8 @@ bool audioFile (const String& path)
 StringArray presetsForLane (const PresetBank& bank, int part)
 {
     StringArray names;
-    for (int i = 0; i < PresetBank::kPer; ++i)
+    const int n = bank.count[part] > 0 ? bank.count[part] : PresetBank::kPer;
+    for (int i = 0; i < n; ++i)
     {
         const char* raw = nullptr;
         switch (part)
@@ -1715,7 +1716,7 @@ struct SampleSlot : Component, FileDragAndDropTarget
             g.setFont (Theme::font (Theme::Role::micro));
             g.setColour (col (kInk));
             auto top = b.reduced (6.f, 1.f).removeFromTop (b.getHeight() * 0.5f);
-            g.drawText (loaded ? "YOUR WAV" : "909", top, Justification::centredLeft, false);
+            g.drawText (loaded ? "YOUR WAV" : "PACK", top, Justification::centredLeft, false);
             g.setFont (Theme::font (Theme::Role::microval));
             g.setColour (col (kInk2));
             auto name = fromSlot ? slotLabel()
@@ -2355,6 +2356,7 @@ struct RollaEditor::Content : Component
         menu.addSeparator();
         menu.addItem (7, utf8 ("Samples folder…"));
         menu.addItem (8, proc.samplesRoot().getFullPathName(), false, false);
+        menu.addItem (9, proc.sampleInventoryText(), false, false);
         menu.showMenuAsync (PopupMenu::Options().withTargetComponent (target != nullptr ? target : &logo),
                             [this] (int result)
                             {
@@ -2698,7 +2700,7 @@ struct RollaEditor::Content : Component
 
     void stepPreset (int dir)
     {
-        const auto names = presetsForLane (proc.copyPresets(), selected);
+        const auto names = presetsForLane (*proc.sharePresets(), selected);
         const auto id = String (partId (selected)) + "Preset";
         if (auto* p = dynamic_cast<AudioParameterChoice*> (proc.apvts.getParameter (id)))
         {
@@ -2713,7 +2715,7 @@ struct RollaEditor::Content : Component
     void browseLanePresets (Stepper& step)
     {
         const int part = selected;
-        const auto names = presetsForLane (proc.copyPresets(), part);
+        const auto names = presetsForLane (*proc.sharePresets(), part);
         const auto id = String (partId (part)) + "Preset";
         auto* param = dynamic_cast<AudioParameterChoice*> (proc.apvts.getParameter (id));
         if (param == nullptr || names.isEmpty())
@@ -2833,7 +2835,7 @@ struct RollaEditor::Content : Component
 
         if (auto* preset = dynamic_cast<AudioParameterChoice*> (proc.apvts.getParameter (String (partId (selected)) + "Preset")))
         {
-            const auto names = presetsForLane (proc.copyPresets(), selected);
+            const auto names = presetsForLane (*proc.sharePresets(), selected);
             const int index = names.isEmpty() ? 0 : jlimit (0, names.size() - 1, preset->getIndex());
             const auto name = names.isEmpty() ? String() : names[index];
             const auto sub = String (index + 1) + " / " + String (names.size())

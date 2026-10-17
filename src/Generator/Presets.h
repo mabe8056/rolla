@@ -3,6 +3,9 @@
 #include "Pattern.h"
 #include "../Engine/SampleSpec.h"
 
+#include <string>
+#include <vector>
+
 namespace rolla
 {
 
@@ -138,6 +141,8 @@ struct DrumPatch
     float drive = 0.15f;
     float trimDb = 0.f;
     SampleSpec sample;
+    // Per-voice round-robin. Empty means voiceFile (or the circuit model).
+    std::vector<std::string> voicePool[NumDrumVoices];
 };
 
 // One row of the v1.1 dialect → preset table (§1.2) plus E17 overrides.
@@ -158,7 +163,9 @@ struct DialectDefaults
 
 struct PresetBank
 {
-    static constexpr int kPer = 3;
+    // Capacity. count[] is how many JSON presets each lane actually loaded.
+    static constexpr int kPer = 40;
+    int count[NumParts] { 3, 3, 3, 3, 3, 3, 3 };
     BassPatch bass[kPer];
     StabPatch stab[kPer];
     TonePatch hits[kPer];
@@ -169,6 +176,91 @@ struct PresetBank
     DialectDefaults dialect[NumDialects];
     bool fromJson = false;
 };
+
+inline int presetSlot (const PresetBank& bank, int part, int index) noexcept
+{
+    int n = 1;
+    if (part >= 0 && part < NumParts && bank.count[part] > 0)
+        n = bank.count[part];
+    if (index < 0)
+        return 0;
+    if (index >= n)
+        return n - 1;
+    return index;
+}
+
+inline const SampleSpec& specAt (const PresetBank& bank, int part, int index) noexcept
+{
+    const int i = presetSlot (bank, part, index);
+    switch (part)
+    {
+        case Bass: return bank.bass[i].sample;
+        case Stab: return bank.stab[i].sample;
+        case Hits: return bank.hits[i].sample;
+        case Pluck: return bank.pluck[i].sample;
+        case Pad: return bank.pad[i].sample;
+        case Vox: return bank.vox[i].sample;
+        case Drums: return bank.drums[i].sample;
+        default: break;
+    }
+    return bank.bass[0].sample;
+}
+
+// styles 0 fits every dialect. Otherwise bit 0 is UK MIN, then LONG, POP, GASKIN.
+inline bool styleFits (std::uint8_t styles, int dialect) noexcept
+{
+    if (styles == 0 || dialect < 0 || dialect >= NumDialects)
+        return true;
+    return (styles & (std::uint8_t) (1u << dialect)) != 0;
+}
+
+// Pick a non-synth preset for an unkept lane. -1 when the lane has none.
+inline int pickPresetForRoll (const PresetBank& bank, int part, int dialect, std::uint32_t seed) noexcept
+{
+    if (part < 0 || part >= NumParts)
+        return -1;
+    int fit[PresetBank::kPer];
+    int any[PresetBank::kPer];
+    int nFit = 0;
+    int nAny = 0;
+    const int n = bank.count[part] > 0 ? bank.count[part] : 1;
+    for (int i = 0; i < n; ++i)
+    {
+        const auto& spec = specAt (bank, part, i);
+        if (spec.mode == SampleMode::Synth)
+            continue;
+        any[nAny++] = i;
+        if (styleFits (spec.styles, dialect))
+            fit[nFit++] = i;
+    }
+    const int* src = nFit > 0 ? fit : any;
+    const int m = nFit > 0 ? nFit : nAny;
+    if (m <= 0)
+        return -1;
+    return src[seed % (std::uint32_t) m];
+}
+
+// ROLL index into a drum voice pool. Tom low/mid are offset so they are not
+// the same perc hit as the PERC voice.
+inline const char* drumVoiceChoice (const DrumPatch& drum, int voice, int pick) noexcept
+{
+    if (voice < 0 || voice >= NumDrumVoices)
+        return "";
+    const auto& pool = drum.voicePool[voice];
+    if (! pool.empty())
+    {
+        int shift = 0;
+        if (voice == TomMid)
+            shift = 1;
+        else if (voice == TomLow)
+            shift = 2;
+        if (pick < 0)
+            pick = 0;
+        const int n = (int) pool.size();
+        return pool[(size_t) ((pick + shift) % n)].c_str();
+    }
+    return drum.sample.voiceFile[voice];
+}
 
 int presetIndex (const PresetBank& bank, int part, const char* id) noexcept;
 void applyDialectBass (const PresetBank& bank, int dialect, BassPatch& bass) noexcept;

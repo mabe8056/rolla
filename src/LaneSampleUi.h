@@ -24,7 +24,8 @@ inline juce::String laneModeProperty (int part)
 
 inline SampleSpec* sampleSpecMutable (PresetBank& bank, int part, int preset) noexcept
 {
-    const int i = juce::jlimit (0, PresetBank::kPer - 1, preset);
+    const int n = bank.count[part] > 0 ? bank.count[part] : PresetBank::kPer;
+    const int i = juce::jlimit (0, n - 1, preset);
     switch (part)
     {
         case Bass: return &bank.bass[i].sample;
@@ -73,8 +74,8 @@ inline int stubMode (const RollaProcessor& proc, int part)
     const auto key = laneModeProperty (part);
     if (proc.apvts.state.hasProperty (key))
         return juce::jlimit (0, 2, (int) proc.apvts.state.getProperty (key));
-    const auto bank = proc.copyPresets();
-    const auto& spec = sampleSpecFor (bank, part, presetIndexOf (proc, part));
+    const auto bank = proc.sharePresets();
+    const auto& spec = sampleSpecFor (*bank, part, presetIndexOf (proc, part));
     return juce::jlimit (0, 2, (int) spec.mode);
 }
 
@@ -83,7 +84,8 @@ inline bool applyStubMode (RollaProcessor& proc, int part, int mode)
     bool changed = false;
     proc.modifyPresets ([&] (PresetBank& bank)
     {
-        for (int i = 0; i < PresetBank::kPer; ++i)
+        const int n = bank.count[part] > 0 ? bank.count[part] : PresetBank::kPer;
+        for (int i = 0; i < n; ++i)
         {
             if (auto* spec = sampleSpecMutable (bank, part, i))
             {
@@ -123,7 +125,7 @@ void writeMode (Proc& proc, int part, int mode)
         proc.undo.beginNewTransaction();
         proc.apvts.state.setProperty (laneModeProperty (part), mode, &proc.undo);
         if (applyStubMode (proc, part, mode))
-            proc.sampleLibrary().watch (proc.copyPresets());
+            proc.sampleLibrary().watch (*proc.sharePresets());
     }
 }
 
@@ -150,11 +152,11 @@ public:
 
     void captureFactory()
     {
-        const auto bank = proc.copyPresets();
+        const auto bank = proc.sharePresets();
         for (int part = 0; part < NumParts; ++part)
             if (! touched[part])
                 for (int i = 0; i < PresetBank::kPer; ++i)
-                    factory[part][i] = (int) sampleSpecFor (bank, part, i).mode;
+                    factory[part][i] = (int) sampleSpecFor (*bank, part, i).mode;
         seenGen = proc.presetGeneration();
     }
 
@@ -201,12 +203,13 @@ public:
             }
             else if (touched[part])
             {
-                const int saved[PresetBank::kPer] = {
-                    factory[part][0], factory[part][1], factory[part][2]
-                };
+                int saved[PresetBank::kPer];
+                for (int i = 0; i < PresetBank::kPer; ++i)
+                    saved[i] = factory[part][i];
                 proc.modifyPresets ([&] (PresetBank& bank)
                 {
-                    for (int i = 0; i < PresetBank::kPer; ++i)
+                    const int n = bank.count[part] > 0 ? bank.count[part] : PresetBank::kPer;
+                    for (int i = 0; i < n; ++i)
                     {
                         if (auto* spec = sampleSpecMutable (bank, part, i))
                         {
@@ -222,7 +225,7 @@ public:
             }
         }
         if (changed)
-            proc.sampleLibrary().watch (proc.copyPresets());
+            proc.sampleLibrary().watch (*proc.sharePresets());
     }
 
     bool engineModeApi() const noexcept
