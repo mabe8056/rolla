@@ -1,4 +1,5 @@
 #include "Generator.h"
+#include "../Drums/DrumPattern.h"
 
 #include <algorithm>
 #include <cmath>
@@ -795,70 +796,6 @@ void genVox (Lane& lane, const Groove& g, const Settings& s, Rng& r)
     }
 }
 
-void genDrums (DrumLane& d, const Settings& s, Rng& r)
-{
-    clearDrums (d);
-    const int steps = s.bars * 16;
-    const bool gaskin = s.dialect == Gaskin;
-    for (int t = 0; t < steps; ++t)
-    {
-        const int s16 = t % 16;
-        const int bar = t / 16;
-        if (s16 == 0 || s16 == 4 || s16 == 8 || s16 == 12)
-        {
-            d.vel[Kick][t] = 120;
-            d.accent[t] = 1;
-        }
-        if (s16 == 4 || s16 == 12)
-        {
-            d.vel[Clap][t] = 116;
-            d.vel[Snare][t] = 78;
-            d.accent[t] = 1;
-        }
-        if (! gaskin && (s16 == 7 || s16 == 15))
-            d.vel[Clap][t] = 62;
-
-        if (gaskin)
-        {
-            // 8th-note open hats on the offbeat, no 16th layer.
-            if (s16 == 2 || s16 == 6 || s16 == 10 || s16 == 14)
-                d.vel[HatO][t] = 104;
-        }
-        else
-        {
-            if (s16 == 2 || s16 == 6 || s16 == 10 || s16 == 14)
-                d.vel[HatC][t] = 110;
-            if (s.busy > 0.35f && (s16 % 2) == 1 && d.vel[HatC][t] == 0)
-                d.vel[HatC][t] = (std::uint8_t) ((s16 % 4 == 3) ? 74 : 46);
-            if (s16 == 14 && (bar % 2) == 1)
-            {
-                d.vel[HatO][t] = 102;
-                d.vel[HatC][t] = 0;
-                if (t + 1 < steps)
-                    d.vel[HatC][t + 1] = std::max<std::uint8_t> (d.vel[HatC][t + 1], 92);
-            }
-        }
-
-        if (s16 == 3 && (bar % 4) == 1 && r.next() < 0.85)
-            d.vel[Rim][t] = 82;
-        if (s16 == 11 && (bar % 4) == 3 && r.next() < 0.55)
-            d.vel[Rim][t] = 70;
-    }
-
-    if (s.fill && s.bars > 0)
-    {
-        const int b0 = (s.bars - 1) * 16;
-        for (int s16 = 8; s16 < 16; ++s16)
-            d.vel[Snare][b0 + s16] = (std::uint8_t) std::min (127, 88 + (s16 - 8) * 4);
-        d.vel[TomMid][b0 + 10] = 104;
-        d.vel[TomLow][b0 + 13] = 108;
-        d.vel[Ride][b0 + 14] = 72;
-        d.vel[HatO][b0 + 6] = 100;
-        if (b0 + 7 < steps)
-            d.vel[HatC][b0 + 7] = std::max<std::uint8_t> (d.vel[HatC][b0 + 7], 96);
-    }
-}
-
 void clampLane (Lane& lane, int bars)
 {
     const float loop = (float) bars * 16.f;
@@ -920,13 +857,8 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
         clampLane (g.lane[Bass], s.bars);
     }
 
-    if (regen (Drums))
-    {
-        Rng r (seeds[Drums] ? seeds[Drums] : 1u);
-        g.drums.seed = seeds[Drums];
-        genDrums (g.drums, s, r);
-    }
-    else if (s.bars * 16 < kMaxSteps)
+    const bool regenDrums = regen (Drums);
+    if (! regenDrums && s.bars * 16 < kMaxSteps)
     {
         for (int v = 0; v < NumDrumVoices; ++v)
             for (int t = s.bars * 16; t < kMaxSteps; ++t)
@@ -941,6 +873,15 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
     }
     else
         clampLane (g.lane[Stab], s.bars);
+
+    // After the stab, so a ghost on 8/16 can see a note that covers that step.
+    // The drum seed is its own stream, so this does not move the stab roll.
+    if (regenDrums)
+    {
+        Rng r (seeds[Drums] ? seeds[Drums] : 1u);
+        g.drums.seed = seeds[Drums];
+        writeDrumPattern (g, s, r);
+    }
 
     if (regen (Hits))
     {

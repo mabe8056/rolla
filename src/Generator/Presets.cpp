@@ -207,8 +207,8 @@ void readSample (SampleSpec& spec, const juce::var& preset)
         if (sampleObj->hasProperty ("voices"))
         {
             const auto voices = sampleObj->getProperty ("voices");
-            const char* keys[] = { "kick", "snare", "clap", "rim", "tomLow", "tomMid", "hatC", "hatO", "ride" };
-            for (int v = 0; v < NumDrumVoices && v < 9; ++v)
+            const char* keys[] = { "kick", "snare", "clap", "rim", "tomLow", "tomMid", "hatC", "hatO", "ride", "perc" };
+            for (int v = 0; v < NumDrumVoices && v < 10; ++v)
                 copySamplePath (spec.voiceFile[v], 96, str (voices, keys[v], "").toRawUTF8());
         }
     }

@@ -29,6 +29,7 @@ enum DrumVoice : int
     HatC,
     HatO,
     Ride,
+    Perc, // shaker / UK-minimal percussion; maps to the PERC sample slot
     NumDrumVoices
 };
 
@@ -128,7 +129,7 @@ inline const char* dialectName (int d) noexcept
 
 inline const char* drumName (int v) noexcept
 {
-    static const char* names[] = { "KICK", "SNARE", "CLAP", "RIM", "LOW", "MID", "CH", "OH", "RIDE" };
+    static const char* names[] = { "KICK", "SNARE", "CLAP", "RIM", "LOW", "MID", "CH", "OH", "RIDE", "PERC" };
     return names[v];
 }
 
@@ -150,7 +151,7 @@ inline const char* keyName (int key) noexcept
 
 inline int drumMidiNote (int voice) noexcept
 {
-    static const int notes[] = { 36, 38, 39, 37, 45, 47, 42, 46, 51 };
+    static const int notes[] = { 36, 38, 39, 37, 45, 47, 42, 46, 51, 70 };
     return notes[voice];
 }
 

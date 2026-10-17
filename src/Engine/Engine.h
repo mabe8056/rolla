@@ -15,6 +15,7 @@ namespace rolla
 {
 
 struct UserSlotView;
+class DrumSampleSlot;
 
 struct EngineParams
 {
@@ -72,6 +73,10 @@ public:
     void loadDrumSample (int voice, const float* mono, int numSamples, double sourceRate);
     void clearDrumSample (int voice);
     bool hasDrumSample (int voice) const noexcept;
+
+    // Per-voice sample hook (src/Drums/DrumSampleSlot.h). Null keeps the
+    // preset sampler. A dropped WAV still wins over this slot.
+    void setDrumSampleSlot (DrumSampleSlot* slot) noexcept;
 
 private:
     double sr = 48000.0;

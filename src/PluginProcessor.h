@@ -75,6 +75,7 @@ public:
     juce::StringArray writeTempMidi();
     bool loadDrumFile (int voice, const juce::File& file, juce::String& error);
     void clearDrumVoice (int voice);
+    void setDrumSampleSlot (DrumSampleSlot* slot) noexcept;
     bool drumVoiceLoaded (int voice) const noexcept;
     juce::String getDrumSampleName (int voice) const;
 

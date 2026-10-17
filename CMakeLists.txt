@@ -59,6 +59,8 @@ target_sources(ROLLA
         src/Generator/Generator.cpp
         src/Generator/Presets.cpp
         src/Generator/MidiFile.cpp
+        src/Drums/DrumMachine.cpp
+        src/Drums/DrumPattern.cpp
 )
 
 target_compile_definitions(ROLLA
@@ -91,6 +93,8 @@ add_executable(rolla-render
     src/Generator/Generator.cpp
     src/Generator/Presets.cpp
     src/Generator/MidiFile.cpp
+    src/Drums/DrumMachine.cpp
+    src/Drums/DrumPattern.cpp
 )
 
 target_compile_definitions(rolla-render
@@ -120,6 +124,8 @@ add_executable(rolla-sample-check
     src/Engine/SampleLibrary.cpp
     src/Generator/Generator.cpp
     src/Generator/Presets.cpp
+    src/Drums/DrumMachine.cpp
+    src/Drums/DrumPattern.cpp
 )
 
 target_compile_definitions(rolla-sample-check
