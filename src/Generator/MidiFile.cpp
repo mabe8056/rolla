@@ -218,6 +218,34 @@ bool writeFile (const std::string& path, const std::vector<std::uint8_t>& bytes,
 
 } // namespace
 
+bool MidiExport::writePart (const std::string& path,
+                           const Groove& groove,
+                           int part,
+                           int key,
+                           float swing,
+                           double bpm,
+                           std::string& error)
+{
+    if (part < 0 || part >= NumParts)
+    {
+        error = "bad lane";
+        return false;
+    }
+    std::vector<Event> ev;
+    collectPart (ev, groove, part, key, swing);
+    const int anchorPitch = part == Drums ? 36 : std::clamp (basePitch (part, key, groove.dialect), 0, 127);
+    const int anchorCh = part == Drums ? 9 : part;
+    bool hasZero = false;
+    for (const auto& e : ev)
+        if (e.tick == 0 && (e.status & 0xf0) == 0x90)
+            hasZero = true;
+    if (! hasZero)
+        addNote (ev, anchorCh, anchorPitch, 1, 0, 1);
+
+    auto bytes = smf ({ trackBytes (ev, bpm, groove.bars, true) });
+    return writeFile (path, bytes, error);
+}
+
 bool MidiExport::writeAll (const std::string& directory,
                            const Groove& groove,
                            int key,

@@ -1,6 +1,7 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "DspUtil.h"
+#include "Generator/Drive.h"
 #include "Generator/MidiFile.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -218,6 +219,8 @@ RollaProcessor::RollaProcessor()
 {
     apvts.addParameterListener ("roll", this);
     apvts.addParameterListener ("dialect", this);
+    for (const char* id : { "dark", "busy", "bounce", "stab" })
+        apvts.addParameterListener (id, this);
     for (int i = 0; i < NumParts; ++i)
         apvts.addParameterListener (juce::String (partId (i)) + "Shuffle", this);
 
@@ -236,6 +239,8 @@ RollaProcessor::~RollaProcessor()
 
     apvts.removeParameterListener ("roll", this);
     apvts.removeParameterListener ("dialect", this);
+    for (const char* id : { "dark", "busy", "bounce", "stab" })
+        apvts.removeParameterListener (id, this);
     for (int i = 0; i < NumParts; ++i)
         apvts.removeParameterListener (juce::String (partId (i)) + "Shuffle", this);
 
@@ -327,6 +332,8 @@ void RollaProcessor::deferredStartup()
 
     startupMs.store (juce::Time::getMillisecondCounterHiRes() - started, std::memory_order_relaxed);
     startupDone.store (true);
+    if (reshapeAfterStartup.exchange (false))
+        requestReshape();
 }
 
 void RollaProcessor::applyDialect (int dialect)
@@ -381,7 +388,15 @@ void RollaProcessor::parameterChanged (const juce::String& parameterID, float ne
             if (self->restoring.load (std::memory_order_acquire))
                 return;
             self->applyDialect (dialect);
+            // Style picks the presets and also the grid. Unkept lanes follow now.
+            self->reshapeUnkept();
         });
+        return;
+    }
+
+    if (parameterID == "dark" || parameterID == "busy" || parameterID == "bounce" || parameterID == "stab")
+    {
+        requestReshape();
         return;
     }
 
@@ -490,6 +505,67 @@ void RollaProcessor::regenerate (int onlyPart)
     publish (next);
 }
 
+void RollaProcessor::requestReshape()
+{
+    if (restoring.load (std::memory_order_acquire))
+        return;
+    if (! startupDone.load (std::memory_order_acquire))
+    {
+        reshapeAfterStartup.store (true);
+        return;
+    }
+
+    auto* mm = juce::MessageManager::getInstanceWithoutCreating();
+    if (mm == nullptr)
+        return;
+    if (reshapePending.exchange (true))
+        return;
+
+    std::weak_ptr<AsyncState> weak = async;
+    const uint32_t epoch = async->epoch.load (std::memory_order_acquire);
+    auto* self = this;
+    mm->callAsync ([weak, epoch, self]
+    {
+        auto locked = weak.lock();
+        if (locked == nullptr)
+            return;
+        std::lock_guard<std::mutex> guard (locked->mu);
+        self->reshapePending.store (false);
+        if (! locked->alive.load() || locked->epoch.load() != epoch)
+            return;
+        if (self->restoring.load (std::memory_order_acquire))
+            return;
+        self->reshapeUnkept();
+    });
+}
+
+void RollaProcessor::reshapeUnkept()
+{
+    if (restoring.load (std::memory_order_acquire) || ! startupDone.load (std::memory_order_acquire))
+        return;
+
+    Settings s = currentSettings();
+    Groove next = copyGroove();
+    uint32_t seeds[NumParts] {};
+    uint32_t mask = 0;
+
+    for (int i = 0; i < NumParts; ++i)
+    {
+        seeds[i] = i == Drums ? next.drums.seed : next.lane[i].seed;
+        if (seeds[i] == 0)
+            seeds[i] = 1;
+        const bool keep = raw (apvts, (juce::String (partId (i)) + "Keep").toRawUTF8()) >= 0.5f;
+        if (! keep)
+            mask |= 1u << (unsigned) i;
+    }
+
+    if (mask == 0)
+        return;
+
+    reshapeLanes (next, s, seeds, mask);
+    publish (next);
+}
+
 void RollaProcessor::publish (const Groove& g)
 {
     std::lock_guard<std::mutex> lock (grooveMu);
@@ -529,6 +605,47 @@ bool RollaProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 
     const auto input = layouts.getMainInputChannelSet();
     return input.isDisabled();
+}
+
+EngineParams RollaProcessor::readParams (std::shared_ptr<const PresetBank>& hold) const
+{
+    {
+        std::lock_guard<std::mutex> lock (presetMu);
+        hold = presets;
+    }
+    EngineParams params;
+    params.presets = hold.get();
+    params.mix = mixProgram.loaded ? &mixProgram : nullptr;
+    params.duck = raw (apvts, "duck") >= 0.5f;
+    params.drumsToMain = raw (apvts, "drumsToMain") >= 0.5f;
+    params.swing = raw (apvts, "swing");
+    params.outputDb = raw (apvts, "output");
+    params.drumsAccent = raw (apvts, "drumsAccent");
+    params.bars = barsFromIndex ((int) raw (apvts, "length"));
+    params.key = (int) raw (apvts, "key");
+    params.dialect = (int) raw (apvts, "dialect");
+    params.library = &library;
+    params.userSlots = slots.published();
+    for (int i = 0; i < NumParts; ++i)
+    {
+        const auto id = juce::String (partId (i));
+        params.tone[i] = raw (apvts, (id + "Tone").toRawUTF8());
+        params.punch[i] = raw (apvts, (id + "Punch").toRawUTF8());
+        params.levelDb[i] = raw (apvts, (id + "Level").toRawUTF8());
+        params.mute[i] = raw (apvts, (id + "Mute").toRawUTF8()) >= 0.5f;
+        params.preset[i] = (int) raw (apvts, (id + "Preset").toRawUTF8());
+        params.samplePick[i] = samplePick[i].load (std::memory_order_relaxed);
+    }
+    for (int v = 0; v < NumDrumVoices; ++v)
+    {
+        const auto id = juce::String (v);
+        params.drumTuneSt[v] = raw (apvts, ("dTune" + id).toRawUTF8());
+        params.drumDecay[v] = raw (apvts, ("dDecay" + id).toRawUTF8());
+        params.drumLevelDb[v] = raw (apvts, ("dLevel" + id).toRawUTF8());
+        params.drumAccentOn[v] = raw (apvts, ("dAccent" + id).toRawUTF8()) >= 0.5f;
+        params.drumAccentAmt[v] = raw (apvts, ("dAccAmt" + id).toRawUTF8());
+    }
+    return params;
 }
 
 void RollaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
@@ -581,43 +698,8 @@ void RollaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     playPpq.store (transport.playing ? transport.ppqStart : 0.0);
     uiPlaying.store (transport.playing);
 
-    EngineParams params;
     std::shared_ptr<const PresetBank> heldPresets;
-    {
-        std::lock_guard<std::mutex> lock (presetMu);
-        heldPresets = presets;
-    }
-    params.presets = heldPresets.get();
-    params.mix = mixProgram.loaded ? &mixProgram : nullptr;
-    params.duck = raw (apvts, "duck") >= 0.5f;
-    params.drumsToMain = raw (apvts, "drumsToMain") >= 0.5f;
-    params.swing = raw (apvts, "swing");
-    params.outputDb = raw (apvts, "output");
-    params.drumsAccent = raw (apvts, "drumsAccent");
-    params.bars = barsFromIndex ((int) raw (apvts, "length"));
-    params.key = (int) raw (apvts, "key");
-    params.dialect = (int) raw (apvts, "dialect");
-    params.library = &library;
-    params.userSlots = slots.published();
-    for (int i = 0; i < NumParts; ++i)
-    {
-        const auto id = juce::String (partId (i));
-        params.tone[i] = raw (apvts, (id + "Tone").toRawUTF8());
-        params.punch[i] = raw (apvts, (id + "Punch").toRawUTF8());
-        params.levelDb[i] = raw (apvts, (id + "Level").toRawUTF8());
-        params.mute[i] = raw (apvts, (id + "Mute").toRawUTF8()) >= 0.5f;
-        params.preset[i] = (int) raw (apvts, (id + "Preset").toRawUTF8());
-        params.samplePick[i] = samplePick[i].load (std::memory_order_relaxed);
-    }
-    for (int v = 0; v < NumDrumVoices; ++v)
-    {
-        const auto id = juce::String (v);
-        params.drumTuneSt[v] = raw (apvts, ("dTune" + id).toRawUTF8());
-        params.drumDecay[v] = raw (apvts, ("dDecay" + id).toRawUTF8());
-        params.drumLevelDb[v] = raw (apvts, ("dLevel" + id).toRawUTF8());
-        params.drumAccentOn[v] = raw (apvts, ("dAccent" + id).toRawUTF8()) >= 0.5f;
-        params.drumAccentAmt[v] = raw (apvts, ("dAccAmt" + id).toRawUTF8());
-    }
+    const EngineParams params = readParams (heldPresets);
 
     float* mainL = buffer.getWritePointer (0);
     float* mainR = buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : nullptr;
@@ -1081,9 +1163,56 @@ juce::String RollaProcessor::exportMidiToDocuments()
     return exportMidiTo (juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("ROLLA"));
 }
 
+juce::File RollaProcessor::exportCache() const
+{
+    juce::File dir;
+   #if JUCE_MAC
+    dir = juce::File::getSpecialLocation (juce::File::userHomeDirectory)
+              .getChildFile ("Library").getChildFile ("Caches").getChildFile ("ROLLA");
+   #elif JUCE_WINDOWS
+    dir = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+              .getChildFile ("ROLLA").getChildFile ("Cache");
+   #else
+    dir = juce::File::getSpecialLocation (juce::File::userHomeDirectory)
+              .getChildFile (".cache").getChildFile ("ROLLA");
+   #endif
+    dir.createDirectory();
+    return dir;
+}
+
+void RollaProcessor::pruneExportCache (const juce::File& keep) const
+{
+    const auto cutoff = juce::Time::getCurrentTime() - juce::RelativeTime::minutes (30.0);
+    for (const auto& entry : juce::RangedDirectoryIterator (exportCache(), false, "ROLLA_*", juce::File::findFiles))
+    {
+        const auto file = entry.getFile();
+        if (file == keep)
+            continue;
+        if (file.getLastModificationTime() < cutoff)
+            file.deleteFile();
+    }
+}
+
+namespace
+{
+std::atomic<int> exportSerial { 1 };
+
+float hostBpmOf (const RollaProcessor& proc)
+{
+    float bpm = proc.getPlayBpm();
+    if (auto* head = proc.getPlayHead())
+        if (auto pos = head->getPosition())
+            if (auto b = pos->getBpm())
+                bpm = (float) *b;
+    if (bpm < 20.f || bpm > 400.f)
+        bpm = 130.f;
+    return bpm;
+}
+}
+
 juce::StringArray RollaProcessor::writeTempMidi()
 {
-    auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("ROLLA");
+    const auto dir = exportCache().getChildFile ("all-" + juce::String (exportSerial.fetch_add (1)));
     dir.createDirectory();
     std::vector<std::string> written;
     std::string error;
@@ -1092,12 +1221,118 @@ juce::StringArray RollaProcessor::writeTempMidi()
                           local,
                           (int) raw (apvts, "key"),
                           raw (apvts, "swing"),
-                          (double) lastBpm.load(),
+                          (double) hostBpmOf (*this),
                           written,
                           error);
     juce::StringArray files;
     for (const auto& path : written)
         files.add (juce::String (path));
+    return files;
+}
+
+juce::StringArray RollaProcessor::writeLaneMidi (int part)
+{
+    juce::StringArray files;
+    if (part < 0 || part >= NumParts)
+        return files;
+    waitUntilReady();
+    const auto file = exportCache().getChildFile ("ROLLA_" + juce::String (partId (part)) + "_"
+                                                  + juce::String (exportSerial.fetch_add (1)) + ".mid");
+    std::string error;
+    const bool ok = MidiExport::writePart (file.getFullPathName().toStdString(),
+                                           copyGroove(),
+                                           part,
+                                           (int) raw (apvts, "key"),
+                                           raw (apvts, "swing"),
+                                           (double) hostBpmOf (*this),
+                                           error);
+    if (! ok)
+        return files;
+    pruneExportCache (file);
+    files.add (file.getFullPathName());
+    return files;
+}
+
+bool RollaProcessor::writeWav (const juce::File& file, const juce::AudioBuffer<float>& audio, double sampleRate) const
+{
+    file.deleteFile();
+    std::unique_ptr<juce::OutputStream> stream (file.createOutputStream());
+    if (stream == nullptr)
+        return false;
+    if (auto* fileStream = dynamic_cast<juce::FileOutputStream*> (stream.get()))
+        if (fileStream->failedToOpen())
+            return false;
+
+    juce::WavAudioFormat wav;
+    const auto options = juce::AudioFormatWriter::Options{}
+                             .withSampleRate (sampleRate)
+                             .withNumChannels (audio.getNumChannels())
+                             .withBitsPerSample (24);
+    auto writer = wav.createWriterFor (stream, options);
+    if (writer == nullptr)
+        return false;
+    return writer->writeFromAudioSampleBuffer (audio, 0, audio.getNumSamples());
+}
+
+juce::StringArray RollaProcessor::writeLaneAudio (int part)
+{
+    juce::StringArray files;
+    if (part < 0 || part >= NumParts)
+        return files;
+    waitUntilReady();
+
+    constexpr double rate = 48000.0;
+    const double bpm = (double) hostBpmOf (*this);
+    const int total = (int) std::llround (8.0 * 4.0 * 60.0 / bpm * rate);
+    if (total < 64)
+        return files;
+
+    std::shared_ptr<const PresetBank> held;
+    EngineParams params = readParams (held);
+    for (int i = 0; i < NumParts; ++i)
+        params.mute[i] = i != part;
+    params.drumsToMain = true;
+
+    Engine offline;
+    offline.prepare (rate, 1024);
+    {
+        std::lock_guard<std::mutex> lock (sampleMu);
+        for (int v = 0; v < NumDrumVoices; ++v)
+            if (remembered[v].set && ! remembered[v].mono.empty())
+                offline.loadDrumSample (v, remembered[v].mono.data(), (int) remembered[v].mono.size(), remembered[v].rate);
+    }
+
+    const Groove local = copyGroove();
+    juce::AudioBuffer<float> audio (2, total);
+    audio.clear();
+    juce::AudioBuffer<float> block (2, 1024);
+    double ppq = 0.0;
+    int done = 0;
+    while (done < total)
+    {
+        const int n = std::min (1024, total - done);
+        block.clear();
+        Transport transport;
+        transport.playing = true;
+        transport.ppqStart = ppq;
+        transport.bpm = bpm;
+        transport.sampleRate = rate;
+        juce::MidiBuffer midi;
+        offline.process (local, params, transport,
+                        block.getWritePointer (0), block.getWritePointer (1),
+                        nullptr, nullptr, n, midi, false);
+        for (int ch = 0; ch < 2; ++ch)
+            audio.copyFrom (ch, done, block, ch, 0, n);
+        ppq += (double) n * bpm / (60.0 * rate);
+        done += n;
+    }
+
+    const auto file = exportCache().getChildFile ("ROLLA_" + juce::String (partId (part)) + "_"
+                                                  + juce::String (exportSerial.fetch_add (1)) + ".wav");
+    if (! writeWav (file, audio, rate))
+        return files;
+    pruneExportCache (file);
+    files.add (file.getFullPathName());
     return files;
 }
 

@@ -90,6 +90,12 @@ public:
 
     juce::String exportMidiToDocuments();
     juce::StringArray writeTempMidi();
+
+    // Drag-out files live here so FL Studio on macOS can read them after
+    // performExternalDragDropOfFiles. One file per call.
+    juce::File exportCache() const;
+    juce::StringArray writeLaneMidi (int part);
+    juce::StringArray writeLaneAudio (int part);
     bool loadDrumFile (int voice, const juce::File& file, juce::String& error);
     void clearDrumVoice (int voice);
     void setDrumSampleSlot (DrumSampleSlot* slot) noexcept;
@@ -126,7 +132,12 @@ private:
     void parameterChanged (const juce::String& parameterID, float newValue) override;
     void applyDialect (int dialect);
     void regenerate (int onlyPart);
+    void requestReshape();
+    void reshapeUnkept();
+    EngineParams readParams (std::shared_ptr<const PresetBank>& hold) const;
     Settings currentSettings() const;
+    void pruneExportCache (const juce::File& keep) const;
+    bool writeWav (const juce::File& file, const juce::AudioBuffer<float>& audio, double sampleRate) const;
     void publish (const Groove& g);
     void publishInitial (const Groove& g);
     void deferredStartup();
@@ -173,6 +184,8 @@ private:
     std::mutex rootSetupMu;
     std::atomic<bool> startupDone { false };
     std::atomic<double> startupMs { 0.0 };
+    std::atomic<bool> reshapePending { false };
+    std::atomic<bool> reshapeAfterStartup { false };
     double startupT0 = 0.0;
     std::thread startupThread;
     std::atomic<std::uint32_t> grooveEpoch { 0 };

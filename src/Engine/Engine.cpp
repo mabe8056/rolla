@@ -241,7 +241,9 @@ struct Duck
         const float floor = dbToGain (-std::clamp (depthDb, 0.f, 48.f));
         target = floor;
         c = coefFromMs (gate ? 0.1f : 0.2f, sr);
-        hold = (int) ((gate ? 0.040f : 0.020f) * sr);
+        // 20 ms was gone before an off-kick bass note. Hold long enough that
+        // the next 16th is still down.
+        hold = (int) ((gate ? 0.060f : 0.048f) * sr);
         arm = true;
         recover = std::max (20.f, recoverMs);
         gateMode = gate;
@@ -1242,7 +1244,9 @@ void Engine::process (const Groove& groove,
                 {
                     const float depth = std::max (0.f, bp.duckDb + punchB * 8.f);
                     const float rec = bp.duckRecoverMs;
-                    E.duckB.trigger (depth, rec, srF, bp.gate);
+                    // Bass attacks sit off the kick. A 110 ms recover has already
+                    // opened again by the "e", so the switch did nothing you could hear.
+                    E.duckB.trigger (depth, std::max (rec, 210.f), srF, bp.gate);
                     E.duckP.trigger (padP.ex.duckDb >= 0.f ? padP.ex.duckDb : std::min (depth, 6.f),
                                     padP.ex.duckDb >= 0.f ? padP.ex.duckRecoverMs : rec, srF, false);
                     E.duckS.trigger (sp.ex.duckDb >= 0.f ? sp.ex.duckDb : 3.f, rec, srF, false);
@@ -1358,7 +1362,7 @@ void Engine::process (const Groove& groove,
                     {
                         const float depth = std::max (0.f, bp.duckDb + punchB * 8.f);
                         const float rec = bp.duckRecoverMs;
-                        E.duckB.trigger (depth, rec, srF, bp.gate);
+                        E.duckB.trigger (depth, std::max (rec, 210.f), srF, bp.gate);
                         E.duckP.trigger (padP.ex.duckDb >= 0.f ? padP.ex.duckDb : std::min (depth, 6.f),
                                         padP.ex.duckDb >= 0.f ? padP.ex.duckRecoverMs : rec, srF, padP.ex.duckGate);
                         E.duckS.trigger (sp.ex.duckDb >= 0.f ? sp.ex.duckDb : 3.f,

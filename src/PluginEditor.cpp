@@ -642,6 +642,83 @@ struct IconButton : QuietButton
     }
 };
 
+void dragFilesOut (Component* source, const StringArray& files)
+{
+    if (source == nullptr || files.isEmpty())
+        return;
+    if (auto* dnd = DragAndDropContainer::findParentDragContainerFor (source))
+        dnd->performExternalDragDropOfFiles (files, false, source);
+}
+
+// One lane. Drag writes a MIDI clip. Alt, Ctrl, or Command (or the click
+// toggle) writes 8 bars of that lane as WAV instead.
+struct LaneDrag : Component
+{
+    RollaProcessor* proc = nullptr;
+    int part = 0;
+    bool audioMode = false;
+    bool armed = false;
+
+    LaneDrag()
+    {
+        setMouseCursor (MouseCursor::DraggingHandCursor);
+        setRepaintsOnMouseActivity (true);
+    }
+
+    void paint (Graphics& g) override
+    {
+        auto b = getLocalBounds().toFloat();
+        const bool hot = isMouseOver() || isMouseButtonDown();
+        g.setColour (audioMode ? col (kLine2) : (hot ? col (kLine) : Colours::transparentBlack));
+        g.fillEllipse (b.reduced (1.f));
+        g.setColour (hot || audioMode ? col (kInk2) : col (kLine2));
+        g.drawEllipse (b.reduced (1.5f), 1.f);
+
+        auto* lf = dynamic_cast<Look*> (&getLookAndFeel());
+        if (audioMode)
+        {
+            g.setColour (col (kInk));
+            if (lf != nullptr)
+                g.setFont (lf->mono.withPointHeight (Theme::typeMicro));
+            g.drawText ("WAV", getLocalBounds(), Justification::centred, false);
+        }
+        else
+        {
+            g.setColour (hot ? col (kInk) : col (kInk2));
+            Path arrow;
+            const float x = b.getCentreX();
+            const float y = b.getCentreY();
+            arrow.startNewSubPath (x, y - 6.f);
+            arrow.lineTo (x, y + 5.f);
+            arrow.startNewSubPath (x - 4.f, y + 1.f);
+            arrow.lineTo (x, y + 5.f);
+            arrow.lineTo (x + 4.f, y + 1.f);
+            g.strokePath (arrow, PathStrokeType (1.5f, PathStrokeType::curved, PathStrokeType::rounded));
+        }
+        focusRing (g, *this);
+    }
+
+    void mouseDown (const MouseEvent&) override { armed = false; }
+
+    void mouseDrag (const MouseEvent& e) override
+    {
+        if (proc == nullptr || armed || e.getDistanceFromDragStart() <= 4.f)
+            return;
+        armed = true;
+        const bool audio = audioMode || e.mods.isAltDown() || e.mods.isCommandDown() || e.mods.isCtrlDown();
+        dragFilesOut (this, audio ? proc->writeLaneAudio (part) : proc->writeLaneMidi (part));
+    }
+
+    void mouseUp (const MouseEvent& e) override
+    {
+        if (! armed && e.getDistanceFromDragStart() <= 4.f && e.mouseWasClicked())
+        {
+            audioMode = ! audioMode;
+            repaint();
+        }
+    }
+};
+
 struct LaneRow : Component, FileDragAndDropTarget
 {
     RollaProcessor* proc = nullptr;
@@ -654,12 +731,14 @@ struct LaneRow : Component, FileDragAndDropTarget
     IconButton mute { IconButton::mute, "Mute" };
     IconButton shuffle { IconButton::dice, "Shuffle" };
     IconButton keep { IconButton::lock, "Keep" };
+    LaneDrag drag;
     PatternStrip strip;
     std::unique_ptr<AudioProcessorValueTreeState::ButtonAttachment> muteA, keepA;
 
     LaneRow()
     {
         addAndMakeVisible (strip);
+        addAndMakeVisible (drag);
         addAndMakeVisible (mute);
         addAndMakeVisible (shuffle);
         addAndMakeVisible (keep);
@@ -679,6 +758,9 @@ struct LaneRow : Component, FileDragAndDropTarget
         shuffle.proc = &processor;
         shuffle.part = index;
         strip.part = index;
+        drag.proc = &processor;
+        drag.part = index;
+        bindHelp (drag, "Drag this lane. MIDI clip, or WAV (click the handle, or hold Alt) for 8 bars.");
         const auto id = String (partId (part));
         muteA = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (processor.apvts, id + "Mute", mute);
         keepA = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (processor.apvts, id + "Keep", keep);
@@ -803,7 +885,8 @@ struct LaneRow : Component, FileDragAndDropTarget
 
     void resized() override
     {
-        strip.setBounds (104, 8, 408, 24);
+        strip.setBounds (104, 8, 368, 24);
+        drag.setBounds (480, 4, 32, 32);
         mute.setBounds (520, 4, 32, 32);
         shuffle.setBounds (560, 4, 32, 32);
         keep.setBounds (600, 4, 32, 32);
@@ -1700,10 +1783,7 @@ struct DragTile : Component
         if (e.getDistanceFromDragStart() <= 4.f)
             return;
         armed = true;
-        auto files = proc->writeTempMidi();
-        if (auto* dnd = DragAndDropContainer::findParentDragContainerFor (this))
-            if (files.size() > 0)
-                dnd->performExternalDragDropOfFiles (files, false, this);
+        dragFilesOut (this, proc->writeTempMidi());
     }
 
     void choose()

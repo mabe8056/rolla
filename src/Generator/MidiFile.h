@@ -19,6 +19,15 @@ struct MidiExport
                           double bpm,
                           std::vector<std::string>& writtenPaths,
                           std::string& error);
+
+    // One lane, one type-0 SMF. Swing is baked into the ticks. .mid, not .midi.
+    static bool writePart (const std::string& path,
+                           const Groove& groove,
+                           int part,
+                           int key,
+                           float swing,
+                           double bpm,
+                           std::string& error);
 };
 
 } // namespace rolla
