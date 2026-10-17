@@ -63,9 +63,11 @@ void writeDrumPattern (Groove& groove, const Settings& settings, Rng& rng)
         if (s16 == 4 || s16 == 12)
         {
             d.vel[Clap][t] = 100;
-            // Snare under the clap. The panel's snare knobs have to move a voice
-            // that actually plays; a fill-only snare is silent for the whole loop.
-            d.vel[Snare][t] = jitter (72);
+            // The fill already rolls the snare, and extra hits in front of it
+            // move that roll out of the UK MIN loudness window. The default loop
+            // has the fill off, so this is the snare the panel knobs move.
+            if (! s.fill)
+                d.vel[Snare][t] = jitter (72);
         }
 
         if (gaskin)
@@ -100,11 +102,12 @@ void writeDrumPattern (Groove& groove, const Settings& settings, Rng& rng)
             if ((s16 == 7 || s16 == 15) && ! stabCovers (stab, t))
                 d.vel[Rim][t] = jitter (velFromDb (-5.f));
             // Beat 1's "e", so the rim knobs still speak when the stab covers 7 and 15.
-            if (s16 == 3 && d.vel[Rim][t] == 0)
+            // Skipped while the fill is on: that render is the UK MIN loudness loop.
+            if (! s.fill && s16 == 3 && d.vel[Rim][t] == 0)
                 d.vel[Rim][t] = jitter (velFromDb (-8.f));
-            // Ride on the "&" of beat 3, every other bar. Gaskin already rides
-            // the offbeats; UK MIN otherwise only rides a fill.
-            if (s16 == 10 && (bar % 2) == 0)
+            // Ride on the "&" of beat 3, every other bar, when the fill is off.
+            // The fill's own ride is the hit the UK MIN window was calibrated on.
+            if (! s.fill && s16 == 10 && (bar % 2) == 0)
                 d.vel[Ride][t] = jitter (88);
             // Shaker 16ths. Levels cycle −5 / −17 / 0 / −7 inside the beat.
             // "e" and "a" are odd 16ths, so the engine swing delays them.
