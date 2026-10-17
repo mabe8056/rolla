@@ -47,6 +47,7 @@ struct MixChain
     bool forceMono = false;
     float inputTrimDb = 0.f;
     float outputTrimDb = 0.f;
+    float tpCeilDb = 24.f;
     float stTargetLufs = -24.f;
     bool valid = false;
 };
@@ -80,6 +81,8 @@ struct MixProgram
     // Extra constant on the MAIN sum, measured so the default full mix sits on the SUM gate.
     // Frozen for a render (same gain on FULL / MUTE / SOLO). Not a limiter.
     float sumAlignDb[kMixDialects] {};
+    // Absolute ceiling for the per-lane oversampled clip, after output trim. 24 dB = off.
+    float tpCeilDb[kMixDialects][kMixLanes] {};
     char overrideId[kMixMelodic][kMixOverrideSlots][24] {};
     MixOverride overrideChain[kMixMelodic][kMixOverrideSlots] {};
     int overrideCount[kMixMelodic] {};
