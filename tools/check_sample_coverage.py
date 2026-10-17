@@ -82,6 +82,12 @@ def main():
                 if "SYNTH" not in name.upper():
                     failed = True
                     print(f"FAIL {lane} synth preset {name!r} is not clearly named")
+            elif mode == "LAYER":
+                failed = True
+                print(f"FAIL {lane} preset {preset.get('id')} is LAYER; factory one-shots are SAMPLE")
+            elif mode != "SAMPLE":
+                failed = True
+                print(f"FAIL {lane} preset {preset.get('id')} mode {mode} is not SAMPLE")
             elif not sample.get("file"):
                 failed = True
                 print(f"FAIL {lane} preset {preset.get('id')} has no sample file")
@@ -101,6 +107,9 @@ def main():
                 failed = True
                 print(f"FAIL drum synth kit is named {preset.get('name')!r}")
             continue
+        if mode != "SAMPLE":
+            failed = True
+            print(f"FAIL kit {preset.get('id')} mode {mode} is not SAMPLE")
         sampled += 1
         pools = sample.get("voicePools") or {}
         for voice in DRUM_VOICES:

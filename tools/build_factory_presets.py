@@ -88,30 +88,26 @@ def sample_block(meta, lane):
     lead = float(prep.get("lead_ms_at_-60dBFS") or 0)
     start = round(max(0.0, lead) / 1000.0, 4)
     root = meta.get("root") or "C3"
+    # Factory one-shots are the sound. LAYER (synth blended under the file)
+    # is opt-in from the lane control; the stored mix is what that opt-in uses.
     mode = "SAMPLE"
     mix = 1.0
     loop_on = False
     slice_on = False
     if lane == "bass":
-        mode = "LAYER"
         mix = 0.45 if length < 400 else (0.6 if length >= 800 else 0.55)
         loop_on = length >= 800
     elif lane == "stab":
-        mode = "LAYER" if length >= 700 else "SAMPLE"
-        mix = 0.6 if mode == "LAYER" else 1.0
+        mix = 0.6 if length >= 700 else 1.0
         loop_on = length >= 1200
     elif lane == "hits":
-        mode = "SAMPLE"
         mix = 1.0
     elif lane == "pluck":
-        mode = "LAYER" if length >= 800 else "SAMPLE"
-        mix = 0.55 if mode == "LAYER" else 1.0
+        mix = 0.55 if length >= 800 else 1.0
     elif lane == "pad":
-        mode = "LAYER"
         mix = 0.6
         loop_on = True
     elif lane == "vox":
-        mode = "SAMPLE"
         mix = 1.0
         slice_on = length >= 600
 
@@ -191,6 +187,10 @@ def main():
             styles = HERO_STYLES.get((lane, preset.get("id")))
             if styles:
                 preset["styles"] = styles
+            sample = preset.get("sample") or {}
+            if sample.get("file") and str(sample.get("mode", "")).upper() != "SYNTH":
+                sample["mode"] = "SAMPLE"
+                preset["sample"] = sample
             kept.append(preset)
         if not kept:
             raise SystemExit(f"{lane} has no hero preset to copy")
@@ -241,6 +241,8 @@ def main():
         if styles:
             preset["styles"] = styles
         sample = preset.setdefault("sample", {})
+        # His kit is the voice. The circuit model stays quiet unless the
+        # file is missing (or the lane is on the named 909 SYNTH preset).
         sample["mode"] = "SAMPLE"
         sample["layerMix"] = 1.0
         voices = sample.setdefault("voices", {})
@@ -259,11 +261,11 @@ def main():
         sample["voicePools"] = pools
 
     doc["notes"] = (
-        "Schema v3. Factory melodic presets are SAMPLE or LAYER and point at "
-        "files under the samples root. One SYNTH preset per lane keeps the "
-        "circuit voice. Drum kits sample every voice from DRUMS/{KICK,SNARE,"
-        "CLAP,RIM,CH,OH,RIDE,PERC}; 909 SYNTH is the circuit kit and the "
-        "missing-file fallback. Do not commit audio."
+        "Schema v3. Factory melodic presets are SAMPLE and point at files "
+        "under the samples root. LAYER is opt-in. One SYNTH preset per lane "
+        "keeps the circuit voice. Drum kits sample every voice from "
+        "DRUMS/{KICK,SNARE,CLAP,RIM,CH,OH,RIDE,PERC}; the circuit model plays "
+        "only when that file is missing, or on the 909 SYNTH kit. Do not commit audio."
     )
 
     with open(PRESETS, "w", encoding="utf-8") as handle:

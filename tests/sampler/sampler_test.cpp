@@ -386,7 +386,7 @@ int main()
         expect (rolla::loadPresetsFromJson (factory, text.toRawUTF8(), (int) text.getNumBytesAsUTF8()),
                 "factory presets parse");
         expect (std::string (factory.bass[0].id) == "pluck", "bass order");
-        expect (factory.bass[0].sample.mode == rolla::SampleMode::Layer, "pluck is layered");
+        expect (factory.bass[0].sample.mode == rolla::SampleMode::Sample, "pluck is his one-shot");
         expect (std::string (factory.bass[0].sample.file) == "BASS/THMAG_Bass_One_Shot_4_Fm.wav",
                 "pluck uses the manifest file");
         expect (factory.bass[1].sample.loop.on && factory.bass[1].sample.loop.start > 32.f,
@@ -426,6 +426,12 @@ int main()
         expect (synths == 1 && std::string (factory.bass[factory.count[rolla::Bass] - 1].name) == "SYNTH",
                 "one clearly named synth bass preset");
         expect (sampled + synths == factory.count[rolla::Bass], "every bass preset is a sample or SYNTH");
+        int factoryLayers = 0;
+        for (int part = rolla::Bass; part <= rolla::Vox; ++part)
+            for (int i = 0; i < factory.count[part]; ++i)
+                if (rolla::specAt (factory, part, i).mode == rolla::SampleMode::Layer)
+                    ++factoryLayers;
+        expect (factoryLayers == 0, "factory one-shots are SAMPLE; LAYER is opt-in");
         const int first = rolla::pickPresetForRoll (factory, rolla::Bass, rolla::UkMin, 1);
         expect (first >= 0 && factory.bass[first].sample.mode != rolla::SampleMode::Synth,
                 "roll does not pick the synth bass");

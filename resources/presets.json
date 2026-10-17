@@ -1,7 +1,7 @@
 {
   "schemaVersion": 3,
   "version": 3,
-  "notes": "Schema v3. Factory melodic presets are SAMPLE or LAYER and point at files under the samples root. One SYNTH preset per lane keeps the circuit voice. Drum kits sample every voice from DRUMS/{KICK,SNARE,CLAP,RIM,CH,OH,RIDE,PERC}; 909 SYNTH is the circuit kit and the missing-file fallback. Do not commit audio.",
+  "notes": "Schema v3. Factory melodic presets are SAMPLE and point at files under the samples root. LAYER is opt-in. One SYNTH preset per lane keeps the circuit voice. Drum kits sample every voice from DRUMS/{KICK,SNARE,CLAP,RIM,CH,OH,RIDE,PERC}; the circuit model plays only when that file is missing, or on the 909 SYNTH kit. Do not commit audio.",
   "parts": {
     "bass": {
       "presets": [
@@ -27,7 +27,7 @@
           "trimDb": 0,
           "octave": 1,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "BASS/THMAG_Bass_One_Shot_4_Fm.wav",
             "root": "F1",
             "start": 0.0006,
@@ -75,7 +75,7 @@
           "trimDb": -1,
           "octave": 1,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "BASS/THMAG_Bass_One_Shot_1_Fm.wav",
             "root": "F1",
             "start": 0.006,
@@ -129,7 +129,7 @@
             "peakDb": -6
           },
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "BASS/DCB_Bass_01_C.wav",
             "root": "C#1",
             "start": 0.0005,
@@ -177,7 +177,7 @@
           "trimDb": 0,
           "octave": 1,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "BASS/THMAG_Bass_One_Shot_4_Fm.wav",
             "root": "F1",
             "start": 0.001,
@@ -219,7 +219,7 @@
           "trimDb": 0,
           "octave": 1,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "BASS/DCB_Bass_01_C.wav",
             "root": "C#1",
             "start": 0.0,
@@ -261,7 +261,7 @@
           "trimDb": 0,
           "octave": 1,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "BASS/THMAG_Bass_One_Shot_1_Fm.wav",
             "root": "F1",
             "start": 0.001,
@@ -303,7 +303,7 @@
           "trimDb": 0,
           "octave": 1,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "BASS/VER_CleanSub_Bass_C.wav",
             "root": "C2",
             "start": 0.001,
@@ -345,7 +345,7 @@
           "trimDb": 0,
           "octave": 1,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "BASS/VER_Donk_Bass_C.wav",
             "root": "C2",
             "start": 0.001,
@@ -384,7 +384,7 @@
           "trimDb": 0,
           "octave": 1,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "BASS/VER_VeritasReese_Bass_C.wav",
             "root": "C2",
             "start": 0.0003,
@@ -423,7 +423,7 @@
           "trimDb": 0,
           "octave": 1,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "BASS/MA_C_303Square_Synth.wav",
             "root": "C3",
             "start": 0.0,
@@ -462,7 +462,7 @@
           "trimDb": 0,
           "octave": 1,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "BASS/THMAG_Bass_One_Shot_3_Fm.wav",
             "root": "F1",
             "start": 0.0004,
@@ -504,7 +504,7 @@
           "trimDb": 0,
           "octave": 1,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "BASS/THMAG_Bass_One_Shot_6_Fm.wav",
             "root": "F1",
             "start": 0.0008,
@@ -547,7 +547,7 @@
           "trimDb": 0,
           "octave": 1,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "BASS/THMAG_Bass_One_Shot_8_Fm.wav",
             "root": "F1",
             "start": 0.0,
@@ -589,7 +589,7 @@
           "trimDb": 0,
           "octave": 1,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "BASS/DCB_Bass_09_C.wav",
             "root": "C2",
             "start": 0.0,
@@ -631,7 +631,7 @@
           "trimDb": 0,
           "octave": 1,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "BASS/TAT_Bass_11_Ds.wav",
             "root": "D#1",
             "start": 0.0,
@@ -673,7 +673,7 @@
           "trimDb": 0,
           "octave": 1,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "BASS/THMN_Bass_Shot_14_Fmin.wav",
             "root": "F1",
             "start": 0.0,
@@ -715,7 +715,7 @@
           "trimDb": 0,
           "octave": 1,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "BASS/THMN_Bass_Shot_12_Fmin.wav",
             "root": "F2",
             "start": 0.0,
@@ -757,7 +757,7 @@
           "trimDb": 0,
           "octave": 1,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "BASS/TAT_Bass_16_F.wav",
             "root": "F1",
             "start": 0.0,
@@ -799,7 +799,7 @@
           "trimDb": 0,
           "octave": 1,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "BASS/TAT_Bass_09_Ds.wav",
             "root": "D#1",
             "start": 0.0006,
@@ -841,7 +841,7 @@
           "trimDb": 0,
           "octave": 1,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "BASS/TAT_Bass_05_As.wav",
             "root": "A#1",
             "start": 0.0009,
@@ -883,7 +883,7 @@
           "trimDb": 0,
           "octave": 1,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "BASS/TAT_Bass_15_F.wav",
             "root": "F1",
             "start": 0.0,
@@ -925,7 +925,7 @@
           "trimDb": 0,
           "octave": 1,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "BASS/VER_MoodyOrgan_Bass_C.wav",
             "root": "C1",
             "start": 0.0,
@@ -967,7 +967,7 @@
           "trimDb": 0,
           "octave": 1,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "BASS/AR_Bass_07_C.wav",
             "root": "C2",
             "start": 0.0003,
@@ -1009,7 +1009,7 @@
           "trimDb": 0,
           "octave": 1,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "BASS/JF_Bass_15_C.wav",
             "root": "C1",
             "start": 0.0,
@@ -1051,7 +1051,7 @@
           "trimDb": 0,
           "octave": 1,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "BASS/SD_Bass_20_C.wav",
             "root": "C1",
             "start": 0.0,
@@ -1093,7 +1093,7 @@
           "trimDb": 0,
           "octave": 1,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "BASS/MPH_Bass_03_C.wav",
             "root": "C2",
             "start": 0.0005,
@@ -1135,7 +1135,7 @@
           "trimDb": 0,
           "octave": 1,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "BASS/JF_Bass_06_C.wav",
             "root": "C1",
             "start": 0.0002,
@@ -1276,7 +1276,7 @@
             7
           ],
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "STAB/JF_Synth_12_C.wav",
             "root": "C3",
             "start": 0.0,
@@ -1388,7 +1388,7 @@
             15
           ],
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "STAB/AR_Synth_06_C.wav",
             "root": "C4",
             "start": 0.001,
@@ -1438,7 +1438,7 @@
             15
           ],
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "STAB/MA_C_Powerchord_Synth.wav",
             "root": "C2",
             "start": 0.0,
@@ -1487,7 +1487,7 @@
             15
           ],
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "STAB/JF_Synth_12_C.wav",
             "root": "C3",
             "start": 0.0003,
@@ -1776,7 +1776,7 @@
             15
           ],
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "STAB/THMN_Chord_Stab_3_Cmin.wav",
             "root": "G#1",
             "start": 0.0,
@@ -1822,7 +1822,7 @@
             15
           ],
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "STAB/THMN_Chord_Stab_4_Cmin.wav",
             "root": "D#4",
             "start": 0.0,
@@ -1868,7 +1868,7 @@
             15
           ],
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "STAB/THMN_Chord_Stab_5_Cmin.wav",
             "root": "C2",
             "start": 0.0,
@@ -1960,7 +1960,7 @@
             15
           ],
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "STAB/MA_C_JunoSaw_Synth.wav",
             "root": "C3",
             "start": 0.0,
@@ -2006,7 +2006,7 @@
             15
           ],
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "STAB/THMN_Stab_1_Cmin.wav",
             "root": "C3",
             "start": 0.0002,
@@ -2056,7 +2056,7 @@
             15
           ],
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "STAB/THMN_Stab_8_Cmin.wav",
             "root": "E3",
             "start": 0.0,
@@ -2105,7 +2105,7 @@
             15
           ],
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "STAB/THMN_Stab_3_Cmin.wav",
             "root": "C3",
             "start": 0.001,
@@ -2154,7 +2154,7 @@
             15
           ],
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "STAB/JF_Synth_09_C.wav",
             "root": "C3",
             "start": 0.0,
@@ -2203,7 +2203,7 @@
             15
           ],
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "STAB/THMN_Stab_2_Cmin.wav",
             "root": "C3",
             "start": 0.0,
@@ -2252,7 +2252,7 @@
             15
           ],
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "STAB/CD_Synth_Hit_09_C.wav",
             "root": "C3",
             "start": 0.0007,
@@ -2350,7 +2350,7 @@
             15
           ],
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "STAB/THMN_Stab_4_Cmin.wav",
             "root": "C3",
             "start": 0.0,
@@ -2399,7 +2399,7 @@
             15
           ],
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "STAB/THMAG_Synth_One_Shot_29_Fm.wav",
             "root": "F1",
             "start": 0.0,
@@ -2497,7 +2497,7 @@
             15
           ],
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "STAB/TAT_SFX_05.wav",
             "root": "B3",
             "start": 0.0001,
@@ -2546,7 +2546,7 @@
             15
           ],
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "STAB/MPH_Synth_03_C.wav",
             "root": "C4",
             "start": 0.001,
@@ -2592,7 +2592,7 @@
             15
           ],
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "STAB/SD_Synth_05_C.wav",
             "root": "C2",
             "start": 0.0003,
@@ -2669,7 +2669,7 @@
           "detune": 1.0,
           "trimDb": 2,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "HITS/VER_DX7Organ_Bass_C.wav",
             "root": "C2",
             "start": 0.0006,
@@ -2756,7 +2756,7 @@
           "detune": 0.8,
           "trimDb": -6,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "HITS/THMN_Instruments_Rave_Stabber_Dmin_142.wav",
             "root": "D4",
             "start": 0.0,
@@ -3540,7 +3540,7 @@
           "brightness": 1.4,
           "trimDb": -9,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PLUCK/VER_Synth_Hit_Flutter_C.wav",
             "root": "C4",
             "start": 0.0,
@@ -3718,7 +3718,7 @@
           "brightness": 1.0,
           "trimDb": -8,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PLUCK/VER_Synth_Hit_Flutter_C.wav",
             "root": "C4",
             "start": 0.0,
@@ -3746,7 +3746,7 @@
           "brightness": 1.0,
           "trimDb": -8,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PLUCK/TAT_SFX_06.wav",
             "root": "B5",
             "start": 0.0002,
@@ -3774,7 +3774,7 @@
           "brightness": 1.0,
           "trimDb": -8,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PLUCK/THMN_Instruments_Square_Pluck_Csmin_142.wav",
             "root": "A4",
             "start": 0.0,
@@ -3799,7 +3799,7 @@
           "brightness": 1.0,
           "trimDb": -8,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PLUCK/THMN_Instruments_Pluck_Layer_Cmin_145.wav",
             "root": "C5",
             "start": 0.0,
@@ -3853,7 +3853,7 @@
           "brightness": 1.0,
           "trimDb": -8,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PLUCK/AR_Synth_01_C.wav",
             "root": "C3",
             "start": 0.0,
@@ -3881,7 +3881,7 @@
           "brightness": 1.0,
           "trimDb": -8,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PLUCK/AR_Synth_31_C.wav",
             "root": "C3",
             "start": 0.0,
@@ -3909,7 +3909,7 @@
           "brightness": 1.0,
           "trimDb": -8,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PLUCK/AR_Synth_22_C.wav",
             "root": "C2",
             "start": 0.0,
@@ -3937,7 +3937,7 @@
           "brightness": 1.0,
           "trimDb": -8,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PLUCK/AR_Synth_21_C.wav",
             "root": "C3",
             "start": 0.0,
@@ -3966,7 +3966,7 @@
           "brightness": 1.0,
           "trimDb": -8,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PLUCK/SD_Synth_01_C.wav",
             "root": "C2",
             "start": 0.0002,
@@ -3994,7 +3994,7 @@
           "brightness": 1.0,
           "trimDb": -8,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PLUCK/SD_Synth_06_C.wav",
             "root": "F2",
             "start": 0.0,
@@ -4047,7 +4047,7 @@
           "brightness": 1.0,
           "trimDb": -8,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PLUCK/MPH_Synth_04_C.wav",
             "root": "C3",
             "start": 0.0,
@@ -4072,7 +4072,7 @@
           "brightness": 1.0,
           "trimDb": -8,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PLUCK/DCB_Synth_06_C.wav",
             "root": "C2",
             "start": 0.001,
@@ -4100,7 +4100,7 @@
           "brightness": 1.0,
           "trimDb": -8,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PLUCK/THMN_Stab_7_Cmin.wav",
             "root": "F2",
             "start": 0.0007,
@@ -4125,7 +4125,7 @@
           "brightness": 1.0,
           "trimDb": -8,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PLUCK/MA_128_Telephone_Synth_FX.wav",
             "root": "C#4",
             "start": 0.0,
@@ -4150,7 +4150,7 @@
           "brightness": 1.0,
           "trimDb": -8,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PLUCK/MPH_Synth_16_C.wav",
             "root": "C3",
             "start": 0.0003,
@@ -4205,7 +4205,7 @@
           "reverbSend": 0.45,
           "trimDb": -12,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/JF_128_Fm_Phased_Funky_Pad_1_Pad.wav",
             "root": "F2",
             "start": 0.0,
@@ -4278,7 +4278,7 @@
           "reverbSend": 0.35,
           "trimDb": -11,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/TAT_128_Pad_11_Fm.wav",
             "root": "D#1",
             "start": 0.0,
@@ -4314,7 +4314,7 @@
           "reverbSend": 0.45,
           "trimDb": -12,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/JF_128_Fm_Phased_Funky_Pad_1_Pad.wav",
             "root": "F2",
             "start": 0.0,
@@ -4345,7 +4345,7 @@
           "reverbSend": 0.45,
           "trimDb": -12,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/TAT_128_Pad_11_Fm.wav",
             "root": "D#1",
             "start": 0.0,
@@ -4376,7 +4376,7 @@
           "reverbSend": 0.45,
           "trimDb": -12,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/CD_SFX_Vinyl_Texture.wav",
             "root": "A#3",
             "start": 0.0001,
@@ -4406,7 +4406,7 @@
           "reverbSend": 0.45,
           "trimDb": -12,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/THMN_Instruments_Pad_5th_Cmin_142.wav",
             "root": "C4",
             "start": 0.001,
@@ -4438,7 +4438,7 @@
           "reverbSend": 0.45,
           "trimDb": -12,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/JF_128_Robot_Pad_Background.wav",
             "root": "A3",
             "start": 0.0,
@@ -4469,7 +4469,7 @@
           "reverbSend": 0.45,
           "trimDb": -12,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/VER_134_EndOfBarChord_Asm_FX.wav",
             "root": "A#3",
             "start": 0.001,
@@ -4499,7 +4499,7 @@
           "reverbSend": 0.45,
           "trimDb": -12,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/JF_128_Fm_Hey_Soundscape_Pads.wav",
             "root": "F3",
             "start": 0.001,
@@ -4529,7 +4529,7 @@
           "reverbSend": 0.45,
           "trimDb": -12,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/JF_128_Gsm_Vocal_Texture_Pad.wav",
             "root": "G#2",
             "start": 0.001,
@@ -4556,7 +4556,7 @@
           "reverbSend": 0.45,
           "trimDb": -12,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/JF_128_Gsm_EvolvingStrings_Pad.wav",
             "root": "G#1",
             "start": 0.001,
@@ -4583,7 +4583,7 @@
           "reverbSend": 0.45,
           "trimDb": -12,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/JF_128_Am_Juno106_Pad.wav",
             "root": "E4",
             "start": 0.0003,
@@ -4610,7 +4610,7 @@
           "reverbSend": 0.45,
           "trimDb": -12,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/DCB_132_Gm_Echo_Pad.wav",
             "root": "G5",
             "start": 0.001,
@@ -4640,7 +4640,7 @@
           "reverbSend": 0.45,
           "trimDb": -12,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/THMN_Tension_String_C_142.wav",
             "root": "C6",
             "start": 0.001,
@@ -4667,7 +4667,7 @@
           "reverbSend": 0.45,
           "trimDb": -12,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/VER_134_GatedUplifter_FX.wav",
             "root": "D5",
             "start": 0.001,
@@ -4694,7 +4694,7 @@
           "reverbSend": 0.45,
           "trimDb": -12,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/THMN_Sweep_Up_1.wav",
             "root": "A#5",
             "start": 0.001,
@@ -4721,7 +4721,7 @@
           "reverbSend": 0.45,
           "trimDb": -12,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/THMAG_Background_Noise_3_Cmin_132.wav",
             "root": "C4",
             "start": 0.001,
@@ -4748,7 +4748,7 @@
           "reverbSend": 0.45,
           "trimDb": -12,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/JF_128_In_The_City_Background.wav",
             "root": "E3",
             "start": 0.0,
@@ -4778,7 +4778,7 @@
           "reverbSend": 0.45,
           "trimDb": -12,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/JF_128_Gsm_Strung_Up_Pad.wav",
             "root": "G#6",
             "start": 0.0001,
@@ -4809,7 +4809,7 @@
           "reverbSend": 0.45,
           "trimDb": -12,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/JF_128_TheBirds_Background.wav",
             "root": "D#6",
             "start": 0.0,
@@ -4836,7 +4836,7 @@
           "reverbSend": 0.45,
           "trimDb": -12,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/DCB_130_Solar_Background.wav",
             "root": "A3",
             "start": 0.0001,
@@ -4863,7 +4863,7 @@
           "reverbSend": 0.45,
           "trimDb": -12,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/THMAG_Background_Noise_4_Cmin_132.wav",
             "root": "C4",
             "start": 0.001,
@@ -4894,7 +4894,7 @@
           "reverbSend": 0.45,
           "trimDb": -12,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/THMAG_Background_Noise_1_Cmin_132.wav",
             "root": "C3",
             "start": 0.0005,
@@ -4924,7 +4924,7 @@
           "reverbSend": 0.45,
           "trimDb": -12,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/JF_128_Swampy_Background.wav",
             "root": "F3",
             "start": 0.0,
@@ -4954,7 +4954,7 @@
           "reverbSend": 0.45,
           "trimDb": -12,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/JF_128_Dsm_Resonator_Background.wav",
             "root": "A6",
             "start": 0.0,
@@ -4981,7 +4981,7 @@
           "reverbSend": 0.45,
           "trimDb": -12,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/DCB_131_Frost_Background.wav",
             "root": "F#6",
             "start": 0.001,
@@ -5011,7 +5011,7 @@
           "reverbSend": 0.45,
           "trimDb": -12,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/DCB_132_Neb_Background.wav",
             "root": "C1",
             "start": 0.001,
@@ -5042,7 +5042,7 @@
           "reverbSend": 0.45,
           "trimDb": -12,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/DCB_132_Fm_Clash_Pad.wav",
             "root": "F2",
             "start": 0.001,
@@ -5069,7 +5069,7 @@
           "reverbSend": 0.45,
           "trimDb": -12,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/THMAG_Background_Noise_5_Cmin_132.wav",
             "root": "C4",
             "start": 0.001,
@@ -5096,7 +5096,7 @@
           "reverbSend": 0.45,
           "trimDb": -12,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/TAT_128_Pad_05_Bm.wav",
             "root": "B3",
             "start": 0.0,
@@ -5123,7 +5123,7 @@
           "reverbSend": 0.45,
           "trimDb": -12,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/TAT_128_Pad_01_Am.wav",
             "root": "A1",
             "start": 0.001,
@@ -5150,7 +5150,7 @@
           "reverbSend": 0.45,
           "trimDb": -12,
           "sample": {
-            "mode": "LAYER",
+            "mode": "SAMPLE",
             "file": "PAD/MA_128_E_Grains_Pad.wav",
             "root": "E2",
             "start": 0.001,
