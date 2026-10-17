@@ -157,6 +157,8 @@ add_executable(rolla-ui-shot
     src/Generator/Generator.cpp
     src/Generator/Presets.cpp
     src/Generator/MidiFile.cpp
+    src/Drums/DrumMachine.cpp
+    src/Drums/DrumPattern.cpp
 )
 
 target_compile_definitions(rolla-ui-shot
