@@ -290,6 +290,9 @@ void testSoundControls()
     proc.waitUntilReady();
     Head head;
     proc.setPlayHead (&head);
+    // Default intensity leaves pluck out. The lane knobs are tested with every lane in.
+    setDenorm (proc, "intensity", 100.f);
+    expect (pumpUntil ([&] { return proc.copyGroove().lane[rolla::Pluck].count > 0; }), "intensity 100 brings pluck in");
 
     const int lanes[] = { rolla::Bass, rolla::Stab, rolla::Hits, rolla::Pluck, rolla::Pad, rolla::Vox };
     const char* names[] = { "BASS", "STAB", "HITS", "PLUCK", "PAD", "VOX" };
@@ -476,14 +479,14 @@ void testBindings()
             setDenorm (proc, id, 0.51f);
         expect (std::abs (slider->getValue() - (double) rawOf (proc, id)) < 0.03, std::string (id) + " follows the host");
     };
-    checkKnob ("Dark.", "dark");
-    checkKnob ("Busy.", "busy");
-    checkKnob ("Bounce.", "bounce");
-    checkKnob ("Stab.", "stab");
-    checkKnob ("Tone.", "bassTone");
-    checkKnob ("Punch.", "bassPunch");
-    checkKnob ("Level,", "bassLevel");
-    checkKnob ("Swing,", "swing");
+    checkKnob ("Sets how dark", "dark");
+    checkKnob ("Sets how many bass", "busy");
+    checkKnob ("Sets how early", "bounce");
+    checkKnob ("Sets how often the stab", "stab");
+    checkKnob ("Brightness", "bassTone");
+    checkKnob ("From round", "bassPunch");
+    checkKnob ("This lane's volume", "bassLevel");
+    checkKnob ("Swing, from 50", "swing");
 
     auto* duck = findHelp (*editor, "Duck.");
     expect (duck != nullptr, "duck on screen");
@@ -510,7 +513,7 @@ void testBindings()
     auto* style = findHelp (*editor, "Style.");
     expect (style != nullptr, "style on screen");
     if (style != nullptr)
-        if (auto* button = findButton (*style, "LONG"))
+        if (auto* button = findButton (*style, "DEEP"))
         {
             const auto generation = proc.copyGroove().generation;
             button->triggerClick();
@@ -739,7 +742,7 @@ void testStabDice()
     expect (editor != nullptr, "dice editor");
     if (editor == nullptr)
         return;
-    auto* row = findHelp (*editor, "STAB.");
+    auto* row = findHelp (*editor, "Open STAB sound");
     expect (row != nullptr, "stab row");
     auto* dice = row != nullptr ? findHelp (*row, "Shuffle this lane") : nullptr;
     expect (dice != nullptr, "stab dice");

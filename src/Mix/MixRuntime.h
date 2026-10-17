@@ -83,10 +83,15 @@ private:
         MixSatType satTo = MixSatType::None;
         int hpfSlopeFrom = 12, hpfSlopeTo = 12, lpfSlopeFrom = 12, lpfSlopeTo = 12;
         MixEqType eqTypeFrom[2] {}, eqTypeTo[2] {};
+        // 4× true-peak clip histories. Every lane runs the same FIR so the mute null keeps one delay.
+        float tpUp[2][8] {};
+        float tpDown[2][32] {};
     };
 
     static float raised (float u) noexcept;
     static float shaper (MixSatType type, float x, float drive) noexcept;
+    static float tpShape (float x, float ceilLin) noexcept;
+    static float clipSample (Strip& s, int ch, float x, float ceilLin) noexcept;
     static void butterworthQ (int slope, float& q0, float& q1, int& stages) noexcept;
     float rampOf (int lane, float ms) const noexcept;
     MixChain blended (const Strip& s) const noexcept;

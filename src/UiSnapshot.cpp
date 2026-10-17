@@ -15,15 +15,24 @@ int main (int argc, char** argv)
 
     const juce::String outPath = argc > 1 ? juce::String (argv[1]) : juce::String ("editor@2x.png");
     bool showMissing = false;
+    bool openLane = false;
     int lane = 0;
+    float scale = 2.f;
     for (int i = 2; i < argc; ++i)
     {
         const juce::String arg (argv[i]);
         if (arg == "--missing")
             showMissing = true;
         else if (arg.startsWith ("--lane="))
+        {
+            openLane = true;
             lane = arg.substring (7).getIntValue();
+        }
+        else if (arg.startsWith ("--scale="))
+            scale = (float) arg.substring (8).getDoubleValue();
     }
+    if (scale < 1.f)
+        scale = 1.f;
 
     const bool bench = outPath == "--bench" || outPath == "--bench-later";
     if (outPath == "--bench-later")
@@ -67,12 +76,12 @@ int main (int argc, char** argv)
             const double tEdit0 = juce::Time::getMillisecondCounterHiRes();
             editor = std::make_unique<rolla::RollaEditor> (*processor);
             const double editorReadyMs = juce::Time::getMillisecondCounterHiRes() - tEdit0;
-            const auto sample = rolla::Theme::sansBold (rolla::Theme::typeControl);
+            const auto sample = rolla::Theme::font (rolla::Theme::Role::lane);
             std::printf ("instantiate_ms %.2f\neditor_ms %.2f\n", instMs, editMs);
             std::printf ("instantiate_warm_ms %.2f\neditor_warm_ms %.2f\n", t1 - t0, t2 - t1);
             std::printf ("startup_wait_ms %.2f\nstartup_work_ms %.2f\n", readyMs, processor->startupMillis());
             std::printf ("editor_after_ready_ms %.2f\n", editorReadyMs);
-            std::printf ("font12_height_px %.2f\nfont12_point_px %.2f\n",
+            std::printf ("lane_height_px %.2f\nlane_point_px %.2f\n",
                          sample.getHeight(), sample.getHeightInPoints());
         }
         editor.reset();
@@ -95,13 +104,43 @@ int main (int argc, char** argv)
 
     rolla::RollaEditor editor (processor);
     editor.setSize (1024, 640);
-    if (lane != 0)
+    if (openLane)
         editor.selectLane (lane);
 
-    juce::Image image (juce::Image::ARGB, 2048, 1280, true);
+    {
+        auto measureWidth = [] (rolla::Theme::Role role, const juce::String& text)
+        {
+            juce::GlyphArrangement glyphs;
+            glyphs.addLineOfText (rolla::Theme::font (role), text, 0.f, 0.f);
+            return glyphs.getBoundingBox (0, -1, true).getWidth();
+        };
+        auto capHeight = [] (rolla::Theme::Role role)
+        {
+            juce::GlyphArrangement glyphs;
+            glyphs.addLineOfText (rolla::Theme::font (role), "H", 0.f, 0.f);
+            if (glyphs.getNumGlyphs() < 1)
+                return 0.f;
+            juce::Path path;
+            glyphs.getGlyph (0).createPath (path);
+            return path.getBounds().getHeight();
+        };
+        std::printf ("gaskin_width_px %.2f\nlane_cap_px %.2f\nsection_cap_px %.2f\n",
+                     measureWidth (rolla::Theme::Role::pill, "GASKIN 90s"),
+                     capHeight (rolla::Theme::Role::lane),
+                     capHeight (rolla::Theme::Role::section));
+        std::printf ("lane_i_px %.2f\nlane_m_px %.2f\nword_i_px %.2f\nword_m_px %.2f\n",
+                     measureWidth (rolla::Theme::Role::lane, "I"),
+                     measureWidth (rolla::Theme::Role::lane, "M"),
+                     measureWidth (rolla::Theme::Role::wordmark, "I"),
+                     measureWidth (rolla::Theme::Role::wordmark, "M"));
+    }
+
+    const int pixelsW = juce::roundToInt (1024.f * scale);
+    const int pixelsH = juce::roundToInt (640.f * scale);
+    juce::Image image (juce::Image::ARGB, pixelsW, pixelsH, true);
     {
         juce::Graphics g (image);
-        g.addTransform (juce::AffineTransform::scale (2.f));
+        g.addTransform (juce::AffineTransform::scale (scale));
         editor.paintEntireComponent (g, true);
     }
 
