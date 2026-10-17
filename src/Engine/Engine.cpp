@@ -283,9 +283,9 @@ struct Duck
     bool gateMode = false;
 };
 
-int clampPreset (int i) noexcept
+int clampPreset (const PresetBank& bank, int part, int i) noexcept
 {
-    return std::clamp (i, 0, PresetBank::kPer - 1);
+    return presetSlot (bank, part, i);
 }
 
 float velGainOf (int vel) noexcept
@@ -606,15 +606,15 @@ void Engine::process (const Groove& groove,
 
     const float toneB = params.tone[Bass] - 0.5f;
     const float punchB = params.punch[Bass] - 0.5f;
-    BassPatch bassPatch = bank.bass[clampPreset (params.preset[Bass])];
+    BassPatch bassPatch = bank.bass[clampPreset (bank, Bass, params.preset[Bass])];
     applyDialectBass (bank, params.dialect, bassPatch);
     const auto& bp = bassPatch;
-    const auto& sp = bank.stab[clampPreset (params.preset[Stab])];
-    const auto& hp = bank.hits[clampPreset (params.preset[Hits])];
-    const auto& pp = bank.pluck[clampPreset (params.preset[Pluck])];
-    const auto& padP = bank.pad[clampPreset (params.preset[Pad])];
-    const auto& vp = bank.vox[clampPreset (params.preset[Vox])];
-    const auto& dp = bank.drums[clampPreset (params.preset[Drums])];
+    const auto& sp = bank.stab[clampPreset (bank, Stab, params.preset[Stab])];
+    const auto& hp = bank.hits[clampPreset (bank, Hits, params.preset[Hits])];
+    const auto& pp = bank.pluck[clampPreset (bank, Pluck, params.preset[Pluck])];
+    const auto& padP = bank.pad[clampPreset (bank, Pad, params.preset[Pad])];
+    const auto& vp = bank.vox[clampPreset (bank, Vox, params.preset[Vox])];
+    const auto& dp = bank.drums[clampPreset (bank, Drums, params.preset[Drums])];
 
     for (int i = 0; i < NumParts; ++i)
     {
@@ -1861,7 +1861,7 @@ void Engine::process (const Groove& groove,
                 voxR += v.ring * 0.92f;
                 continue;
             }
-            const float bright = bank.vox[clampPreset (params.preset[Vox])].brightness * std::pow (2.f, (params.tone[Vox] - 0.5f) * 0.6f);
+            const float bright = bank.vox[clampPreset (bank, Vox, params.preset[Vox])].brightness * std::pow (2.f, (params.tone[Vox] - 0.5f) * 0.6f);
             v.vib += 5.f / srF;
             if (v.vib >= 1.f)
                 v.vib -= 1.f;

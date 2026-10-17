@@ -143,8 +143,63 @@ void readExtras (Extras& ex, const juce::var& o)
             apply (obj->getProperty ("ex"));
 }
 
+void readStyles (SampleSpec& spec, const juce::var& preset)
+{
+    spec.styles = 0;
+    auto* obj = preset.getDynamicObject();
+    if (obj == nullptr || ! obj->hasProperty ("styles"))
+        return;
+    if (auto* arr = obj->getProperty ("styles").getArray())
+    {
+        for (const auto& item : *arr)
+        {
+            const auto s = item.toString().toLowerCase();
+            if (s == "ukmin")
+                spec.styles = (std::uint8_t) (spec.styles | 1u);
+            else if (s == "long")
+                spec.styles = (std::uint8_t) (spec.styles | 2u);
+            else if (s == "pop")
+                spec.styles = (std::uint8_t) (spec.styles | 4u);
+            else if (s == "gaskin")
+                spec.styles = (std::uint8_t) (spec.styles | 8u);
+        }
+    }
+}
+
+void readVoicePools (DrumPatch& drum, const juce::var& preset)
+{
+    for (int v = 0; v < NumDrumVoices; ++v)
+        drum.voicePool[v].clear();
+    auto* obj = preset.getDynamicObject();
+    if (obj == nullptr || ! obj->hasProperty ("sample"))
+        return;
+    auto* sampleObj = obj->getProperty ("sample").getDynamicObject();
+    if (sampleObj == nullptr || ! sampleObj->hasProperty ("voicePools"))
+        return;
+    const auto pools = sampleObj->getProperty ("voicePools");
+    auto* poolsObj = pools.getDynamicObject();
+    if (poolsObj == nullptr)
+        return;
+    const char* keys[] = { "kick", "snare", "clap", "rim", "tomLow", "tomMid", "hatC", "hatO", "ride", "perc" };
+    for (int v = 0; v < NumDrumVoices && v < 10; ++v)
+    {
+        if (auto* arr = poolsObj->getProperty (keys[v]).getArray())
+        {
+            const int n = std::min (64, arr->size());
+            drum.voicePool[v].reserve ((size_t) n);
+            for (int i = 0; i < n; ++i)
+            {
+                const auto path = arr->getReference (i).toString();
+                if (path.isNotEmpty())
+                    drum.voicePool[v].push_back (path.toStdString());
+            }
+        }
+    }
+}
+
 void readSample (SampleSpec& spec, const juce::var& preset)
 {
+    readStyles (spec, preset);
     auto* obj = preset.getDynamicObject();
     if (obj == nullptr || ! obj->hasProperty ("sample"))
         return;
@@ -232,6 +287,22 @@ void fillDialect (DialectDefaults& d, const char* bass, const char* stab, const 
     setId (d.presetId[Drums], drums);
     d.hitsMute = hitsMute;
     d.swing = swing;
+}
+
+int presetCountIn (const juce::var& root, const char* part)
+{
+    auto* obj = root.getDynamicObject();
+    if (obj == nullptr)
+        return 0;
+    auto* partsObj = obj->getProperty ("parts").getDynamicObject();
+    if (partsObj == nullptr)
+        return 0;
+    auto* partObj = partsObj->getProperty (part).getDynamicObject();
+    if (partObj == nullptr)
+        return 0;
+    if (auto* arr = partObj->getProperty ("presets").getArray())
+        return std::min (PresetBank::kPer, arr->size());
+    return 0;
 }
 
 const juce::var* presetAt (const juce::var& root, const char* part, int index)
@@ -403,8 +474,22 @@ bool loadPresetsFromJson (PresetBank& bank, const char* json, int size)
             b.drive = num (*p, "drive", b.drive);
             b.trimDb = num (*p, "trimDb", b.trimDb);
             readSample (b.sample, *p);
+            readVoicePools (b, *p);
         }
     }
+
+    const int counts[NumParts] = {
+        presetCountIn (parsed, "bass"),
+        presetCountIn (parsed, "stab"),
+        presetCountIn (parsed, "hits"),
+        presetCountIn (parsed, "pluck"),
+        presetCountIn (parsed, "pad"),
+        presetCountIn (parsed, "vox"),
+        presetCountIn (parsed, "drums"),
+    };
+    for (int part = 0; part < NumParts; ++part)
+        if (counts[part] > 0)
+            bank.count[part] = counts[part];
 
     if (auto* root = parsed.getDynamicObject())
     {
@@ -470,7 +555,8 @@ int presetIndex (const PresetBank& bank, int part, const char* id) noexcept
 {
     if (id == nullptr || id[0] == 0 || part < 0 || part >= NumParts)
         return -1;
-    for (int i = 0; i < PresetBank::kPer; ++i)
+    const int n = bank.count[part] > 0 ? bank.count[part] : PresetBank::kPer;
+    for (int i = 0; i < n; ++i)
     {
         const char* have = "";
         switch (part)

@@ -37,6 +37,8 @@ int presetOf (const EngineParams& params, int part) noexcept
 {
     if (part < 0 || part >= NumParts)
         return 0;
+    if (params.presets != nullptr)
+        return presetSlot (*params.presets, part, params.preset[part]);
     const int i = params.preset[part];
     if (i < 0)
         return 0;
@@ -49,19 +51,7 @@ int presetOf (const EngineParams& params, int part) noexcept
 
 const SampleSpec& sampleSpecFor (const PresetBank& bank, int part, int preset) noexcept
 {
-    const int i = std::clamp (preset, 0, PresetBank::kPer - 1);
-    switch (part)
-    {
-        case Bass: return bank.bass[i].sample;
-        case Stab: return bank.stab[i].sample;
-        case Hits: return bank.hits[i].sample;
-        case Pluck: return bank.pluck[i].sample;
-        case Pad: return bank.pad[i].sample;
-        case Vox: return bank.vox[i].sample;
-        case Drums: return bank.drums[i].sample;
-        default: break;
-    }
-    return bank.bass[0].sample;
+    return specAt (bank, part, preset);
 }
 
 void Sampler::Voice::Env::start (float aMs, float dMs, float sGain, float rMs, float sr) noexcept
@@ -266,7 +256,7 @@ struct Amp
 
 Amp ampFor (const PresetBank& bank, int part, int preset)
 {
-    const int i = std::clamp (preset, 0, PresetBank::kPer - 1);
+    const int i = presetSlot (bank, part, preset);
     Amp a;
     if (part == Bass)
     {
@@ -514,13 +504,14 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
         return keep;
     if (params.library == nullptr)
         return 1.f;
-    const auto& spec = sampleSpecFor (bank, Drums, presetOf (params, Drums));
+    const int preset = presetOf (params, Drums);
+    const auto& spec = sampleSpecFor (bank, Drums, preset);
     if (spec.mode == SampleMode::Synth)
         return 1.f;
 
-    const char* file = spec.voiceFile[voice];
+    const char* file = drumVoiceChoice (bank.drums[preset], voice, params.samplePick[Drums]);
     int root = spec.root;
-    if (file[0] == 0 && spec.poolCount > 0)
+    if ((file == nullptr || file[0] == 0) && spec.poolCount > 0)
     {
         const int i = (params.samplePick[Drums] % spec.poolCount + spec.poolCount) % spec.poolCount;
         file = spec.pool[i];

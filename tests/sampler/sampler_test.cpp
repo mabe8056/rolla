@@ -396,7 +396,46 @@ int main()
         expect (std::string (factory.drums[0].sample.voiceFile[rolla::Kick]) == "DRUMS/KICK/CD_Kick_06.wav",
                 "tight kick file");
         expect (factory.drums[1].sample.voiceFile[rolla::Ride][0] != 0, "room kit has a ride");
-        expect (factory.drums[2].sample.mode == rolla::SampleMode::Synth, "dry kit keeps the synth");
+        expect (factory.drums[2].sample.mode == rolla::SampleMode::Synth, "909 synth kit keeps the circuit model");
+        expect (std::string (factory.drums[2].name) == "909 SYNTH", "circuit kit is named 909 SYNTH");
+        expect (factory.drums[0].voicePool[rolla::Kick].size() >= 20, "kick pool");
+        expect (factory.drums[0].voicePool[rolla::Snare].size() >= 10, "snare pool");
+        expect (factory.drums[0].voicePool[rolla::Clap].size() >= 16, "clap pool");
+        expect (factory.drums[0].voicePool[rolla::Rim].size() >= 8, "rim pool");
+        expect (factory.drums[0].voicePool[rolla::HatC].size() >= 14, "closed hat pool");
+        expect (factory.drums[0].voicePool[rolla::HatO].size() >= 14, "open hat pool");
+        expect (factory.drums[0].voicePool[rolla::Ride].size() >= 6, "ride pool");
+        expect (factory.drums[0].voicePool[rolla::Perc].size() >= 12, "perc pool");
+        expect (std::string (rolla::drumVoiceChoice (factory.drums[0], rolla::Kick, 0))
+                    == "DRUMS/KICK/CD_Kick_06.wav",
+                "pick 0 is the hero kick");
+        expect (std::string (rolla::drumVoiceChoice (factory.drums[0], rolla::Kick, 1))
+                    != "DRUMS/KICK/CD_Kick_06.wav",
+                "the next roll picks another kick");
+        expect (factory.bass[0].sample.styles != 0, "pluck is tagged to a dialect");
+        int synths = 0;
+        int sampled = 0;
+        for (int i = 0; i < factory.count[rolla::Bass]; ++i)
+        {
+            if (factory.bass[i].sample.mode == rolla::SampleMode::Synth)
+                ++synths;
+            else if (factory.bass[i].sample.file[0] != 0)
+                ++sampled;
+        }
+        expect (factory.count[rolla::Bass] > 3, "bass bank grew past the three heroes");
+        expect (synths == 1 && std::string (factory.bass[factory.count[rolla::Bass] - 1].name) == "SYNTH",
+                "one clearly named synth bass preset");
+        expect (sampled + synths == factory.count[rolla::Bass], "every bass preset is a sample or SYNTH");
+        const int first = rolla::pickPresetForRoll (factory, rolla::Bass, rolla::UkMin, 1);
+        expect (first >= 0 && factory.bass[first].sample.mode != rolla::SampleMode::Synth,
+                "roll does not pick the synth bass");
+        bool varied = false;
+        for (std::uint32_t seed = 2; seed < 24; ++seed)
+            if (rolla::pickPresetForRoll (factory, rolla::Bass, rolla::UkMin, seed) != first)
+                varied = true;
+        expect (varied, "roll preset pick changes with the seed");
+        expect (rolla::pickPresetForRoll (factory, rolla::Drums, rolla::Gaskin, 3) == 1,
+                "gaskin roll stays on the sample kit");
 
         rolla::SampleLibrary missingLib;
         missingLib.setRoot (rootDir.getChildFile ("empty-root"));

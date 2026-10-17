@@ -65,6 +65,22 @@ void findSlices (SampleAudio& audio)
     }
 }
 
+void gatherReferenced (std::vector<std::string>& paths, const PresetBank& bank)
+{
+    for (int part = 0; part < NumParts; ++part)
+    {
+        const int n = bank.count[part] > 0 ? bank.count[part] : PresetBank::kPer;
+        for (int i = 0; i < n; ++i)
+        {
+            considerSpec (paths, specAt (bank, part, i));
+            if (part == Drums)
+                for (int v = 0; v < NumDrumVoices; ++v)
+                    for (const auto& file : bank.drums[i].voicePool[v])
+                        consider (paths, file.c_str());
+        }
+    }
+}
+
 } // namespace
 
 juce::File SampleLibrary::defaultRoot()
@@ -116,19 +132,15 @@ juce::File SampleLibrary::root() const
     return rootDir;
 }
 
+void collectReferencedSamples (const PresetBank& bank, std::vector<std::string>& out)
+{
+    gatherReferenced (out, bank);
+}
+
 void SampleLibrary::watch (const PresetBank& bank)
 {
     std::vector<std::string> paths;
-    for (int i = 0; i < PresetBank::kPer; ++i)
-    {
-        considerSpec (paths, bank.bass[i].sample);
-        considerSpec (paths, bank.stab[i].sample);
-        considerSpec (paths, bank.hits[i].sample);
-        considerSpec (paths, bank.pluck[i].sample);
-        considerSpec (paths, bank.pad[i].sample);
-        considerSpec (paths, bank.vox[i].sample);
-        considerSpec (paths, bank.drums[i].sample);
-    }
+    gatherReferenced (paths, bank);
     for (const auto& p : paths)
         enqueue (p);
 }

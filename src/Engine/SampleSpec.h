@@ -38,7 +38,8 @@ struct SampleZone
 
 // Preset sample block. Paths are relative to the samples root, with '/' separators.
 // pool entries are what ROLL/SHUFFLE rotates. zones are key-mapped multisamples.
-// voiceFile is the drum kit map (kick, snare, clap, rim, tomLow, tomMid, hatC, hatO, ride).
+// voiceFile is the drum kit map (kick, snare, clap, rim, tomLow, tomMid, hatC, hatO, ride, perc).
+// styles is a dialect mask: bit 0 UK MIN, 1 LONG, 2 POP, 3 GASKIN. 0 fits every dialect.
 struct SampleSpec
 {
     static constexpr int kPool = 8;
@@ -58,6 +59,7 @@ struct SampleSpec
     int zoneCount = 0;
     SampleZone zones[kZones] {};
     char voiceFile[NumDrumVoices][96] {};
+    std::uint8_t styles = 0;
 };
 
 inline void copySamplePath (char* dst, int n, const char* src) noexcept

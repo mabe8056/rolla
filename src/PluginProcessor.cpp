@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstring>
 #include <random>
+#include <string>
 #include <vector>
 
 namespace rolla
@@ -318,8 +319,11 @@ void RollaProcessor::deferredStartup()
                 library.setRoot (samples);
                 library.watch (copyPresets());
                 slots.setRoot (samples);
+                refreshSampleInventory();
             }
         }
+        else if (! startupStop.load())
+            refreshSampleInventory();
     }
     catch (...)
     {
@@ -460,6 +464,7 @@ Settings RollaProcessor::currentSettings() const
 void RollaProcessor::regenerate (int onlyPart)
 {
     Settings s = currentSettings();
+    const auto sound = copyPresets();
     Groove next = copyGroove();
     uint32_t seeds[NumParts] {};
     uint32_t mask = 0;
@@ -479,7 +484,17 @@ void RollaProcessor::regenerate (int onlyPart)
         {
             seeds[i] = freshSeed();
             mask |= 1u << (unsigned) i;
-            samplePick[i].fetch_add (1, std::memory_order_relaxed);
+            samplePick[i].store ((int) (seeds[i] % 10007u), std::memory_order_relaxed);
+            const int next = pickPresetForRoll (sound, i, s.dialect, seeds[i]);
+            if (next >= 0)
+            {
+                if (auto* param = apvts.getParameter (juce::String (partId (i)) + "Preset"))
+                {
+                    const float norm = param->convertTo0to1 ((float) next);
+                    if (std::fabs (param->getValue() - norm) >= 1.0e-4f)
+                        param->setValueNotifyingHost (norm);
+                }
+            }
         }
     }
 
@@ -783,8 +798,8 @@ bool RollaProcessor::laneSampleMissing (int part) const
     else if (slots.mode (part) != 0)
         return slots.warning (part);
 
-    const int preset = std::clamp ((int) raw (apvts, (juce::String (partId (part)) + "Preset").toRawUTF8()), 0, PresetBank::kPer - 1);
     const auto bank = copyPresets();
+    const int preset = presetSlot (bank, part, (int) raw (apvts, (juce::String (partId (part)) + "Preset").toRawUTF8()));
     const auto& spec = sampleSpecFor (bank, part, preset);
     if (spec.mode == SampleMode::Synth)
         return false;
@@ -802,10 +817,12 @@ bool RollaProcessor::laneSampleMissing (int part) const
             const int slot = userSlotForDrum (v);
             if (slot >= 0 && slots.mode (slot) != 0)
                 continue;
-            if (spec.voiceFile[v][0] == 0)
+            const int pick = samplePick[part].load (std::memory_order_relaxed);
+            const char* file = drumVoiceChoice (bank.drums[preset], v, pick);
+            if (file == nullptr || file[0] == 0)
                 continue;
             named = true;
-            if (library.missing (spec.voiceFile[v]))
+            if (library.missing (file))
                 return true;
         }
         if (named)
@@ -833,6 +850,7 @@ void RollaProcessor::setSamplesRoot (const juce::File& folder)
     library.setRoot (folder);
     library.watch (copyPresets());
     slots.setRoot (folder);
+    refreshSampleInventory();
     juce::PropertiesFile::Options options;
     options.applicationName = "ROLLA";
     options.filenameSuffix = "settings";
@@ -847,6 +865,36 @@ void RollaProcessor::setSamplesRoot (const juce::File& folder)
 juce::File RollaProcessor::samplesRoot() const
 {
     return library.root();
+}
+
+void RollaProcessor::refreshSampleInventory()
+{
+    std::vector<std::string> paths;
+    collectReferencedSamples (copyPresets(), paths);
+    const auto folder = library.root();
+    int found = 0;
+    int missing = 0;
+    for (const auto& relative : paths)
+    {
+        if (folder.getChildFile (juce::String (relative)).existsAsFile())
+            ++found;
+        else
+            ++missing;
+    }
+    samplesFoundCount.store (found, std::memory_order_relaxed);
+    samplesMissingCount.store (missing, std::memory_order_relaxed);
+    const auto line = "ROLLA samples: " + std::to_string (found) + " found, " + std::to_string (missing) + " missing";
+    juce::Logger::writeToLog (juce::String (line));
+    std::fprintf (stderr, "%s\n", line.c_str());
+}
+
+juce::String RollaProcessor::sampleInventoryText() const
+{
+    const int found = samplesFound();
+    const int missing = samplesMissing();
+    if (found < 0 || missing < 0)
+        return "samples …";
+    return juce::String (found) + " found / " + juce::String (missing) + " missing";
 }
 
 void RollaProcessor::setEditorSize (int width, int height) noexcept

@@ -24,7 +24,8 @@ inline juce::String laneModeProperty (int part)
 
 inline SampleSpec* sampleSpecMutable (PresetBank& bank, int part, int preset) noexcept
 {
-    const int i = juce::jlimit (0, PresetBank::kPer - 1, preset);
+    const int n = bank.count[part] > 0 ? bank.count[part] : PresetBank::kPer;
+    const int i = juce::jlimit (0, n - 1, preset);
     switch (part)
     {
         case Bass: return &bank.bass[i].sample;
@@ -83,7 +84,8 @@ inline bool applyStubMode (RollaProcessor& proc, int part, int mode)
     bool changed = false;
     proc.modifyPresets ([&] (PresetBank& bank)
     {
-        for (int i = 0; i < PresetBank::kPer; ++i)
+        const int n = bank.count[part] > 0 ? bank.count[part] : PresetBank::kPer;
+        for (int i = 0; i < n; ++i)
         {
             if (auto* spec = sampleSpecMutable (bank, part, i))
             {
@@ -201,12 +203,13 @@ public:
             }
             else if (touched[part])
             {
-                const int saved[PresetBank::kPer] = {
-                    factory[part][0], factory[part][1], factory[part][2]
-                };
+                int saved[PresetBank::kPer];
+                for (int i = 0; i < PresetBank::kPer; ++i)
+                    saved[i] = factory[part][i];
                 proc.modifyPresets ([&] (PresetBank& bank)
                 {
-                    for (int i = 0; i < PresetBank::kPer; ++i)
+                    const int n = bank.count[part] > 0 ? bank.count[part] : PresetBank::kPer;
+                    for (int i = 0; i < n; ++i)
                     {
                         if (auto* spec = sampleSpecMutable (bank, part, i))
                         {

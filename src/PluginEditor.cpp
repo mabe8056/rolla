@@ -82,7 +82,8 @@ bool audioFile (const String& path)
 StringArray presetsForLane (const PresetBank& bank, int part)
 {
     StringArray names;
-    for (int i = 0; i < PresetBank::kPer; ++i)
+    const int n = bank.count[part] > 0 ? bank.count[part] : PresetBank::kPer;
+    for (int i = 0; i < n; ++i)
     {
         const char* raw = nullptr;
         switch (part)
@@ -2026,6 +2027,7 @@ struct RollaEditor::Content : Component
         menu.addSeparator();
         menu.addItem (7, utf8 ("Samples folder…"));
         menu.addItem (8, proc.samplesRoot().getFullPathName(), false, false);
+        menu.addItem (9, proc.sampleInventoryText(), false, false);
         menu.showMenuAsync (PopupMenu::Options().withTargetComponent (target != nullptr ? target : &logo),
                             [this] (int result)
                             {
@@ -2255,6 +2257,10 @@ struct RollaEditor::Content : Component
         auto* lf = dynamic_cast<Look*> (&getLookAndFeel());
         if (lf == nullptr)
             return;
+
+        g.setColour (proc.samplesMissing() > 0 ? col (kMark) : col (kInk2));
+        g.setFont (lf->mono.withHeight (11.f));
+        g.drawText (proc.sampleInventoryText(), 568, 16, 250, 18, Justification::centredLeft, true);
 
         g.setColour (col (kLine));
         g.fillRect (16, 399, 640, 1);

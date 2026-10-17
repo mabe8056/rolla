@@ -74,12 +74,15 @@ private:
     std::thread worker;
     std::atomic<bool> stop { false };
 
-    static constexpr int kSlots = 192;
+    static constexpr int kSlots = 384;
     Slot slots[kSlots];
     std::mutex slotMu;
     std::vector<std::unique_ptr<SampleAudio>> kept;
 };
 
 void ensureSampleFolders (const juce::File& root);
+
+// Unique relative paths named by the loaded presets, including drum voice pools.
+void collectReferencedSamples (const PresetBank& bank, std::vector<std::string>& out);
 
 } // namespace rolla

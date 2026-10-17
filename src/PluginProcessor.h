@@ -104,6 +104,11 @@ public:
     juce::File samplesRoot() const;
     SampleLibrary& sampleLibrary() noexcept { return library; }
 
+    // Disk check of every file the factory presets name. -1 until the first scan.
+    int samplesFound() const noexcept { return samplesFoundCount.load (std::memory_order_relaxed); }
+    int samplesMissing() const noexcept { return samplesMissingCount.load (std::memory_order_relaxed); }
+    juce::String sampleInventoryText() const;
+
     // 14 session slots (6 lanes + 8 drum voices). Paths persist; audio does not.
     bool loadUserSlot (int slot, const juce::File& file, juce::String& error);
     void clearUserSlot (int slot);
@@ -126,6 +131,7 @@ private:
     void parameterChanged (const juce::String& parameterID, float newValue) override;
     void applyDialect (int dialect);
     void regenerate (int onlyPart);
+    void refreshSampleInventory();
     Settings currentSettings() const;
     void publish (const Groove& g);
     void publishInitial (const Groove& g);
@@ -163,6 +169,8 @@ private:
     SampleLibrary library;
     UserSlots slots;
     std::atomic<int> samplePick[NumParts] {};
+    std::atomic<int> samplesFoundCount { -1 };
+    std::atomic<int> samplesMissingCount { -1 };
 
     std::atomic<int> editorWidth { 0 };
     std::atomic<int> editorHeight { 0 };
