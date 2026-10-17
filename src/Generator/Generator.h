@@ -29,8 +29,16 @@ struct Rng
 };
 
 // partMask bit N regenerates that part. Other parts are kept and only clamped
-// to the new bar length. Stab / hits / vox are written against the bass (and
-// stab) that are in `g` after this call, so a shuffle fits the kept lanes.
+// to the new bar length. A regenerated stab is placed in the holes of the bass
+// left in `g`, and drums sit under that pair, so a shuffle fits the kept lanes.
+// Each draw recombines corpus cells. Only the four hard rules (key, low-end
+// clash, broken bars, originality) reject a candidate. Six candidates are
+// scored on the soft bands and one is drawn with a penalty-weighted pick.
+// The caller seed is what lands on the lane.
 void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[NumParts], std::uint32_t partMask);
+
+// OC-style bass skeleton similarity in [0, 1]. A pair at or above 0.55 is the
+// same skeleton (GENERATOR_RULES v2 §4.2). Deterministic and history-free.
+float bassSkeletonSimilarity (const Groove& a, const Groove& b) noexcept;
 
 } // namespace rolla

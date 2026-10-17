@@ -619,14 +619,16 @@ void Engine::process (const Groove& groove,
 
     if (wasPlaying && ! transport.playing)
     {
+        // Stop kills the voices. Releasing them retriggers the bar-1 attack
+        // into the free tail (the loop end is already gated quiet).
         auto offs = [&] (auto& v)
         {
             if (v.midiOn)
                 midi.addEvent (juce::MidiMessage::noteOff (v.midiCh + 1, v.midiNote), 0);
-            v.midiOn = false;
-            v.env.release();
+            v.kill();
         };
         offs (E.bass);
+        offs (E.live);
         for (auto& v : E.stab) offs (v);
         for (auto& v : E.pluck) offs (v);
         for (auto& v : E.pad) offs (v);
@@ -635,8 +637,7 @@ void Engine::process (const Groove& groove,
             if (v.midiOn)
                 for (int n = 0; n < v.midiCount; ++n)
                     midi.addEvent (juce::MidiMessage::noteOff (v.midiCh + 1, v.midiNote[n]), 0);
-            v.midiOn = false;
-            v.env.release();
+            v.kill();
         }
         for (auto& v : E.vox) offs (v);
         for (auto& p : E.pending)
@@ -646,12 +647,9 @@ void Engine::process (const Groove& groove,
             p.on = false;
         }
         for (auto& p : E.play)
-        {
-            if (p.on)
-                p.ring = p.last;
-            p.on = false;
-        }
-        sampler.releaseAll();
+            p = {};
+        sampler.reset();
+        E.drums.reset();
     }
     wasPlaying = transport.playing;
     const float ringC = expDecay (12.f, srF);
@@ -682,6 +680,20 @@ void Engine::process (const Groove& groove,
         const double prev = pos;
         if (transport.playing)
             pos = wrapLoop (pos + d16, loop16);
+        else
+        {
+            // Stop is silence. Killing voices is not enough: an attack that
+            // began on the last playing sample keeps rising through the free
+            // tail and reads as bar 1 starting again.
+            mainL[i] = 0.f;
+            if (mainR != nullptr)
+                mainR[i] = 0.f;
+            if (drumL != nullptr)
+                drumL[i] = 0.f;
+            if (drumR != nullptr)
+                drumR[i] = 0.f;
+            continue;
+        }
 
         auto emitHeld = [&] (int part, int note, int vel, float st, float en)
         {
@@ -1921,6 +1933,13 @@ void Engine::process (const Groove& groove,
             }
             else
                 E.fxHeld = false;
+        }
+        else
+        {
+            // A stop must not reopen the bar-end gate. Delay and reverb that
+            // were cleared on the last sixteenth stay clear, so the free tail
+            // after a loop is silence rather than bar 1 played again.
+            fxGate = 0.f;
         }
         sDelay *= fxGate;
         sRev *= fxGate;

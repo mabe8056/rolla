@@ -104,11 +104,34 @@ struct Env3
     }
 };
 
+// Raised-cosine 0→1. A hard step into a reset highpass is a one-sample click.
+struct Atk
+{
+    int age = 0;
+    int n = 1;
+
+    void trigger (float sr) noexcept
+    {
+        age = 0;
+        n = std::max (8, (int) (0.002f * sr));
+    }
+
+    float next() noexcept
+    {
+        if (age >= n)
+            return 1.f;
+        const float t = (float) age / (float) n;
+        ++age;
+        return 0.5f * (1.f - std::cos (kPi * t));
+    }
+};
+
 struct Click
 {
     float env = 0.f;
     float coef = 1.f;
-    float burst = 0.f;
+    int age = 0;
+    int len = 1;
     Svf hp;
     Noise noise { 0xC11Cu };
 
@@ -116,7 +139,10 @@ struct Click
     {
         env = amp;
         coef = std::exp (-1.f / std::max (1.f, 0.005f * sr));
-        burst = 1.f;
+        age = 0;
+        // 2 ms beater. The old burst was a unit step on sample 0; the highpass
+        // turned that into a one-sample impulse on every kick.
+        len = std::max (8, (int) (0.002f * sr));
         hp.reset();
     }
 
@@ -124,8 +150,14 @@ struct Click
     {
         if (env < 1.0e-6f)
             return 0.f;
-        const float x = burst + noise.next() * burst * 0.35f;
-        burst *= 0.45f;
+        float w = 0.f;
+        if (age < len)
+        {
+            const float t = (float) age / (float) len;
+            w = 0.5f * (1.f - std::cos (2.f * kPi * t));
+            ++age;
+        }
+        const float x = w * (1.f + noise.next() * 0.35f);
         const float y = hp.highpass (x, 4200.f, 0.85f, sr) * env;
         env *= coef;
         return y;
@@ -162,6 +194,7 @@ struct Tone2
     float last = 0.f;
     float ring = 0.f;
     bool on = false;
+    Atk atk;
     Svf hp;
     Noise noise { 0x51Au };
 };
@@ -198,6 +231,7 @@ struct Metal
     float gain = 0.f;
     float last = 0.f;
     float ring = 0.f;
+    Atk atk;
     Svf hp1, hp2, lp;
     Noise noise { 0xA47u };
 };
@@ -215,6 +249,7 @@ struct PercV
     float last = 0.f;
     float ring = 0.f;
     bool on = false;
+    Atk atk;
 };
 
 struct RimTom
@@ -233,6 +268,7 @@ struct RimTom
     float last = 0.f;
     float ring = 0.f;
     bool on = false;
+    Atk atk;
     Noise noise { 0xB1Fu };
     Svf hp;
 };
@@ -377,6 +413,7 @@ struct DrumMachine::Core
         snare.nEnv = 1.f;
         snare.nC = std::exp (std::log (1.0e-4f) / std::max (1.f, ms * 0.42f * 0.001f * sr));
         snare.hp.reset();
+        snare.atk.trigger (sr);
         snare.gain = kSnareOut * velGain (hit.velocity) * hit.synthKeep * hit.levelGain;
     }
 
@@ -464,6 +501,7 @@ struct DrumMachine::Core
         else
             m.env.start (sr, 13.f, -6.f, 45.f, -20.f, 85.f, -40.f, scale);
         const float out = (rideVoice ? kHatOut * kRideRatio : kHatOut);
+        m.atk.trigger (sr);
         m.gain = out * velGain (hit.velocity) * hit.synthKeep * hit.levelGain;
     }
 
@@ -478,6 +516,7 @@ struct DrumMachine::Core
         perc.env.start (sr, 20.f, -6.f, 39.f, -12.f, 70.f, -20.f, decayOf (hit));
         perc.hp.reset();
         perc.lp.reset();
+        perc.atk.trigger (sr);
         perc.pan = -0.20f;
         perc.gain = kPercOut * velGain (hit.velocity) * hit.synthKeep * hit.levelGain;
     }
@@ -497,6 +536,7 @@ struct DrumMachine::Core
         v.click = 0.22f;
         v.clickC = std::exp (-1.f / std::max (1.f, 0.004f * sr));
         v.hp.reset();
+        v.atk.trigger (sr);
         v.pan = pan;
         v.gain = out * velGain (hit.velocity) * hit.synthKeep * hit.levelGain;
     }
@@ -534,7 +574,7 @@ struct DrumMachine::Core
             const float b = snare.b.tick (snare.f2, sr);
             const float tone = a * (1.f - snare.tone) + b * snare.tone;
             const float nz = snare.hp.highpass (snare.noise.next(), 1800.f, 0.75f, sr);
-            raw = (tone * snare.env + nz * snare.nEnv * snare.snap) * snare.gain;
+            raw = (tone * snare.env + nz * snare.nEnv * snare.snap) * snare.gain * snare.atk.next();
             snare.env *= snare.envC;
             snare.nEnv *= snare.nC;
             if (snare.env < 1.0e-5f && snare.nEnv < 1.0e-5f)
@@ -613,7 +653,7 @@ struct DrumMachine::Core
                 if (m.choke < 1.0e-4f)
                     m.on = false;
             }
-            raw = y * m.env.tick() * m.choke * m.gain;
+            raw = y * m.env.tick() * m.choke * m.gain * m.atk.next();
             if (! m.env.on)
                 m.on = false;
         }
@@ -629,7 +669,7 @@ struct DrumMachine::Core
         {
             const float nz = perc.lp.lowpass (perc.hp.highpass (perc.noise.next(), perc.hpHz, 0.707f, sr),
                                               perc.lpHz, 0.707f, sr);
-            raw = nz * perc.env.tick() * perc.gain;
+            raw = nz * perc.env.tick() * perc.gain * perc.atk.next();
             if (! perc.env.on)
                 perc.on = false;
         }
@@ -646,7 +686,7 @@ struct DrumMachine::Core
             const float hz = v.hz * std::pow (2.f, (v.semis * v.pitch) / 12.f);
             const float body = v.body.tick (hz, sr) * v.env;
             const float clk = v.hp.highpass (v.noise.next(), 2500.f, 0.7f, sr) * v.click;
-            raw = (body + clk * 0.25f) * v.gain;
+            raw = (body + clk * 0.25f) * v.gain * v.atk.next();
             v.pitch *= v.pitchC;
             v.env *= v.envC;
             v.click *= v.clickC;

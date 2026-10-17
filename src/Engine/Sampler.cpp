@@ -375,7 +375,7 @@ bool Sampler::playUserSlot (int part, int drumVoice, int midiNote, int velocity,
     fresh.ratio = std::clamp (std::pow (2.0, semis / 12.0) * (pod.audio->rate / sr), ratioMin, ratioMax);
     fresh.end16 = end16;
     fresh.fade = 0.f;
-    fresh.fadeInc = 1.f / (drumVoice >= 0 ? 32.f : 64.f);
+    fresh.fadeInc = drumVoice >= 0 ? 1.f / std::max (8.f, 0.002f * srF) : 1.f / 64.f;
     fresh.stopping = false;
     float trim = amp.trim * std::clamp (velocity / 127.f, 0.05f, 1.f);
     if (drumVoice >= 0)
@@ -548,7 +548,7 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
     juce::ignoreUnused (root);
     fresh.end16 = 1.0e9f;
     fresh.fade = 0.f;
-    fresh.fadeInc = 1.f / 32.f;
+    fresh.fadeInc = 1.f / std::max (8.f, 0.002f * (float) sr);
     fresh.gain = amp.trim * std::clamp (velocity / 127.f, 0.05f, 1.f) * ampDb (params.drumLevelDb[voice]);
     if (spec.mode == SampleMode::Layer)
         fresh.gain *= std::clamp (spec.layerMix, 0.f, 1.f);
