@@ -221,6 +221,9 @@ RollaProcessor::RollaProcessor()
     for (int i = 0; i < NumParts; ++i)
         apvts.addParameterListener (juce::String (partId (i)) + "Shuffle", this);
 
+    mixProgram.loadFromMemory (BinaryData::mix_profiles_json, BinaryData::mix_profiles_jsonSize,
+                               BinaryData::main_sum_trim_json, BinaryData::main_sum_trim_jsonSize,
+                               BinaryData::mix_makeup_json, BinaryData::mix_makeup_jsonSize);
     startupT0 = juce::Time::getMillisecondCounterHiRes();
     startupThread = std::thread ([this] { deferredStartup(); });
 }
@@ -585,6 +588,7 @@ void RollaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
         heldPresets = presets;
     }
     params.presets = heldPresets.get();
+    params.mix = mixProgram.loaded ? &mixProgram : nullptr;
     params.duck = raw (apvts, "duck") >= 0.5f;
     params.drumsToMain = raw (apvts, "drumsToMain") >= 0.5f;
     params.swing = raw (apvts, "swing");

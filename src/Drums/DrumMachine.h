@@ -56,6 +56,10 @@ public:
 
     void trigger (const DrumHit& hit) noexcept;
     void process (float& left, float& right) noexcept;
+    // voiceL/R, when both non-null, receive this sample's panned voice
+    // (NumDrumVoices) instead of adding it into left/right. The sample slot
+    // still adds into left/right.
+    void process (float& left, float& right, float* voiceL, float* voiceR) noexcept;
 
     // Key follow: root / 4th / 5th nearest 52.8 Hz inside 49–56 Hz. Tie → 5th.
     static float kickHzForKey (int key) noexcept;

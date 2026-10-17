@@ -368,6 +368,7 @@ bool Sampler::playUserSlot (int part, int drumVoice, int midiNote, int velocity,
     Voice fresh;
     fresh.on = true;
     fresh.part = voicePart;
+    fresh.drumVoice = drumVoice;
     fresh.midiNote = midiNote;
     fresh.age = serial++;
     fresh.audio = pod.audio;
@@ -541,6 +542,7 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
     Voice fresh;
     fresh.on = true;
     fresh.part = Drums;
+    fresh.drumVoice = voice;
     fresh.age = serial++;
     fresh.audio = audio;
     fresh.reverse = spec.reverse;
@@ -580,6 +582,8 @@ void Sampler::render (float* laneL, float* laneR, float prev16, float pos16, boo
         return;
     for (int i = 0; i < NumParts; ++i)
         laneL[i] = laneR[i] = 0.f;
+    for (int v = 0; v < NumDrumVoices; ++v)
+        drumOutL[v] = drumOutR[v] = 0.f;
 
     for (auto& v : voices)
     {
@@ -598,6 +602,11 @@ void Sampler::render (float* laneL, float* laneR, float prev16, float pos16, boo
         {
             laneL[v.part] += l;
             laneR[v.part] += r;
+            if (v.part == Drums && v.drumVoice >= 0 && v.drumVoice < NumDrumVoices)
+            {
+                drumOutL[v.drumVoice] += l;
+                drumOutR[v.drumVoice] += r;
+            }
         }
     }
 }

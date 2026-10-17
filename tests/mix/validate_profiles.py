@@ -2,13 +2,13 @@
 """Validate plugin-design/mix_profiles.json: parses, has schema_version, equals the ```json block embedded in MIX_SPEC.md §8,
 matches tests/targets.json, and matches the MIX_SPEC §2.2 / §2.3 / §3 tables. Prints JSON {pass, n_checks, fails}; exit 0/1."""
 import json,os,re,sys
-H=os.path.dirname(os.path.abspath(__file__)); PD=os.path.dirname(H)
+H=os.path.dirname(os.path.abspath(__file__)); PD=os.path.dirname(H); ROOT=os.path.dirname(PD)
 fails=[]; n=[0]
 def ok(c,msg):
     n[0]+=1
     if not c: fails.append(msg)
 num=lambda t: float(t.replace('−','-').replace('**','').replace('≤','').replace('+','').strip())
-P=json.load(open(os.path.join(PD,'mix_profiles.json'))); T=json.load(open(os.path.join(H,'targets.json'))); md=open(os.path.join(PD,'MIX_SPEC.md')).read()
+P=json.load(open(os.path.join(ROOT,'resources','mix_profiles.json'))); T=json.load(open(os.path.join(H,'targets.json'))); md=open(os.path.join(ROOT,'docs','mix','MIX_SPEC.md')).read()
 ok('schema_version' in P,'schema_version missing')
 m=re.search(r'## 8\..*?```json\n(.*?)\n```',md,re.S); ok(m is not None,'no json block in §8')
 if m: ok(json.loads(m.group(1))==P,'embedded §8 JSON != mix_profiles.json')
@@ -70,7 +70,8 @@ for v in ['CLAP','SNARE','RIM','CH','OH','RIDE','PERC']:
 import os
 A=P.get('main_auto_trim'); ok(A is not None,'main_auto_trim block missing')
 if A:
-    tp=os.path.join(os.path.dirname(os.path.abspath(__file__)),'..',A['table']); ok(os.path.exists(tp),f'trim table {A["table"]} missing')
+    # The profile stores "presets/main_sum_trim.json"; this repo keeps the table in resources/.
+    tp=os.path.join(ROOT,'resources',os.path.basename(A['table'])); ok(os.path.exists(tp),f'trim table {A["table"]} missing')
     ok(A['ramp']['ms']==50 and A['gate']['sum_st_lufs']==-19.0 and A['gate']['tol_lu']==0.5 and A['gate']['sum_tp_dbtp']==-6.0,'E21 ramp/gate values')
     if os.path.exists(tp):
         TT=json.load(open(tp)); bits=A['lane_bit_order']

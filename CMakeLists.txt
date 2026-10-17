@@ -18,6 +18,9 @@ FetchContent_MakeAvailable(juce)
 juce_add_binary_data(RollaData
     SOURCES
         resources/presets.json
+        resources/mix_profiles.json
+        resources/main_sum_trim.json
+        resources/mix_makeup.json
         resources/fonts/InstrumentSans-SemiBold.ttf
         resources/fonts/InstrumentSans-Bold.ttf
         resources/fonts/GeistMono-Regular.ttf
@@ -62,6 +65,8 @@ target_sources(ROLLA
         src/Generator/MidiFile.cpp
         src/Drums/DrumMachine.cpp
         src/Drums/DrumPattern.cpp
+        src/Mix/MixProgram.cpp
+        src/Mix/MixRuntime.cpp
 )
 
 target_compile_definitions(ROLLA
@@ -96,6 +101,8 @@ add_executable(rolla-render
     src/Generator/MidiFile.cpp
     src/Drums/DrumMachine.cpp
     src/Drums/DrumPattern.cpp
+    src/Mix/MixProgram.cpp
+    src/Mix/MixRuntime.cpp
 )
 
 target_compile_definitions(rolla-render
@@ -127,6 +134,8 @@ add_executable(rolla-sample-check
     src/Generator/Presets.cpp
     src/Drums/DrumMachine.cpp
     src/Drums/DrumPattern.cpp
+    src/Mix/MixProgram.cpp
+    src/Mix/MixRuntime.cpp
 )
 
 target_compile_definitions(rolla-sample-check
@@ -161,6 +170,8 @@ add_executable(rolla-ui-shot
     src/Generator/MidiFile.cpp
     src/Drums/DrumMachine.cpp
     src/Drums/DrumPattern.cpp
+    src/Mix/MixProgram.cpp
+    src/Mix/MixRuntime.cpp
 )
 
 target_compile_definitions(rolla-ui-shot
@@ -192,6 +203,8 @@ add_executable(rolla-sampler-test
     src/Generator/Presets.cpp
     src/Drums/DrumMachine.cpp
     src/Drums/DrumPattern.cpp
+    src/Mix/MixProgram.cpp
+    src/Mix/MixRuntime.cpp
 )
 
 target_include_directories(rolla-sampler-test PRIVATE src)
@@ -228,6 +241,8 @@ add_executable(rolla-roll-test
     src/Generator/MidiFile.cpp
     src/Drums/DrumMachine.cpp
     src/Drums/DrumPattern.cpp
+    src/Mix/MixProgram.cpp
+    src/Mix/MixRuntime.cpp
 )
 
 target_include_directories(rolla-roll-test PRIVATE src)
@@ -241,6 +256,39 @@ target_compile_definitions(rolla-roll-test
 )
 
 target_link_libraries(rolla-roll-test
+    PRIVATE
+        RollaData
+        juce::juce_audio_utils
+        juce::juce_dsp
+        juce::juce_audio_formats
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags
+)
+
+add_executable(rolla-mix-render
+    src/MixRender.cpp
+    src/Engine/Engine.cpp
+    src/Engine/Sampler.cpp
+    src/Engine/SampleLibrary.cpp
+    src/Sampler/SamplePrep.cpp
+    src/Sampler/UserSlots.cpp
+    src/Generator/Generator.cpp
+    src/Generator/Presets.cpp
+    src/Drums/DrumMachine.cpp
+    src/Drums/DrumPattern.cpp
+    src/Mix/MixProgram.cpp
+    src/Mix/MixRuntime.cpp
+)
+
+target_compile_definitions(rolla-mix-render
+    PRIVATE
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_DISPLAY_SPLASH_SCREEN=0
+        JUCE_REPORT_APP_USAGE=0
+)
+
+target_link_libraries(rolla-mix-render
     PRIVATE
         RollaData
         juce::juce_audio_utils

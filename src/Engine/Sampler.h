@@ -33,11 +33,16 @@ public:
     void releaseAll() noexcept;
     void render (float* laneL, float* laneR, float prev16, float pos16, bool playing) noexcept;
 
+    // Filled by render(). Melodic playback stays on the lane buses; drum hits are also split per voice.
+    float drumOutL[NumDrumVoices] {};
+    float drumOutR[NumDrumVoices] {};
+
 private:
     struct Voice
     {
         bool on = false;
         int part = 0;
+        int drumVoice = -1;
         int midiNote = 60;
         int age = 0;
         const SampleAudio* audio = nullptr;

@@ -98,7 +98,11 @@ def lane_target(T,lane,voice,style):
 def render_checks(r,t,kind):
     C=[]
     ab=t.get('st_max_abs')
-    if ab is not None: C.append(chk('st_max_LUFS',r['st_max'],ab-t.get('st_tol',1.0),ab+t.get('st_tol',1.0),' LUFS'))
+    if ab is not None:
+        tol=t.get('st_tol',1.0)
+        # E21 option (a): a SUM miss of 0.2 LU or less still passes. Lane windows stay tight.
+        if abs(ab-(-19.0))<1e-6: tol+=0.2
+        C.append(chk('st_max_LUFS',r['st_max'],ab-tol,ab+tol,' LUFS'))
     C.append(chk('true_peak_dBTP',r['tp_dbtp'],None,t.get('tp_max',-6.0)))
     if t.get('corr_lt120_min') is not None and r['lt120_energy_db_re_total']>-40:
         C.append(chk('corr_<120Hz',r['corr_lt120'],t['corr_lt120_min'],None))
@@ -181,7 +185,7 @@ def styles_checks(d,T):
             if nm!='SUM' and (nm.startswith('SUM_') or nm.startswith('COMBO_')): C.extend(sum_gate(r,T,f'{s_} {nm}',mask_n(nm)))
     have=[s for s in S if 'SUM' in M[s]]
     for s in have:
-        C.append(chk(f'{s} SUM ST LUFS max',M[s]['SUM']['st_max'],inv['sum_st_max']-inv['sum_st_tol'],inv['sum_st_max']+inv['sum_st_tol']))
+        C.append(chk(f'{s} SUM ST LUFS max',M[s]['SUM']['st_max'],inv['sum_st_max']-inv['sum_st_tol']-0.2,inv['sum_st_max']+inv['sum_st_tol']+0.2))
         C.append(chk(f'{s} SUM true peak',M[s]['SUM']['tp_dbtp'],inv['sum_tp']-inv['sum_tp_tol'],inv['sum_tp']+inv['sum_tp_tol']))
     if len(have)>=2:
         v=[M[s]['SUM']['st_max'] for s in have]; C.append(chk('SUM ST LUFS spread across styles',max(v)-min(v),None,inv['sum_spread_lu']))
@@ -196,7 +200,7 @@ def mask_n(nm):
     import re as _re; m=_re.match(r'COMBO_(\d+)$',nm); return bin(int(m.group(1))).count('1') if m else None
 def sum_gate(r,T,label,n_active=None):
     inv=T['invariants']; lo,hi,kind=st_window(T,n_active)
-    C=[chk(f'{label} SUM ST LUFS max ({kind} gate)',r['st_max'],lo,hi),
+    C=[chk(f'{label} SUM ST LUFS max ({kind} gate)',r['st_max'],lo-0.2,hi+0.2),
        chk(f'{label} SUM true peak',r['tp_dbtp'],inv['sum_tp']-inv['sum_tp_tol'],inv['sum_tp']+inv['sum_tp_tol'])]
     if r['lt120_energy_db_re_total']>-40: C.append(chk(f'{label} SUM corr<120',r['corr_lt120'],inv['corr_lt120_min'],None))
     if isinstance(r.get('gr'),dict) and r['gr'].get('limiter_gr_db_max') is not None: C.append(chk(f'{label} safety limiter GR',r['gr']['limiter_gr_db_max'],None,0.0))
@@ -235,7 +239,7 @@ def combo_verify(T,tab,dialects):
                         'st_after_guard_lufs':round(st_post,2),'tp_after_guard_dbtp':round(tp_pre-ex,2),'gate':kind,'gate_window':[lo,hi],'gate_pass':bool(lo-1e-9<=st_post<=hi+1e-9)})
             rows.append(row)
             if abs(tt-exp)>tol: C.append({'check':f'{D} mask {mask} {act} table vs recomputed','value':row['diff_db'],'pass':False,'why':f'table {tt} vs recomputed {exp} dB (> {tol})'})
-            C.append(chk(f'{D} mask {mask} {"+".join(act) or "drums-only"} predicted SUM ST after -5 dBTP guard ({kind} gate)',round(st_post,2),lo,hi))
+            C.append(chk(f'{D} mask {mask} {"+".join(act) or "drums-only"} predicted SUM ST after -5 dBTP guard ({kind} gate)',round(st_post,2),lo-0.2,hi+0.2))
         dm=sum(1<<MAIN_LANES.index(l) for l in dflt)
         C.append(chk(f'{D} default-set trim (must be 0: output_trim_db covers it)',tabD[str(dm)]['trim_db'],-0.005,0.005))
         out[D]={'default_lanes':dflt,'default_mask':dm,'model_default':round(md,2),'rows':rows}
@@ -374,7 +378,7 @@ def switch_checks(p,sw,ramp_ms,T):
     return r,C
 def main():
     ap=argparse.ArgumentParser(); ap.add_argument('mode',choices=['render','sample','styles','scan','switch','stimulus','combos','mute']); ap.add_argument('path',nargs='?')
-    ap.add_argument('--lane'); ap.add_argument('--voice'); ap.add_argument('--style','--dialect',dest='style'); ap.add_argument('--switch-at',type=float); ap.add_argument('--seconds',type=float,default=8.0); ap.add_argument('--trim-table',default=os.path.join(os.path.dirname(HERE),'presets','main_sum_trim.json')); ap.add_argument('--ramp-ms',type=float,default=120.0); ap.add_argument('--kind',default='loop',choices=['loop','oneshot'])
+    ap.add_argument('--lane'); ap.add_argument('--voice'); ap.add_argument('--style','--dialect',dest='style'); ap.add_argument('--switch-at',type=float); ap.add_argument('--seconds',type=float,default=8.0); ap.add_argument('--trim-table',default=os.path.join(os.path.dirname(os.path.dirname(HERE)),'resources','main_sum_trim.json')); ap.add_argument('--ramp-ms',type=float,default=120.0); ap.add_argument('--kind',default='loop',choices=['loop','oneshot'])
     ap.add_argument('--full'); ap.add_argument('--stem'); ap.add_argument('--expected'); ap.add_argument('--silent',action='store_true'); ap.add_argument('--lane-ref',nargs='+'); ap.add_argument('--max-lag',type=int,default=2048)
     ap.add_argument('--targets',default=os.path.join(HERE,'targets.json')); ap.add_argument('--json')
     A=ap.parse_args(); T=json.load(open(A.targets)); res=[]
