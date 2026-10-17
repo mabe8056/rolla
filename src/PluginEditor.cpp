@@ -874,11 +874,16 @@ struct LaneRow : Component, FileDragAndDropTarget
 
     void resized() override
     {
-        const int y0 = jmax (0, (getHeight() - 40) / 2);
-        strip.setBounds (104, y0 + 8, 408, 24);
-        mute.setBounds (520, y0 + 4, 32, 32);
-        shuffle.setBounds (560, y0 + 4, 32, 32);
-        keep.setBounds (600, y0 + 4, 32, 32);
+        // 40px row → 24px strip. 80px row → 48px strip. Both stay centred.
+        const float rh = (float) getHeight();
+        const float stripH = 24.f + (rh - 40.f) * (24.f / 40.f);
+        const int sh = jmax (1, roundToInt (stripH));
+        const int sy = jmax (0, roundToInt ((rh - (float) sh) * 0.5f));
+        strip.setBounds (104, sy, 408, sh);
+        const int yIcon = jmax (0, roundToInt ((rh - 32.f) * 0.5f));
+        mute.setBounds (520, yIcon, 32, 32);
+        shuffle.setBounds (560, yIcon, 32, 32);
+        keep.setBounds (600, yIcon, 32, 32);
     }
 };
 
@@ -1930,7 +1935,7 @@ struct StatusStrip : Component
 
 } // namespace
 
-struct RollaEditor::Content : Component, private Timer
+struct RollaEditor::Content : Component
 {
     struct SoundBody : Component
     {
@@ -1960,11 +1965,16 @@ struct RollaEditor::Content : Component, private Timer
     StatusStrip status;
     std::unique_ptr<FileChooser> sampleChooser;
     int selected = Bass;
-    float panelAmt = 0.f;
+    float panelAmt = 0.f;     // 0 collapsed, 1 open. The only layout driver.
     float panelFrom = 0.f;
     float panelTarget = 0.f;
+    float contentAlpha = 0.f; // panel contents, not the card
+    float alphaFrom = 0.f;
     double panelT0 = 0.0;
     bool panelRun = false;
+    bool panelOpening = false;
+    bool panelClockOn = false;
+    VBlankAttachment panelVblank;
     Groove groove;
     uint32_t seenGen = 0;
     bool haveGroove = false;
@@ -2110,6 +2120,7 @@ struct RollaEditor::Content : Component, private Timer
 
     ~Content() override
     {
+        panelVblank = VBlankAttachment();
         setLookAndFeel (nullptr);
     }
 
@@ -2207,6 +2218,19 @@ struct RollaEditor::Content : Component, private Timer
             return;
         }
         selected = part;
+        if (soundIsOpen())
+        {
+            for (int i = 0; i < NumParts; ++i)
+            {
+                rows[i].selected = i == part;
+                rows[i].repaint();
+            }
+            proc.setSoundPanel (true, selected);
+            source.setCurrent (samples.mode (selected));
+            bindSound();
+            repaint();
+            return;
+        }
         setOpen (true, true, true);
     }
 
@@ -2222,49 +2246,105 @@ struct RollaEditor::Content : Component, private Timer
 
         const float target = open ? 1.f : 0.f;
         const bool reduced = paramRaw (proc.apvts, "reduceMotion") >= 0.5f;
+        panelTarget = target;
         if (! animate || reduced || std::abs (panelAmt - target) < 0.001f)
         {
             panelAmt = target;
-            panelTarget = target;
+            contentAlpha = target;
             panelRun = false;
-            stopTimer();
+            disarmPanelClock();
         }
         else
         {
             panelFrom = panelAmt;
-            panelTarget = target;
+            alphaFrom = contentAlpha;
+            panelOpening = open;
             panelT0 = Time::getMillisecondCounterHiRes();
             panelRun = true;
-            startTimer (8);
+            armPanelClock();
         }
         source.setCurrent (samples.mode (selected));
         if (open)
             bindSound();
         else
-            layoutLeft();
+            resized();
         repaint();
     }
 
-    void timerCallback() override
+    void armPanelClock()
     {
-        if (! panelRun)
-        {
-            stopTimer();
-            return;
-        }
-        float u = (float) ((Time::getMillisecondCounterHiRes() - panelT0) / 120.0);
-        if (u >= 1.f)
+        if (getPeer() == nullptr)
         {
             panelAmt = panelTarget;
+            contentAlpha = panelTarget;
             panelRun = false;
-            stopTimer();
+            panelClockOn = false;
+            return;
+        }
+        if (panelClockOn && ! panelVblank.isEmpty())
+            return;
+        panelClockOn = true;
+        if (panelVblank.isEmpty())
+            panelVblank = VBlankAttachment (this, [this] (double) { advancePanel(); });
+    }
+
+    void disarmPanelClock()
+    {
+        panelClockOn = false;
+        if (panelVblank.isEmpty())
+            return;
+        if (auto* mm = MessageManager::getInstanceWithoutCreating())
+        {
+            Component::SafePointer<Content> alive (this);
+            mm->callAsync ([alive]
+            {
+                if (alive != nullptr && ! alive->panelClockOn)
+                    alive->panelVblank = VBlankAttachment();
+            });
         }
         else
         {
-            u = u * u * (3.f - 2.f * u);
-            panelAmt = panelFrom + (panelTarget - panelFrom) * u;
+            panelVblank = VBlankAttachment();
         }
-        layoutLeft();
+    }
+
+    void advancePanel()
+    {
+        if (! panelRun)
+        {
+            disarmPanelClock();
+            return;
+        }
+        const double elapsed = Time::getMillisecondCounterHiRes() - panelT0;
+        const double dur = panelOpening ? 180.0 : 140.0;
+        const float u = (float) (elapsed / dur);
+        if (u >= 1.f)
+        {
+            panelAmt = panelTarget;
+            contentAlpha = panelTarget;
+            panelRun = false;
+            disarmPanelClock();
+        }
+        else
+        {
+            // Open: ease-out cubic(0.2, 0, 0, 1). Close: that curve reversed.
+            const float eased = panelOpening ? bezierEase (u, 0.2f, 0.f, 0.f, 1.f)
+                                             : bezierEase (u, 1.f, 0.f, 0.8f, 1.f);
+            panelAmt = panelFrom + (panelTarget - panelFrom) * eased;
+            if (panelOpening)
+            {
+                const double fadeDur = (1.0 - (double) alphaFrom) * 100.0;
+                const double fadeStart = 180.0 - fadeDur;
+                contentAlpha = elapsed <= fadeStart
+                                 ? alphaFrom
+                                 : jlimit (0.f, 1.f, alphaFrom + (float) ((elapsed - fadeStart) / 100.0));
+            }
+            else
+            {
+                contentAlpha = jmax (0.f, alphaFrom - (float) (elapsed / 100.0));
+            }
+        }
+        resized();
         repaint();
     }
 
@@ -2285,6 +2365,24 @@ struct RollaEditor::Content : Component, private Timer
         const int panelH = jmax (0, kBottom - panelY);
         sound.setBounds (16, panelY, 640, panelH);
         sound.setVisible (panelH > 2);
+        applyContentFade();
+    }
+
+    void applyContentFade()
+    {
+        const float a = contentAlpha;
+        const bool live = a > 0.99f;
+        presetStep.setAlpha (a);
+        tone.setAlpha (a);
+        punch.setAlpha (a);
+        level.setAlpha (a);
+        voxSlot.setAlpha (a);
+        inStab.setAlpha (a);
+        kitStep.setAlpha (a);
+        source.setAlpha (a);
+        for (auto& col : drums)
+            col.setAlpha (a);
+        sound.setInterceptsMouseClicks (live, live);
     }
 
     void placeSound()
@@ -2537,6 +2635,8 @@ struct RollaEditor::Content : Component, private Timer
         g.setColour (col (kLine));
         g.drawRoundedRectangle (b.reduced (0.5f), Theme::radiusPanel, 1.f);
 
+        g.saveState();
+        g.setOpacity (contentAlpha);
         g.setColour (col (kLine));
         g.fillRect (0, 47, 640, 1);
 
@@ -2588,6 +2688,7 @@ struct RollaEditor::Content : Component, private Timer
                 g.drawText ("Hits land on the stab's answer slots.", 16, 240, 280, 16, Justification::centredLeft, true);
             }
         }
+        g.restoreState();
     }
 };
 
@@ -2759,7 +2860,8 @@ bool RollaEditor::everyLaneKept() const
 
 bool RollaEditor::keyPressed (const KeyPress& key)
 {
-    if (key == KeyPress::escapeKey && content != nullptr && content->soundIsOpen())
+    if (key == KeyPress::escapeKey && hasKeyboardFocus (true)
+        && content != nullptr && content->soundIsOpen())
     {
         content->closeSound();
         return true;
