@@ -127,6 +127,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout (const PresetBa
             AudioParameterBoolAttributes().withAutomatable (false)));
     }
 
+    // Appended last so saved sessions and host automation keep their parameter indices.
+    for (int part = 0; part < NumParts; ++part)
+        add (std::make_unique<AudioParameterBool> (ParameterID { String (partId (part)) + "Solo", 1 },
+                                                   String (partName (part)) + " Solo", false));
+
     return { p.begin(), p.end() };
 }
 
@@ -548,6 +553,23 @@ void RollaProcessor::triggerRoll()
     }
 }
 
+void RollaProcessor::setExclusiveSolo (int part)
+{
+    if (part < 0 || part >= NumParts)
+        return;
+    for (int i = 0; i < NumParts; ++i)
+    {
+        auto* p = apvts.getParameter (juce::String (partId (i)) + "Solo");
+        const float target = i == part ? 1.f : 0.f;
+        // Only touch lanes that change, so the host records no empty gestures.
+        if (p == nullptr || (p->getValue() >= 0.5f) == (target >= 0.5f))
+            continue;
+        p->beginChangeGesture();
+        p->setValueNotifyingHost (target);
+        p->endChangeGesture();
+    }
+}
+
 void RollaProcessor::triggerShuffle (int part)
 {
     if (part < 0 || part >= NumParts)
@@ -765,6 +787,13 @@ EngineParams RollaProcessor::readParams (std::shared_ptr<const PresetBank>& hold
         params.preset[i] = (int) raw (apvts, (id + "Preset").toRawUTF8());
         params.samplePick[i] = samplePick[i].load (std::memory_order_relaxed);
     }
+    // Solo is folded in here, after the mute read, so playback, the drums bus, the full
+    // bounce and the stems all hear it. regenerate() reads the raw Mute parameter, so
+    // ROLL still treats a lane that is only silenced by someone else's solo as unmuted.
+    bool solo[NumParts] {};
+    for (int i = 0; i < NumParts; ++i)
+        solo[i] = raw (apvts, (juce::String (partId (i)) + "Solo").toRawUTF8()) >= 0.5f;
+    foldSolo (params.mute, solo);
     for (int v = 0; v < NumDrumVoices; ++v)
     {
         const auto id = juce::String (v);

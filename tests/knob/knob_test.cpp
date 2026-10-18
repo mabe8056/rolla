@@ -835,6 +835,162 @@ void testStabDice()
     editor.reset();
 }
 
+std::string soloId (int part)
+{
+    return std::string (rolla::partId (part)) + "Solo";
+}
+
+void clearSolos (rolla::RollaProcessor& proc)
+{
+    for (int i = 0; i < rolla::NumParts; ++i)
+        setDenorm (proc, soloId (i).c_str(), 0.f);
+}
+
+// Factory mutes: only hits starts muted.
+void defaultMutes (rolla::RollaProcessor& proc)
+{
+    for (int i = 0; i < rolla::NumParts; ++i)
+        setDenorm (proc, (std::string (rolla::partId (i)) + "Mute").c_str(), i == rolla::Hits ? 1.f : 0.f);
+}
+
+std::uint32_t seedOf (const rolla::Groove& g, int part)
+{
+    return part == rolla::Drums ? g.drums.seed : g.lane[part].seed;
+}
+
+void testSolo()
+{
+    // The fold itself: playback-only, and a no-op with no solo.
+    {
+        bool mute[rolla::NumParts] {};
+        bool none[rolla::NumParts] {};
+        mute[rolla::Hits] = true;
+        rolla::foldSolo (mute, none);
+        for (int i = 0; i < rolla::NumParts; ++i)
+            expect (mute[i] == (i == rolla::Hits), std::string ("no solo leaves ") + rolla::partId (i) + " mute as it was");
+
+        bool solo[rolla::NumParts] {};
+        solo[rolla::Bass] = true;
+        solo[rolla::Drums] = true;
+        rolla::foldSolo (mute, solo);
+        for (int i = 0; i < rolla::NumParts; ++i)
+            expect (mute[i] == (i != rolla::Bass && i != rolla::Drums),
+                    std::string ("bass + drums solo silences ") + rolla::partId (i) + " only if not soloed");
+    }
+
+    rolla::RollaProcessor proc;
+    proc.waitUntilReady();
+
+    // Appended last, so the indices of every older parameter (sessions, automation) hold.
+    const auto& params = proc.getParameters();
+    expect (params.size() > rolla::NumParts, "parameter list");
+    for (int i = 0; i < rolla::NumParts && params.size() > rolla::NumParts; ++i)
+    {
+        auto* p = dynamic_cast<juce::AudioProcessorParameterWithID*> (params[params.size() - rolla::NumParts + i]);
+        expect (p != nullptr && p->paramID == juce::String (soloId (i)), soloId (i) + " is at the end of the layout");
+        expect (! flagOf (proc, soloId (i).c_str()), soloId (i) + " starts off");
+    }
+
+    // Alt-click path: one solo, the rest cleared.
+    setDenorm (proc, soloId (rolla::Bass).c_str(), 1.f);
+    setDenorm (proc, soloId (rolla::Stab).c_str(), 1.f);
+    proc.setExclusiveSolo (rolla::Drums);
+    for (int i = 0; i < rolla::NumParts; ++i)
+        expect (flagOf (proc, soloId (i).c_str()) == (i == rolla::Drums),
+                "exclusive solo leaves only drums soloed (" + soloId (i) + ")");
+    proc.setExclusiveSolo (rolla::Drums);
+    expect (flagOf (proc, soloId (rolla::Drums).c_str()), "exclusive solo on a soloed lane keeps it soloed");
+
+    // Saved in the plugin state.
+    clearSolos (proc);
+    setDenorm (proc, soloId (rolla::Bass).c_str(), 1.f);
+    setDenorm (proc, soloId (rolla::Pad).c_str(), 1.f);
+    {
+        juce::MemoryBlock block;
+        proc.getStateInformation (block);
+        rolla::RollaProcessor restored;
+        restored.waitUntilReady();
+        restored.setStateInformation (block.getData(), (int) block.getSize());
+        for (int i = 0; i < rolla::NumParts; ++i)
+            expect (flagOf (restored, soloId (i).c_str()) == (i == rolla::Bass || i == rolla::Pad),
+                    "restore " + soloId (i));
+    }
+
+    // ROLL ignores solo: unkept, unmuted lanes re-roll even when another lane is soloed.
+    clearSolos (proc);
+    defaultMutes (proc);
+    setDenorm (proc, soloId (rolla::Bass).c_str(), 1.f);
+    {
+        std::uint32_t before[rolla::NumParts] {};
+        const auto g0 = proc.copyGroove();
+        for (int i = 0; i < rolla::NumParts; ++i)
+            before[i] = seedOf (g0, i);
+        for (int attempt = 0; attempt < 3 && seedOf (proc.copyGroove(), rolla::Drums) == before[rolla::Drums]; ++attempt)
+        {
+            proc.triggerRoll();
+            pumpUntil ([&] { return seedOf (proc.copyGroove(), rolla::Drums) != before[rolla::Drums]; });
+        }
+        const auto after = proc.copyGroove();
+        for (int part : { rolla::Bass, rolla::Stab, rolla::Pluck, rolla::Pad, rolla::Vox, rolla::Drums })
+            expect (seedOf (after, part) != before[part],
+                    std::string ("roll with bass soloed re-rolls ") + rolla::partId (part));
+        expect (seedOf (after, rolla::Hits) == before[rolla::Hits], "roll with a solo still leaves the muted hits lane");
+        expect (flagOf (proc, soloId (rolla::Bass).c_str()), "roll does not clear solo");
+    }
+
+    // Audio. Factory presets need the sample pack; without it every render is silent.
+    clearSolos (proc);
+    defaultMutes (proc);
+    if (! packOnDisk (proc))
+    {
+        std::cout << "solo audio skipped: sample pack is not on this machine\n";
+        return;
+    }
+    Head head;
+    proc.setPlayHead (&head);
+    std::string detail;
+
+    // Samples load lazily on first play (and ROLL above may have picked new presets).
+    // Warm the files once so every compared render hears the same loaded set.
+    render (proc, head, 4);
+    pumpUntil ([&] { return proc.sampleLibrary().idle(); }, 8000);
+    render (proc, head, 4);
+    pumpUntil ([&] { return proc.sampleLibrary().idle(); }, 8000);
+
+    const auto full = render (proc, head, 4);
+    expect (full.rms > 1.0e-4, "full mix sounds");
+
+    // References built from mutes alone, which the mute-null mix checks already trust.
+    solo (proc, rolla::Bass);
+    const auto bassByMute = render (proc, head, 4);
+    for (int i = 0; i < rolla::NumParts; ++i)
+        setDenorm (proc, (std::string (rolla::partId (i)) + "Mute").c_str(),
+                   i == rolla::Bass || i == rolla::Drums ? 0.f : 1.f);
+    const auto bassDrumsByMute = render (proc, head, 4);
+    defaultMutes (proc);
+
+    setDenorm (proc, soloId (rolla::Bass).c_str(), 1.f);
+    const auto bassSolo = render (proc, head, 4);
+    expect (bassSolo.rms > 1.0e-4, "soloed bass still sounds, rms " + std::to_string (bassSolo.rms));
+    expect (! heard (bassSolo, bassByMute, detail), "bass solo is bass alone " + detail);
+    expect (heard (bassSolo, full, detail), "bass solo silences the other lanes " + detail);
+
+    setDenorm (proc, soloId (rolla::Drums).c_str(), 1.f);
+    const auto twoSolos = render (proc, head, 4);
+    expect (! heard (twoSolos, bassDrumsByMute, detail), "bass + drums solo sounds both lanes " + detail);
+    expect (heard (twoSolos, bassSolo, detail), "the second solo adds the drums " + detail);
+
+    proc.setExclusiveSolo (rolla::Bass);
+    const auto exclusive = render (proc, head, 4);
+    expect (! heard (exclusive, bassByMute, detail), "exclusive bass solo drops the drums again " + detail);
+
+    clearSolos (proc);
+    const auto unsoloed = render (proc, head, 4);
+    expect (! heard (unsoloed, full, detail), "no solo leaves the output unchanged " + detail);
+
+    proc.setPlayHead (nullptr);
+}
+
 } // namespace
 
 int main()
@@ -852,6 +1008,7 @@ int main()
     testState();
     testExport();
     testStabDice();
+    testSolo();
     testSoundControls();
     if (fails == 0)
         std::cout << "knob tests passed\n";
