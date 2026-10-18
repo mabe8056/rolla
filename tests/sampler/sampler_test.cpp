@@ -558,6 +558,8 @@ void testGenreTargets()
     expect (box.lane (Style::Deep, Lane::Kick).centroidHz.lo == 200.f && box.lane (Style::Deep, Lane::Kick).decayMs.hi == 140.f
                 && box.lane (Style::Bouncy, Lane::Pluck).centroidHz.hi == 1200.f,
             "genre json: ext bands (per style over ALL) become p10..p90 bands");
+    expect (box.lane (Style::Bouncy, Lane::Hits).centroidHz.hi == mock.lane (Style::Bouncy, Lane::Hits).centroidHz.hi,
+            "genre json: stab_chord covers STAB and PLUCK only; HITS keeps its own values");
     expect (std::fabs (box.style (Style::Jackin).groove.swing.hi - 0.646f) < 1.0e-4f, "genre json: ext swing percent becomes a ratio band");
 }
 

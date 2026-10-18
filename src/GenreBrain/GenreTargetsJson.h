@@ -85,23 +85,25 @@ inline void lane (const juce::var& v, LaneTargets& lt)
 // The box's extension block (schema rolla.genre_targets.ext/1): per-style feature
 // percentiles over reference hits, in its own lane grouping. p10..p90 becomes the
 // band. Applied before the per-lane v1 fields, so an explicit v1 "bands" wins.
+// ext lane -> library lanes, as the box's ext.lane_to_library_folders lists them
+// (RIM sits in PERC). HITS and FX have no ext lane and keep their v1 data.
 inline std::vector<Lane> extLanes (const juce::String& name)
 {
     const auto n = name.toLowerCase();
     if (n == "kick")
         return { Lane::Kick };
-    if (n == "hat" || n == "hats")
-        return { Lane::HatC, Lane::HatO };
+    if (n == "hat")
+        return { Lane::HatC, Lane::HatO, Lane::Ride };
     if (n == "clap_perc")
         return { Lane::Clap, Lane::Snare, Lane::Perc };
     if (n == "perc_hats")
-        return { Lane::HatC, Lane::HatO, Lane::Clap, Lane::Snare, Lane::Perc, Lane::Ride };
+        return { Lane::HatC, Lane::HatO, Lane::Ride, Lane::Clap, Lane::Snare, Lane::Perc };
     if (n == "bass")
         return { Lane::Bass };
-    if (n == "stab_chord" || n == "stab")
-        return { Lane::Stab, Lane::Pluck, Lane::Hits };
+    if (n == "stab_chord")
+        return { Lane::Stab, Lane::Pluck };
     if (n == "pad")
-        return { Lane::Pad, Lane::Fx };
+        return { Lane::Pad };
     if (n == "vox")
         return { Lane::Vox };
     return {};
@@ -136,15 +138,25 @@ inline void ext (const juce::var& e, GenreTargets& g)
 {
     if (! e.isObject())
         return;
-    // ALL first, then each style on top.
+    // ALL first, then each style on top. Within a style the combined perc_hats
+    // lane goes first so the specific hat / clap_perc lanes override it.
+    // Style keys are UPPERCASE here (styleFromId folds case).
     auto applyBands = [&g] (const juce::var& byLane, int onlyStyle)
     {
-        if (auto* lanes = byLane.getDynamicObject())
+        auto* lanes = byLane.getDynamicObject();
+        if (lanes == nullptr)
+            return;
+        for (int pass = 0; pass < 2; ++pass)
             for (const auto& l : lanes->getProperties())
+            {
+                const bool combined = l.name.toString().equalsIgnoreCase ("perc_hats");
+                if (combined != (pass == 0))
+                    continue;
                 for (Lane lane : extLanes (l.name.toString()))
                     for (int s = 0; s < kStyles; ++s)
                         if (onlyStyle < 0 || onlyStyle == s)
                             extLaneFeatures (l.value, g.styles[(size_t) s].lanes[(size_t) lane]);
+            }
     };
     if (auto* bands = e["bands"].getDynamicObject())
     {
