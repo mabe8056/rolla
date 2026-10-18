@@ -4238,6 +4238,8 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
         avoidReaction (g.lane[Bass]);
         if (s.dialect == Long)
             deepbouncy::deepArc (g.lane[Bass], s.bars, bassSeed, s.busy);
+        else if (s.dialect == Pop)
+            deepbouncy::relegato (g.lane[Bass], s.bars);
         else if (s.dialect == Gaskin)
         {
             contrastCallAnswer (g.lane[Bass], s.bars);

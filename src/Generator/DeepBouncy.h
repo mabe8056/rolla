@@ -566,6 +566,24 @@ inline void bouncyBass (Lane& lane, int bars, std::uint32_t seed, float dark, fl
     lane.count = w;
 }
 
+// BOUNCY after the cross-roll twin nudge (separateTwinRhythm) and the other
+// shared bass passes: notes may have moved, so the line is made legato again
+// and bar 8 keeps its 4/16 rest. Pitches and onsets are not touched.
+inline void relegato (Lane& lane, int bars)
+{
+    if (lane.count <= 0)
+        return;
+    bars = std::clamp (bars, 2, kMaxBars);
+    legatoBass (lane, bars, 0.12f, 6.f);
+    const float origin = (float) ((bars - 1) * 16);
+    for (int i = 0; i < lane.count; ++i)
+    {
+        Note& note = lane.notes[i];
+        if (note.start >= origin && note.start < origin + 11.f && note.start + note.length > origin + 11.f)
+            note.length = std::max (0.5f, origin + 11.f - note.start);
+    }
+}
+
 inline void deepArc (Lane& lane, int bars, std::uint32_t seed, float busy)
 {
     if (bars < 4 || lane.count <= 0)
