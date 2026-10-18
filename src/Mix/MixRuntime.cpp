@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <iterator>
 
 namespace rolla
 {
@@ -101,6 +102,54 @@ void MixRuntime::Biquad::setShelf (bool high, float freq, float q, float gainDb,
     b2 = bb2 / a0;
     a1 = aa1 / a0;
     a2 = aa2 / a0;
+}
+
+void KWeight::prepare (double sampleRate) noexcept
+{
+    // libebur128's bilinear design: at 48 kHz it is the BS.1770 table exactly
+    // (shelf b 1.53512486 -2.69169619 1.19839281, a -1.69065929 0.73248077;
+    // RLB b 1 -2 1, a -1.99004745 0.99007225), and it holds at other rates.
+    const double fs = sampleRate > 1000.0 ? sampleRate : 48000.0;
+    constexpr double pi = 3.14159265358979323846;
+    {
+        const double f0 = 1681.974450955533, G = 3.999843853973347, Q = 0.7071752369554196;
+        const double K = std::tan (pi * f0 / fs);
+        const double Vh = std::pow (10.0, G / 20.0);
+        const double Vb = std::pow (Vh, 0.4996667741545416);
+        const double a0 = 1.0 + K / Q + K * K;
+        sb0 = (Vh + Vb * K / Q + K * K) / a0;
+        sb1 = 2.0 * (K * K - Vh) / a0;
+        sb2 = (Vh - Vb * K / Q + K * K) / a0;
+        sa1 = 2.0 * (K * K - 1.0) / a0;
+        sa2 = (1.0 - K / Q + K * K) / a0;
+    }
+    {
+        const double f0 = 38.13547087602444, Q = 0.5003270373238773;
+        const double K = std::tan (pi * f0 / fs);
+        const double a0 = 1.0 + K / Q + K * K;
+        hb0 = 1.0;
+        hb1 = -2.0;
+        hb2 = 1.0;
+        ha1 = 2.0 * (K * K - 1.0) / a0;
+        ha2 = (1.0 - K / Q + K * K) / a0;
+    }
+    reset();
+}
+
+double KWeight::process (double x) noexcept
+{
+    // Transposed direct form II, both stages.
+    const double y = sb0 * x + s1;
+    s1 = sb1 * x - sa1 * y + s2;
+    s2 = sb2 * x - sa2 * y;
+    const double z = hb0 * y + h1;
+    h1 = hb1 * y - ha1 * z + h2;
+    h2 = hb2 * y - ha2 * z;
+    if (std::fabs (s1) < 1.0e-30) s1 = 0.0;
+    if (std::fabs (s2) < 1.0e-30) s2 = 0.0;
+    if (std::fabs (h1) < 1.0e-30) h1 = 0.0;
+    if (std::fabs (h2) < 1.0e-30) h2 = 0.0;
+    return z;
 }
 
 void MixRuntime::RmsWin::assign (int samples) noexcept
@@ -220,8 +269,14 @@ void MixRuntime::prepare (double sampleRate) noexcept
     ramp120 = std::max (1, (int) std::lround (0.120 * sr));
     corrN = std::max (8, (int) std::lround (0.050 * sr));
     rmsN = std::max (4, (int) std::lround (0.005 * sr));
+    levelBlockN = std::max (16, (int) std::lround (0.100 * sr));
+    // One-pole toward the wanted gain: cuts in ~0.3 s, boosts in ~1.5 s.
+    levelCut = 1.f - std::exp (-1.f / (float) (0.3 * sr));
+    levelBoost = 1.f - std::exp (-1.f / (float) (1.5 * sr));
     for (auto& s : strip)
     {
+        s.level.kL.prepare (sr);
+        s.level.kR.prepare (sr);
         s.rms.assign (rmsN);
         s.corr.assign (corrN);
         s.compEnv = 1.f;
@@ -248,6 +303,14 @@ void MixRuntime::reset() noexcept
         s.rms.reset();
         s.corr.reset();
         s.compEnv = 1.f;
+        auto& lv = s.level;
+        lv.kL.reset();
+        lv.kR.reset();
+        lv.acc = lv.sum = 0.0;
+        lv.count = lv.w = lv.fill = 0;
+        std::fill (std::begin (lv.ring), std::end (lv.ring), 0.0);
+        lv.holdDb = -200.f;
+        lv.wantLin = lv.gain = 1.f;
         std::memset (s.tpUp, 0, sizeof s.tpUp);
         std::memset (s.tpDown, 0, sizeof s.tpDown);
         s.rampSample = 1000000;
@@ -355,6 +418,7 @@ void MixRuntime::beginBlock (const MixProgram& prog, const MixBlockInfo& info) n
     program = &prog;
     dialect = std::clamp (info.dialect, 0, kMixDialects - 1);
     bypassSum = info.bypassSumTrim;
+    laneLevel = info.laneLevel;
     sumMask = info.sumMask >= 0 ? std::clamp (info.sumMask, 0, 63) : std::clamp (info.activeMask, 0, 63);
 
     float targetSum = prog.dialectTrimDb[dialect] + prog.sumAlignDb[dialect];
@@ -642,6 +706,9 @@ void MixRuntime::process (int lane, float& l, float& r) noexcept
         yR = yR - lpR + mono;
     }
 
+    if (laneLevel)
+        levelLane (s, c, yL, yR);
+
     const float trim = dbToLin (c.outputTrimDb);
     const float ceilLin = dbToLin (c.tpCeilDb);
     // Soft knee into a hard clamp at 4×, after the trim, so makeup can put the body
@@ -657,6 +724,47 @@ void MixRuntime::process (int lane, float& l, float& r) noexcept
         s.satXfade = false;
         s.eqXfade[0] = s.eqXfade[1] = false;
     }
+}
+
+// Lane level: the lane's own K-weighted short-term loudness, held at its recent
+// max, steers a slow gain so the ST max sits on the profile's st_target_lufs.
+// It reads only this lane (before the mute), so FULL / MUTE / SOLO share one gain.
+// Blocks well under the hold (rests, silence) neither move the hold nor the gain,
+// so a lane coming back from a rest is not boosted.
+void MixRuntime::levelLane (Strip& s, const MixChain& c, float& l, float& r) noexcept
+{
+    auto& lv = s.level;
+    const double kl = lv.kL.process ((double) l);
+    const double kr = lv.kR.process ((double) r);
+    lv.acc += kl * kl + kr * kr;
+    if (++lv.count >= levelBlockN)
+    {
+        const double block = lv.acc / (double) lv.count;
+        lv.acc = 0.0;
+        lv.count = 0;
+        lv.sum += block - lv.ring[lv.w];
+        if (lv.sum < 0.0)
+            lv.sum = 0.0;
+        lv.ring[lv.w] = block;
+        lv.w = (lv.w + 1) % kLevelBlocks;
+        lv.fill = std::min (lv.fill + 1, kLevelBlocks);
+        // Output trim (makeup) comes after this stage: count it in.
+        const float blockDb = -0.691f + 10.f * std::log10 ((float) block + 1.0e-20f) + c.outputTrimDb;
+        const float stDb = -0.691f + 10.f * std::log10 ((float) (lv.sum / (double) lv.fill) + 1.0e-20f) + c.outputTrimDb;
+        const bool active = blockDb > -70.f && blockDb > lv.holdDb - 20.f;
+        if (active && lv.fill >= 4)
+        {
+            // The hold falls 0.5 dB/s while the lane plays, so a quieter section is found.
+            lv.holdDb = std::max (stDb, lv.holdDb - 0.05f);
+            float err = c.stTargetLufs - lv.holdDb;
+            err = err > 0.f ? std::max (0.f, err - 0.5f) : std::min (0.f, err + 0.5f);
+            lv.wantLin = dbToLin (std::clamp (err, -9.f, 12.f));
+        }
+    }
+    lv.gain += (lv.wantLin - lv.gain) * (lv.wantLin < lv.gain ? levelCut : levelBoost);
+    lv.gain = flush (lv.gain);
+    l *= lv.gain;
+    r *= lv.gain;
 }
 
 float MixRuntime::sumGain() noexcept
