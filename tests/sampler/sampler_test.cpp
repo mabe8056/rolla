@@ -549,6 +549,21 @@ void testGenreTargets()
     s.vector = { 0.2f, -0.1f, 5.f };
     expect (g.timbreDistance (Style::Deep, s) < 1.f, "genre json: timbre distance skips the null dimension");
     expect (! loadGenreTargets (juce::File ("/nonexistent/genre_targets.json")).fromData, "genre json: no file means the mock");
+
+    // The box's shape: style names (roller...), and the ext block's p10..p90 bands
+    // (ALL, then per style) and swing in percent.
+    const char* boxText = R"JSON({"version":1,"styles":{"roller":{"KICK":{"clusters":[{"centroid":[1],"spread":[1]}],"threshold":1.2,"pooled":false}}},
+      "ext":{"schema":"rolla.genre_targets.ext/1",
+        "bands":{"ALL":{"stab_chord":{"features":{"centroid_hz":{"p10":400,"p50":700,"p90":1200}}}},
+                 "DEEP":{"kick":{"n_hits":10,"features":{"centroid_hz":{"p10":200,"p50":261,"p90":330},"decay20_ms":{"p10":60,"p50":90,"p90":140}}}}},
+        "groove":{"JACKIN":{"hat_16th_swing_pct":{"p10":51.1,"p50":56.5,"p90":64.6}}}}})JSON";
+    const auto box = parseGenreTargets (juce::JSON::parse (boxText));
+    expect (box.lane (Style::Roller, Lane::Kick).timbre.clusters.size() == 1 && box.lane (Style::Roller, Lane::Kick).timbre.threshold == 1.2f,
+            "genre json: 'roller' maps to ROLLER");
+    expect (box.lane (Style::Deep, Lane::Kick).centroidHz.lo == 200.f && box.lane (Style::Deep, Lane::Kick).decayMs.hi == 140.f
+                && box.lane (Style::Bouncy, Lane::Pluck).centroidHz.hi == 1200.f,
+            "genre json: ext bands (per style over ALL) become p10..p90 bands");
+    expect (std::fabs (box.style (Style::Jackin).groove.swing.hi - 0.646f) < 1.0e-4f, "genre json: ext swing percent becomes a ratio band");
 }
 
 // Made-up samples with numbers typical of the mock bands; never real files or a profile.
