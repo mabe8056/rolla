@@ -2849,9 +2849,13 @@ void writeStab (Lane& lane, const Lane& bass, const Settings& s, Rng& rng, float
         { 0, 3, 7 }, { 3, 7, 10 }, { 0, 3, 10 }, { 3, 10, 15 },
         { 7, 10, 15 }, { 0, 7, 15 }, { 5, 8, 12 }, { 3, 7, 14 },
     };
+    // BOUNCY draws a 3-chord, 4-bar progression from 16 (all natural minor), so
+    // an off-beat minor triad on two chords is not every roll's default.
     static const int bouncyBook[][3] = {
         { 3, 10, 15 }, { 7, 10, 19 }, { 3, 7, 14 }, { 10, 14, 17 },
         { 0, 7, 15 }, { 3, 10, 17 }, { 5, 10, 15 }, { 7, 12, 19 },
+        { 0, 3, 7 }, { 2, 7, 10 }, { 5, 8, 12 }, { 8, 12, 15 },
+        { 0, 5, 10 }, { 3, 8, 12 }, { 2, 5, 10 }, { 7, 10, 14 },
     };
     static const int jackinBook[][3] = {
         { 3, 7, 10 }, { 0, 3, 10 }, { 3, 10, 14 }, { 7, 10, 14 },
@@ -2861,6 +2865,30 @@ void writeStab (Lane& lane, const Lane& bass, const Settings& s, Rng& rng, float
     int voice[2] = { (int) (seed % 8u), (int) ((seed / 8u) % 8u) };
     if (voice[1] == voice[0])
         voice[1] = (voice[1] + 3) % 8;
+    // BOUNCY: three distinct chords on a 4-bar shape (A B A C, A B C B, ...).
+    int popChord[3] = { 0, 1, 2 };
+    const int* popShape = nullptr;
+    if (s.dialect == Pop)
+    {
+        static const int shapes[4][4] = { { 0, 1, 0, 2 }, { 0, 1, 2, 1 }, { 0, 0, 1, 2 }, { 0, 1, 2, 0 } };
+        std::uint32_t h = (seed ^ 0x51ABu) * 0x9E3779B1u;
+        for (int c = 0; c < 3; ++c)
+        {
+            h = h * 0x9E3779B1u + 0x7F4A7C15u;
+            int k = (int) ((h >> 8) % 16u);
+            for (int t = 0; t < 16; ++t)
+            {
+                bool dup = false;
+                for (int d = 0; d < c; ++d)
+                    dup = dup || popChord[d] == k;
+                if (! dup)
+                    break;
+                k = (k + 5) % 16;
+            }
+            popChord[c] = k;
+        }
+        popShape = shapes[(h >> 20) % 4u];
+    }
 
     auto rollerChord = [&] (int cell, int* out)
     {
@@ -2929,6 +2957,17 @@ void writeStab (Lane& lane, const Lane& bass, const Settings& s, Rng& rng, float
         if (s.dialect == UkMin)
             rollerChord (bar, rollerVoi);
         const int* voi = s.dialect == UkMin ? rollerVoi : book[voice[par]];
+        // BOUNCY bar variants: the 4-bar chord shape, and a seeded skip of one
+        // or two hits so no two bars are the same full off-beat grid.
+        int perBar = per;
+        const std::uint32_t barHash = (seed + (std::uint32_t) bar * 0x632BE5ABu) * 0x9E3779B1u;
+        if (s.dialect == Pop && popShape != nullptr)
+        {
+            voi = bouncyBook[popChord[popShape[bar & 3]]];
+            const int skip = (int) ((barHash >> 7) % 4u);
+            if (per >= 4 && (skip == 1 || skip == 2))
+                perBar = per - skip;
+        }
         if (s.dialect == UkMin)
         {
             const std::uint32_t lh = (seed + (std::uint32_t) bar * 13u) * 0x9E3779B1u;
@@ -2965,7 +3004,7 @@ void writeStab (Lane& lane, const Lane& bass, const Settings& s, Rng& rng, float
         bool placedRest[12] {};
         auto place = [&] (int slot, bool isRest)
         {
-            if (placed >= per || taken[slot])
+            if (placed >= perBar || taken[slot])
                 return;
             const int abs = bar * 16 + slot;
             float hold = len;
@@ -3000,6 +3039,12 @@ void writeStab (Lane& lane, const Lane& bass, const Settings& s, Rng& rng, float
             place (onsetSlots[i], false);
         for (int i = 0; i < nRest; ++i)
             place (rest[i], true);
+        // BOUNCY: two bars in three carry one ghost hit (about 60% velocity).
+        if (s.dialect == Pop && placed > 2 && (barHash >> 13) % 3u != 0u)
+        {
+            const int g = placedIdx[(int) ((barHash >> 17) % (std::uint32_t) std::min (placed, 12))];
+            lane.notes[g].vel = (std::uint8_t) clampi ((int) std::lround (0.6f * (float) stabVel), 40, 127);
+        }
 
         int alreadyRest = 0;
         for (int i = 0; i < placed && i < 12; ++i)
