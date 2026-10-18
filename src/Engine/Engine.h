@@ -57,6 +57,11 @@ struct EngineParams
     // Master true-peak safety stage, ceiling -6 dBTP (src/Mix/TruePeakGuard.h).
     // Off keeps the same latency and passes the sum through unchanged.
     bool tpGuard = true;
+    // Lane TONE / PUNCH, DRUMS ACCENT and the per-voice drum ACCENT also shape
+    // sample playback (not only the synth). The plugin turns this on; tools and
+    // tests that build EngineParams by hand keep the old sample path. At the
+    // knob defaults (tone / punch 0.5, accent 0.6, voice accent off) it is an identity.
+    bool sampleShaping = false;
 };
 
 struct Transport

@@ -723,7 +723,7 @@ struct PatternStrip : Component
 
 struct IconButton : QuietButton
 {
-    enum Kind { mute, dice, lock };
+    enum Kind { mute, solo, dice, lock };
 
     Kind kind;
     RollaProcessor* proc = nullptr;
@@ -757,6 +757,11 @@ struct IconButton : QuietButton
             g.setColour (col (kMute));
             g.fillEllipse (b.reduced (1.f));
         }
+        else if (kind == solo && on)
+        {
+            g.setColour (col (kSolo));
+            g.fillEllipse (b.reduced (1.f));
+        }
         else if (kind == lock && on)
         {
             g.setColour (col (kInk));
@@ -773,14 +778,14 @@ struct IconButton : QuietButton
             g.fillEllipse (b.reduced (1.f));
         }
 
-        const auto glyph = (kind == mute && on) || (kind == lock && on) ? col (kPaper)
+        const auto glyph = on && kind != dice ? col (kPaper)
                          : (over ? col (kInk) : col (kInk2));
         g.setColour (glyph);
 
-        if (kind == mute)
+        if (kind == mute || kind == solo)
         {
             g.setFont (Theme::font (Theme::Role::button));
-            g.drawText ("M", getLocalBounds(), Justification::centred, false);
+            g.drawText (kind == mute ? "M" : "S", getLocalBounds(), Justification::centred, false);
         }
         else if (kind == dice)
         {
@@ -921,15 +926,18 @@ struct LaneRow : Component, FileDragAndDropTarget
     bool hot = false;
     bool sampleMissing = false;
     bool laneOut = false;
+    // Another lane is soloed and this one is not: it paints dimmed, like a mute.
+    bool soloedOut = false;
     int comesIn = 75;
     std::function<void (int)> onSelect;
     std::function<void (int)> onNudge;
     IconButton mute { IconButton::mute, "Mute" };
+    IconButton solo { IconButton::solo, "Solo" };
     IconButton shuffle { IconButton::dice, "Shuffle" };
     IconButton keep { IconButton::lock, "Keep" };
     LaneDrag drag;
     PatternStrip strip;
-    std::unique_ptr<AudioProcessorValueTreeState::ButtonAttachment> muteA, keepA;
+    std::unique_ptr<AudioProcessorValueTreeState::ButtonAttachment> muteA, soloA, keepA;
 
     LaneRow()
     {
@@ -938,13 +946,16 @@ struct LaneRow : Component, FileDragAndDropTarget
         addAndMakeVisible (strip);
         addAndMakeVisible (drag);
         addAndMakeVisible (mute);
+        addAndMakeVisible (solo);
         addAndMakeVisible (shuffle);
         addAndMakeVisible (keep);
         mute.setMouseCursor (MouseCursor::NormalCursor);
+        solo.setMouseCursor (MouseCursor::NormalCursor);
         shuffle.setMouseCursor (MouseCursor::NormalCursor);
         keep.setMouseCursor (MouseCursor::NormalCursor);
         strip.setInterceptsMouseClicks (false, false);
         mute.setClickingTogglesState (true);
+        solo.setClickingTogglesState (true);
         keep.setClickingTogglesState (true);
     }
 
@@ -954,6 +965,8 @@ struct LaneRow : Component, FileDragAndDropTarget
         part = index;
         mute.proc = &processor;
         mute.part = index;
+        solo.proc = &processor;
+        solo.part = index;
         keep.proc = &processor;
         keep.part = index;
         shuffle.proc = &processor;
@@ -964,8 +977,16 @@ struct LaneRow : Component, FileDragAndDropTarget
         bindHelp (drag, "Drag this lane. MIDI clip, or WAV (click the handle, or hold Alt) for one loop.");
         const auto id = String (partId (part));
         muteA = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (processor.apvts, id + "Mute", mute);
+        soloA = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (processor.apvts, id + "Solo", solo);
         keepA = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (processor.apvts, id + "Keep", keep);
         bindHelp (mute, "Mute this lane. Roll leaves it alone, the same as Keep.");
+        bindHelp (solo, "Solo this lane. Only soloed lanes play; Roll still re-rolls the rest. Alt-click to solo it alone.");
+        // The attachment has already written the toggle; Alt then makes this the only solo.
+        solo.onClick = [this]
+        {
+            if (proc != nullptr && ModifierKeys::currentModifiers.isAltDown())
+                proc->setExclusiveSolo (part);
+        };
         bindHelp (shuffle, "Shuffle this lane only. Re-rolls it even if it is muted or kept, and clears an automatic keep.");
         bindHelp (keep, "Keep this lane. Roll leaves a kept lane alone.");
         shuffle.onClick = [this] { if (proc != nullptr) proc->triggerShuffle (part); };
@@ -1061,7 +1082,7 @@ struct LaneRow : Component, FileDragAndDropTarget
             g.drawRect (b.reduced (0.5f), 1.f);
         }
 
-        const bool muted = mute.getToggleState();
+        const bool muted = mute.getToggleState() || soloedOut;
         float dotA = muted ? Theme::alphaMuted : 1.f;
         if (laneOut && ! muted)
             dotA = 0.35f;
@@ -1091,7 +1112,7 @@ struct LaneRow : Component, FileDragAndDropTarget
             g.setColour (col (kInk3));
             g.setFont (Theme::font (Theme::Role::meta));
             g.drawText ("out " + String (utf8 ("·")) + " comes in at " + String (comesIn) + "%",
-                        112, sy, 384, sh, Justification::centredLeft, false);
+                        112, sy, 312, sh, Justification::centredLeft, false);
         }
 
         if (hot)
@@ -1141,16 +1162,20 @@ struct LaneRow : Component, FileDragAndDropTarget
     {
         // 40px row → 24px strip. 80px row → 48px strip. Both stay centred.
         // The strip stops short of the drag handle, which sits just before mute.
+        // Solo took one 40px icon slot from the strip; the icons keep their 8px gaps.
         const float rh = (float) getHeight();
         const float stripH = 24.f + (rh - 40.f) * (24.f / 40.f);
         const int sh = jmax (1, roundToInt (stripH));
         const int sy = jmax (0, roundToInt ((rh - (float) sh) * 0.5f));
-        strip.setBounds (112, sy, 352, sh);
-        const int yIcon = jmax (0, roundToInt ((rh - 32.f) * 0.5f));
-        drag.setBounds (476, yIcon, 32, 32);
-        mute.setBounds (520, yIcon, 32, 32);
-        shuffle.setBounds (560, yIcon, 32, 32);
-        keep.setBounds (600, yIcon, 32, 32);
+        const int icon = Theme::heightIcon;
+        const int pitch = icon + Theme::space8;
+        strip.setBounds (112, sy, 352 - pitch, sh);
+        const int yIcon = jmax (0, roundToInt ((rh - (float) icon) * 0.5f));
+        drag.setBounds (476 - pitch, yIcon, icon, icon);
+        mute.setBounds (520 - pitch, yIcon, icon, icon);
+        solo.setBounds (520, yIcon, icon, icon);
+        shuffle.setBounds (560, yIcon, icon, icon);
+        keep.setBounds (600, yIcon, icon, icon);
     }
 };
 
@@ -2086,7 +2111,11 @@ struct DragTile : Component
             return;
         armed = true;
         const bool audio = audioMode || e.mods.isAltDown() || e.mods.isCommandDown() || e.mods.isCtrlDown();
-        dragFilesOut (this, audio ? proc->writeStemAudio() : proc->writeTempMidi());
+        // Shift: one MIDI file per lane (FL drops each on its own pattern/channel).
+        if (audio)
+            dragFilesOut (this, proc->writeStemAudio());
+        else
+            dragFilesOut (this, e.mods.isShiftDown() ? proc->writeLaneMidiFiles() : proc->writeTempMidi());
     }
 
     void mouseUp (const MouseEvent& e) override
@@ -2328,6 +2357,11 @@ struct RollaEditor::Content : Component
             sync();
         };
         sound.addAndMakeVisible (source);
+       #if ROLLA_PLUGIN_BUILD
+        // Plugin builds play samples only (Sampler kSamplesOnly): SYNTH and LAYER
+        // would change nothing you can hear, so the source switch is not shown.
+        source.setVisible (false);
+       #endif
 
         voxSlot.proc = &proc;
         voxSlot.voice = -1;
@@ -2398,7 +2432,7 @@ struct RollaEditor::Content : Component
         bindHelp (swing, "Swing, from 50 to 57 percent.");
         bindHelp (duck, "Duck. The bass dips under the stab.");
         bindHelp (face, "Roll. Re-rolls every lane that is not kept.");
-        bindHelp (drag, "Drag all. One MIDI file, one track per lane. Click the tile, or hold Alt, for a WAV stem of every lane.");
+        bindHelp (drag, "Drag all. One MIDI file, one track per lane. Hold Shift for one MIDI file per lane. Click the tile, or hold Alt, for a WAV stem of every lane.");
         bindHelp (voxSlot, "Vox sample. Drop a file to override the preset.");
         bindHelp (inStab, "In stab. Hits land on the stab's answer slots.");
         for (int i = 0; i < NumParts; ++i)
@@ -2882,13 +2916,23 @@ struct RollaEditor::Content : Component
         haveGroove = true;
         seenGen = groove.generation;
         intensity.word = plan.word;
+        bool soloed[NumParts] {};
+        for (int i = 0; i < NumParts; ++i)
+            soloed[i] = paramRaw (proc.apvts, String (partId (i)) + "Solo") >= 0.5f;
+        const bool anySolo = anyLaneSoloed (soloed);
         for (int i = 0; i < NumParts; ++i)
         {
             rows[i].strip.swing = swingNow;
             rows[i].strip.playing = playing;
             rows[i].strip.pos16 = pos16;
             rows[i].syncHover();
-            const bool muted = rows[i].mute.getToggleState();
+            const bool soloedOut = anySolo && ! soloed[i];
+            if (soloedOut != rows[i].soloedOut)
+            {
+                rows[i].soloedOut = soloedOut;
+                rows[i].repaint();
+            }
+            const bool muted = rows[i].mute.getToggleState() || soloedOut;
             const bool kept = paramRaw (proc.apvts, String (partId (i)) + "Keep") >= 0.5f;
             const bool sampled = i < Drums && proc.userSlotMode (i) != 0;
             const bool inLane = intensityLaneIn (plan, i, kept, sampled);

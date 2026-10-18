@@ -24,6 +24,7 @@ inline constexpr juce::uint32 kCapHov = Theme::capHov;
 inline constexpr juce::uint32 kMark = Theme::mark;
 inline constexpr juce::uint32 kWarn = Theme::warn;
 inline constexpr juce::uint32 kMute = Theme::mute;
+inline constexpr juce::uint32 kSolo = Theme::solo;
 inline constexpr juce::uint32 kAcc = Theme::acc;
 inline constexpr juce::uint32 kAcc2 = Theme::acc2;
 inline constexpr juce::uint32 kFaceInk = Theme::faceInk;
