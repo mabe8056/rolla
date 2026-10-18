@@ -82,15 +82,33 @@ bool reshapeTo (rolla::RollaProcessor& proc, const char* id, float value)
     return pumpUntil ([&] { return proc.copyGroove().generation != before; });
 }
 
+// How the fake host moves its playhead.
+struct HostSim
+{
+    double wrapBeats = 0.0;  // > 0: the reported ppq wraps every wrapBeats, like FL's pattern loop
+    bool loopPoints = false; // also report isLooping and loop points [0, wrapBeats)
+    int stopAt = -1;         // >= 0: stop here for a moment, then restart from ppq 0
+};
+
 struct Head : juce::AudioPlayHead
 {
     double ppq = 0.0;
+    bool playing = true;
+    HostSim sim;
     juce::Optional<juce::AudioPlayHead::PositionInfo> getPosition() const override
     {
         juce::AudioPlayHead::PositionInfo info;
         info.setBpm (kBpm);
-        info.setIsPlaying (true);
-        info.setPpqPosition (ppq);
+        info.setIsPlaying (playing);
+        info.setPpqPosition (sim.wrapBeats > 0.0 ? std::fmod (ppq, sim.wrapBeats) : ppq);
+        if (sim.wrapBeats > 0.0 && sim.loopPoints)
+        {
+            juce::AudioPlayHead::LoopPoints loop;
+            loop.ppqStart = 0.0;
+            loop.ppqEnd = sim.wrapBeats;
+            info.setIsLooping (true);
+            info.setLoopPoints (loop);
+        }
         return info;
     }
 };
@@ -103,9 +121,11 @@ struct NoteOn
 
 // Pattern MIDI the plugin sends while it plays one loop, in 480-PPQ ticks.
 // processBlock delays it by the plugin latency, so that is taken back out.
-std::vector<NoteOn> playedNotes (rolla::RollaProcessor& proc, int loopN)
+// With sim.stopAt the loop is counted from the restart.
+std::vector<NoteOn> playedNotes (rolla::RollaProcessor& proc, int loopN, const HostSim& sim = {})
 {
     Head head;
+    head.sim = sim;
     proc.setPlayHead (&head);
     proc.releaseResources();
     juce::AudioProcessor::BusesLayout layout;
@@ -116,15 +136,32 @@ std::vector<NoteOn> playedNotes (rolla::RollaProcessor& proc, int loopN)
     const int lat = proc.getLatencySamples();
     std::vector<NoteOn> out;
     juce::AudioBuffer<float> buffer (2, 256);
-    for (int done = 0; done < loopN + lat + 256;)
+    int origin = 0;
+    bool restarted = false;
+    for (int done = 0; done < origin + loopN + lat + 256;)
     {
         const int n = 256;
+        if (sim.stopAt >= 0 && ! restarted && done >= sim.stopAt)
+        {
+            restarted = true;
+            // Stop long enough to flush the delayed MIDI, then play from the top.
+            head.playing = false;
+            for (int stopped = 0; stopped < lat + 1024; stopped += n)
+            {
+                juce::MidiBuffer midi;
+                proc.processBlock (buffer, midi);
+            }
+            head.playing = true;
+            head.ppq = 0.0;
+            out.clear();
+            origin = done;
+        }
         juce::MidiBuffer midi;
         proc.processBlock (buffer, midi);
         for (const auto meta : midi)
         {
             const auto m = meta.getMessage();
-            const int at = done + meta.samplePosition - lat;
+            const int at = done - origin + meta.samplePosition - lat;
             if (! m.isNoteOn() || at < 0 || at >= loopN)
                 continue;
             const double tick = at * kBpm / 60.0 / kRate * 480.0;
@@ -295,6 +332,62 @@ void compareMidi (rolla::RollaProcessor& proc, const std::string& tag, const rol
                 + std::to_string (onlyPlayed) + " only played) " + example);
 }
 
+// Styles whose bars 5-8 differ from bars 1-4, so the host-loop checks below
+// would catch a phrase that restarts every 4 bars.
+int distinctHalves = 0;
+
+// FL Studio loops its pattern: the host plays on while its ppq wraps every 4
+// bars. ROLLA plays its own phrase through the wrap, so an 8-bar roll sends the
+// same notes as under a straight host, bars 5-8 included. A stop and restart
+// goes back to bar 1.
+void testHostLoop (rolla::RollaProcessor& proc, const std::string& tag, int bars)
+{
+    if (bars != 8)
+        return;
+    const int loopN = rolla::rollexport::loopSamples (8, kBpm, kRate);
+    const double half = 4.0 * 4.0 * 480.0;
+    auto lateCount = [&] (const std::vector<NoteOn>& v)
+    {
+        int c = 0;
+        for (const auto& x : v)
+            c += x.tick >= half - 4.0;
+        return c;
+    };
+    const auto straight = playedNotes (proc, loopN);
+    const int late = lateCount (straight);
+    {
+        std::vector<NoteOn> first, second;
+        for (auto x : straight)
+        {
+            if (x.tick >= half - 4.0)
+            {
+                x.tick -= half;
+                second.push_back (x);
+            }
+            else
+                first.push_back (x);
+        }
+        int a = 0, b = 0;
+        std::string unused;
+        matchNotes (first, second, a, b, unused);
+        distinctHalves += a + b > 0;
+    }
+    auto check = [&] (const HostSim& sim, const std::string& what)
+    {
+        const auto played = playedNotes (proc, loopN, sim);
+        int onlyStraight = 0, onlyPlayed = 0;
+        std::string example;
+        matchNotes (straight, played, onlyStraight, onlyPlayed, example);
+        expect (onlyStraight == 0 && onlyPlayed == 0 && late > 0 && lateCount (played) == late,
+                tag + ": " + what + " (" + std::to_string (lateCount (played)) + " of " + std::to_string (late)
+                    + " bar 5-8 notes, " + std::to_string (onlyStraight) + " missing, " + std::to_string (onlyPlayed)
+                    + " extra) " + example);
+    };
+    check ({ 16.0, false, -1 }, "8 bars play through a 4-bar host loop (no loop points)");
+    check ({ 16.0, true, -1 }, "8 bars play through a 4-bar host loop (loop points)");
+    check ({ 16.0, false, loopN * 13 / 16 }, "stop and restart in host loop 2 goes back to bar 1");
+}
+
 bool nameOk (const juce::File& f, const rolla::Groove& g, int part)
 {
     const auto name = f.getFileNameWithoutExtension();
@@ -358,6 +451,7 @@ void testStyle (rolla::RollaProcessor& proc, int style, bool pack, const juce::F
 
     // Full multitrack MIDI vs what processBlock plays.
     compareMidi (proc, tag, g, bars);
+    testHostLoop (proc, tag, bars);
     const auto mids = proc.writeTempMidi();
     if (mids.isEmpty())
         return;
@@ -441,6 +535,8 @@ int main (int argc, char** argv)
 
         for (int style = 0; style < rolla::NumDialects; ++style)
             testStyle (proc, style, havePack, scratch);
+        expect (distinctHalves > 0, "host loop: " + std::to_string (distinctHalves)
+                                        + " style(s) with bars 5-8 unlike bars 1-4");
 
         // Every vox preset, right after its pick: each recipe has to find a file
         // in the library (the "loops" recipe has no tempo-locked loop in the tone
