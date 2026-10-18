@@ -437,8 +437,20 @@ void testFingerprintTool()
             bass[(size_t) (b * 60000) + i] = note[960 + i] * (float) std::exp (-(double) i / 48000.0 / 0.3);
     writeWave (base.getChildFile ("stems/trackA/sep/drums.wav"), drums);
     writeWave (base.getChildFile ("stems/trackA/sep/bass.wav"), bass);
+    // Not tracks: a tools folder and a track missing from the CSV are skipped.
+    writeWave (base.getChildFile ("stems/_tools/sep/drums.wav"), drums);
+    writeWave (base.getChildFile ("stems/trackB/sep/drums.wav"), drums);
     // The box CSV's header: track,style,mode_or_role.
     base.getChildFile ("styles.csv").replaceWithText ("track,style,mode_or_role\ntrackA,ukmin,support\n");
+    {
+        juce::StringArray skipped;
+        const auto got = fp::sliceStems (base.getChildFile ("stems"), fp::readStyles (base.getChildFile ("styles.csv")), 0.f, &skipped);
+        bool onlyA = ! got.empty();
+        for (const auto& e : got)
+            onlyA = onlyA && e.track == "trackA";
+        expect (onlyA && skipped.contains ("_tools") && skipped.contains ("trackB"),
+                "fingerprint tool: stems skips '_' folders and tracks missing from the CSV, and lists them");
+    }
     const auto stemJson = base.getChildFile ("stems.json");
     expect (runTool ({ "stems", base.getChildFile ("stems").getFullPathName(), "--styles",
                        base.getChildFile ("styles.csv").getFullPathName(), "--out", stemJson.getFullPathName() }) == 0,

@@ -7,7 +7,8 @@
 //       STAB, VOX/chops, ...) unless --lane is given.
 //   rolla-fingerprint stems <dir> [--styles track_style.csv] [--min-conf 0.5] --out fp.json
 //       Demucs stems at <dir>/<track>/sep/{drums,bass,other,vocals}.wav (chunked
-//       copies are skipped).
+//       copies are skipped). Folders starting with '_', without sep/, or missing
+//       from the CSV are skipped and listed.
 //   rolla-fingerprint scan-stems <track_dir> --track-id T [--style S] [--min-conf 0.5] --out fp.json
 //       One track's stems (<track_dir>/sep/... or <track_dir>/...).
 //   rolla-fingerprint targets <fp.json>... [--k 3] --out genre_targets.json
@@ -367,16 +368,25 @@ inline std::vector<Entry> sliceTrack (const juce::File& dir, const TrackInfo& in
     return out;
 }
 
-inline std::vector<Entry> sliceStems (const juce::File& dir, const std::map<juce::String, TrackInfo>& styles, float minConf)
+// Folders starting with '_', without a sep/ folder, or (when a CSV is given) not
+// in it are skipped and logged by folder name only.
+inline std::vector<Entry> sliceStems (const juce::File& dir, const std::map<juce::String, TrackInfo>& styles, float minConf,
+                                      juce::StringArray* skipped = nullptr)
 {
     std::vector<Entry> out;
     auto tracks = dir.findChildFiles (juce::File::findDirectories, false);
     tracks.sort();
     for (const auto& track : tracks)
     {
-        if (! track.getChildFile ("sep").isDirectory())
+        const auto name = track.getFileName();
+        if (name.startsWithChar ('_') || ! track.getChildFile ("sep").isDirectory()
+            || (! styles.empty() && styles.count (name) == 0))
+        {
+            if (skipped != nullptr)
+                skipped->add (name);
             continue;
-        const auto found = styles.find (track.getFileName());
+        }
+        const auto found = styles.find (name);
         const TrackInfo info = found != styles.end() ? found->second : TrackInfo { track.getFileName(), {} };
         auto more = sliceTrack (track, info, minConf);
         out.insert (out.end(), more.begin(), more.end());
@@ -646,7 +656,10 @@ inline int run (const juce::StringArray& args)
             std::map<juce::String, TrackInfo> map;
             if (styles.isNotEmpty())
                 map = readStyles (cwd.getChildFile (styles));
-            entries = sliceStems (cwd.getChildFile (inputs[0]), map, minConf);
+            juce::StringArray skipped;
+            entries = sliceStems (cwd.getChildFile (inputs[0]), map, minConf, &skipped);
+            if (! skipped.isEmpty())
+                std::cout << "skipped " << skipped.size() << " folders: " << skipped.joinIntoString (", ") << "\n";
         }
         else
         {
