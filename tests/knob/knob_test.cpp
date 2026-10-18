@@ -632,7 +632,8 @@ void testExport()
     rolla::RollaProcessor proc;
     proc.waitUntilReady();
     const auto cache = proc.exportCache();
-    expect (cache.getFullPathName().contains ("ROLLA"), "cache folder is ROLLA");
+    // The scratch profile puts caches under a temp "rolla-knob-..." folder (ROLLA_CACHE_DIR).
+    expect (cache.getFullPathName().containsIgnoreCase ("ROLLA"), "cache folder is ROLLA");
     expect (cache.isDirectory(), "cache exists");
 
     const auto bass = proc.writeLaneMidi (rolla::Bass);
