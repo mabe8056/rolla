@@ -479,6 +479,10 @@ struct SampleAudio
     // -1 until loadOne measures the in-memory buffer. The file on disk is not written.
     float flatness = -1.f;
     int loudStart = 0;
+    // Vox chop starts on the voice, not on near-silence (SampleChop.h voicedOnsets).
+    int voicedCount = 0;
+    int voiced[24] { 0 };
+    float voicedFloor = 0.f;
 };
 
 // Loads preset-referenced files from the user sample folder on a background thread.

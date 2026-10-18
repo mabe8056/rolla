@@ -717,8 +717,14 @@ bool Sampler::playUserSlot (int part, int drumVoice, int midiNote, int velocity,
     else
         fresh.env.start (amp.a, amp.d, amp.s, amp.r, srF);
 
-    const double startFrame = std::min (std::clamp ((double) decision.startSec, 0.0, 60.0) * pod.audio->rate,
-                                         (double) pod.audio->frames - 1.0);
+    double startFrame = std::min (std::clamp ((double) decision.startSec, 0.0, 60.0) * pod.audio->rate,
+                                   (double) pod.audio->frames - 1.0);
+    // A dropped vox file left at start 0 opens on its voice, not its lead-in.
+    // A start the user set is kept.
+    if (part == Vox && drumVoice < 0 && decision.startSec <= 0.f && ! decision.reverse && pod.audio->voicedCount > 0)
+        startFrame = (double) voxStart (0, false, 0, pod.audio->voiced, pod.audio->voicedCount, pod.audio->voicedFloor,
+                                        pod.audio->left.data(), pod.audio->right.empty() ? nullptr : pod.audio->right.data(),
+                                        pod.audio->frames, pod.audio->rate);
     fresh.pos = startFrame;
     fresh.loop = decision.loop;
     SampleLoop loop;
@@ -897,6 +903,11 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     // A vox chop that would start in the file's lead-in silence starts at the first word.
     if (part == Vox && startFrame < (double) audio->lead)
         startFrame = (double) audio->lead;
+    // VOX chops start on the voice, not on a lead-in or a breath (in memory).
+    if (part == Vox && ! fromPack && ! phrase && audio->voicedCount > 0)
+        startFrame = (double) voxStart ((int) startFrame, choice.slice, choice.sliceIndex, audio->voiced, audio->voicedCount,
+                                        audio->voicedFloor, audio->left.data(),
+                                        audio->right.empty() ? nullptr : audio->right.data(), audio->frames, audio->rate);
     fresh.pos = startFrame;
     fresh.loop = ! fromPack && played.loop.on && part != Hits && part != Vox;
     const auto region = makeLoopRegion (played.loop, audio->rate, audio->frames, startFrame);

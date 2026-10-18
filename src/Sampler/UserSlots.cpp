@@ -1,5 +1,6 @@
 #include "UserSlots.h"
 #include "SamplePrep.h"
+#include "../Engine/SampleChop.h"
 
 #include <algorithm>
 #include <cstring>
@@ -620,6 +621,11 @@ void UserSlots::loadSlot (int slot)
         audio->right = std::move (prepared.right);
         audio->sliceCount = 1;
         audio->slices[0] = 0;
+        // A dropped vox file starts on its voice too (in memory; the file is not written).
+        audio->loudStart = loudestRegionStart (audio->left.data(), audio->frames, audio->rate);
+        audio->voicedCount = voicedOnsets (audio->left.data(), audio->right.empty() ? nullptr : audio->right.data(),
+                                           audio->frames, audio->rate, audio->slices, audio->sliceCount,
+                                           audio->loudStart, audio->voiced, 24, audio->voicedFloor);
 
         {
             std::lock_guard<std::mutex> lock (editMu);

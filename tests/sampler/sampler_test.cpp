@@ -1,4 +1,5 @@
 #include "Engine/Engine.h"
+#include "Engine/SampleChop.h"
 #include "Engine/Sampler.h"
 #include "Mix/TruePeakGuard.h"
 #include "Sampler/PlayDecision.h"
@@ -16,6 +17,7 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <random>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -1680,6 +1682,104 @@ int main()
         expect (before.getSize() == after.getSize()
                     && std::memcmp (before.getData(), after.getData(), before.getSize()) == 0,
                 "the source wav is unchanged");
+    }
+
+    // ---------------------------------------------------------------- vox starts on the voice
+    {
+        constexpr int rate = 48000;
+        // 0.5 s near-silence, 0.4 s voice, 0.6 s near-silence, 0.4 s voice, 0.3 s near-silence.
+        std::vector<float> vox;
+        std::mt19937 noise (5);
+        std::uniform_real_distribution<float> u (-1.f, 1.f);
+        auto quiet = [&] (double sec) { for (int i = 0; i < (int) (sec * rate); ++i) vox.push_back (0.001f * u (noise)); };
+        auto voice = [&] (double sec, float hz)
+        {
+            for (int i = 0; i < (int) (sec * rate); ++i)
+                vox.push_back (0.5f * std::sin (2.f * 3.14159265f * hz * (float) i / (float) rate));
+        };
+        quiet (0.5);
+        const int v1 = (int) vox.size();
+        voice (0.4, 330.f);
+        quiet (0.6);
+        const int v2 = (int) vox.size();
+        voice (0.4, 392.f);
+        quiet (0.3);
+        const int frames = (int) vox.size();
+        const int cand[] = { 0, (int) (0.45 * rate), (int) (0.95 * rate), v2, frames - 100 };
+        int voiced[24];
+        float floorRms = 0.f;
+        const int loud = rolla::loudestRegionStart (vox.data(), frames, rate);
+        const int n = rolla::voicedOnsets (vox.data(), nullptr, frames, rate, cand, 5, loud, voiced, 24, floorRms);
+        const int near = (int) (0.04 * rate);
+        bool onVoice = n >= 2;
+        bool hitV1 = false, hitV2 = false;
+        for (int i = 0; i < n; ++i)
+        {
+            const bool inV1 = voiced[i] >= v1 - near && voiced[i] < v1 + (int) (0.4 * rate);
+            const bool inV2 = voiced[i] >= v2 - near && voiced[i] < v2 + (int) (0.4 * rate);
+            onVoice = onVoice && (inV1 || inV2);
+            hitV1 = hitV1 || std::abs (voiced[i] - v1) <= near;
+            hitV2 = hitV2 || std::abs (voiced[i] - v2) <= near;
+        }
+        expect (onVoice && hitV1 && hitV2, "vox starts sit on the voice, not on the lead-in, the gap or the tail ("
+                                               + std::to_string (n) + " starts)");
+        const int fromZero = rolla::voxStart (0, false, 0, voiced, n, floorRms, vox.data(), nullptr, frames, rate);
+        expect (std::abs (fromZero - v1) <= near, "an unsliced vox note that opens on silence moves to the voice");
+        const int inVoice = v1 + rate / 10;
+        expect (rolla::voxStart (inVoice, false, 0, voiced, n, floorRms, vox.data(), nullptr, frames, rate) == inVoice,
+                "a vox note that already starts on the voice stays put");
+        bool rotates = true;
+        for (int k = 0; k < 2 * n; ++k)
+            rotates = rotates && rolla::voxStart (0, true, k, voiced, n, floorRms, vox.data(), nullptr, frames, rate) == voiced[k % n];
+        expect (rotates, "sliced vox rotates through the voiced starts only");
+
+        // End to end: a dropped vox file with a half-second lead-in sounds at once.
+        const auto voxFile = rootDir.getChildFile ("VOX/lead_in.wav");
+        voxFile.getParentDirectory().createDirectory();
+        {
+            juce::WavAudioFormat wav;
+            auto fileStream = std::make_unique<juce::FileOutputStream> (voxFile);
+            std::unique_ptr<juce::OutputStream> stream (fileStream.release());
+            auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (rate).withNumChannels (1).withBitsPerSample (16));
+            juce::AudioBuffer<float> buf (1, frames);
+            for (int i = 0; i < frames; ++i)
+                buf.setSample (0, i, vox[(size_t) i]);
+            if (writer != nullptr)
+                writer->writeFromAudioSampleBuffer (buf, 0, frames);
+        }
+        const auto voxSum = checksum (voxFile);
+        rolla::UserSlots voxSlots;
+        voxSlots.setRoot (rootDir);
+        juce::String voxError;
+        expect (voxSlots.assign (rolla::SlotVox, voxFile, voxError), "assign vox: " + voxError.toStdString());
+        expect (waitUntil ([&] { return voxSlots.status (rolla::SlotVox) == 2; }), "vox slot loads");
+        rolla::PresetBank voxBank;
+        rolla::loadDefaultPresets (voxBank);
+        rolla::Sampler voxSampler;
+        voxSampler.prepare ((double) rate);
+        rolla::EngineParams voxParams;
+        voxParams.presets = &voxBank;
+        voxParams.userSlots = voxSlots.published();
+        for (int i = 0; i < rolla::NumDrumVoices; ++i)
+            voxParams.drumDecay[i] = 0.5f;
+        const auto voxTaken = voxSampler.take (rolla::Vox, 64, 110, 1.0e9f, voxBank, voxParams);
+        std::vector<float> heard ((size_t) rate);
+        float voxPeak = 0.f;
+        for (int i = 0; i < rate; ++i)
+        {
+            float laneL[rolla::NumParts] {};
+            float laneR[rolla::NumParts] {};
+            voxSampler.render (laneL, laneR, 0.f, 0.f, false);
+            heard[(size_t) i] = laneL[rolla::Vox];
+            voxPeak = std::max (voxPeak, std::fabs (laneL[rolla::Vox]));
+        }
+        int first = -1;
+        for (int i = 0; i < rate && first < 0 && voxPeak > 1.0e-4f; ++i)
+            if (std::fabs (heard[(size_t) i]) > 0.1f * voxPeak)
+                first = i;
+        expect (voxTaken.kind != 0 && first >= 0 && first < (int) (0.05 * rate),
+                "a vox chop with a lead-in sounds within 50 ms (first sound at sample " + std::to_string (first) + ")");
+        expect (checksum (voxFile) == voxSum, "the vox source file is unchanged");
     }
 
     outside.deleteFile();
