@@ -2,14 +2,111 @@
 
 #include "SampleLibrary.h"
 #include <atomic>
+#include <cstring>
 #include <string>
 #include "../DspUtil.h"
 #include "../Generator/Presets.h"
+#include "../GenreBrain/Treatment.h"
 
 namespace rolla
 {
 
 struct EngineParams;
+
+// Per-lane adaptive treatments (GenreBrain/Treatment.h), decided at roll time for
+// the drawn samples and published through EngineParams::treatments. Null there (the
+// default) leaves every voice exactly as before. User slots are never treated: the
+// user's own sample keeps the user's settings.
+//
+// A slot with a file only treats that file (library-relative path, as in
+// SampleAudio::path); a pool swap to another file plays it untreated. An empty
+// file treats whatever the lane plays.
+//
+// Publish like UserSlotView: build a set off the audio thread, then swap the
+// pointer. The audio thread only reads it.
+struct TreatmentSet
+{
+    struct Slot
+    {
+        bool on = false;
+        genre::Treatment treatment;
+        char file[96] {};
+    };
+
+    Slot part[NumParts] {};       // melodic lanes; part[Drums] is unused (see drum)
+    Slot drum[NumDrumVoices] {};  // drum voices (takeDrum)
+
+    void set (int lane, const genre::Treatment& t, const char* file = nullptr) noexcept
+    {
+        if (lane >= 0 && lane < NumParts && lane != Drums)
+            fill (part[lane], t, file);
+    }
+
+    void setDrum (int voice, const genre::Treatment& t, const char* file = nullptr) noexcept
+    {
+        if (voice >= 0 && voice < NumDrumVoices)
+            fill (drum[voice], t, file);
+    }
+
+    void clear() noexcept
+    {
+        for (auto& s : part)
+            s = {};
+        for (auto& s : drum)
+            s = {};
+    }
+
+    // The treatment for a voice about to start, or null. drumVoice >= 0 picks a drum slot.
+    const genre::Treatment* find (int lane, int drumVoice, const char* path) const noexcept
+    {
+        const Slot* s = nullptr;
+        if (drumVoice >= 0)
+            s = drumVoice < NumDrumVoices ? &drum[drumVoice] : nullptr;
+        else if (lane >= 0 && lane < NumParts && lane != Drums)
+            s = &part[lane];
+        if (s == nullptr || ! s->on)
+            return nullptr;
+        if (s->file[0] != 0 && (path == nullptr || std::strcmp (s->file, path) != 0))
+            return nullptr;
+        return &s->treatment;
+    }
+
+private:
+    static void fill (Slot& s, const genre::Treatment& t, const char* file) noexcept
+    {
+        s.on = true;
+        s.treatment = t;
+        copySamplePath (s.file, (int) sizeof s.file, file);
+    }
+};
+
+// Where a genre lane plays in the engine: a melodic part, or a drum voice of the
+// Drums part. False for lanes with no engine slot (FX).
+inline bool engineSlotFor (genre::Lane lane, int& part, int& drumVoice) noexcept
+{
+    part = -1;
+    drumVoice = -1;
+    switch (lane)
+    {
+        case genre::Lane::Kick:  drumVoice = Kick; break;
+        case genre::Lane::Clap:  drumVoice = Clap; break;
+        case genre::Lane::Snare: drumVoice = Snare; break;
+        case genre::Lane::HatC:  drumVoice = HatC; break;
+        case genre::Lane::HatO:  drumVoice = HatO; break;
+        case genre::Lane::Perc:  drumVoice = Perc; break;
+        case genre::Lane::Ride:  drumVoice = Ride; break;
+        case genre::Lane::Bass:  part = Bass; break;
+        case genre::Lane::Stab:  part = Stab; break;
+        case genre::Lane::Pluck: part = Pluck; break;
+        case genre::Lane::Pad:   part = Pad; break;
+        case genre::Lane::Hits:  part = Hits; break;
+        case genre::Lane::Vox:   part = Vox; break;
+        default: return false;
+    }
+    if (drumVoice >= 0)
+        part = Drums;
+    return true;
+}
 
 // Realtime sample voices. take() / takeDrum() run on the audio thread and only
 // read a published SampleAudio. Rendering uses a 16-tap windowed sinc.
@@ -97,6 +194,10 @@ private:
         int releaseLeft = 0;
         int releaseN = 0;
         float noteEdge = 1.f;
+        // Treatment decay trim: output samples until the trim fade starts (0 = no
+        // trim), then a raised-cosine release of trimFadeN samples.
+        int trimLeft = 0;
+        int trimFadeN = 0;
         float gain = 0.2f;
         float pan = 0.f;
         float end16 = 1.0e9f;
@@ -121,6 +222,8 @@ private:
     Voice* allocate (int part) noexcept;
     void park (const Voice& dying) noexcept;
     void armAttack (Voice& voice) noexcept;
+    // Loop region and decay trim from a Treatment; call after armAttack.
+    void applyTreatment (Voice& voice, const genre::Treatment& t) const noexcept;
     float readSinc (const std::vector<float>& src, double index) const noexcept;
     void readVoice (Voice& v, float& l, float& r) noexcept;
     // True when a user slot owns this note (playing, or still loading).

@@ -45,6 +45,9 @@ struct EngineParams
     const SampleIndex* sampleIndex = nullptr;
     // Published by UserSlots. Null keeps the preset sample block only.
     const UserSlotView* userSlots = nullptr;
+    // Adaptive per-sample treatments set at roll time (Sampler.h). Null plays
+    // every sample as recorded, exactly as before.
+    const TreatmentSet* treatments = nullptr;
     int samplePick[NumParts] {};
     float bpm = 130.f;
     // Baked mix strip (MIX_SPEC). Null keeps the legacy sum.

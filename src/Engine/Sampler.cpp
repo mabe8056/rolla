@@ -360,6 +360,38 @@ void Sampler::armAttack (Voice& v) noexcept
     v.stopping = false;
 }
 
+void Sampler::applyTreatment (Voice& v, const genre::Treatment& t) const noexcept
+{
+    if (v.audio == nullptr || v.audio->frames < 8)
+        return;
+    // Phrase loops belong to the tempo-sync path; reversed voices count the file
+    // backwards, so a region measured from the file start would not line up.
+    if (v.tempoSync || v.reverse)
+        return;
+    const double rate = v.audio->rate > 1.0 ? v.audio->rate : sr;
+    if (t.loop)
+    {
+        // Region in file frames, the same space makeLoopRegion fills.
+        const double fileEnd = (double) v.audio->frames - 1.0;
+        const double a = std::clamp ((double) t.loopStartMs * 0.001 * rate, 0.0, fileEnd);
+        const double b = std::clamp ((double) t.loopEndMs * 0.001 * rate, 0.0, fileEnd);
+        if (b > a + 8.0)
+        {
+            v.loop = true;
+            v.loopA = a;
+            v.loopB = b;
+            v.xfade = std::min (std::max (0.0, (double) t.xfadeMs * 0.001 * rate), 0.5 * (b - a));
+        }
+    }
+    if (t.decayTrimMs > 0.f)
+    {
+        // Heard time (output samples), which is what the lane's decay band describes.
+        const double fadeMs = std::clamp ((double) t.releaseMs, 0.0, (double) t.decayTrimMs);
+        v.trimFadeN = std::max (8, (int) (fadeMs * 0.001 * sr));
+        v.trimLeft = std::max (1, (int) (((double) t.decayTrimMs - fadeMs) * 0.001 * sr));
+    }
+}
+
 void Sampler::park (const Voice& dying) noexcept
 {
     Voice* dest = nullptr;
@@ -538,6 +570,14 @@ void Sampler::readVoice (Voice& v, float& l, float& r) noexcept
         v.pos += v.ratio;
     if (! v.loop && v.pos >= n - 1.0)
         v.on = false;
+    // Treatment decay trim: past the lane's decay band the tail fades out on the
+    // same raised-cosine release a stopping voice uses. trimLeft 0 never fires.
+    if (v.trimLeft > 0 && --v.trimLeft == 0 && ! v.stopping)
+    {
+        v.releaseN = std::max (8, v.trimFadeN);
+        v.releaseLeft = v.releaseN;
+        v.stopping = true;
+    }
     if (v.releaseN > 0 && v.releaseLeft <= 0 && v.stopping)
         v.on = false;
 
@@ -878,6 +918,14 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     fresh.fadeInc = 1.f / 64.f;
     fresh.stopping = false;
     fresh.gain = amp.trim * std::clamp (velocity / 127.f, 0.05f, 1.f);
+    // Adaptive treatment for the drawn file (null: none set, the voice is as before).
+    // The drum-pack fallback is a stand-in from another lane: the lane's treatment
+    // was decided for a different sound, so it plays untreated.
+    const genre::Treatment* treat = params.treatments != nullptr && ! fromPack
+                                        ? params.treatments->find (part, -1, audio->path.c_str())
+                                        : nullptr;
+    if (treat != nullptr && treat->gainDb != 0.f)
+        fresh.gain *= ampDb (treat->gainDb);
     // A factory LAYER preset keeps its synth half only outside the plugin.
     const bool layered = &played == &spec && played.mode == SampleMode::Layer && ! kSamplesOnly;
     if (layered)
@@ -891,7 +939,9 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     fresh.hpfHz = amp.hpf;
     fresh.hpState = 0.f;
     fresh.ladder.reset();
-    fresh.env.start (amp.a, amp.d, amp.s, amp.r, srF);
+    // A treatment only ever softens the attack, never sharpens the preset's.
+    const float attackMs = treat != nullptr ? std::max (amp.a, treat->attackMs) : amp.a;
+    fresh.env.start (attackMs, amp.d, amp.s, amp.r, srF);
 
     double startFrame = fromPack ? 0.0 : std::clamp ((double) played.start, 0.0, 16.0) * audio->rate;
     if (choice.slice && audio->sliceCount > 1)
@@ -928,6 +978,9 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     }
 
     armAttack (fresh);
+    // Loop region and decay trim (after armAttack, which clears the release state).
+    if (treat != nullptr)
+        applyTreatment (fresh, *treat);
     fresh.born = true;
     *slot = fresh;
     if (layered)
@@ -1028,6 +1081,9 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
             pending = true;
         }
     }
+    // A hit borrowed from another voice's folder below plays untreated: this voice's
+    // treatment was decided for a different sound.
+    const bool ownHit = audio != nullptr;
     if (audio == nullptr && ! pending)
     {
         // Crash, tom, shaker, noise, or a missing folder: PERC, then OH, then RIDE.
@@ -1081,6 +1137,11 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
     fresh.gain = amp.trim * std::clamp (velocity / 127.f, 0.05f, 1.f) * ampDb (params.drumLevelDb[voice]);
     if (spec.mode == SampleMode::Layer)
         fresh.gain *= std::clamp (spec.layerMix, 0.f, 1.f);
+    const genre::Treatment* treat = params.treatments != nullptr && ownHit
+                                        ? params.treatments->find (Drums, voice, audio->path.c_str())
+                                        : nullptr;
+    if (treat != nullptr && treat->gainDb != 0.f)
+        fresh.gain *= ampDb (treat->gainDb);
     fresh.cut = amp.cut;
     fresh.res = amp.res;
     fresh.envOct = 0.f;
@@ -1089,7 +1150,8 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
     fresh.hpfHz = 30.f;
     fresh.ladder.reset();
     const float decay = 80.f * std::pow (2.f, (params.drumDecay[voice] - 0.5f) * 2.f);
-    fresh.env.start (0.5f, decay, 0.f, 12.f, (float) sr);
+    const float attackMs = treat != nullptr ? std::max (0.5f, treat->attackMs) : 0.5f;
+    fresh.env.start (attackMs, decay, 0.f, 12.f, (float) sr);
     fresh.pos = std::clamp ((double) spec.start, 0.0, 4.0) * audio->rate;
     fresh.loop = spec.loop.on;
     const auto region = makeLoopRegion (spec.loop, audio->rate, audio->frames, fresh.pos);
@@ -1097,6 +1159,8 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
     fresh.loopB = region.b;
     fresh.xfade = region.xfade;
     armAttack (fresh);
+    if (treat != nullptr)
+        applyTreatment (fresh, *treat);
     fresh.born = true;
     *slot = fresh;
 
