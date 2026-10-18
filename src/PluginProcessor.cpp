@@ -243,10 +243,12 @@ RollaProcessor::RollaProcessor()
                                BinaryData::mix_makeup_json, BinaryData::mix_makeup_jsonSize);
     startupT0 = juce::Time::getMillisecondCounterHiRes();
     startupThread = std::thread ([this] { deferredStartup(); });
+    prefetchTimer.startTimer (50);
 }
 
 RollaProcessor::~RollaProcessor()
 {
+    prefetchTimer.stopTimer();
     startupStop.store (true);
     if (startupThread.joinable())
         startupThread.join();
@@ -264,6 +266,35 @@ RollaProcessor::~RollaProcessor()
 
     std::lock_guard<std::mutex> lock (async->mu);
     async->alive.store (false);
+}
+
+void RollaProcessor::prefetchPlayFiles()
+{
+    const auto index = library.index();
+    const auto bank = sharePresets();
+    if (index == nullptr || bank == nullptr)
+        return;
+    int preset[NumParts] {};
+    int pick[NumParts] {};
+    std::uint64_t key = 1469598103934665603ull;
+    auto mix = [&key] (std::uint64_t v) { key = (key ^ v) * 1099511628211ull; };
+    mix ((std::uint64_t) (std::uintptr_t) index.get());
+    mix ((std::uint64_t) (std::uintptr_t) bank.get());
+    const int dialect = (int) raw (apvts, "dialect");
+    mix ((std::uint64_t) dialect);
+    for (int i = 0; i < NumParts; ++i)
+    {
+        preset[i] = presetSlot (*bank, i, (int) raw (apvts, (juce::String (partId (i)) + "Preset").toRawUTF8()));
+        pick[i] = samplePick[i].load (std::memory_order_relaxed);
+        mix ((std::uint64_t) (std::uint32_t) preset[i]);
+        mix ((std::uint64_t) (std::uint32_t) pick[i]);
+    }
+    if (key == prefetchedKey)
+        return;
+    prefetchedKey = key;
+    std::vector<std::string> paths;
+    collectPlayFiles (*bank, *index, preset, pick, dialect, 8, paths);
+    library.preload (paths);
 }
 
 std::shared_ptr<const PresetBank> RollaProcessor::sharePresets() const
@@ -1484,8 +1515,9 @@ juce::AudioBuffer<float> RollaProcessor::bounceLoop (Engine& offline, const Groo
     {
         // A stem is that lane alone. Solo renders bypass E21 (MIX_SPEC §9.4), so
         // the stems keep the lane balance the mix program sets.
+        // A lane the user muted stays muted: a muted lane never sounds.
         for (int i = 0; i < NumParts; ++i)
-            params.mute[i] = i != part;
+            params.mute[i] = params.mute[i] || i != part;
         params.bypassSumTrim = true;
     }
     return rollexport::renderLoop (offline, g, params, rate, bpm, &library).audio;

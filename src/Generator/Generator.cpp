@@ -2814,17 +2814,29 @@ void writeStab (Lane& lane, const Lane& bass, const Settings& s, Rng& rng, float
 {
     const std::uint32_t seed = lane.seed ? lane.seed : 1u;
     clearLane (lane, seed);
-    int per = s.dialect == Pop ? 8 : s.dialect == Gaskin ? 6 : s.dialect == Long ? 3 : (s.stab > 0.66f ? 2 : 1);
+    int per = s.dialect == Pop ? 8 : s.dialect == Gaskin ? 6 : s.dialect == Long ? 3 : 1;
     if (s.styleIntensity <= 0.25f)
         per = std::min (per, 1);
     else if (s.styleIntensity >= 0.75f)
         per = std::min (12, per + 2);
     // Fills follow BUSY. 0.40 keeps the count above. Low BUSY drops a hit and,
     // on a sparse line, skips the odd bars. High BUSY adds two hits a bar.
+    // ROLLER's single stab is not dropped by BUSY: that used to cancel STAB.
     if (s.busy > 0.75f)
         per = std::min (12, per + 2);
-    else if (s.busy < 0.25f)
+    else if (s.busy < 0.25f && s.dialect != UkMin)
         per = std::max (1, per - 1);
+    // STAB sets stab density in every style. 0.55 (the default) keeps the count
+    // above; 0 is about a quarter of it, 1 about 1.6x. ROLLER steps 1 / 2 / 3.
+    const float stabKnob = std::clamp (s.stab, 0.f, 1.f);
+    if (s.dialect == UkMin)
+        per = std::min (12, per + (stabKnob > 0.85f ? 2 : stabKnob > 0.66f ? 1 : 0));
+    else
+        per = clampi ((int) std::lround ((float) per * (0.25f + 1.364f * stabKnob)), 1, 12);
+    // Low STAB also thins the bars: stabs only on even bars.
+    const bool stabSparse = stabKnob < 0.2f;
+    // Presence follows STAB too: 98 at the default.
+    const int stabVel = clampi ((int) std::lround (70.f + 51.f * stabKnob), 60, 124);
 
     const int flavour = s.dialect == Gaskin ? jackinFlavour (seed) : -1;
     float len = s.dialect == Pop ? 1.f : 2.f;
@@ -2834,10 +2846,22 @@ void writeStab (Lane& lane, const Lane& bass, const Settings& s, Rng& rng, float
     // One chord per half of a 2-bar figure, drawn for this roll.
     // ROLLER builds the chord from the scale (inversion, spread, register)
     // instead of a fixed book, and shuffles the off-beats per bar.
-    static const int book[][3] = {
-        { 3, 10, 15 }, { 7, 10, 19 }, { 3, 7, 14 }, { 10, 14, 17 },
-        { 0, 7, 12 }, { 3, 10, 17 }, { 5, 10, 15 }, { 7, 12, 19 },
+    // Each style has its own 8 voicings (semitones over the key root, natural minor).
+    // DEEP always carries a minor third: no bare open fifths, darker, and clear of
+    // the reference chop voicings.
+    static const int deepBook[][3] = {
+        { 0, 3, 7 }, { 3, 7, 10 }, { 0, 3, 10 }, { 3, 10, 15 },
+        { 7, 10, 15 }, { 0, 7, 15 }, { 5, 8, 12 }, { 3, 7, 14 },
     };
+    static const int bouncyBook[][3] = {
+        { 3, 10, 15 }, { 7, 10, 19 }, { 3, 7, 14 }, { 10, 14, 17 },
+        { 0, 7, 15 }, { 3, 10, 17 }, { 5, 10, 15 }, { 7, 12, 19 },
+    };
+    static const int jackinBook[][3] = {
+        { 3, 7, 10 }, { 0, 3, 10 }, { 3, 10, 14 }, { 7, 10, 14 },
+        { 5, 8, 12 }, { 0, 7, 10 }, { 3, 7, 12 }, { 10, 15, 19 },
+    };
+    const int (*book)[3] = s.dialect == Long ? deepBook : s.dialect == Gaskin ? jackinBook : bouncyBook;
     int voice[2] = { (int) (seed % 8u), (int) ((seed / 8u) % 8u) };
     if (voice[1] == voice[0])
         voice[1] = (voice[1] + 3) % 8;
@@ -2899,7 +2923,7 @@ void writeStab (Lane& lane, const Lane& bass, const Settings& s, Rng& rng, float
             order[bar][t] = src[(spin + t + twist) % 12];
     }
 
-    const bool skipOdd = s.busy < 0.25f && per <= 2;
+    const bool skipOdd = (s.busy < 0.25f && per <= 2) || stabSparse;
     for (int bar = 0; bar < s.bars && bar < 8; ++bar)
     {
         if (skipOdd && (bar & 1) != 0)
@@ -2957,7 +2981,7 @@ void writeStab (Lane& lane, const Lane& bass, const Settings& s, Rng& rng, float
             e.start = (float) abs;
             e.len = hold;
             e.nChord = 3;
-            e.vel = 98;
+            e.vel = (std::uint8_t) stabVel;
             for (int c = 0; c < 3; ++c)
                 e.chord[c] = (std::int8_t) voi[c];
             if (! pushEv (lane, e, s.bars))
