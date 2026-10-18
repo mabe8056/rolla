@@ -315,6 +315,16 @@ target_link_libraries(rolla-roll-test
         juce::juce_recommended_warning_flags
 )
 
+# DEEP / BOUNCY review measures, ROLLER / JACKIN frozen. No JUCE.
+add_executable(rolla-style-test
+    tests/style/style_test.cpp
+    src/Generator/Generator.cpp
+    src/Generator/PhraseBank.cpp
+    src/Generator/MidiFile.cpp
+)
+
+target_include_directories(rolla-style-test PRIVATE src)
+
 # DEEP / JACKIN phrase grammar checks. No JUCE.
 add_executable(rolla-phrase-test
     tests/phrase/phrase_test.cpp
