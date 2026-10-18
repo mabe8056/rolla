@@ -720,6 +720,7 @@ void testScorerV23()
         int stabGaps = 0;
         int turn = 0;
         int callOk = 0;
+        int jackinKick = 0, jackinOnsets = 0, jackinBars = 0;
         std::vector<float> lengths;
         std::uint32_t b2s[20] {};
         std::uint64_t lo[20] {};
@@ -816,6 +817,10 @@ void testScorerV23()
                         ++match;
                 if (match * 5 <= slots)
                     ++callOk;
+                for (int i = 0; i < bass.count; ++i)
+                    jackinKick += ((int) std::lround (bass.notes[i].start) & 3) == 0 ? 1 : 0;
+                jackinOnsets += bass.count;
+                jackinBars += g.bars;
             }
             for (int i = 0; i < g.lane[rolla::Stab].count; ++i)
             {
@@ -884,7 +889,15 @@ void testScorerV23()
             expect (turn >= 14, "BOUNCY bar 8 turns around");
         }
         if (style == rolla::Gaskin)
+        {
             expect (callOk >= 12, "JACKIN call and answer");
+            // JACKIN density and kick bass (style_rules.json: 4.4 a bar, ~19% on the kick, hard <= 35%).
+            const double npb = jackinBars > 0 ? (double) jackinOnsets / jackinBars : 0.0;
+            const double onKick = jackinOnsets > 0 ? (double) jackinKick / jackinOnsets : 0.0;
+            std::cout << "JACKIN bass/bar " << npb << " on-kick " << onKick << "\n";
+            expect (npb >= 3.5 && npb <= 5.5, "JACKIN bass onsets per bar 3.5-5.5");
+            expect (onKick >= 0.10 && onKick <= 0.30, "JACKIN bass on the kick 10-30%");
+        }
     }
 }
 

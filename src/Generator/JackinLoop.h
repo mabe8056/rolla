@@ -12,6 +12,7 @@
 // across rolls is untouched. Header-only.
 
 #include "RollerPass.h"
+#include "StyleJackin.h"
 
 namespace rolla::jackin
 {
@@ -141,17 +142,29 @@ inline int pickHook (const Lane& lane, int bars)
     return best;
 }
 
-inline void loopify (Lane& lane, int bars, std::uint32_t seed)
+inline void loopify (Lane& lane, int bars, std::uint32_t seed, float busy = 0.40f)
 {
-    if (bars < 4 || lane.count <= 0)
+    if (lane.count <= 0)
         return;
+    if (bars < 4)
+    {
+        // A 2-bar loop is the pair itself.
+        if (bars == 2)
+            shapePair (lane, seed, busy);
+        return;
+    }
     Rng r (mix (seed, 0x1AC4u));
-    const Lane src = lane;
-    const int hook = pickHook (src, bars);
+    const int hook = pickHook (lane, bars);
+    // The hook pair gets JACKIN's density and kick placement before it repeats.
+    Lane src;
+    src.seed = lane.seed;
+    copyBar (lane, hook * 2, src, 0, 2);
+    copyBar (lane, hook * 2 + 1, src, 1, 2);
+    shapePair (src, seed, busy);
     lane.count = 0;
     // A B A B4 A B A B8 (4 bars: A B A B8), from the pair that carries the most JACKIN flavour.
     for (int bar = 0; bar < bars; ++bar)
-        copyBar (src, hook * 2 + (bar & 1), lane, bar, bars);
+        copyBar (src, bar & 1, lane, bar, bars);
     sortLane (lane);
     if (bars >= 8)
         answerBar (lane, 3, bars, r);

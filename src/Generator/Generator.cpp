@@ -2,6 +2,7 @@
 #include "DeepBouncy.h"
 #include "RollerPass.h"
 #include "JackinLoop.h"
+#include "StyleJackin.h"
 #include "PhraseBank.h"
 
 #include <algorithm>
@@ -3493,6 +3494,9 @@ void writeDrums (DrumLane& drums, std::uint32_t seed, const Settings& s, Rng& rn
                 drums.vel[Perc][t] = 62;
         }
     }
+    // JACKIN only: open offbeat hats, ghost hats, raw top end (StyleJackin.h).
+    if (s.dialect == Gaskin)
+        jackin::styleDrums (drums, drums.seed, s.bars, s.busy);
 }
 
 bool neighbourPc (int a, int b) noexcept
@@ -4322,7 +4326,7 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
             contrastCallAnswer (g.lane[Bass], s.bars);
             enforceMonophonic (g.lane[Bass]);
             contrastCallAnswer (g.lane[Bass], s.bars);
-            jackin::loopify (g.lane[Bass], s.bars, bassSeed);
+            jackin::loopify (g.lane[Bass], s.bars, bassSeed, s.busy);
         }
         enforceMonophonic (g.lane[Bass]);
         avoidReaction (g.lane[Bass]);

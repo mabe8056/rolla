@@ -32,6 +32,7 @@
 #include "Generator/Generator.h"
 #include "Generator/Intensity.h"
 #include "Generator/MidiFile.h"
+#include "Generator/StyleJackin.h"
 
 #include <algorithm>
 #include <cmath>
@@ -162,6 +163,9 @@ struct Measures
     double distinctBars = 0, rep1 = 0, rep2 = 0;
     int maxDistinct = 0, hooks = 0, clones = 0;
     double onBeat = 0;
+    // JACKIN style pass: bass onsets on a kick, b2 share of bass time, hat /
+    // perc onsets per bar, ghost hats per e / a 16th, open hats per offbeat 8th.
+    double onKick = 0, b2 = 0, b2Max = 0, hiBand = 0, ghost = 0, openOff = 0;
     std::vector<std::string> hookKeys, rollKeys;
     // BOUNCY modes, read from the output the way roll_test does (mean note length >= 1.8 is pulse).
     int pulseRolls = 0;
@@ -339,6 +343,33 @@ Measures measure (int style, std::uint32_t base, const Settings& s)
             m.hookKeys.push_back (barKeys.size() >= 2 ? barKeys[0] + "|" + barKeys[1] : "");
             m.rollKeys.push_back ([&] { std::string all; for (auto& k : barKeys) all += k + "|"; return all; }());
         }
+        {
+            int kicks = 0;
+            double b2T = 0, allT = 0;
+            for (int i = 0; i < bass.count; ++i)
+            {
+                kicks += ((int) std::lround (bass.notes[i].start) & 3) == 0 ? 1 : 0;
+                allT += bass.notes[i].length;
+                b2T += pcOfSemi (bass.notes[i].chord[0]) == 1 ? bass.notes[i].length : 0.0;
+            }
+            m.onKick += bass.count > 0 ? (double) kicks / bass.count : 0.0;
+            const double b2Roll = allT > 0 ? b2T / allT : 0.0;
+            m.b2 += b2Roll;
+            m.b2Max = std::max (m.b2Max, b2Roll);
+            int hi = 0, ghosts = 0, opens = 0;
+            for (int t = 0; t < steps; ++t)
+            {
+                const auto& d = g.drums;
+                hi += (d.vel[HatC][t] | d.vel[HatO][t] | d.vel[Ride][t] | d.vel[Perc][t]) != 0 ? 1 : 0;
+                if ((t & 1) == 1 && d.vel[HatC][t] > 0 && d.vel[HatC][t] <= 60)
+                    ++ghosts;
+                if ((t & 3) == 2 && d.vel[HatO][t] > 0)
+                    ++opens;
+            }
+            m.hiBand += (double) hi / g.bars;
+            m.ghost += (double) ghosts / (8.0 * g.bars);
+            m.openOff += (double) opens / (4.0 * g.bars);
+        }
         bool pick = false;
         for (const Lane* l : { &bass, &stab })
             for (int i = 0; i < l->count; ++i)
@@ -360,6 +391,11 @@ Measures measure (int style, std::uint32_t base, const Settings& s)
     m.dens /= m.rolls;
     m.pickup /= m.rolls;
     m.onBeat /= m.rolls;
+    m.onKick /= m.rolls;
+    m.b2 /= m.rolls;
+    m.hiBand /= m.rolls;
+    m.ghost /= m.rolls;
+    m.openOff /= m.rolls;
     m.distinctBars /= m.rolls;
     m.rep1 /= m.rolls;
     m.rep2 /= m.rolls;
@@ -470,7 +506,9 @@ int main (int argc, char** argv)
     // Every style frozen at its last intended change.
     // A style's hashes change only in the PR that means to change that style
     // (regenerate with --golden). ROLLER changed in claude/roller-phrasing;
-    // BOUNCY in #28 (relegato); JACKIN in #25 (STAB) and claude/jackin-identity.
+    // BOUNCY in #28 (relegato); JACKIN in #25 (STAB), claude/jackin-identity and
+    // claude/style-jackin (density, kick bass, open / ghost hats: intentional;
+    // the two Gaskin values below are regenerated with --golden for that PR).
     const struct { int style; std::uint32_t base; std::uint64_t hash; } frozen[] = {
         { UkMin, 1u, 0x7c9dcbee6dddc8eaull }, { UkMin, 2u, 0x47a4548b99fd9987ull },
         { Long, 1u, 0x3881ed002bc4c2ebull }, { Long, 2u, 0x8682efccde9fe80bull },
@@ -534,6 +572,29 @@ int main (int argc, char** argv)
         std::snprintf (what, sizeof what, "JACKIN seed %u: <= %d distinct bars, 1-bar repeat %.2f, 2-bar repeat %.2f, %d/20 hooks, %d clones",
                        base, m.maxDistinct, m.rep1, m.rep2, m.hooks, m.clones);
         check (m.maxDistinct <= 4 && m.rep1 <= 0.11 && m.rep2 >= 0.60 && m.hooks >= 18 && m.clones == 0, what);
+
+        // JACKIN style pass (style_rules.json styles.JACKIN): bass 3.5-5.5 onsets a
+        // bar (band 2.7-5.8, target 4.4), 10-30% on the kick (hard <= 35), b2 colour
+        // <= 30% of bass time, a 2-bar statement (m2 0.64-0.92, m1 stays <= 0.11
+        // above), hat / perc 8-13 onsets a bar, ghosts 0.25-0.55 per e / a 16th,
+        // open hats on >= 80% of offbeat 8ths, and every roll still turns at bar 8.
+        std::printf ("gaskin   seed %-10u notes/bar %.2f  on-kick %.2f  b2 %.2f (max %.2f)  hi-band %.1f  ghost %.2f  open-off %.2f  noTurn %d/20\n",
+                     base, m.npb, m.onKick, m.b2, m.b2Max, m.hiBand, m.ghost, m.openOff, m.noTurn);
+        std::snprintf (what, sizeof what,
+                       "JACKIN seed %u: %.2f notes/bar, on-kick %.2f, b2 %.2f, m2 %.2f, hi-band %.1f, ghost %.2f, open %.2f, no turn %d/20",
+                       base, m.npb, m.onKick, m.b2, m.rep2, m.hiBand, m.ghost, m.openOff, m.noTurn);
+        check (m.npb >= 3.5 && m.npb <= 5.5 && m.onKick >= 0.10 && m.onKick <= 0.30 && m.b2 <= 0.30
+                   && m.rep2 >= 0.64 && m.rep2 <= 0.92 && m.hiBand >= 8.0 && m.hiBand <= 13.0
+                   && m.ghost >= 0.25 && m.ghost <= 0.55 && m.openOff >= 0.80 && m.noTurn == 0,
+               what);
+    }
+    // JACKIN's default swing is the band's p50 inside the SWING knob, never straight.
+    {
+        std::snprintf (what, sizeof what, "JACKIN default swing %.3f (band %.3f-%.3f, floor %.2f)", jackin::kDefaultSwing,
+                       jackin::kTargets.swingMin, jackin::kTargets.swingMax, jackin::kTargets.swingFloor);
+        check (jackin::kDefaultSwing >= jackin::kTargets.swingFloor && jackin::kDefaultSwing <= jackin::kTargets.swingMax
+                   && std::fabs (jackin::kDefaultSwing - jackin::kTargets.swing) < 0.01f,
+               what);
     }
 
     // BUSY: bass notes per bar rise (monotonic, >= 30%), as the knob test asks of

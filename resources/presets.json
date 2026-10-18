@@ -983,11 +983,11 @@
       "vox": "chop",
       "drums": "room",
       "hitsMute": false,
-      "swing": 0.5,
+      "swing": 0.565,
       "overrides": {
         "bass": {
           "whenPreset": "round",
-          "duckDb": 7,
+          "duckDb": 9,
           "duckRecoverMs": 110,
           "glideMs": 0
         }

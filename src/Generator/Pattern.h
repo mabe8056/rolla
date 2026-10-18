@@ -173,7 +173,7 @@ inline const StyleCopy& styleCopy (int d) noexcept
           "Pad\tair\n"
           "Plays\tbass, stab, pluck, pad, vox, drums" },
         { kStyleLabels[Gaskin],
-          "Groove\tstraight, swing 50%\n"
+          "Groove\tswing 56.5%, open hats\n"
           "Notes\t2 sixteenths\n"
           "Bass\tround\n"
           "Stab\tswell\n"

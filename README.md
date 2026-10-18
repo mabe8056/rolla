@@ -135,7 +135,7 @@ Top level:
 | `parts.<part>.presets[]` | Three presets. `part` is `bass`, `stab`, `hits`, `pluck`, `pad`, `vox`, `drums` |
 | `dialects.<id>` | `ukmin`, `long`, `pop`, `gaskin`. Each names a preset id per lane, plus `hitsMute`, `swing` (0.50–0.57), and optional `overrides.bass` |
 
-`overrides.bass` applies only when the loaded bass preset id equals `whenPreset`. Gaskin on Round uses duck **7 dB / 110 ms** and glide **0**. Changing Dialect in the UI loads that row (preset, swing, hits mute). It does not reroll the pattern.
+`overrides.bass` applies only when the loaded bass preset id equals `whenPreset`. Gaskin on Round uses duck **9 dB / 110 ms** and glide **0**. Changing Dialect in the UI loads that row (preset, swing, hits mute). It does not reroll the pattern.
 
 Shared synth keys (preset root, or an `ex` object that overrides the root):
 

@@ -1,4 +1,5 @@
 #include "Presets.h"
+#include "StyleJackin.h"
 
 #include <algorithm>
 #include <cstring>
@@ -377,11 +378,13 @@ void loadDefaultPresets (PresetBank& bank)
     fillDialect (bank.dialect[UkMin], "pluck", "dub", "warehouse", "hook", "air", "close", "tight", true, 0.52f);
     fillDialect (bank.dialect[Long], "round", "swell", "dusty", "bright", "wide", "booth", "tight", true, 0.51f);
     fillDialect (bank.dialect[Pop], "click", "click", "rave", "soft", "air", "chop", "tight", true, 0.50f);
-    fillDialect (bank.dialect[Gaskin], "round", "swell", "warehouse", "hook", "dark", "chop", "room", false, 0.50f);
+    // JACKIN swings hardest and ducks deeper (StyleJackin.h targets).
+    fillDialect (bank.dialect[Gaskin], "round", "swell", "warehouse", "hook", "dark", "chop", "room", false,
+                 jackin::kDefaultSwing);
     auto& g = bank.dialect[Gaskin];
     g.bassDuck = true;
     g.bassGlide = true;
-    g.bassDuckDb = 7.f;
+    g.bassDuckDb = jackin::kTargets.duckDb;
     g.bassDuckMs = 110.f;
     g.bassGlideMs = 0.f;
     setId (g.bassWhen, "round");
