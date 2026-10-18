@@ -875,16 +875,16 @@
      "b2 (neighbour only)": 0.02
     },
     "chromatic": {
-     "b2_bass_time_max_pct": 12,
+     "b2_bass_time_max_pct": 6,
      "neighbour_max_len16": 1,
-     "note": "b2 only as a short neighbour to 1 or 2; refs 0-12% (one ref 11.7)"
+     "note": "b2 only as a one-sixteenth passing note to 1 or 2, <= 6% outside Phrygian (Composer msg 409; refs 0-12%, one ref 11.7)"
     },
     "source": "mode weights ESTIMATE informed by key_est (minor in 8/11 refs) and MIDI bass degree histograms"
    },
    "hard": [
     {
      "id": "H1_key_scale",
-     "rule": "bass+stab out-of-scale time <= 5% for the chosen mode; tonic in the bass top-2 pitch classes; b2 time <= 12% and only as <= 1-sixteenth neighbour unless mode=Phrygian",
+     "rule": "bass+stab out-of-scale time <= 5% for the chosen mode; tonic in the bass top-2 pitch classes; b2 time <= 6% and only as <= 1-sixteenth neighbour unless mode=Phrygian; no bass/stab semitone clash",
      "src": "GR v2 hard rule 1 + refs"
     },
     {
@@ -1818,16 +1818,19 @@
      "b2 (jackin flavour)": 0.05
     },
     "chromatic": {
-     "b2_bass_time_max_pct": 30,
-     "neighbour_max_len16": 2,
-     "note": "b2 is a genre colour here (refs 0-28%); GR jackin_flavour 10-30 applies to the 90s-jack sub-mode only"
+     "b2_bass_time_max_pct": 6,
+     "neighbour_max_len16": 1,
+     "phrygian_b2_bass_time_max_pct": 30,
+     "phrygian_neighbour_max_len16": 2,
+     "phrygian_requires": "no natural 2 in stab or pad voicings",
+     "note": "Composer msg 409: outside Phrygian b2 is a one-sixteenth passing note (<= 6%). The 30% b2 colour (refs 0-28%) applies ONLY when mode=Phrygian and the stab has no natural 2. Reject any roll where bass and stab sound a semitone apart."
     },
     "source": "mode weights ESTIMATE informed by key_est (minor in 8/9 refs) and MIDI bass degree histograms"
    },
    "hard": [
     {
      "id": "H1_key_scale",
-     "rule": "bass+stab out-of-scale time <= 5% for the chosen mode; tonic in the bass top-2 pitch classes; b2 time <= 30% and only as <= 2-sixteenth neighbour unless mode=Phrygian",
+     "rule": "bass+stab out-of-scale time <= 5% for the chosen mode; tonic in the bass top-2 pitch classes; b2 time <= 6% and only as a 1-sixteenth passing note unless mode=Phrygian (Phrygian: b2 <= 30%, <= 2-sixteenth, no natural 2 in stab/pad); no bass/stab semitone clash",
      "src": "GR v2 hard rule 1 + refs"
     },
     {
