@@ -1068,6 +1068,13 @@ int main()
         float after = 0.f;
         prev = 0.01f;
         pos = 0.03f;
+        // The cut is a 4 ms fade now (no click), then silence.
+        for (int i = 0; i < 200; ++i)
+        {
+            wrapSampler.render (laneL, laneR, prev, pos, true, 32.f);
+            prev = pos;
+            pos += 0.02f;
+        }
         for (int i = 0; i < 40; ++i)
         {
             wrapSampler.render (laneL, laneR, prev, pos, true, 32.f);
@@ -1075,7 +1082,7 @@ int main()
             prev = pos;
             pos += 0.02f;
         }
-        expect (after < 1.0e-4f, "a kick already sounding dies on the next loop wrap");
+        expect (after < 1.0e-4f, "a kick already sounding fades out within 4 ms of the next loop wrap");
 
         rolla::Engine downbeat;
         downbeat.prepare (48000.0, 256);

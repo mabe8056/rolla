@@ -403,10 +403,20 @@ void waitReady (rolla::SampleLibrary& library, const std::vector<std::string>& p
         if (waiting)
             juce::Thread::sleep (10);
     }
-    // Say so loudly: a file that is not ready renders as a silent lane.
+    // Say so loudly: a file still loading here plays as a silent note.
+    // Missing files are only counted: the sampler swaps them from the same pool.
+    int absent = 0;
     for (const auto& path : paths)
-        if (! library.ready (path.c_str()))
-            std::cerr << "SAMPLE NOT READY " << (library.missing (path.c_str()) ? "(missing) " : "(timeout) ") << path << "\n";
+    {
+        if (library.ready (path.c_str()))
+            continue;
+        if (library.missing (path.c_str()))
+            ++absent;
+        else
+            std::cerr << "SAMPLE NOT READY (timeout) " << path << "\n";
+    }
+    if (absent > 0)
+        std::cerr << "samples not on disk for this roll: " << absent << " (swapped from the same pool)\n";
 }
 
 void writeSidecar (const juce::File& wav, int style, const Knobs& knobs, bool hitsMute, float swing,
