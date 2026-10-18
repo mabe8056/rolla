@@ -3179,6 +3179,36 @@ void writeHits (Lane& lane, const Groove& g, const Settings& s, Rng& rng)
     };
     const int voice = (int) (rng.next() * 4.0) % 4;
 
+    // IN STAB: the hits double the stab's answers, one hit per stab onset
+    // (up to `want`), instead of filling the holes around them.
+    if (s.hitsInStab && g.lane[Stab].count > 0)
+    {
+        const auto& stab = g.lane[Stab];
+        for (int i = 0; i < stab.count && lane.count < want && lane.count < kMaxNotes; ++i)
+        {
+            const float start = stab.notes[i].start;
+            if (start >= (float) loop)
+                continue;
+            bool clash = false;
+            for (int k = 0; k < lane.count; ++k)
+                if (std::fabs (lane.notes[k].start - start) < 1.f)
+                    clash = true;
+            if (clash)
+                continue;
+            Ev e;
+            e.start = start;
+            e.len = std::clamp (stab.notes[i].length, 0.5f, 1.5f);
+            e.nChord = 3;
+            for (int c = 0; c < 3; ++c)
+                e.chord[c] = (std::int8_t) voi[voice][c];
+            e.vel = 106;
+            if (pushEv (lane, e, s.bars))
+                lane.notes[lane.count - 1].timbre = (std::uint8_t) ((int) (rng.next() * 5.0) % 5);
+        }
+        if (lane.count > 0)
+            return;
+    }
+
     for (int n = 0; n < want && lane.count < kMaxNotes; ++n)
     {
         int best = -1;
@@ -3437,6 +3467,24 @@ void writeDrums (DrumLane& drums, std::uint32_t seed, const Settings& s, Rng& rn
                 continue;
             if (drums.vel[Perc][t] == 0)
                 drums.vel[Perc][t] = 62;
+        }
+    }
+    // FILL: the last beat of the phrase becomes a snare / tom run into the
+    // downbeat. Hats there drop out so the run reads. Seed-free, so the same
+    // roll with FILL on and off differs only in that beat.
+    if (s.fill && steps >= 16)
+    {
+        const int beat = steps - 4;
+        static constexpr int kRun[4] = { Snare, Snare, TomMid, TomLow };
+        static constexpr int kVel[4] = { 78, 92, 100, 110 };
+        for (int k = 0; k < 4; ++k)
+        {
+            const int t = beat + k;
+            drums.vel[HatC][t] = 0;
+            drums.vel[HatO][t] = 0;
+            drums.vel[Ride][t] = 0;
+            drums.vel[Perc][t] = 0;
+            drums.vel[kRun[k]][t] = (std::uint8_t) kVel[k];
         }
     }
 }
@@ -4276,6 +4324,13 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
         Rng rs (stabSeed);
         char stabBreaks[48] = "";
         writeStab (g.lane[Stab], g.lane[Bass], s, rs, freedom, stabBreaks, (int) sizeof stabBreaks);
+    }
+    // IN STAB follows the stab that ships, so the hits are rewritten on it.
+    if (s.hitsInStab && regen (Hits))
+    {
+        Rng rh (seeds[Hits] ? seeds[Hits] : 1u);
+        g.lane[Hits].seed = rh.s;
+        writeHits (g.lane[Hits], g, s, rh);
     }
     for (int part = 0; part < Drums; ++part)
         dedupeNoteOns (g.lane[part]);

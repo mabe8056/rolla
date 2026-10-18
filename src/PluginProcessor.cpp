@@ -122,9 +122,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout (const PresetBa
         add (std::make_unique<AudioParameterFloat> (
             ParameterID { id + "Level", 1 }, label + " Level",
             NormalisableRange<float> (-24.f, 6.f, 0.01f), 0.f));
-        add (std::make_unique<AudioParameterBool> (
-            ParameterID { id + "Shuffle", 1 }, label + " Shuffle", false,
-            AudioParameterBoolAttributes().withAutomatable (false)));
+        // A trigger, like ROLL: automating it re-rolls that lane on the host's beat.
+        add (std::make_unique<AudioParameterBool> (ParameterID { id + "Shuffle", 1 }, label + " Shuffle", false));
     }
 
     // Appended last so saved sessions and host automation keep their parameter indices.
@@ -235,7 +234,7 @@ RollaProcessor::RollaProcessor()
 {
     apvts.addParameterListener ("roll", this);
     apvts.addParameterListener ("dialect", this);
-    for (const char* id : { "dark", "busy", "bounce", "stab", "styleIntensity" })
+    for (const char* id : { "dark", "busy", "bounce", "stab", "styleIntensity", "fill", "hitsInStab" })
         apvts.addParameterListener (id, this);
     apvts.addParameterListener ("intensity", this);
     for (int i = 0; i < NumParts; ++i)
@@ -261,7 +260,7 @@ RollaProcessor::~RollaProcessor()
 
     apvts.removeParameterListener ("roll", this);
     apvts.removeParameterListener ("dialect", this);
-    for (const char* id : { "dark", "busy", "bounce", "stab", "styleIntensity" })
+    for (const char* id : { "dark", "busy", "bounce", "stab", "styleIntensity", "fill", "hitsInStab" })
         apvts.removeParameterListener (id, this);
     apvts.removeParameterListener ("intensity", this);
     for (int i = 0; i < NumParts; ++i)
@@ -509,7 +508,7 @@ void RollaProcessor::parameterChanged (const juce::String& parameterID, float ne
     }
 
     if (parameterID == "dark" || parameterID == "busy" || parameterID == "bounce" || parameterID == "stab"
-        || parameterID == "styleIntensity")
+        || parameterID == "styleIntensity" || parameterID == "fill" || parameterID == "hitsInStab")
     {
         requestReshape();
         return;
@@ -595,6 +594,7 @@ Settings RollaProcessor::currentSettings() const
     s.key = (int) raw (apvts, "key");
     s.bars = barsFromIndex ((int) raw (apvts, "length"));
     s.fill = raw (apvts, "fill") >= 0.5f;
+    s.hitsInStab = raw (apvts, "hitsInStab") >= 0.5f;
     return s;
 }
 
@@ -777,6 +777,7 @@ EngineParams RollaProcessor::readParams (std::shared_ptr<const PresetBank>& hold
     params.dialect = (int) raw (apvts, "dialect");
     params.library = &library;
     params.userSlots = slots.published();
+    params.sampleShaping = true;
     for (int i = 0; i < NumParts; ++i)
     {
         const auto id = juce::String (partId (i));
@@ -1363,10 +1364,10 @@ juce::String RollaProcessor::exportMidiTo (const juce::File& dir)
     const float swing = raw (apvts, "swing");
     const double bpm = (double) hostBpmOf (*this);
     std::string error;
+    // Every lane gets its file, an empty one too (a loop-long track with the
+    // tempo), so a folder export always has the same 7 lanes + full to drop into FL.
     for (int p = 0; p < NumParts; ++p)
     {
-        if (p != Drums && local.lane[p].count <= 0)
-            continue;
         const auto file = dir.getChildFile (rollexport::baseName (local, key, bpm, p) + ".mid");
         if (! MidiExport::writePart (file.getFullPathName().toStdString(), local, p, key, swing, bpm, error))
             return juce::String (error);
@@ -1541,6 +1542,27 @@ juce::StringArray RollaProcessor::writeTempMidi()
         return files;
     pruneExportCache (file);
     files.add (file.getFullPathName());
+    return files;
+}
+
+juce::StringArray RollaProcessor::writeLaneMidiFiles()
+{
+    juce::StringArray files;
+    waitUntilReady();
+    const Groove local = exportGroove();
+    const int key = (int) raw (apvts, "key");
+    const float swing = raw (apvts, "swing");
+    const double bpm = (double) hostBpmOf (*this);
+    const auto dir = newExportFolder();
+    std::string error;
+    for (int part = 0; part < NumParts; ++part)
+    {
+        const auto file = dir.getChildFile (rollexport::baseName (local, key, bpm, part) + ".mid");
+        if (! MidiExport::writePart (file.getFullPathName().toStdString(), local, part, key, swing, bpm, error))
+            return {};
+        files.add (file.getFullPathName());
+    }
+    pruneExportCache (dir);
     return files;
 }
 

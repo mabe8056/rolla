@@ -2111,7 +2111,11 @@ struct DragTile : Component
             return;
         armed = true;
         const bool audio = audioMode || e.mods.isAltDown() || e.mods.isCommandDown() || e.mods.isCtrlDown();
-        dragFilesOut (this, audio ? proc->writeStemAudio() : proc->writeTempMidi());
+        // Shift: one MIDI file per lane (FL drops each on its own pattern/channel).
+        if (audio)
+            dragFilesOut (this, proc->writeStemAudio());
+        else
+            dragFilesOut (this, e.mods.isShiftDown() ? proc->writeLaneMidiFiles() : proc->writeTempMidi());
     }
 
     void mouseUp (const MouseEvent& e) override
@@ -2353,6 +2357,11 @@ struct RollaEditor::Content : Component
             sync();
         };
         sound.addAndMakeVisible (source);
+       #if ROLLA_PLUGIN_BUILD
+        // Plugin builds play samples only (Sampler kSamplesOnly): SYNTH and LAYER
+        // would change nothing you can hear, so the source switch is not shown.
+        source.setVisible (false);
+       #endif
 
         voxSlot.proc = &proc;
         voxSlot.voice = -1;
@@ -2423,7 +2432,7 @@ struct RollaEditor::Content : Component
         bindHelp (swing, "Swing, from 50 to 57 percent.");
         bindHelp (duck, "Duck. The bass dips under the stab.");
         bindHelp (face, "Roll. Re-rolls every lane that is not kept.");
-        bindHelp (drag, "Drag all. One MIDI file, one track per lane. Click the tile, or hold Alt, for a WAV stem of every lane.");
+        bindHelp (drag, "Drag all. One MIDI file, one track per lane. Hold Shift for one MIDI file per lane. Click the tile, or hold Alt, for a WAV stem of every lane.");
         bindHelp (voxSlot, "Vox sample. Drop a file to override the preset.");
         bindHelp (inStab, "In stab. Hits land on the stab's answer slots.");
         for (int i = 0; i < NumParts; ++i)
