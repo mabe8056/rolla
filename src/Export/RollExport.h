@@ -204,12 +204,21 @@ inline LoopRender renderLoop (Engine& engine, const Groove& g, const EngineParam
     const int total = preN + loopN + lat;
 
     out.audio.setSize (2, loopN);
-    const auto deadline = juce::Time::getMillisecondCounterHiRes() + timeoutMs;
+    // The timeout bounds each wait for the loader, never the bounce itself: 7 stems
+    // bounce in parallel and one pass can take longer than the timeout on a busy CPU.
+    // A shared deadline let a stem that lazy-loaded a file (vox) skip its redo: silent stem.
+    auto waitIdle = [&]
+    {
+        if (library == nullptr)
+            return true;
+        const auto deadline = juce::Time::getMillisecondCounterHiRes() + timeoutMs;
+        while (! library->idle() && juce::Time::getMillisecondCounterHiRes() < deadline)
+            juce::Thread::sleep (2);
+        return library->idle();
+    };
     for (int attempt = 0; attempt < 4; ++attempt)
     {
-        if (library != nullptr)
-            while (! library->idle() && juce::Time::getMillisecondCounterHiRes() < deadline)
-                juce::Thread::sleep (2);
+        waitIdle();
         const auto before = library != nullptr ? library->notReadyRequests() : 0;
         out.audio.clear();
         detail::pass (engine, g, params, rate, bpm, ppqStart, total, out.audio, preN + lat, preN, out.kickSample);
@@ -217,10 +226,8 @@ inline LoopRender renderLoop (Engine& engine, const Groove& g, const EngineParam
         // unloaded file means this pass may be missing notes: wait and redo it.
         if (library == nullptr || library->notReadyRequests() == before)
             break;
-        while (! library->idle() && juce::Time::getMillisecondCounterHiRes() < deadline)
-            juce::Thread::sleep (2);
-        out.samplesSettled = library->idle();
-        if (juce::Time::getMillisecondCounterHiRes() >= deadline)
+        out.samplesSettled = waitIdle();
+        if (! out.samplesSettled)
             break;
     }
     return out;

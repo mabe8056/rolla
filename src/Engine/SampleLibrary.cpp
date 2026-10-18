@@ -1,4 +1,6 @@
 #include "SampleLibrary.h"
+
+#include <iostream>
 #include "../Generator/Presets.h"
 #include "../Sampler/SamplePrep.h"
 
@@ -6,6 +8,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <map>
 
 namespace rolla
@@ -52,8 +55,19 @@ void findSlices (SampleAudio& audio)
 {
     audio.sliceCount = 1;
     audio.slices[0] = 0;
+    audio.lead = 0;
     if (audio.frames < 64)
         return;
+    for (int i = 0; i < audio.frames; ++i)
+    {
+        const float a = std::max (std::fabs (audio.left[(size_t) i]),
+                                  audio.right.size() > (size_t) i ? std::fabs (audio.right[(size_t) i]) : 0.f);
+        if (a > 0.01f)
+        {
+            audio.lead = std::max (0, i - (int) (0.002 * audio.rate));
+            break;
+        }
+    }
     const int hop = std::max (1, (int) (audio.rate / 200.0));
     const int gap = std::max (hop, (int) (audio.rate * 0.04));
     float env = 0.f;
@@ -87,6 +101,29 @@ void gatherReferenced (std::vector<std::string>& paths, const PresetBank& bank)
 }
 
 } // namespace
+
+// Caches never go into the sample folder: those are the user's files.
+// They live in the per-user app data folder, one file per sample root and kind.
+// ROLLA_CACHE_DIR overrides the folder (tests, headless renders).
+juce::File sampleCacheFor (const juce::File& sampleRoot, const char* kind)
+{
+    juce::File dir;
+    const auto env = juce::SystemStats::getEnvironmentVariable ("ROLLA_CACHE_DIR", {});
+    if (env.isNotEmpty() && juce::File::isAbsolutePath (env))
+        dir = juce::File (env);
+    else
+        dir = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+                  .getChildFile ("ROLLA")
+                  .getChildFile ("Cache");
+    dir.createDirectory();
+    const auto key = juce::String::toHexString (sampleRoot.getFullPathName().hashCode64());
+    return dir.getChildFile (juce::String (kind) + "-" + key + ".json");
+}
+
+juce::File loudnessCacheFor (const juce::File& sampleRoot)
+{
+    return sampleCacheFor (sampleRoot, "loudness");
+}
 
 juce::File SampleLibrary::defaultRoot()
 {
@@ -160,6 +197,62 @@ void SampleLibrary::watch (const PresetBank& bank)
     gatherReferenced (paths, bank);
     for (const auto& p : paths)
         enqueue (p);
+}
+
+void SampleLibrary::preload (const std::vector<std::string>& relativePaths)
+{
+    {
+        std::lock_guard<std::mutex> lock (jobMu);
+        // jobs is popped from the back, so the first path goes in last.
+        for (auto it = relativePaths.rbegin(); it != relativePaths.rend(); ++it)
+            if (! it->empty() && ! ready (it->c_str()) && ! missing (it->c_str()))
+                jobs.push_back (*it);
+    }
+    jobCv.notify_all();
+}
+
+void collectPlayFiles (const PresetBank& bank, const SampleIndex& index, const int preset[NumParts],
+                       const int samplePick[NumParts], int dialect, int window, std::vector<std::string>& out)
+{
+    auto addIndexed = [&] (const SampleSpec& spec, int part, int voice, int pick)
+    {
+        if (voice < 0 && ! spec.filter.on)
+            return;
+        const int queryVoice = voice >= 0 ? voice : spec.filter.voice;
+        const PoolFilter filter = poolFilterFor (spec, part, queryVoice, dialect);
+        const int n = sampleIndexCount (index, part, filter);
+        if (n <= 0)
+            return;
+        const int start = (pick < 0 ? 0 : pick) % n;
+        const int w = std::max (1, std::min (n, window));
+        for (int i = 0; i < w; ++i)
+            if (const auto* entry = sampleIndexAt (index, part, filter, (start + i) % n))
+                out.emplace_back (entry->path);
+    };
+    for (int part = 0; part < Drums; ++part)
+    {
+        const auto& spec = specAt (bank, part, preset[part]);
+        if (spec.mode == SampleMode::Synth)
+            continue;
+        addIndexed (spec, part, -1, samplePick[part]);
+        if (spec.file[0] != 0)
+            out.emplace_back (spec.file);
+    }
+    const int kit = presetSlot (bank, Drums, preset[Drums]);
+    const auto& drums = specAt (bank, Drums, kit);
+    if (drums.mode == SampleMode::Synth)
+        return;
+    const int voices[] = { Kick, Snare, Clap, Rim, HatC, HatO, Ride, Perc, TomLow, TomMid };
+    for (int voice : voices)
+    {
+        const int shift = voice == TomMid ? 1 : voice == TomLow ? 2 : 0;
+        const int pick = std::max (0, samplePick[Drums]) + shift;
+        const auto& own = bank.drums[kit].voicePool[voice];
+        if (! own.empty())
+            out.push_back (own[(size_t) (pick % (int) own.size())]);
+        else
+            addIndexed (drums, Drums, voice, pick);
+    }
 }
 
 void SampleLibrary::enqueue (const std::string& relative)
@@ -275,13 +368,54 @@ void SampleLibrary::threadMain()
     }
 }
 
+namespace
+{
+std::uint32_t pathHash (const char* text) noexcept
+{
+    std::uint32_t h = 2166136261u;
+    for (const char* c = text; *c != 0; ++c)
+    {
+        h ^= (std::uint8_t) *c;
+        h *= 16777619u;
+    }
+    return h;
+}
+} // namespace
+
+// Open addressing. Slots are never cleared, so a probe chain only grows and
+// the audio thread can stop at the first empty slot without a lock.
 SampleLibrary::Slot* SampleLibrary::slotFor (const char* relative) noexcept
 {
-    if (relative == nullptr)
+    if (relative == nullptr || relative[0] == 0)
         return nullptr;
-    for (auto& slot : slots)
-        if (slot.status.load (std::memory_order_acquire) != 0 && std::strcmp (slot.path, relative) == 0)
+    const std::uint32_t start = pathHash (relative) & (std::uint32_t) (kSlots - 1);
+    for (int i = 0; i < kSlots; ++i)
+    {
+        auto& slot = slots[(start + (std::uint32_t) i) & (std::uint32_t) (kSlots - 1)];
+        if (slot.status.load (std::memory_order_acquire) == 0)
+            return nullptr;
+        if (std::strcmp (slot.path, relative) == 0)
             return &slot;
+    }
+    return nullptr;
+}
+
+SampleLibrary::Slot* SampleLibrary::claimSlot (const char* relative) noexcept
+{
+    const std::uint32_t start = pathHash (relative) & (std::uint32_t) (kSlots - 1);
+    for (int i = 0; i < kSlots; ++i)
+    {
+        auto& slot = slots[(start + (std::uint32_t) i) & (std::uint32_t) (kSlots - 1)];
+        if (slot.status.load (std::memory_order_acquire) == 0)
+        {
+            std::strncpy (slot.path, relative, sizeof (slot.path) - 1);
+            slot.path[sizeof (slot.path) - 1] = 0;
+            slot.status.store (1, std::memory_order_release);
+            return &slot;
+        }
+        if (std::strcmp (slot.path, relative) == 0)
+            return &slot;
+    }
     return nullptr;
 }
 
@@ -318,23 +452,16 @@ void SampleLibrary::loadOne (const std::string& relative)
     Slot* slot = nullptr;
     {
         std::lock_guard<std::mutex> lock (slotMu);
-        slot = slotFor (relative.c_str());
-        if (slot == nullptr)
-        {
-            for (auto& candidate : slots)
-            {
-                if (candidate.status.load (std::memory_order_acquire) == 0)
-                {
-                    std::strncpy (candidate.path, relative.c_str(), sizeof (candidate.path) - 1);
-                    candidate.path[sizeof (candidate.path) - 1] = 0;
-                    candidate.status.store (1, std::memory_order_release);
-                    slot = &candidate;
-                    break;
-                }
-            }
-        }
+        slot = claimSlot (relative.c_str());
     }
-    if (slot == nullptr || slot->status.load (std::memory_order_acquire) == 2)
+    if (slot == nullptr)
+    {
+        // Never fail quietly: a full table used to leave the lane pending forever (silent).
+        if (! tableFullLogged.exchange (true))
+            std::cerr << "ROLLA samples: load table full (" << kSlots << " files), cannot load " << relative << "\n";
+        return;
+    }
+    if (slot->status.load (std::memory_order_acquire) >= 2)
         return;
 
     juce::File file;
@@ -350,6 +477,7 @@ void SampleLibrary::loadOne (const std::string& relative)
 
     if (! file.existsAsFile())
     {
+        std::cerr << "ROLLA samples: missing file " << relative << "\n";
         fail();
         return;
     }
@@ -359,6 +487,7 @@ void SampleLibrary::loadOne (const std::string& relative)
     std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
     if (reader == nullptr || reader->sampleRate < 1000.0 || reader->lengthInSamples < 8)
     {
+        std::cerr << "ROLLA samples: unreadable file " << relative << "\n";
         fail();
         return;
     }
@@ -415,7 +544,7 @@ bool SampleLibrary::cachedGain (const std::string& relative, juce::int64 bytes, 
     juce::File file;
     {
         std::lock_guard<std::mutex> rootLock (rootMu);
-        file = rootDir.getChildFile (".rolla-loudness.json");
+        file = loudnessCacheFor (rootDir);
     }
     std::lock_guard<std::mutex> lock (gainMu);
     if (! gainsLoaded)
@@ -458,7 +587,7 @@ void SampleLibrary::rememberGain (const std::string& relative, juce::int64 bytes
     juce::File file;
     {
         std::lock_guard<std::mutex> rootLock (rootMu);
-        file = rootDir.getChildFile (".rolla-loudness.json");
+        file = loudnessCacheFor (rootDir);
     }
     std::lock_guard<std::mutex> lock (gainMu);
     GainRow row;
@@ -822,7 +951,7 @@ void SampleLibrary::buildIndex()
     char signatureText[32];
     std::snprintf (signatureText, sizeof signatureText, "%llu", (unsigned long long) signature);
 
-    const auto cacheFile = folder.getChildFile (".rolla-index.json");
+    const auto cacheFile = sampleCacheFor (folder, "index");
     if (cacheFile.existsAsFile())
     {
         const auto cached = juce::JSON::parse (cacheFile);

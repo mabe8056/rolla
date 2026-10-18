@@ -75,6 +75,35 @@ void writeBurst (const juce::File& file, int frames, int burst)
     writer->writeFromAudioSampleBuffer (buf, 0, frames);
 }
 
+void writeKick (const juce::File& file, double seconds)
+{
+    // A realistic kick: pitch drops 150 -> 50 Hz, slow decay so the next quarter
+    // retriggers while the last one is still loud. Starts at phase 0 (no click of its own).
+    file.getParentDirectory().createDirectory();
+    juce::WavAudioFormat wav;
+    auto fileStream = std::make_unique<juce::FileOutputStream> (file);
+    if (fileStream == nullptr || ! fileStream->openedOk())
+        return;
+    std::unique_ptr<juce::OutputStream> stream (fileStream.release());
+    const auto options = juce::AudioFormatWriterOptions().withSampleRate (48000.0)
+                                                          .withNumChannels (1)
+                                                          .withBitsPerSample (24);
+    auto writer = wav.createWriterFor (stream, options);
+    if (writer == nullptr)
+        return;
+    const int n = (int) std::lround (seconds * 48000.0);
+    juce::AudioBuffer<float> buf (1, n);
+    double phase = 0.0;
+    for (int i = 0; i < n; ++i)
+    {
+        const double t = i / 48000.0;
+        const double hz = 50.0 + 100.0 * std::exp (-t / 0.03);
+        phase += 2.0 * 3.14159265358979 * hz / 48000.0;
+        buf.setSample (0, i, (float) (0.8 * std::exp (-t / 0.35) * std::sin (phase)));
+    }
+    writer->writeFromAudioSampleBuffer (buf, 0, n);
+}
+
 void writeTone (const juce::File& file, double seconds, float amplitude, float hz, bool leadSilence)
 {
     file.getParentDirectory().createDirectory();
@@ -241,6 +270,10 @@ int main()
             "non-kick drums stay on C3");
 
     const auto rootDir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("rolla-sampler-test");
+    // Caches live outside the sample roots now, keyed by root path: clear this test's.
+    for (const char* sub : { "scan", "dual" })
+        for (const char* kind : { "index", "loudness" })
+            rolla::sampleCacheFor (rootDir.getChildFile (sub), kind).deleteFile();
     rootDir.deleteRecursively();
     const auto inside = rootDir.getChildFile ("BASS/tone.wav");
     writeTone (inside, 0.5, 0.4f, 440.f, false);
@@ -747,8 +780,9 @@ int main()
         }
         expect (scannedKick > 0.01f, "the scanned kick is audible");
 
-        const auto cache = scanRoot.getChildFile (".rolla-index.json");
-        expect (cache.existsAsFile(), "the index is cached beside the samples");
+        const auto cache = rolla::sampleCacheFor (scanRoot, "index");
+        expect (! scanRoot.getChildFile (".rolla-index.json").exists(), "nothing is written into the sample folder");
+        expect (cache.existsAsFile() && ! cache.isAChildOf (scanRoot), "the index is cached outside the samples");
         auto cachedText = cache.loadFileAsString();
         expect (cachedText.contains ("Phantom"), "cache keeps pack metadata");
         cachedText = cachedText.replace ("Phantom", "CachedPack");
@@ -878,10 +912,13 @@ int main()
                 boosted = std::max (boosted, std::fabs (s));
         expect (boosted > 0.04f, "load-time gain lifts a quiet raw copy");
         expect (checksum (quietFile) == quietSum, "loudness normalisation does not write the wav");
-        auto cacheText = dualRoot.getChildFile (".rolla-loudness.json").loadFileAsString();
+        const auto cacheFile = rolla::loudnessCacheFor (dualRoot);
+        expect (! dualRoot.getChildFile (".rolla-loudness.json").exists(), "nothing is written into the sample folder");
+        expect (! cacheFile.isAChildOf (dualRoot), "the loudness cache lives outside the sample folder");
+        auto cacheText = cacheFile.loadFileAsString();
         expect (cacheText.contains ("VOX/quiet.wav"), "the gain is cached");
         cacheText = cacheText.replace ("\"gainDb\":", "\"gainDb\": 0, \"was\":");
-        dualRoot.getChildFile (".rolla-loudness.json").replaceWithText (cacheText);
+        cacheFile.replaceWithText (cacheText);
         rolla::SampleLibrary cached;
         cached.setRoot (dualRoot);
         cached.request ("VOX/quiet.wav");
@@ -1215,6 +1252,13 @@ int main()
         float after = 0.f;
         prev = 0.01f;
         pos = 0.03f;
+        // The cut is a 4 ms fade now (no click), then silence.
+        for (int i = 0; i < 200; ++i)
+        {
+            wrapSampler.render (laneL, laneR, prev, pos, true, 32.f);
+            prev = pos;
+            pos += 0.02f;
+        }
         for (int i = 0; i < 40; ++i)
         {
             wrapSampler.render (laneL, laneR, prev, pos, true, 32.f);
@@ -1222,7 +1266,7 @@ int main()
             prev = pos;
             pos += 0.02f;
         }
-        expect (after < 1.0e-4f, "a kick already sounding dies on the next loop wrap");
+        expect (after < 1.0e-4f, "a kick already sounding fades out within 4 ms of the next loop wrap");
 
         rolla::Engine downbeat;
         downbeat.prepare (48000.0, 256);
@@ -1266,6 +1310,104 @@ int main()
             }
         expect (onset >= 0, "the downbeat kick is audible in the first block");
         expect (onset >= lat && onset - lat < 400, "after the true-peak delay the kick is the downbeat, not the next 16th");
+    }
+
+    {
+        // The same kick sample retriggered 8x in a row (every quarter, each one cutting
+        // the last while it is still loud) must click no more than the first kick or the
+        // raw file: no steal / retrigger cut without a fade, no alternating voices.
+        const auto kRoot = rootDir.getChildFile ("retrig");
+        writeKick (kRoot.getChildFile ("DRUMS/KICK/long.wav"), 0.9);
+        const char* manifest = R"JSON({"files":[{"file":"DRUMS/KICK/long.wav","lane":"DRUMS","voice":"KICK","category":"kick"}]})JSON";
+        rolla::SampleLibrary kLib;
+        kLib.setRoot (kRoot);
+        kLib.startIndex (manifest, (int) std::strlen (manifest));
+        expect (waitUntil ([&] { return kLib.indexedFound() >= 0; }), "retrigger index publishes");
+        const auto kSnap = kLib.index();
+        rolla::PresetBank kBank;
+        kBank.count[rolla::Drums] = 1;
+        kBank.drums[0].sample.mode = rolla::SampleMode::Sample;
+        kBank.drums[0].sample.filter.on = true;
+        kBank.drums[0].sample.filter.lane = rolla::Drums;
+        kLib.preload ({ std::string ("DRUMS/KICK/long.wav") });
+        expect (waitUntil ([&] { return kLib.ready ("DRUMS/KICK/long.wav"); }), "retrigger kick preloads");
+
+        for (const float decay : { 0.5f, 1.0f })
+        {
+            rolla::EngineParams play;
+            play.presets = &kBank;
+            play.library = &kLib;
+            play.sampleIndex = kSnap.get();
+            play.dialect = rolla::UkMin;
+            for (int i = 0; i < rolla::NumDrumVoices; ++i)
+                play.drumDecay[i] = decay;
+            play.bars = 2;
+            play.bpm = 130.f;
+            play.duck = false;
+            rolla::Engine eng;
+            eng.prepare (48000.0, 256);
+            rolla::Groove groove;
+            groove.bars = 2;
+            groove.key = 2;
+            for (int st = 0; st < 32; st += 4)
+                groove.drums.vel[rolla::Kick][st] = 120;
+            rolla::Transport tr;
+            tr.playing = true;
+            tr.bpm = 130.0;
+            tr.ppqStart = 0.0;
+            tr.sampleRate = 48000.0;
+            const int loopN = (int) std::lround (8.0 * 60.0 / 130.0 * 48000.0);
+            const int blocks = loopN / 256;
+            std::vector<float> outL ((size_t) blocks * 256, 0.f), outR ((size_t) blocks * 256, 0.f);
+            for (int b = 0; b < blocks; ++b)
+            {
+                juce::MidiBuffer midi;
+                eng.process (groove, play, tr, outL.data() + b * 256, outR.data() + b * 256, nullptr, nullptr, 256, midi, true);
+                tr.ppqStart += 256.0 * 130.0 / 60.0 / 48000.0;
+            }
+            const int lat = eng.latencySamples();
+            const double quarterN = 60.0 / 130.0 * 48000.0;
+            // Click score: worst |second difference| from 5 ms before to 10 ms after the onset,
+            // relative to that kick's own body peak.
+            auto score = [&] (const std::vector<float>& x, int on) {
+                float d2 = 0.f, pk = 1.0e-9f;
+                for (int i = std::max (2, on - 240); i < std::min ((int) x.size(), on + 480); ++i)
+                    d2 = std::max (d2, std::fabs (x[(size_t) i] - 2.f * x[(size_t) i - 1] + x[(size_t) i - 2]));
+                for (int i = on; i < std::min ((int) x.size(), on + 2400); ++i)
+                    pk = std::max (pk, std::fabs (x[(size_t) i]));
+                return d2 / pk;
+            };
+            std::vector<float> raw (48000, 0.f);
+            {
+                double phase = 0.0;
+                for (int i = 0; i < 48000; ++i)
+                {
+                    const double t = i / 48000.0;
+                    phase += 2.0 * 3.14159265358979 * (50.0 + 100.0 * std::exp (-t / 0.03)) / 48000.0;
+                    raw[(size_t) i + 0] = (float) (0.8 * std::exp (-t / 0.35) * std::sin (phase));
+                }
+            }
+            std::vector<float> rawPad (480, 0.f);
+            rawPad.insert (rawPad.end(), raw.begin(), raw.end());
+            const float rawScore = score (rawPad, 480);
+            std::vector<float> s;
+            for (int k = 0; k < 8; ++k)
+                s.push_back (score (outL, lat + (int) std::lround (k * quarterN)));
+            float lo = 1.0e9f, hi = 0.f;
+            for (int k = 1; k < 8; ++k)
+            {
+                lo = std::min (lo, s[(size_t) k]);
+                hi = std::max (hi, s[(size_t) k]);
+            }
+            std::string detail = " (raw " + std::to_string (rawScore) + ", first " + std::to_string (s[0])
+                               + ", retriggers " + std::to_string (lo) + ".." + std::to_string (hi) + ", decay "
+                               + std::to_string (decay) + ")";
+            std::cout << "INFO kick retrigger click scores" << detail << "\n";
+            expect (s[0] <= rawScore * 2.0f + 1.0e-3f, "the first kick's onset is no sharper than the raw file" + detail);
+            expect (hi <= std::max (s[0], rawScore) * 1.5f + 1.0e-3f,
+                    "a retriggered kick (cutting the last one) clicks no more than a fresh kick" + detail);
+            expect (hi <= lo * 1.5f + 1.0e-3f, "all 8 retriggered kicks are alike: no alternating-voice clicks" + detail);
+        }
     }
 
     outside.deleteFile();
