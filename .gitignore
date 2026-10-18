@@ -5,10 +5,16 @@ tools/out/
 dist/
 renders/
 .DS_Store
+# Audio never goes in the repo. Packs are copied into built bundles
+# (cmake -DROLLA_SAMPLE_PACK_DIR=…, tools/inject_pack.sh). Tiny fixtures under
+# tests/fixtures/ may be added on purpose (repo guard caps them at 64 KB).
 *.wav
 *.aif
 *.aiff
+*.aifc
 *.flac
+!tests/fixtures/**
+Resources/Samples/
 .rolla-index.json
 .rolla-loudness.json
 *.zip

@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# Copies a sample pack into a built ROLLA bundle, where the plugin looks first:
+#   <bundle>/Contents/Resources/Samples
+# then writes Samples/.rolla-pack.json (file count, manifest hash) and, on macOS,
+# re-signs the bundle ad hoc so hosts still load it.
+#
+#   tools/inject_pack.sh build/ROLLA_artefacts/Release/VST3/ROLLA.vst3 /path/to/pack
+#   tools/inject_pack.sh build/ROLLA_artefacts/Release/AU/ROLLA.component /path/to/pack
+#
+# The pack stays out of the repo: this only writes inside the bundle.
+# cmake -DROLLA_SAMPLE_PACK_DIR=/path/to/pack runs this after every plugin build.
+set -euo pipefail
+
+usage="usage: tools/inject_pack.sh <ROLLA.vst3|ROLLA.component|ROLLA.app> <packdir>"
+bundle=${1:?$usage}
+pack=${2:?$usage}
+bundle=${bundle%/}
+pack=${pack%/}
+
+if [ ! -d "$bundle/Contents" ]; then
+    echo "inject_pack: $bundle is not a plugin bundle (no Contents folder)" >&2
+    exit 1
+fi
+if [ ! -d "$pack" ]; then
+    echo "inject_pack: $pack is not a folder" >&2
+    exit 1
+fi
+
+count_audio() {
+    find "$1" -type f \( -iname '*.wav' -o -iname '*.aif' -o -iname '*.aiff' -o -iname '*.flac' \) | wc -l | tr -d ' '
+}
+
+source_files=$(count_audio "$pack")
+if [ "$source_files" -eq 0 ]; then
+    echo "inject_pack: $pack holds no .wav/.aif/.aiff/.flac files" >&2
+    exit 1
+fi
+
+dest="$bundle/Contents/Resources/Samples"
+rm -rf "$dest"
+mkdir -p "$dest"
+if [ "$(uname)" = "Darwin" ]; then
+    # APFS clones: no second copy on disk. Plain copy across volumes.
+    cp -cR "$pack/." "$dest/" 2>/dev/null || cp -R "$pack/." "$dest/"
+    # Finder info and quarantine flags make codesign refuse the bundle.
+    xattr -cr "$dest" 2>/dev/null || true
+else
+    cp -R "$pack/." "$dest/"
+fi
+
+files=$(count_audio "$dest")
+manifest=""
+for name in SAMPLE_MANIFEST_v2.json SAMPLE_MANIFEST.json; do
+    if [ -f "$dest/$name" ]; then
+        manifest=$name
+        break
+    fi
+done
+manifest_sha=""
+if [ -n "$manifest" ]; then
+    if command -v shasum >/dev/null 2>&1; then
+        manifest_sha=$(shasum -a 256 "$dest/$manifest" | cut -d' ' -f1)
+    else
+        manifest_sha=$(sha256sum "$dest/$manifest" | cut -d' ' -f1)
+    fi
+fi
+
+cat > "$dest/.rolla-pack.json" <<EOF
+{
+  "files": $files,
+  "manifest": "${manifest}",
+  "manifestSha256": "${manifest_sha}"
+}
+EOF
+
+if [ "$(uname)" = "Darwin" ]; then
+    codesign --force --deep -s - "$bundle"
+fi
+
+echo "inject_pack: $files audio files -> $dest${manifest:+ ($manifest $manifest_sha)}"
