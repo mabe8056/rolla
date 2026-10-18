@@ -4480,3 +4480,10 @@ A safety stage on MAIN after the E21 trim: `MAIN out = Σ lanes → output_trim_
 `render` / `sample` / `scan` (§5), `styles` (§5, including the any-combo SUM gate with the lane-count window), `mute` (§5.1, P0), `switch` (§9.3), `combos` (§9.4).
 
 `--dialect` (alias `--style`) selects the per-dialect targets in `render` / `sample` and labels `switch` runs.
+
+### 9.6 Gain staging lane slots (#36)
+- The lane level stage (`MixRuntime::levelLane`, K-weighted short-term loudness, 3 s / 100 ms) steers each lane to `st_target_lufs`.
+- `resources/lane_targets.json` replaces that target for BASS, STAB, PLUCK, HITS and PAD per style: target = KICK target (−23.7) + `re_kick_db`. BASS uses the measured per-style bass re kick p50; STAB and PLUCK take the measured "other" budget re kick (other vs mix − bass vs mix + bass re kick); HITS = BASS − 3 and PAD = BASS − 8, as before. Every other lane keeps its profile target.
+- This supersedes the §2.1 BASS clamp (KICK −1.0 in every style) for the runtime only. `targets.json`, `mix_profiles.json` and the E21 table are unchanged, so `mix_check.py` loudness windows and `main_sum_trim.json` still describe the old clamp until they are regenerated.
+- Mix LUFS-I, drop crest and duck depth are stored there for reference only. Duck depth stays with the presets.
+- Test: `rolla-tp-test` part C, 4 styles × INTENSITY 0/25/50/75/100 × 20 seeds: sample peak and true peak ≤ −6, staged lanes within ±1.5 dB of their slot over bars 5–8. `validate_profiles.py` checks the table's arithmetic.

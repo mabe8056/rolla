@@ -90,6 +90,8 @@ public:
     int latencySamples() const noexcept;
     // Audio thread or a test harness: largest true-peak gain reduction since the last call, dB.
     float takeTpGuardGrDb() noexcept;
+    // Test harness: mix lane 0..13's latest short-term loudness after lane level, LUFS (-200: none yet).
+    float laneLevelDb (int lane) const noexcept;
     bool hasDrumSample (int voice) const noexcept;
 
     // Per-voice sample hook (src/Drums/DrumSampleSlot.h). Null keeps the

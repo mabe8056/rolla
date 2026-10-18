@@ -2297,4 +2297,9 @@ float Engine::takeTpGuardGrDb() noexcept
     return impl != nullptr ? impl->tpGuard.takeMaxGrDb() : 0.f;
 }
 
+float Engine::laneLevelDb (int lane) const noexcept
+{
+    return impl != nullptr ? impl->mixRt.laneLevelDb (lane) : -200.f;
+}
+
 } // namespace rolla

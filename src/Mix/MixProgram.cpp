@@ -263,7 +263,8 @@ void MixProgram::applyOverride (MixChain& dst, int part, const char* presetId) c
 
 bool MixProgram::loadFromMemory (const char* profilesJson, int profilesBytes,
                                  const char* trimJson, int trimBytes,
-                                 const char* makeupJson, int makeupBytes)
+                                 const char* makeupJson, int makeupBytes,
+                                 const char* laneTargetsJson, int laneTargetsBytes)
 {
     *this = MixProgram {};
     for (int d = 0; d < kMixDialects; ++d)
@@ -355,6 +356,25 @@ bool MixProgram::loadFromMemory (const char* profilesJson, int profilesBytes,
                 continue;
             for (int lane = 0; lane < kMixLanes; ++lane)
                 makeupDb[d][lane] = num (lanes, kLaneNames[lane], 0.f);
+        }
+    }
+
+    if (laneTargetsJson != nullptr && laneTargetsBytes > 0)
+    {
+        // Gain staging slots: target = this dialect's KICK target + re_kick_db.
+        const auto lt = juce::JSON::parse (juce::String::fromUTF8 (laneTargetsJson, laneTargetsBytes));
+        const auto ld = lt.getProperty ("dialects", {});
+        const int kick = mixLaneIndex ("KICK");
+        for (int d = 0; d < kMixDialects; ++d)
+        {
+            const auto reKick = ld.getProperty (kDialects[d], {}).getProperty ("re_kick_db", {});
+            auto* obj = reKick.getDynamicObject();
+            if (obj == nullptr || kick < 0 || ! chain[d][kick].valid)
+                continue;
+            const float kickTarget = chain[d][kick].stTargetLufs;
+            for (int lane = 0; lane < kMixLanes; ++lane)
+                if (lane != kick && chain[d][lane].valid && obj->hasProperty (kLaneNames[lane]))
+                    chain[d][lane].stTargetLufs = kickTarget + num (reKick, kLaneNames[lane], 0.f);
         }
     }
 

@@ -78,7 +78,8 @@ bool loadProgram (rolla::MixProgram& program, const juce::File& makeupFile)
     }
     return program.loadFromMemory (BinaryData::mix_profiles_json, BinaryData::mix_profiles_jsonSize,
                                    BinaryData::main_sum_trim_json, BinaryData::main_sum_trim_jsonSize,
-                                   makeup, makeupBytes);
+                                   makeup, makeupBytes,
+                                   BinaryData::lane_targets_json, BinaryData::lane_targets_jsonSize);
 }
 
 rolla::EngineParams makeParams (const rolla::PresetBank& bank, const rolla::MixProgram& mix, int dialect, bool bypassSum,

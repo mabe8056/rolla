@@ -165,7 +165,8 @@ bool loadMix (rolla::MixProgram& program)
 {
     return program.loadFromMemory (BinaryData::mix_profiles_json, BinaryData::mix_profiles_jsonSize,
                                    BinaryData::main_sum_trim_json, BinaryData::main_sum_trim_jsonSize,
-                                   BinaryData::mix_makeup_json, BinaryData::mix_makeup_jsonSize);
+                                   BinaryData::mix_makeup_json, BinaryData::mix_makeup_jsonSize,
+                                   BinaryData::lane_targets_json, BinaryData::lane_targets_jsonSize);
 }
 
 void seedsFor (int style, int roll, std::uint32_t seeds[rolla::NumParts])

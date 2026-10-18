@@ -107,4 +107,15 @@ if TPG:
     ok(cnum(r'kTaps\s*=\s*([0-9]+);')==TPG['detector_taps_per_phase'],'TruePeakGuard.h taps != tp_guard.detector_taps_per_phase')
     ok(cnum(r'float lookaheadMs\s*=\s*([0-9.]+)f')==TPG['lookahead_ms'] and cnum(r'float releaseMs\s*=\s*([0-9.]+)f')==TPG['release_ms'],'TruePeakGuard.h lookahead/release != tp_guard')
     ok('### 9.4b Master true-peak guard' in md,'MIX_SPEC §9.4b tp_guard clause missing')
+# Gain staging lane slots (resources/lane_targets.json, #36): re_kick follows from the inputs.
+LTP=os.path.join(ROOT,'resources','lane_targets.json'); ok(os.path.exists(LTP),'resources/lane_targets.json missing')
+if os.path.exists(LTP):
+    LT=json.load(open(LTP))
+    for s in ST:
+        row=LT['dialects'].get(s); ok(row is not None,f'lane_targets {s} missing')
+        if not row: continue
+        i=row['inputs']; r=row['re_kick_db']; bass=i['bass_vs_kick_db']; other=i['other_vs_mix_db']-i['bass_vs_mix_db']+bass
+        for k,want in [('BASS',bass),('STAB',other),('PLUCK',other),('HITS',bass-3.0),('PAD',bass-8.0)]:
+            ok(k in r and abs(r[k]-want)<=0.051,f'lane_targets {s} {k} {r.get(k)} != {want:.2f}')
+        ok(set(r)<={'BASS','STAB','PLUCK','HITS','PAD'},f'lane_targets {s} sets lanes outside the music lanes: {sorted(r)}')
 out={'pass':not fails,'n_checks':n[0],'fails':fails}; print(json.dumps(out,indent=1,ensure_ascii=False)); sys.exit(0 if not fails else 1)

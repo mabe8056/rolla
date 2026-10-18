@@ -88,9 +88,12 @@ struct MixProgram
     int overrideCount[kMixMelodic] {};
     bool loaded = false;
 
+    // laneTargetsJson (resources/lane_targets.json, optional): per-style lane slots re
+    // KICK that replace the profile st_target_lufs of the lanes it lists.
     bool loadFromMemory (const char* profilesJson, int profilesBytes,
                          const char* trimJson, int trimBytes,
-                         const char* makeupJson, int makeupBytes);
+                         const char* makeupJson, int makeupBytes,
+                         const char* laneTargetsJson = nullptr, int laneTargetsBytes = 0);
     void applyOverride (MixChain& dst, int part, const char* presetId) const;
 };
 

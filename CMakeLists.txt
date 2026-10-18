@@ -22,6 +22,7 @@ juce_add_binary_data(RollaData
         resources/mix_profiles.json
         resources/main_sum_trim.json
         resources/mix_makeup.json
+        resources/lane_targets.json
         resources/fonts/Unbounded-SemiBold.ttf
         resources/fonts/Unbounded-Bold.ttf
         resources/fonts/Unbounded-ExtraBold.ttf

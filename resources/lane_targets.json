@@ -1,0 +1,32 @@
+{
+ "schema_version": "1.0.0",
+ "_doc": {
+  "what": "Per-style lane loudness slots for the lane level stage (gain staging, #36). Overrides mix_profiles.json st_target_lufs for the listed lanes only: target = profile KICK st_target_lufs + re_kick_db. Every other lane keeps its profile target.",
+  "styles": "UKMIN = ROLLER, LONG = DEEP, POP = BOUNCY, GASKIN = JACKIN (Pattern.h kStyleLabels order).",
+  "derivation": "BASS re kick = measured bass_vs_kick_db p50. OTHER (stab/pluck budget) re kick = other_vs_mix - bass_vs_mix + bass_vs_kick, all p50 in one frame. STAB and PLUCK take the OTHER budget. HITS = BASS - 3 (A&R rule). PAD = BASS - 8 (PRESET_SPEC rule).",
+  "info_only": "mix_lufs_i, drop_crest_db and duck_depth_db are reference numbers. The runtime does not read them: the plugin sum is a pre-master (-19 LUFS-S, -6 dBTP) and duck depth stays with the presets.",
+  "checked_by": "tests/mix/validate_profiles.py (arithmetic), rolla-tp-test (levels and peaks)"
+ },
+ "dialects": {
+  "UKMIN": {
+   "inputs": { "bass_vs_mix_db": -4.7, "other_vs_mix_db": -8.5, "bass_vs_kick_db": -0.4 },
+   "info": { "mix_lufs_i": -9.2, "drop_crest_db": 9.7, "duck_depth_db": -11.2, "bass_low_corr": 1.0 },
+   "re_kick_db": { "BASS": -0.4, "STAB": -4.2, "PLUCK": -4.2, "HITS": -3.4, "PAD": -8.4 }
+  },
+  "LONG": {
+   "inputs": { "bass_vs_mix_db": -4.8, "other_vs_mix_db": -10.4, "bass_vs_kick_db": -0.2 },
+   "info": { "mix_lufs_i": -9.4, "drop_crest_db": 10.0, "duck_depth_db": -16.0, "bass_low_corr": 1.0 },
+   "re_kick_db": { "BASS": -0.2, "STAB": -5.8, "PLUCK": -5.8, "HITS": -3.2, "PAD": -8.2 }
+  },
+  "POP": {
+   "inputs": { "bass_vs_mix_db": -7.2, "other_vs_mix_db": -7.7, "bass_vs_kick_db": -4.1 },
+   "info": { "mix_lufs_i": -8.6, "drop_crest_db": 10.1, "duck_depth_db": -7.5, "bass_low_corr": 1.0 },
+   "re_kick_db": { "BASS": -4.1, "STAB": -4.6, "PLUCK": -4.6, "HITS": -7.1, "PAD": -12.1 }
+  },
+  "GASKIN": {
+   "inputs": { "bass_vs_mix_db": -5.7, "other_vs_mix_db": -9.4, "bass_vs_kick_db": -2.8 },
+   "info": { "mix_lufs_i": -8.7, "drop_crest_db": 9.9, "duck_depth_db": -9.0, "bass_low_corr": 1.0 },
+   "re_kick_db": { "BASS": -2.8, "STAB": -6.5, "PLUCK": -6.5, "HITS": -5.8, "PAD": -10.8 }
+  }
+ }
+}

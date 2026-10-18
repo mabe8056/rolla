@@ -309,7 +309,7 @@ void MixRuntime::reset() noexcept
         lv.acc = lv.sum = 0.0;
         lv.count = lv.w = lv.fill = 0;
         std::fill (std::begin (lv.ring), std::end (lv.ring), 0.0);
-        lv.holdDb = -200.f;
+        lv.holdDb = lv.lastStDb = -200.f;
         lv.wantLin = lv.gain = 1.f;
         std::memset (s.tpUp, 0, sizeof s.tpUp);
         std::memset (s.tpDown, 0, sizeof s.tpDown);
@@ -751,6 +751,8 @@ void MixRuntime::levelLane (Strip& s, const MixChain& c, float& l, float& r) noe
         // Output trim (makeup) comes after this stage: count it in.
         const float blockDb = -0.691f + 10.f * std::log10 ((float) block + 1.0e-20f) + c.outputTrimDb;
         const float stDb = -0.691f + 10.f * std::log10 ((float) (lv.sum / (double) lv.fill) + 1.0e-20f) + c.outputTrimDb;
+        if (lv.fill >= 4)
+            lv.lastStDb = stDb + 20.f * std::log10 (std::max (1.0e-6f, lv.gain));
         const bool active = blockDb > -70.f && blockDb > lv.holdDb - 20.f;
         if (active && lv.fill >= 4)
         {
@@ -765,6 +767,13 @@ void MixRuntime::levelLane (Strip& s, const MixChain& c, float& l, float& r) noe
     lv.gain = flush (lv.gain);
     l *= lv.gain;
     r *= lv.gain;
+}
+
+float MixRuntime::laneLevelDb (int lane) const noexcept
+{
+    if (lane < 0 || lane >= kMixLanes)
+        return -200.f;
+    return strip[lane].level.lastStDb;
 }
 
 float MixRuntime::sumGain() noexcept

@@ -240,7 +240,8 @@ RollaProcessor::RollaProcessor()
 
     mixProgram.loadFromMemory (BinaryData::mix_profiles_json, BinaryData::mix_profiles_jsonSize,
                                BinaryData::main_sum_trim_json, BinaryData::main_sum_trim_jsonSize,
-                               BinaryData::mix_makeup_json, BinaryData::mix_makeup_jsonSize);
+                               BinaryData::mix_makeup_json, BinaryData::mix_makeup_jsonSize,
+                               BinaryData::lane_targets_json, BinaryData::lane_targets_jsonSize);
     startupT0 = juce::Time::getMillisecondCounterHiRes();
     startupThread = std::thread ([this] { deferredStartup(); });
     prefetchTimer.startTimer (50);

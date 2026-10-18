@@ -5,6 +5,8 @@
 // transient out of silence, release back to unity, and bypass.
 // Part B renders the engine for every style x INTENSITY 0/25/50/75/100 with
 // the mix program loaded (guard on and off), plus a +12 dB hot pass.
+// Part C (gain staging, #36) sweeps style x INTENSITY x 20 seeds: sample peak and
+// true peak at or under -6, and the staged lanes within 1.5 dB of lane_targets.json.
 //
 // The gate meter reproduces tests/mix/mix_check.py: scipy.signal.resample_poly
 // (x, 4, 1), i.e. firwin(81, 1/4, kaiser 5.0) * 4. A stricter 64-tap/phase
@@ -323,7 +325,8 @@ bool loadProgram (rolla::MixProgram& program)
 {
     return program.loadFromMemory (BinaryData::mix_profiles_json, BinaryData::mix_profiles_jsonSize,
                                    BinaryData::main_sum_trim_json, BinaryData::main_sum_trim_jsonSize,
-                                   BinaryData::mix_makeup_json, BinaryData::mix_makeup_jsonSize);
+                                   BinaryData::mix_makeup_json, BinaryData::mix_makeup_jsonSize,
+                                   BinaryData::lane_targets_json, BinaryData::lane_targets_jsonSize);
 }
 
 rolla::EngineParams makeParams (const rolla::PresetBank& bank, const rolla::MixProgram& mix, int dialect)
@@ -423,12 +426,144 @@ void partB()
     std::printf ("INFO worst over styles x intensity: guard on %.2f dBTP, guard off %.2f dBTP (synth voices, no sample pack)\n",
                  worstOn, worstOff);
 }
+
+// Part C, gain staging (#36): every style x INTENSITY 0/25/50/75/100 x 20 seeds.
+// Gates: sample peak and true peak (gate meter) at or under -6, no NaN/Inf, and
+// the staged lanes (KICK and the music lanes that lane_targets.json sets) within
+// +-1.5 dB of their target after settling. Lane level is read from the lane level
+// stage (after its gain and the output trim, before the lane TP clip) over bars 5-8.
+constexpr float kLaneTolDb = 1.5f;
+constexpr int kStagedLanes[] = { 6, 0, 1, 3, 2, 4 }; // KICK BASS STAB PLUCK HITS PAD
+
+struct SweepTake
+{
+    Stereo audio;
+    float laneMax[rolla::kMixLanes];
+    bool finite = true;
+};
+
+SweepTake renderSweep (const rolla::Groove& groove, const rolla::EngineParams& params)
+{
+    const int total = (int) std::llround (8 * 4.0 * 60.0 / kBpm * kSr);
+    SweepTake take;
+    take.audio = Stereo { std::vector<float> ((size_t) total), std::vector<float> ((size_t) total) };
+    std::fill (std::begin (take.laneMax), std::end (take.laneMax), -200.f);
+    rolla::Engine engine;
+    engine.prepare (kSr, kBlock);
+    double ppq = 0.0;
+    for (int done = 0; done < total; done += kBlock)
+    {
+        const int n = std::min (kBlock, total - done);
+        rolla::Transport t;
+        t.playing = true;
+        t.bpm = kBpm;
+        t.ppqStart = ppq;
+        t.sampleRate = kSr;
+        juce::MidiBuffer midi;
+        engine.process (groove, params, t, take.audio.l.data() + done, take.audio.r.data() + done, nullptr, nullptr, n, midi, true);
+        ppq += (double) n * kBpm / (60.0 * kSr);
+        if (done >= total / 2)
+            for (int lane = 0; lane < rolla::kMixLanes; ++lane)
+                take.laneMax[lane] = std::max (take.laneMax[lane], engine.laneLevelDb (lane));
+    }
+    for (size_t i = 0; i < take.audio.l.size(); ++i)
+        if (! std::isfinite (take.audio.l[i]) || ! std::isfinite (take.audio.r[i]))
+            take.finite = false;
+    return take;
+}
+
+void partC()
+{
+    rolla::PresetBank bank;
+    rolla::MixProgram mix;
+    const bool ok = rolla::loadPresetsFromJson (bank, BinaryData::presets_json, BinaryData::presets_jsonSize) && loadProgram (mix);
+    check (ok, "gain staging: presets and mix program load");
+    if (! ok)
+        return;
+    forceSynth (bank);
+
+    int peakFails = 0, levelFails = 0, levelChecks = 0, printed = 0;
+    double worstTp = -100.0, worstSample = -100.0, worstDev = 0.0;
+    for (int d = 0; d < rolla::NumDialects; ++d)
+    {
+        for (int intensity : { 0, 25, 50, 75, 100 })
+        {
+            double styleTp = -100.0, styleDev = 0.0;
+            for (int seed = 1; seed <= 20; ++seed)
+            {
+                rolla::Settings st;
+                st.dialect = d;
+                st.bars = 8;
+                st.fill = true;
+                std::uint32_t seeds[rolla::NumParts];
+                for (int p = 0; p < rolla::NumParts; ++p)
+                    seeds[p] = 0x9E3779B9u * (std::uint32_t) (seed * 31 + p + 1) ^ (std::uint32_t) (d * 0x51ABu + intensity);
+                rolla::Groove full {};
+                rolla::generate (full, st, seeds, 0x7fu);
+                const auto plan = rolla::planIntensity (d, intensity, st.stab);
+                rolla::Groove g {};
+                rolla::applyIntensity (full, g, plan, 0u, 0u);
+                const auto params = makeParams (bank, mix, d);
+                const SweepTake take = renderSweep (g, params);
+
+                float sp = 0.f;
+                for (size_t i = 0; i < take.audio.l.size(); ++i)
+                    sp = std::max (sp, std::max (std::fabs (take.audio.l[i]), std::fabs (take.audio.r[i])));
+                const double spDb = 20.0 * std::log10 ((double) sp + 1e-12);
+                const double tp = gateDbtp (take.audio.l, take.audio.r);
+                worstTp = std::max (worstTp, tp);
+                worstSample = std::max (worstSample, spDb);
+                styleTp = std::max (styleTp, tp);
+                if (! take.finite || spDb > kCeiling || tp > kCeiling)
+                {
+                    ++peakFails;
+                    char label[160];
+                    std::snprintf (label, sizeof (label), "%s INTENSITY %d seed %d peaks at or under -6", rolla::dialectName (d), intensity, seed);
+                    check (false, label, fmt ("sample peak %.2f dBFS, %.2f dBTP%s", spDb, tp, take.finite ? "" : " (NaN/Inf)"));
+                }
+
+                for (int lane : kStagedLanes)
+                {
+                    const auto& chain = mix.chain[d][lane];
+                    // A lane this seed and intensity did not play has no level to stage.
+                    if (! chain.valid || take.laneMax[lane] < -70.f)
+                        continue;
+                    ++levelChecks;
+                    const double dev = (double) take.laneMax[lane] - (double) chain.stTargetLufs;
+                    styleDev = std::max (styleDev, std::fabs (dev));
+                    worstDev = std::max (worstDev, std::fabs (dev));
+                    if (std::fabs (dev) > kLaneTolDb)
+                    {
+                        ++levelFails;
+                        if (printed++ < 40)
+                        {
+                            char label[160];
+                            std::snprintf (label, sizeof (label), "%s INTENSITY %d seed %d %s within 1.5 dB of its slot",
+                                           rolla::dialectName (d), intensity, seed, rolla::mixLaneName (lane));
+                            check (false, label, fmt ("ST %.2f vs target %.2f LUFS", take.laneMax[lane], chain.stTargetLufs));
+                        }
+                        else
+                            ++failures;
+                    }
+                }
+            }
+            std::printf ("INFO %s INTENSITY %d over 20 seeds: worst %.2f dBTP, worst lane deviation %.2f dB\n",
+                         rolla::dialectName (d), intensity, styleTp, styleDev);
+        }
+    }
+    check (peakFails == 0, "gain staging: no clipping on any style x intensity x seed (400 renders)",
+           fmt ("worst sample peak %.2f dBFS, worst %.2f dBTP", worstSample, worstTp));
+    char d[160];
+    std::snprintf (d, sizeof (d), "%d of %d lane checks outside, worst %.2f dB", levelFails, levelChecks, worstDev);
+    check (levelFails == 0 && levelChecks > 0, "gain staging: staged lanes within 1.5 dB of their slot after settling", d);
+}
 } // namespace
 
 int main()
 {
     partA();
     partB();
+    partC();
     std::printf ("%s: %d failure(s)\n", failures == 0 ? "OK" : "FAILED", failures);
     return failures == 0 ? 0 : 1;
 }

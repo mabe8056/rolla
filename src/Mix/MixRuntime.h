@@ -46,6 +46,9 @@ public:
     void beginBlock (const MixProgram& program, const MixBlockInfo& info) noexcept;
     void process (int lane, float& l, float& r) noexcept;
     float sumGain() noexcept;
+    // Test hook: the lane's latest short-term loudness after the lane level gain and
+    // the output trim (before the lane's TP clip), LUFS. -200 until the lane has played 0.4 s.
+    float laneLevelDb (int lane) const noexcept;
 
 private:
     struct Biquad
@@ -69,6 +72,7 @@ private:
         double sum = 0.0;
         int w = 0, fill = 0;
         float holdDb = -200.f;
+        float lastStDb = -200.f;
         float wantLin = 1.f;
         float gain = 1.f;
     };
