@@ -355,6 +355,8 @@ struct Engine::Impl
     DcBlock mainDc, mainDcR, drumDc;
     // Master sub-mono crossover (mix path only).
     Svf subL, subR;
+    // DRUMS bus mono below 120 Hz (LR4 on the side), before the main sum and the stem.
+    MonoBelow drumMono;
     MixRuntime mixRt;
     TruePeakGuard tpGuard;
     bool primed = false;
@@ -435,6 +437,7 @@ struct Engine::Impl
         drumDc.reset();
         subL.reset();
         subR.reset();
+        drumMono.reset();
         mixRt.reset();
         tpGuard.reset();
         lastPos = -1.0;
@@ -2168,6 +2171,10 @@ void Engine::process (const Groove& groove,
             // Independent DC state would be better; a shared one-pole is acceptable at this gain.
             drumRgt = flush (drumRgt);
         }
+        // Stereo drum samples, voice pans and slot kicks put side energy under 120 Hz.
+        // Mono it here, so the main sum and the DRUMS stem get the same bus.
+        // Linear, so MUTE - (FULL - SOLO) still nulls.
+        E.drumMono.process (drumLft, drumRgt, kSubMonoHz, srF);
 
         float fxGate = 1.f;
         if (transport.playing)
