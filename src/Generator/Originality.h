@@ -422,6 +422,9 @@ struct Index
 {
     Thresholds th;
     std::vector<RefData> refs;
+    // Test hook, in memory only (the file format has no such field): every
+    // roll counts as a copy, so tests can drive the refusal path.
+    bool refuseAll = false;
 
     // Lookup tables, rebuilt by finalize().
     std::unordered_map<std::uint64_t, std::vector<int>> ngramRefs;
@@ -903,6 +906,15 @@ inline Report check (const Groove& g, std::uint32_t partMask, const Index* exter
         h.builtin = true;
         h.refId = "banned:reaction_or_b3_tie";
         detail::note (rep, h, 1u << Bass);
+    }
+    if (external != nullptr && external->refuseAll)
+    {
+        Hit h;
+        h.score = 1.f;
+        h.severity = 2.f;
+        h.refId = "test:refuse_all";
+        detail::note (rep, h, pitched);
+        return rep;
     }
     const Index& builtin = builtinIndex();
     const bool useExternal = external != nullptr && ! external->empty();

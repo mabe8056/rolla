@@ -520,7 +520,15 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
             for (int p = 0; p < rolla::NumParts; ++p)
                 seeds[p] = seed + (std::uint32_t) roll * 0x9E3779B9u + (std::uint32_t) p * 17u + (std::uint32_t) style * 101u;
             rolla::Groove groove {};
-            rolla::generate (groove, settings, seeds, 0x7fu);
+            // The originality floor refuses a roll it cannot clear (generate() returns
+            // false and leaves the groove alone). A refused roll is never written.
+            if (! rolla::generate (groove, settings, seeds, 0x7fu))
+            {
+                ++origFails;
+                std::cerr << "ORIG_REFUSED " << rolla::dialectId (style) << " " << name.str()
+                          << ": no composition cleared the originality floor; roll not written\n";
+                continue;
+            }
             // v2.1 skeleton cap is a runtime redraw, not a constant fitted to the gate seeds.
             for (int guard = 0; guard < 8; ++guard)
             {
@@ -531,15 +539,16 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
                 if (! close)
                     break;
                 seeds[rolla::Bass] ^= 0x6D2B79F5u * (std::uint32_t) (guard + 1);
-                rolla::generate (groove, settings, seeds, 0x7fu);
+                if (! rolla::generate (groove, settings, seeds, 0x7fu))
+                {
+                    // Refused: groove still holds the last roll that cleared.
+                    ++origFails;
+                    std::cerr << "ORIG_REFUSED " << rolla::dialectId (style) << " " << name.str()
+                              << " (skeleton redraw " << guard << "): kept the last original draw\n";
+                    break;
+                }
             }
             seen.push_back (groove);
-            if (std::strcmp (groove.guardRef, "ORIG_FAIL") == 0)
-            {
-                ++origFails;
-                std::cerr << "ORIG_FAIL " << rolla::dialectId (style) << " " << name.str()
-                          << ": every redraw still matched a reference or banned figure\n";
-            }
             rolla::Groove arranged;
             const auto plan = rolla::planIntensity (style, knobs.intensity, settings.stab);
             rolla::applyIntensity (groove, arranged, plan, 0, 0);
@@ -613,7 +622,7 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
             }
         }
     }
-    std::cout << "wav files " << wavs << " skipped " << silent << " orig_fail " << origFails << "\n";
+    std::cout << "wav files " << wavs << " skipped " << silent << " orig_refused " << origFails << "\n";
     if (! samples.empty() && wavs == 0)
         return 1;
     return origFails > 0 ? 1 : 0;
@@ -803,7 +812,12 @@ int main (int argc, char** argv)
             std::uint32_t seeds[rolla::NumParts];
             seedsFor (dialect, roll, seeds);
             rolla::Groove groove {};
-            rolla::generate (groove, settings, seeds, 0x7fu);
+            if (! rolla::generate (groove, settings, seeds, 0x7fu))
+            {
+                std::cerr << "FAIL ORIG_REFUSED " << rolla::dialectId (dialect) << " " << name.str() << "\n";
+                ++failures;
+                continue;
+            }
             for (int guard = 0; guard < 16; ++guard)
             {
                 bool close = false;
@@ -813,7 +827,13 @@ int main (int argc, char** argv)
                 if (! close)
                     break;
                 seeds[rolla::Bass] ^= 0x9E3779B9u + (std::uint32_t) guard * 0x85EBCA6Bu;
-                rolla::generate (groove, settings, seeds, 0x7fu);
+                if (! rolla::generate (groove, settings, seeds, 0x7fu))
+                {
+                    std::cerr << "FAIL ORIG_REFUSED " << rolla::dialectId (dialect) << " " << name.str()
+                              << " (skeleton redraw " << guard << ")\n";
+                    ++failures;
+                    break;
+                }
             }
             seen[dialect].push_back (groove);
 
