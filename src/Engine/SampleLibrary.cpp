@@ -201,6 +201,7 @@ void SampleLibrary::request (const char* relative) const noexcept
         return;
     if (ready (relative) || missing (relative))
         return;
+    notReady.fetch_add (1, std::memory_order_acq_rel);
     const int tail = reqTail.load (std::memory_order_relaxed);
     const int head = reqHead.load (std::memory_order_acquire);
     if (tail - head >= kReq)
@@ -215,24 +216,39 @@ void SampleLibrary::request (const char* relative) const noexcept
     jobCv.notify_one();
 }
 
+bool SampleLibrary::idle() const
+{
+    if (working.load (std::memory_order_acquire) != 0 || indexKick.load (std::memory_order_acquire))
+        return false;
+    if (reqHead.load (std::memory_order_acquire) != reqTail.load (std::memory_order_acquire))
+        return false;
+    std::lock_guard<std::mutex> lock (jobMu);
+    return jobs.empty() && working.load (std::memory_order_acquire) == 0;
+}
+
 void SampleLibrary::threadMain()
 {
     while (! stop.load())
     {
+        working.fetch_add (1, std::memory_order_acq_rel);
         if (indexKick.exchange (false, std::memory_order_acq_rel))
         {
             buildIndex();
+            working.fetch_sub (1, std::memory_order_acq_rel);
             continue;
         }
+        working.fetch_sub (1, std::memory_order_acq_rel);
 
         const int head = reqHead.load (std::memory_order_relaxed);
         const int tail = reqTail.load (std::memory_order_acquire);
         if (head != tail)
         {
             const std::string path (reqRing[head % kReq]);
+            working.fetch_add (1, std::memory_order_acq_rel);
             reqHead.store (head + 1, std::memory_order_release);
             if (! stop.load())
                 loadOne (path);
+            working.fetch_sub (1, std::memory_order_acq_rel);
             continue;
         }
 
@@ -252,8 +268,10 @@ void SampleLibrary::threadMain()
                 continue;
             job = std::move (jobs.back());
             jobs.pop_back();
+            working.fetch_add (1, std::memory_order_acq_rel);
         }
         loadOne (job);
+        working.fetch_sub (1, std::memory_order_acq_rel);
     }
 }
 
