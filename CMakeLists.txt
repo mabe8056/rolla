@@ -312,6 +312,14 @@ target_link_libraries(rolla-mix-render
         juce::juce_recommended_warning_flags
 )
 
+# Bar-8 turnaround and 7+1 harmony helpers. No JUCE.
+add_executable(rolla-arrange-test
+    tests/arrange/arrange_test.cpp
+    src/Generator/Arrangement.cpp
+)
+
+target_include_directories(rolla-arrange-test PRIVATE src)
+
 add_executable(rolla-knob-test
     tests/knob/knob_test.cpp
     src/PluginProcessor.cpp
