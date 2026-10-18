@@ -1,6 +1,8 @@
 #include "PluginProcessor.h"
+#include "PluginEditor.h"
 #include "../common/ScratchProfile.h"
 #include "UiTokens.h"
+#include "ui/TextFit.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_events/juce_events.h>
@@ -834,6 +836,128 @@ void testStabDice()
     editor.reset();
 }
 
+// Every string the editor draws goes through rolla::drawLabel. Paint the editor in
+// several states at the default (1024x640) and minimum (768x480) sizes and check:
+//  - point size >= Theme::minTextPoint (design space; the content is one scale transform),
+//  - the measured string fits its box, unless the call allows an ellipsis,
+//  - the drawn text (box narrowed to the string, height = point size) lies inside the clip,
+//    i.e. inside the painting component's bounds,
+//  - the processor UI notice is drawn when set, and the KEY / SCALE pills don't overlap.
+void testTextFit()
+{
+    rolla::RollaProcessor proc;
+    proc.waitUntilReady();
+    std::unique_ptr<juce::AudioProcessorEditor> base (proc.createEditor());
+    auto* editor = dynamic_cast<rolla::RollaEditor*> (base.get());
+    expect (editor != nullptr, "text fit: editor");
+    if (editor == nullptr)
+        return;
+
+    for (int r = 0; r <= (int) rolla::Theme::Role::keycap; ++r)
+        expect (rolla::Theme::pointSize ((rolla::Theme::Role) r) >= rolla::Theme::minTextPoint,
+                "role " + std::to_string (r) + " is at least the minimum point size");
+
+    int records = 0;
+    std::vector<std::string> seen;
+    std::string where;
+    rolla::textAudit() = [&] (const rolla::TextRecord& t)
+    {
+        ++records;
+        seen.push_back (t.text.toStdString());
+        const auto label = where + " '" + t.text.toStdString() + "' box "
+                         + t.box.toString().toStdString() + " width " + std::to_string (t.width);
+        expect (t.point >= rolla::Theme::minTextPoint - 0.01f, label + " below the minimum point size");
+        const float drawnW = t.ellipsis ? std::min (t.width, t.box.getWidth()) : t.width;
+        if (! t.ellipsis)
+            expect (t.width <= t.box.getWidth() + 0.5f, label + " is clipped (wider than its box)");
+        const auto drawn = t.justification.appliedToRectangle (
+            juce::Rectangle<float> (0.f, 0.f, std::min (drawnW, t.box.getWidth()), t.point), t.box);
+        expect (t.clip.expanded (1.f).contains (drawn),
+                label + " runs outside its component (clip " + t.clip.toString().toStdString() + ")");
+    };
+
+    auto paintAll = [&] (const std::string& state)
+    {
+        pumpUntil ([] { return false; }, 120); // editor timer: sync() picks up parameter changes
+        for (auto size : { juce::Point<int> (1024, 640), juce::Point<int> (768, 480) })
+        {
+            editor->setSize (size.x, size.y);
+            where = state + " @" + std::to_string (size.x) + "x" + std::to_string (size.y);
+            juce::Image image (juce::Image::ARGB, size.x, size.y, true);
+            juce::Graphics g (image);
+            editor->paintEntireComponent (g, true);
+
+            const float scale = (float) size.x / 1024.f;
+            for (int i = 0; i < editor->getNumChildComponents(); ++i)
+                if (auto* text = dynamic_cast<juce::Label*> (editor->getChildComponent (i)))
+                    if (text->isVisible())
+                        expect (text->getFont().getHeightInPoints() / scale >= rolla::Theme::minTextPoint - 0.05f,
+                                where + " banner below the minimum point size");
+        }
+    };
+
+    paintAll ("closed");
+    expect (records > 40, "text fit: the editor drew its labels through drawLabel (" + std::to_string (records) + ")");
+
+    for (int lane : { rolla::Bass, rolla::Hits, rolla::Vox, rolla::Drums })
+    {
+        editor->selectLane (lane);
+        paintAll (std::string ("open ") + rolla::laneShortName (lane));
+    }
+
+    // Long captions: six lanes kept, low intensity (lanes out), key and scale locked.
+    for (int i = 0; i < rolla::Drums; ++i)
+        setDenorm (proc, (std::string (rolla::partId (i)) + "Keep").c_str(), 1.f);
+    setDenorm (proc, "intensity", 0.f);
+    setDenorm (proc, "keyLock", 1.f);
+    setDenorm (proc, "key", 3.f);
+    setDenorm (proc, "scale", 5.f);
+    editor->selectLane (rolla::Drums);
+    paintAll ("kept + locked");
+
+    // Guard notice in the status strip.
+    const juce::String notice ("NO SAFE FILE: STAB muted in D# Phrygian");
+    proc.setUiNotice (notice);
+    expect (proc.getUiNotice() == notice, "ui notice round trip");
+    seen.clear();
+    paintAll ("notice");
+    expect (std::find (seen.begin(), seen.end(), notice.toStdString()) != seen.end(), "ui notice is drawn");
+    proc.clearUiNotice();
+    seen.clear();
+    paintAll ("notice cleared");
+    expect (std::find (seen.begin(), seen.end(), notice.toStdString()) == seen.end(), "cleared ui notice is gone");
+
+    // Header controls sit on the token grid without overlapping.
+    // The scaled content is the editor's 1024x640 child; header controls end above the y 55 rule.
+    std::vector<juce::Component*> header;
+    for (int i = 0; i < editor->getNumChildComponents(); ++i)
+    {
+        auto* content = editor->getChildComponent (i);
+        if (dynamic_cast<juce::Label*> (content) != nullptr || content->getWidth() != 1024)
+            continue;
+        for (int k = 0; k < content->getNumChildComponents(); ++k)
+        {
+            auto* child = content->getChildComponent (k);
+            if (child->isVisible() && child->getBottom() <= 56)
+                header.push_back (child);
+        }
+    }
+    expect (header.size() >= 7, "header controls found (" + std::to_string (header.size()) + ")");
+    for (size_t a = 0; a < header.size(); ++a)
+    {
+        expect (header[a]->getX() >= 16 && header[a]->getRight() <= 1008,
+                "header control inside the 16 px margins: " + header[a]->getBounds().toString().toStdString());
+        for (size_t b = a + 1; b < header.size(); ++b)
+            expect (! header[a]->getBounds().intersects (header[b]->getBounds()),
+                    "header controls overlap: " + header[a]->getBounds().toString().toStdString()
+                        + " / " + header[b]->getBounds().toString().toStdString());
+    }
+
+    rolla::textAudit() = nullptr;
+    base.reset();
+    pumpUntil ([] { return false; }, 50);
+}
+
 } // namespace
 
 int main()
@@ -845,6 +969,7 @@ int main()
         return 1;
     }
     juce::ScopedJuceInitialiser_GUI juce;
+    testTextFit();
     testBindings();
     testBusyDensity();
     testGeneratorControls();

@@ -147,6 +147,26 @@ public:
     };
     SamplesStatus samplesStatus() const;
 
+    // One-line UI notice (e.g. the Key + Scale guard: "NO SAFE FILE: STAB muted in D# Phrygian").
+    // Any thread may set it; never call from the audio thread (takes a lock, copies a String).
+    // An empty string clears it. The editor polls getUiNotice() and shows it in the status strip.
+    void setUiNotice (const juce::String& text)
+    {
+        {
+            const std::lock_guard<std::mutex> lock (noticeMu);
+            uiNotice = text;
+        }
+        uiNoticeSerial.fetch_add (1, std::memory_order_release);
+    }
+    void clearUiNotice() { setUiNotice ({}); }
+    juce::String getUiNotice() const
+    {
+        const std::lock_guard<std::mutex> lock (noticeMu);
+        return uiNotice;
+    }
+    // Bumps on every set; lets the editor skip the lock when nothing changed.
+    std::uint32_t getUiNoticeSerial() const noexcept { return uiNoticeSerial.load (std::memory_order_acquire); }
+
     // Library-relative file the last note on a lane (or drum voice) played. Tests only.
     std::string lastPickedFile (int part, int drumVoice = -1) const { return engine.lastPickedFile (part, drumVoice); }
 
@@ -169,6 +189,10 @@ public:
     std::uint32_t getProjectEditorSerial() const noexcept { return projectEditorSerial.load (std::memory_order_relaxed); }
 
 private:
+    mutable std::mutex noticeMu;
+    juce::String uiNotice;
+    std::atomic<std::uint32_t> uiNoticeSerial { 0 };
+
     void parameterChanged (const juce::String& parameterID, float newValue) override;
     void applyDialect (int dialect);
     void regenerate (int onlyPart);
