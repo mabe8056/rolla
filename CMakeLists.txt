@@ -271,6 +271,14 @@ target_link_libraries(rolla-roll-test
         juce::juce_recommended_warning_flags
 )
 
+# DEEP / JACKIN phrase grammar checks. No JUCE.
+add_executable(rolla-phrase-test
+    tests/phrase/phrase_test.cpp
+    src/Generator/PhraseBank.cpp
+)
+
+target_include_directories(rolla-phrase-test PRIVATE src)
+
 add_executable(rolla-mix-render
     src/MixRender.cpp
     src/Engine/Engine.cpp

@@ -1,0 +1,157 @@
+{
+  "schema": 1,
+  "about": "Ingredients for the DEEP / JACKIN bass phrase grammar (src/Generator/PhraseBank.*). Nothing here is a whole phrase. The grammar picks half-bar rhythm cells, joins two into a bar, mutates them, walks a scale-degree contour over the onsets, applies octave tendencies, and varies the even bar. Steps are 16ths inside a half bar (0-7). Degrees are scale-step indices from the root: 0 root, 2 third, 4 fifth, -1 seventh below, -3 fifth below, 7 root an octave up. 'max_len' caps a held note in 16ths. After editing, run tools/build_phrase_bank.py to regenerate src/Generator/PhraseBankData.h.",
+  "modes": {
+    "dorian":   [0, 2, 3, 5, 7, 9, 10],
+    "aeolian":  [0, 2, 3, 5, 7, 8, 10],
+    "phrygian": [0, 1, 3, 5, 7, 8, 10]
+  },
+  "kick_steps": [0, 4, 8, 12],
+  "max_kick_share": 0.35,
+  "styles": {
+    "deep": {
+      "half_cells": [
+        { "id": "off8",        "steps": [2],       "len": [6],       "w": 1.4, "tag": "sparse" },
+        { "id": "off8_pair",   "steps": [2, 6],    "len": [3, 2],    "w": 1.2, "tag": "dense" },
+        { "id": "push3",       "steps": [3],       "len": [5],       "w": 1.0, "tag": "sparse" },
+        { "id": "push3_tail",  "steps": [3, 6],    "len": [3, 2],    "w": 1.0, "tag": "dense" },
+        { "id": "down_push",   "steps": [0, 3],    "len": [3, 4],    "w": 0.5, "tag": "dense" },
+        { "id": "dotted",      "steps": [2, 5],    "len": [3, 3],    "w": 1.0, "tag": "dense" },
+        { "id": "late_tie",    "steps": [1, 6],    "len": [4, 2],    "w": 0.7, "tag": "dense" },
+        { "id": "pickup",      "steps": [6],       "len": [2],       "w": 0.8, "tag": "sparse" },
+        { "id": "ghost_main",  "steps": [2, 3],    "len": [1, 4],    "w": 0.6, "tag": "dense" },
+        { "id": "late5",       "steps": [5],       "len": [3],       "w": 0.7, "tag": "sparse" },
+        { "id": "off_and_end", "steps": [2, 7],    "len": [4, 1],    "w": 0.7, "tag": "dense" },
+        { "id": "triplet_ish", "steps": [3, 5, 7], "len": [2, 2, 1], "w": 0.4, "tag": "dense" },
+        { "id": "long_down",   "steps": [0],       "len": [7],       "w": 0.3, "tag": "sparse" },
+        { "id": "rest",        "steps": [],        "len": [],        "w": 0.5, "tag": "rest" },
+        { "id": "one_e",       "steps": [1],       "len": [3],       "w": 0.5, "tag": "sparse" },
+        { "id": "ah_push",     "steps": [3, 7],    "len": [3, 1],    "w": 0.6, "tag": "dense" }
+      ],
+      "degree_pool": [
+        { "deg": 0,  "w": 5.0 },
+        { "deg": -1, "w": 2.6 },
+        { "deg": -3, "w": 1.8 },
+        { "deg": 2,  "w": 1.3 },
+        { "deg": 3,  "w": 0.9 },
+        { "deg": 4,  "w": 0.8 },
+        { "deg": -2, "w": 0.6 },
+        { "deg": 7,  "w": 0.5 }
+      ],
+      "contours": [
+        { "id": "pedal",       "deg": [0],              "w": 1.0 },
+        { "id": "root_b7",     "deg": [0, -1],          "w": 1.2 },
+        { "id": "root_5below", "deg": [0, -3],          "w": 1.0 },
+        { "id": "fall",        "deg": [0, -1, -3],      "w": 0.8 },
+        { "id": "rise3",       "deg": [0, 2, 0],        "w": 0.8 },
+        { "id": "neighbour",   "deg": [0, 1, 0],        "w": 0.5 },
+        { "id": "fourth",      "deg": [0, 0, 3],        "w": 0.6 },
+        { "id": "walk_down",   "deg": [0, -1, -2, -3],  "w": 0.6 },
+        { "id": "octave_lift", "deg": [0, 7, 0],        "w": 0.4 },
+        { "id": "answer_low",  "deg": [0, 0, -1, -3],   "w": 0.7 }
+      ],
+      "octave": { "pop_up": 0.08, "drop_down": 0.04 },
+      "len_scale": [0.6, 1.0],
+      "legato": 0.55,
+      "max_len": 8,
+      "ghost": 0.12,
+      "glide": 0.20,
+      "contour_stray": 0.22,
+      "first_root": 0.85,
+      "variation": [
+        { "op": "retail",       "w": 1.2 },
+        { "op": "nudge",        "w": 0.9 },
+        { "op": "last_degree",  "w": 1.0 },
+        { "op": "drop_one",     "w": 0.6 },
+        { "op": "pickup_fill",  "w": 0.7 },
+        { "op": "octave_swap",  "w": 0.4 },
+        { "op": "same",         "w": 0.3 }
+      ]
+    },
+    "jackin": {
+      "half_cells": [
+        { "id": "jab",        "steps": [2],          "len": [1],          "w": 0.8, "tag": "sparse" },
+        { "id": "and_a",      "steps": [2, 3],       "len": [1, 1],       "w": 1.1, "tag": "dense" },
+        { "id": "e_and",      "steps": [1, 2],       "len": [1, 2],       "w": 0.8, "tag": "dense" },
+        { "id": "down_a",     "steps": [0, 3],       "len": [2, 1],       "w": 0.7, "tag": "dense" },
+        { "id": "three_jack", "steps": [2, 3, 6],    "len": [1, 1, 2],    "w": 1.0, "tag": "dense" },
+        { "id": "skip",       "steps": [1, 3, 6],    "len": [1, 2, 1],    "w": 0.9, "tag": "dense" },
+        { "id": "late_pair",  "steps": [6, 7],       "len": [1, 1],       "w": 0.8, "tag": "sparse" },
+        { "id": "ah",         "steps": [3],          "len": [2],          "w": 0.7, "tag": "sparse" },
+        { "id": "stutter",    "steps": [2, 3, 5],    "len": [1, 1, 2],    "w": 0.8, "tag": "dense" },
+        { "id": "push_end",   "steps": [5, 7],       "len": [1, 1],       "w": 0.7, "tag": "sparse" },
+        { "id": "rest",       "steps": [],           "len": [],           "w": 0.9, "tag": "rest" },
+        { "id": "one_ghost",  "steps": [6],          "len": [1],          "w": 0.6, "tag": "sparse" },
+        { "id": "roll3",      "steps": [1, 2, 3],    "len": [1, 1, 1],    "w": 0.4, "tag": "dense" },
+        { "id": "and_tail",   "steps": [2, 6, 7],    "len": [2, 1, 1],    "w": 0.8, "tag": "dense" },
+        { "id": "syncop",     "steps": [3, 6],       "len": [2, 1],       "w": 0.9, "tag": "dense" },
+        { "id": "down_jab",   "steps": [0, 2],       "len": [1, 1],       "w": 0.5, "tag": "dense" }
+      ],
+      "degree_pool": [
+        { "deg": 0,  "w": 5.0 },
+        { "deg": 7,  "w": 1.6 },
+        { "deg": -1, "w": 1.6 },
+        { "deg": 2,  "w": 1.2 },
+        { "deg": 4,  "w": 1.2 },
+        { "deg": -3, "w": 1.0 },
+        { "deg": 3,  "w": 0.7 },
+        { "deg": 6,  "w": 0.5 }
+      ],
+      "contours": [
+        { "id": "pedal",      "deg": [0],             "w": 0.8 },
+        { "id": "oct_jack",   "deg": [0, 7],          "w": 1.2 },
+        { "id": "root_b7",    "deg": [0, 0, -1],      "w": 1.0 },
+        { "id": "minor3",     "deg": [0, 2, 0],       "w": 0.9 },
+        { "id": "fifth_call", "deg": [0, 4, 0],       "w": 0.8 },
+        { "id": "drop5",      "deg": [0, -3, 0],      "w": 0.8 },
+        { "id": "climb",      "deg": [0, 2, 3, 4],    "w": 0.5 },
+        { "id": "oct_fall",   "deg": [7, 0, -1],      "w": 0.6 },
+        { "id": "jack_b7",    "deg": [0, 6, 7],       "w": 0.4 },
+        { "id": "call_resp",  "deg": [0, 0, 4, 2],    "w": 0.7 }
+      ],
+      "octave": { "pop_up": 0.14, "drop_down": 0.03 },
+      "len_scale": [0.8, 1.0],
+      "legato": 0.15,
+      "max_len": 3,
+      "ghost": 0.20,
+      "glide": 0.05,
+      "contour_stray": 0.25,
+      "first_root": 0.80,
+      "variation": [
+        { "op": "retail",       "w": 1.3 },
+        { "op": "nudge",        "w": 1.0 },
+        { "op": "last_degree",  "w": 0.9 },
+        { "op": "drop_one",     "w": 0.7 },
+        { "op": "pickup_fill",  "w": 0.6 },
+        { "op": "octave_swap",  "w": 0.7 },
+        { "op": "same",         "w": 0.2 }
+      ],
+      "call_answer": {
+        "about": "JACKIN pairing. Voicings are stacks of scale steps over the answer degree, so every stab stays in key. A half bar where the bass is busy is a call; the stab answers in the quiet half that follows it. Zones are half-bar steps. A 'rest' or 'sparse' half after a 'dense' one is the answer slot.",
+        "pairs": [
+          { "call": "dense",  "answer": "rest",   "zone": [0, 7], "hits": [1, 3], "w": 1.4 },
+          { "call": "dense",  "answer": "sparse", "zone": [0, 7], "hits": [1, 2], "w": 1.0 },
+          { "call": "sparse", "answer": "rest",   "zone": [0, 7], "hits": [1, 2], "w": 0.8 },
+          { "call": "dense",  "answer": "dense",  "zone": [4, 7], "hits": [1, 1], "w": 0.5 },
+          { "call": "rest",   "answer": "dense",  "zone": [0, 3], "hits": [1, 1], "w": 0.4 }
+        ],
+        "len": [1, 2],
+        "offbeat_bias": 0.7,
+        "voicings": [
+          { "id": "seventh",    "stack": [0, 2, 4, 6],  "w": 1.0 },
+          { "id": "shell9",     "stack": [2, 4, 6, 8],  "w": 1.0 },
+          { "id": "sus4_7",     "stack": [0, 3, 4, 6],  "w": 0.8 },
+          { "id": "open11",     "stack": [-1, 2, 3, 6], "w": 0.7 },
+          { "id": "fifth_dyad", "stack": [0, 4],        "w": 0.5 },
+          { "id": "third_dyad", "stack": [2, 6],        "w": 0.5 }
+        ],
+        "answer_degree": [
+          { "deg": 0,  "w": 3.0 },
+          { "deg": 3,  "w": 1.0 },
+          { "deg": -1, "w": 1.0 },
+          { "deg": 5,  "w": 0.6 }
+        ]
+      }
+    }
+  }
+}
