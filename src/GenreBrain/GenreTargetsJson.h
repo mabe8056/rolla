@@ -82,6 +82,105 @@ inline void lane (const juce::var& v, LaneTargets& lt)
     number (v["loudness_db"], lt.loudnessDb);
 }
 
+// The box's extension block (schema rolla.genre_targets.ext/1): per-style feature
+// percentiles over reference hits, in its own lane grouping. p10..p90 becomes the
+// band. Applied before the per-lane v1 fields, so an explicit v1 "bands" wins.
+inline std::vector<Lane> extLanes (const juce::String& name)
+{
+    const auto n = name.toLowerCase();
+    if (n == "kick")
+        return { Lane::Kick };
+    if (n == "hat" || n == "hats")
+        return { Lane::HatC, Lane::HatO };
+    if (n == "clap_perc")
+        return { Lane::Clap, Lane::Snare, Lane::Perc };
+    if (n == "perc_hats")
+        return { Lane::HatC, Lane::HatO, Lane::Clap, Lane::Snare, Lane::Perc, Lane::Ride };
+    if (n == "bass")
+        return { Lane::Bass };
+    if (n == "stab_chord" || n == "stab")
+        return { Lane::Stab, Lane::Pluck, Lane::Hits };
+    if (n == "pad")
+        return { Lane::Pad, Lane::Fx };
+    if (n == "vox")
+        return { Lane::Vox };
+    return {};
+}
+
+// {p10, p90} -> band. Percent features are left in their own units.
+inline void percentileBand (const juce::var& v, Band& b)
+{
+    if (! v.isObject() || ! v.hasProperty ("p10") || ! v.hasProperty ("p90"))
+        return;
+    const auto lo = (float) (double) v["p10"], hi = (float) (double) v["p90"];
+    if (std::isnan (lo) || std::isnan (hi))
+        return;
+    b.lo = std::min (lo, hi);
+    b.hi = std::max (lo, hi);
+    b.set = true;
+}
+
+inline void extLaneFeatures (const juce::var& laneObj, LaneTargets& lt)
+{
+    const auto& f = laneObj.hasProperty ("features") ? laneObj["features"] : laneObj;
+    percentileBand (f["centroid_hz"], lt.centroidHz);
+    percentileBand (f["tilt_db_per_oct"], lt.tiltDbPerOct);
+    percentileBand (f["attack_ms"], lt.attackMs);
+    percentileBand (f["decay20_ms"], lt.decayMs);
+    const auto& conf = f["pitch_conf"];
+    if (conf.isObject() && conf.hasProperty ("p10"))
+        lt.minPitchConf = std::clamp ((float) (double) conf["p10"], 0.f, 1.f);
+}
+
+inline void ext (const juce::var& e, GenreTargets& g)
+{
+    if (! e.isObject())
+        return;
+    // ALL first, then each style on top.
+    auto applyBands = [&g] (const juce::var& byLane, int onlyStyle)
+    {
+        if (auto* lanes = byLane.getDynamicObject())
+            for (const auto& l : lanes->getProperties())
+                for (Lane lane : extLanes (l.name.toString()))
+                    for (int s = 0; s < kStyles; ++s)
+                        if (onlyStyle < 0 || onlyStyle == s)
+                            extLaneFeatures (l.value, g.styles[(size_t) s].lanes[(size_t) lane]);
+    };
+    if (auto* bands = e["bands"].getDynamicObject())
+    {
+        for (const auto& s : bands->getProperties())
+            if (s.name.toString().equalsIgnoreCase ("ALL"))
+                applyBands (s.value, -1);
+        for (const auto& s : bands->getProperties())
+        {
+            const Style style = styleFromId (s.name.toString().toStdString());
+            if (style != Style::Count)
+                applyBands (s.value, (int) style);
+        }
+    }
+    if (auto* groove = e["groove"].getDynamicObject())
+        for (const auto& s : groove->getProperties())
+        {
+            const Style style = styleFromId (s.name.toString().toStdString());
+            if (style == Style::Count)
+                continue;
+            if (auto* metrics = s.value.getDynamicObject())
+                for (const auto& m : metrics->getProperties())
+                    if (m.name.toString().containsIgnoreCase ("swing"))
+                    {
+                        Band b;
+                        percentileBand (m.value, b);
+                        if (b.set && b.hi > 1.f) // percent (53.7) -> ratio (0.537)
+                        {
+                            b.lo /= 100.f;
+                            b.hi /= 100.f;
+                        }
+                        if (b.set)
+                            g.styles[(size_t) style].groove.swing = b;
+                    }
+        }
+}
+
 } // namespace json
 
 inline GenreTargets parseGenreTargets (const juce::var& doc)
@@ -95,6 +194,7 @@ inline GenreTargets parseGenreTargets (const juce::var& doc)
     const auto& norm = doc["norm"];
     g.norm.mean = json::floats (norm["mean"]);
     g.norm.std = json::floats (norm["std"]);
+    json::ext (doc["ext"], g);
     if (auto* styles = doc["styles"].getDynamicObject())
         for (const auto& s : styles->getProperties())
         {
