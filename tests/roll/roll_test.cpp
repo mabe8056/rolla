@@ -1,11 +1,19 @@
 #include "PluginProcessor.h"
+#include "Generator/MidiFile.h"
 
 #include <juce_events/juce_events.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
+#include <map>
+#include <set>
 #include <string>
+#include <vector>
 
 // JUCE builds with modal loops off, so MessageManager::runDispatchLoopUntil is not in the
 // library. The roll and shuffle handlers post to the message queue; this drains it.
@@ -176,8 +184,9 @@ void testIntensityChangesOutput()
     setDenorm (proc, "intensity", 100.f);
     expect (pumpUntil ([&]
     {
-        return proc.copyGroove().lane[rolla::Pluck].count > 0;
-    }), "intensity 100 brings pluck back");
+        return proc.copyGroove().lane[rolla::Pluck].count == 0
+            && noteSig (proc.copyGroove(), rolla::Bass) == bass75;
+    }), "roller stays without pluck at full intensity");
     const auto full = proc.copyGroove();
     for (int i = 0; i < rolla::NumParts; ++i)
         expect (seedOf (full, i) == seedOf (seeds, i), std::string ("intensity keeps the ") + rolla::partId (i) + " seed");
@@ -206,6 +215,547 @@ void testIntensityChangesOutput()
     expect (seedOf (proc.copyGroove(), rolla::Stab) == seedOf (seeds, rolla::Stab), "the knob does not re-roll stab");
 }
 
+int noteOnVelocityOne (const std::string& path)
+{
+    std::ifstream in (path, std::ios::binary);
+    std::vector<std::uint8_t> b ((std::istreambuf_iterator<char> (in)), {});
+    if (b.size() < 14)
+        return 99;
+    const int tracks = (b[10] << 8) | b[11];
+    std::size_t i = 14;
+    int bad = 0;
+    for (int t = 0; t < tracks; ++t)
+    {
+        if (i + 8 > b.size() || b[i] != 'M')
+            return 99;
+        const std::uint32_t len = ((std::uint32_t) b[i + 4] << 24) | ((std::uint32_t) b[i + 5] << 16)
+                                 | ((std::uint32_t) b[i + 6] << 8) | b[i + 7];
+        std::size_t p = i + 8;
+        const std::size_t end = std::min (b.size(), p + len);
+        std::uint8_t run = 0;
+        while (p < end)
+        {
+            int guard = 0;
+            while (p < end && guard++ < 5)
+            {
+                const std::uint8_t v = b[p++];
+                if ((v & 0x80) == 0)
+                    break;
+            }
+            if (p >= end)
+                break;
+            std::uint8_t st = b[p];
+            if (st >= 0x80)
+            {
+                run = st;
+                ++p;
+            }
+            else
+                st = run;
+            if (st == 0xff)
+            {
+                if (p >= end)
+                    break;
+                ++p;
+                std::uint32_t n = 0;
+                int g2 = 0;
+                while (p < end && g2++ < 5)
+                {
+                    const std::uint8_t v = b[p++];
+                    n = (n << 7) | (v & 0x7f);
+                    if ((v & 0x80) == 0)
+                        break;
+                }
+                p += n;
+            }
+            else
+            {
+                const int need = ((st & 0xf0) == 0xc0 || (st & 0xf0) == 0xd0) ? 1 : 2;
+                if ((st & 0xf0) == 0x90 && need == 2 && p + 1 < end && b[p + 1] == 1 && b[p] != 0)
+                    ++bad;
+                p += (std::size_t) need;
+            }
+        }
+        i = end;
+    }
+    return bad;
+}
+
+int pcOfNote (int semi)
+{
+    int pc = semi % 12;
+    if (pc < 0)
+        pc += 12;
+    return pc;
+}
+
+void testEarReview()
+{
+    const std::uint32_t base = 2517220185u;
+    std::cout << "ear seeds from " << base << "\n";
+    const char* names[] = { "ROLLER", "DEEP", "BOUNCY", "JACKIN" };
+    int flavour[4] {};
+    int darkN = 0;
+    double darkNpb = 0;
+    double brightNpb = 0;
+    int brightN = 0;
+    int pulseN = 0;
+    double popOct = 0;
+    int popN = 0;
+    std::set<std::string> jackinRhythms;
+    double jackinLen = 0;
+    int jackinStabs = 0;
+
+    for (int style = 0; style < 4; ++style)
+    {
+        int reaction = 0;
+        int stackedBass = 0;
+        int stackedStab = 0;
+        int pluck = 0;
+        for (int roll = 0; roll < 20; ++roll)
+        {
+            rolla::Settings s;
+            s.dialect = style;
+            s.bars = 8;
+            std::uint32_t seeds[rolla::NumParts] {};
+            for (int p = 0; p < rolla::NumParts; ++p)
+                seeds[p] = base + (std::uint32_t) roll * 0x9E3779B9u + (std::uint32_t) p * 17u
+                         + (std::uint32_t) style * 101u;
+            rolla::Groove g {};
+            rolla::generate (g, s, seeds, 0x7fu);
+
+            std::set<int> bassAt;
+            std::string rhythm;
+            for (int i = 0; i < g.lane[rolla::Bass].count; ++i)
+            {
+                const int st = (int) std::lround (g.lane[rolla::Bass].notes[i].start);
+                if (! bassAt.insert (st).second)
+                    ++stackedBass;
+                rhythm.push_back ((char) (st + 1));
+            }
+            std::set<int> stabAt;
+            for (int i = 0; i < g.lane[rolla::Stab].count; ++i)
+            {
+                const int st = (int) std::lround (g.lane[rolla::Stab].notes[i].start);
+                if (! stabAt.insert (st).second)
+                    ++stackedStab;
+                if (style == rolla::Gaskin)
+                {
+                    jackinLen += g.lane[rolla::Stab].notes[i].length;
+                    ++jackinStabs;
+                }
+            }
+            for (int b = 0; b < g.bars; ++b)
+            {
+                bool s1 = false;
+                bool s3 = false;
+                for (int i = 0; i < g.lane[rolla::Bass].count; ++i)
+                {
+                    const int st = (int) std::lround (g.lane[rolla::Bass].notes[i].start);
+                    if (st / 16 != b || pcOfNote (g.lane[rolla::Bass].notes[i].chord[0]) != 0)
+                        continue;
+                    if (st % 16 == 1)
+                        s1 = true;
+                    if (st % 16 == 3)
+                        s3 = true;
+                }
+                if (s1 && s3)
+                    ++reaction;
+            }
+            pluck += g.lane[rolla::Pluck].count;
+
+            if (style == rolla::Gaskin)
+            {
+                jackinRhythms.insert (rhythm);
+                const int flav = (int) (((seeds[rolla::Bass] ? seeds[rolla::Bass] : 1u) * 0x9E3779B9u) % 4u);
+                if (flav >= 0 && flav < 4)
+                    ++flavour[flav];
+            }
+            if (style == rolla::Long)
+            {
+                const float npb = g.bars > 0 ? (float) g.lane[rolla::Bass].count / (float) g.bars : 0.f;
+                const bool dark = s.dark >= 0.75f || (s.dark > 0.25f && ((seeds[rolla::Bass] * 0x85EBCA6Bu) % 100u) < 40u);
+                if (dark)
+                {
+                    ++darkN;
+                    darkNpb += npb;
+                }
+                else
+                {
+                    ++brightN;
+                    brightNpb += npb;
+                }
+            }
+            if (style == rolla::Pop)
+            {
+                ++popN;
+                int moves = 0;
+                int oct = 0;
+                const auto& lane = g.lane[rolla::Bass];
+                for (int i = 1; i < lane.count; ++i)
+                {
+                    const int d = std::abs ((int) lane.notes[i].chord[0] - (int) lane.notes[i - 1].chord[0]);
+                    ++moves;
+                    if (d == 12 || d == 24)
+                        ++oct;
+                }
+                if (moves > 0)
+                    popOct += 100.0 * oct / moves;
+                double lens = 0;
+                for (int i = 0; i < lane.count; ++i)
+                    lens += lane.notes[i].length;
+                if (lane.count > 0 && lens / lane.count >= 1.8)
+                    ++pulseN;
+            }
+            if (roll == 0)
+            {
+                const auto dir = std::filesystem::path ("/tmp/rolla_ear_midi") / names[style];
+                std::filesystem::create_directories (dir);
+                std::vector<std::string> written;
+                std::string error;
+                expect (rolla::MidiExport::writeAll (dir.string(), g, s.key, 0.5f, 130.0, written, error),
+                        "midi export");
+                int vel1 = 0;
+                for (const auto& path : written)
+                    vel1 += noteOnVelocityOne (path);
+                expect (vel1 == 0, std::string (names[style]) + " export has no velocity-1 note");
+            }
+        }
+        std::cout << names[style] << " stacked bass " << stackedBass << " stacked stab " << stackedStab
+                  << " reaction bars " << reaction << " pluck notes " << pluck << "\n";
+        expect (stackedBass == 0, std::string (names[style]) + " bass is monophonic");
+        expect (stackedStab == 0, std::string (names[style]) + " stabs do not stack");
+        expect (reaction == 0, std::string (names[style]) + " avoids the reaction figure");
+        if (style == rolla::Long || style == rolla::Pop)
+            expect (pluck > 0, std::string (names[style]) + " plays pluck");
+        else
+            expect (pluck == 0, std::string (names[style]) + " gates pluck");
+    }
+    std::cout << "JACKIN distinct 8-bar rhythms " << jackinRhythms.size() << "/20"
+              << " flavours dotted " << flavour[0] << " b2 " << flavour[1]
+              << " sustained " << flavour[2] << " offbeat " << flavour[3] << "\n";
+    if (jackinStabs > 0)
+        std::cout << "JACKIN stab length mean " << (jackinLen / jackinStabs) << "\n";
+    if (darkN > 0)
+        std::cout << "DEEP dark " << darkN << "/20 npb " << (darkNpb / darkN) << "\n";
+    if (brightN > 0)
+        std::cout << "DEEP bright " << brightN << "/20 npb " << (brightNpb / brightN) << "\n";
+    if (popN > 0)
+        std::cout << "BOUNCY octave moves " << (popOct / popN) << "%  pulse-length rolls " << pulseN << "/20\n";
+    expect (popN > 0 && popOct / popN >= 15.0 && popOct / popN <= 30.0, "BOUNCY octaves land in 15-30%");
+    expect (pulseN >= 3, "BOUNCY has a pulse mode");
+    expect (jackinRhythms.size() >= 18, "JACKIN 8-bar rhythms are almost all distinct");
+    expect (flavour[0] > 0 && flavour[1] > 0 && flavour[2] > 0 && flavour[3] > 0, "JACKIN uses all four flavours");
+    expect (darkN >= 4 && darkN <= 16, "DEEP dark is about two fifths of the rolls");
+    if (darkN > 0)
+        expect (darkNpb / darkN >= 5.5, "DEEP dark bass is busier");
+}
+
+struct MidiHit
+{
+    std::uint32_t on = 0;
+    std::uint32_t off = 0;
+    int ch = 0;
+    int pitch = 0;
+    int vel = 0;
+};
+
+bool readMidi (const std::string& path, std::vector<MidiHit>& hits, int& duplicateOns, int& lowVel)
+{
+    duplicateOns = 0;
+    lowVel = 0;
+    hits.clear();
+    std::ifstream in (path, std::ios::binary);
+    std::vector<std::uint8_t> b ((std::istreambuf_iterator<char> (in)), {});
+    if (b.size() < 14 || std::string (b.begin(), b.begin() + 4) != "MThd")
+        return false;
+    const int tracks = (b[10] << 8) | b[11];
+    std::size_t i = 14;
+    std::set<std::uint64_t> ons;
+    bool open[16][128] {};
+    std::uint32_t openAt[16][128] {};
+    int openVel[16][128] {};
+    for (int t = 0; t < tracks; ++t)
+    {
+        if (i + 8 > b.size())
+            return false;
+        const std::uint32_t len = ((std::uint32_t) b[i + 4] << 24) | ((std::uint32_t) b[i + 5] << 16)
+                                 | ((std::uint32_t) b[i + 6] << 8) | b[i + 7];
+        std::size_t p = i + 8;
+        const std::size_t end = std::min (b.size(), p + len);
+        std::uint32_t tick = 0;
+        std::uint8_t run = 0;
+        while (p < end)
+        {
+            std::uint32_t delta = 0;
+            int guard = 0;
+            while (p < end && guard++ < 5)
+            {
+                const std::uint8_t v = b[p++];
+                delta = (delta << 7) | (v & 0x7f);
+                if ((v & 0x80) == 0)
+                    break;
+            }
+            tick += delta;
+            if (p >= end)
+                break;
+            std::uint8_t st = b[p];
+            if (st >= 0x80)
+            {
+                run = st;
+                ++p;
+            }
+            else
+                st = run;
+            if (st == 0xff)
+            {
+                if (p >= end)
+                    break;
+                ++p;
+                std::uint32_t n = 0;
+                int g2 = 0;
+                while (p < end && g2++ < 5)
+                {
+                    const std::uint8_t v = b[p++];
+                    n = (n << 7) | (v & 0x7f);
+                    if ((v & 0x80) == 0)
+                        break;
+                }
+                if (p + n > end)
+                    break;
+                p += n;
+                continue;
+            }
+            const int need = ((st & 0xf0) == 0xc0 || (st & 0xf0) == 0xd0) ? 1 : 2;
+            if (p + (std::size_t) need > end)
+                break;
+            const int d1 = b[p];
+            const int d2 = need == 2 ? b[p + 1] : 0;
+            p += (std::size_t) need;
+            const int kind = st & 0xf0;
+            if (kind != 0x90 && kind != 0x80)
+                continue;
+            const int ch = st & 0x0f;
+            const int pitch = std::clamp (d1, 0, 127);
+            const bool noteOff = kind == 0x80 || d2 == 0;
+            if (! noteOff)
+            {
+                if (d2 <= 2)
+                    ++lowVel;
+                const std::uint64_t key = (std::uint64_t) tick << 16 | (std::uint64_t) (ch << 8) | (std::uint64_t) pitch;
+                if (! ons.insert (key).second)
+                    ++duplicateOns;
+                if (open[ch][pitch])
+                {
+                    hits.push_back ({ openAt[ch][pitch], tick, ch, pitch, openVel[ch][pitch] });
+                }
+                open[ch][pitch] = true;
+                openAt[ch][pitch] = tick;
+                openVel[ch][pitch] = d2;
+            }
+            else if (open[ch][pitch])
+            {
+                hits.push_back ({ openAt[ch][pitch], tick, ch, pitch, openVel[ch][pitch] });
+                open[ch][pitch] = false;
+            }
+        }
+        i = end;
+    }
+    return true;
+}
+
+int bassOverlapTicks (const std::vector<MidiHit>& hits)
+{
+    std::vector<MidiHit> bass;
+    for (const auto& h : hits)
+        if (h.ch != 9)
+            bass.push_back (h);
+    std::sort (bass.begin(), bass.end(), [] (const MidiHit& a, const MidiHit& b) { return a.on < b.on; });
+    int worst = 0;
+    for (std::size_t i = 0; i + 1 < bass.size(); ++i)
+    {
+        const int over = (int) bass[i].off - (int) bass[i + 1].on;
+        if (over > worst)
+            worst = over;
+    }
+    return worst;
+}
+
+bool bassSoundsAt (const rolla::Lane& bass, int slot)
+{
+    for (int i = 0; i < bass.count; ++i)
+    {
+        const float a = bass.notes[i].start;
+        const float b = a + bass.notes[i].length;
+        if (a < (float) slot + 1.f - 0.05f && b > (float) slot + 0.05f)
+            return true;
+    }
+    return false;
+}
+
+int laneDuplicateOns (const rolla::Lane& lane)
+{
+    std::set<std::uint64_t> seen;
+    int dups = 0;
+    for (int i = 0; i < lane.count; ++i)
+    {
+        const int st = (int) std::lround (lane.notes[i].start);
+        const int nc = std::max (1, (int) lane.notes[i].nChord);
+        for (int c = 0; c < nc && c < 4; ++c)
+        {
+            const std::uint64_t key = ((std::uint64_t) st << 16) ^ (std::uint64_t) (std::uint8_t) lane.notes[i].chord[c];
+            if (! seen.insert (key).second)
+                ++dups;
+        }
+    }
+    return dups;
+}
+
+int bassHoldTicks (const rolla::Lane& lane)
+{
+    std::vector<std::pair<float, float>> notes;
+    for (int i = 0; i < lane.count; ++i)
+        notes.push_back ({ lane.notes[i].start, lane.notes[i].start + lane.notes[i].length });
+    std::sort (notes.begin(), notes.end());
+    int worst = -100000;
+    for (std::size_t i = 0; i + 1 < notes.size(); ++i)
+    {
+        const int over = (int) std::lround ((notes[i].second - notes[i + 1].first) * 120.f);
+        if (over > worst)
+            worst = over;
+    }
+    return notes.size() < 2 ? 0 : worst;
+}
+
+void testScorerV23()
+{
+    const std::uint32_t base = 20261018u;
+    const char* names[] = { "ROLLER", "DEEP", "BOUNCY", "JACKIN" };
+    std::cout << "v2.3 fresh seeds from " << base << "\n";
+    for (int style = 0; style < 4; ++style)
+    {
+        int answers = 0;
+        int pulse = 0;
+        int stabHits = 0;
+        int stabGaps = 0;
+        std::map<std::string, int> rhythms;
+        int exportDups = 0;
+        int exportLow = 0;
+        int exportOverlap = 0;
+        for (int roll = 0; roll < 20; ++roll)
+        {
+            rolla::Settings s;
+            s.dialect = style;
+            s.bars = 8;
+            std::uint32_t seeds[rolla::NumParts] {};
+            for (int p = 0; p < rolla::NumParts; ++p)
+                seeds[p] = base + (std::uint32_t) roll * 0x9E3779B9u + (std::uint32_t) p * 17u
+                         + (std::uint32_t) style * 101u;
+            rolla::Groove g {};
+            rolla::generate (g, s, seeds, 0x7fu);
+
+            int dups = 0;
+            int low = 0;
+            for (int p = 0; p < rolla::Drums; ++p)
+            {
+                dups += laneDuplicateOns (g.lane[p]);
+                for (int i = 0; i < g.lane[p].count; ++i)
+                    if (g.lane[p].notes[i].vel <= 2)
+                        ++low;
+            }
+            for (int v = 0; v < rolla::NumDrumVoices; ++v)
+                for (int t = 0; t < g.bars * 16; ++t)
+                    if (g.drums.vel[v][t] > 0 && g.drums.vel[v][t] <= 2)
+                        ++low;
+            const int hold = bassHoldTicks (g.lane[rolla::Bass]);
+            expect (dups == 0, std::string (names[style]) + " roll " + std::to_string (roll) + " has no duplicate note-ons");
+            expect (low == 0, std::string (names[style]) + " roll " + std::to_string (roll) + " drops velocity <= 2");
+            expect (hold <= 3, std::string (names[style]) + " roll " + std::to_string (roll) + " bass overlap " + std::to_string (hold) + " ticks");
+
+            bool bar2[16] {};
+            bool bar4[16] {};
+            std::string rhythm;
+            for (int i = 0; i < g.lane[rolla::Bass].count; ++i)
+            {
+                const int st = (int) std::lround (g.lane[rolla::Bass].notes[i].start);
+                rhythm.push_back ((char) (st + 1));
+                const int bar = st / 16;
+                const int slot = st % 16;
+                if (bar == 1)
+                    bar2[slot] = true;
+                if (bar == 3)
+                    bar4[slot] = true;
+            }
+            bool answered = false;
+            for (int slot = 8; slot < 16; ++slot)
+                if (bar2[slot] != bar4[slot])
+                    answered = true;
+            if (answered)
+                ++answers;
+            ++rhythms[rhythm];
+
+            if (style == rolla::Pop)
+            {
+                double lens = 0;
+                const auto& lane = g.lane[rolla::Bass];
+                for (int i = 0; i < lane.count; ++i)
+                    lens += lane.notes[i].length;
+                if (lane.count > 0 && lens / lane.count >= 1.8)
+                    ++pulse;
+            }
+            for (int i = 0; i < g.lane[rolla::Stab].count; ++i)
+            {
+                ++stabHits;
+                const int st = (int) std::lround (g.lane[rolla::Stab].notes[i].start);
+                if (! bassSoundsAt (g.lane[rolla::Bass], st))
+                    ++stabGaps;
+            }
+
+            const auto dir = std::filesystem::path ("/tmp/rolla_v23") / names[style] / std::to_string (roll);
+            std::filesystem::create_directories (dir);
+            std::vector<std::string> written;
+            std::string error;
+            expect (rolla::MidiExport::writeAll (dir.string(), g, s.key, 0.57f, 130.0, written, error),
+                    "v2.3 midi export");
+            for (const auto& path : written)
+            {
+                std::vector<MidiHit> hits;
+                int fileDups = 0;
+                int fileLow = 0;
+                expect (readMidi (path, hits, fileDups, fileLow), "readable midi " + path);
+                exportDups += fileDups;
+                exportLow += fileLow;
+                if (path.size() >= 9 && path.rfind ("_bass.mid") == path.size() - 9)
+                {
+                    const int over = bassOverlapTicks (hits);
+                    if (over > 3)
+                        ++exportOverlap;
+                }
+            }
+        }
+        int pairs = 0;
+        for (const auto& kv : rhythms)
+            if (kv.second >= 2)
+                pairs += kv.second * (kv.second - 1) / 2;
+        const double gapPct = stabHits > 0 ? 100.0 * stabGaps / stabHits : 0.0;
+        std::cout << names[style]
+                  << " bar4-answers " << answers << "/20"
+                  << " twin-pairs " << pairs
+                  << " stab-in-gap " << gapPct << "%";
+        if (style == rolla::Pop)
+            std::cout << " pulse " << pulse << "/20";
+        std::cout << "\n";
+        expect (answers >= 8 && answers <= 16, std::string (names[style]) + " bar 4 answers bar 2 about 60%");
+        expect (pairs <= 2, std::string (names[style]) + " twin 8-bar rhythms <= 2 pairs");
+        expect (gapPct <= 20.0, std::string (names[style]) + " stabs-in-gaps stays a light preference");
+        expect (exportDups == 0, std::string (names[style]) + " midi has no duplicate note-ons");
+        expect (exportLow == 0, std::string (names[style]) + " midi drops velocity <= 2");
+        expect (exportOverlap == 0, std::string (names[style]) + " midi bass ends before the next note");
+        if (style == rolla::Pop)
+            expect (pulse >= 6 && pulse <= 14, "BOUNCY pulse mode is about half the rolls");
+    }
+}
+
 void testShuffleKeepsManualLock()
 {
     rolla::RollaProcessor proc;
@@ -230,6 +780,8 @@ int main()
 {
     juce::ScopedJuceInitialiser_GUI juce;
 
+    testEarReview();
+    testScorerV23();
     testRollSkipsMutedAndKept();
     testShuffleClearsAutoKeep();
     testShuffleKeepsManualLock();
