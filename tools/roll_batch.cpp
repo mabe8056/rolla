@@ -1,6 +1,5 @@
 #include "PatternStats.h"
 #include "Engine/Engine.h"
-#include "Generator/CorpusData.h"
 #include "Generator/Generator.h"
 #include "Generator/MidiFile.h"
 #include "Generator/Presets.h"
@@ -155,15 +154,7 @@ void writeStats (const std::filesystem::path& path,
     std::ofstream out (path);
     out << std::fixed << std::setprecision (2);
     out << "# ROLLA corpus rolls\n\n";
-    out << "Vocabulary extracted by tools/extract_corpus.py into data/corpus.json and src/Generator/CorpusData.h.\n\n";
-    out << "| cells | count |\n| --- | ---: |\n";
-    out << "| bass | " << rolla::corpus::kBassN << " |\n";
-    out << "| contours | " << rolla::corpus::kContourN << " |\n";
-    out << "| stab | " << rolla::corpus::kStabN << " |\n";
-    out << "| voicings | " << rolla::corpus::kVoicingN << " |\n";
-    out << "| drums | " << rolla::corpus::kDrumN << " |\n";
-    out << "| chops | " << rolla::corpus::kChopN << " |\n";
-    out << "| banned 2-bar windows | " << rolla::corpus::kBanN << " |\n\n";
+    out << "Bass phrases come from the phrase grammar. No stored reference cells.\n\n";
     out << "Each style is 6000 seeds. A pattern counts as distinct when onset, length, and pitch differ "
            "(chord tones for stab, hits, and pad; a per-step voice mask for drums). "
            "Edit distance is the mean pairwise Levenshtein of the first 48 patterns (1128 pairs).\n\n";
