@@ -1988,6 +1988,211 @@ void contrastCallAnswer (Lane& lane, int bars)
     }
 }
 
+// ---- JACKIN loop identity (A&R 490 #3, ported from #30's JackinLoop.h) ----
+// The A&R gate read "loop doesn't repeat" on 14 of 20 JACKIN rolls: the
+// scorer wants the 2-bar repeat (LOOP_NO_REPEAT: sounding match at 2 bars
+// >= 0.50; lane F6: attack/pitch match at 2 bars >= 0.60) with the 1-bar
+// repeat kept low (F6 <= 0.10). The line used to play eight different bars:
+// bars 5-8 rotate their degrees (pushJackinVariationBack) and the call/answer
+// pass edits each bar against the one before. Now one bar pair of the roll's
+// own line is the hook and the loop plays A B A B4 A B A B8:
+//   B4  B, and on about three fifths of rolls its last onset takes another
+//       pitch the hook plays (the bar-4 answer)
+//   B8  B up to step 12, then the four-16th turn rest (and maybe the pickup)
+// The hook is whatever the grammar drew for the roll, so variety across rolls
+// is kept. Runs after the call/answer contrast and before the kick and hold
+// passes, which key their choices on the 2-bar position so repeats move
+// together.
+
+int jackinBarOf (float start) noexcept
+{
+    return (int) std::floor (start / 16.f + 1.0e-4f);
+}
+
+// The bar pair (0-1, 2-3, 4-5; never the turn bar) with the most JACKIN
+// flavour (dotted 16ths, b2 colour), while the root clearly leads the pitch
+// time (#30: repeated four times, the pair sets the key a listener hears),
+// the b2 stays at or under 20% and nothing sits outside JACKIN's scale.
+// Ties, and rolls where no pair qualifies, take the first pair.
+int pickJackinHook (const Lane& lane, int bars) noexcept
+{
+    int best = 0;
+    float bestScore = -1.f;
+    for (int p = 0; p * 2 + 1 < bars - 1 && p < 4; ++p)
+    {
+        int att = 0;
+        int dotted = 0;
+        int inA = 0;
+        int inB = 0;
+        float t = 0.f;
+        float b2 = 0.f;
+        float out = 0.f;
+        float pcTime[12] {};
+        for (int i = 0; i < lane.count; ++i)
+        {
+            const Note& n = lane.notes[i];
+            const int bar = jackinBarOf (n.start);
+            if (bar != p * 2 && bar != p * 2 + 1)
+                continue;
+            if (bar == p * 2)
+                ++inA;
+            else
+                ++inB;
+            const int slot = ((int) std::lround (n.start)) % 16;
+            ++att;
+            if (slot % 3 == 0)
+                ++dotted;
+            const int pc = pcOf (n.chord[0]);
+            const float len = std::max (0.f, n.length);
+            t += len;
+            pcTime[pc] += len;
+            if (pc == 1)
+                b2 += len;
+            if (pc == 4 || pc == 6 || pc == 9 || pc == 11)
+                out += len;
+        }
+        float other = 0.f;
+        for (int pc = 1; pc < 12; ++pc)
+            other = std::max (other, pcTime[pc]);
+        if (inA == 0 || inB == 0 || t <= 0.f || b2 > 0.20f * t || out > 0.f || pcTime[0] < 1.15f * other)
+            continue;
+        const float score = std::min (1.5f, (float) dotted / (0.55f * (float) att))
+                          + std::min (1.5f, b2 / (0.10f * t));
+        if (score > bestScore + 1.0e-4f)
+        {
+            bestScore = score;
+            best = p;
+        }
+    }
+    return best;
+}
+
+// B4: the last onset of bar 4 takes another pitch the hook plays (JACKIN is
+// phrygian, never the b2 here, never a pitch bar 2 has within one 16th of
+// that slot), so bar 4 answers bar 2 and the rest of the bar repeats.
+void answerJackinBar4 (Lane& lane, std::uint32_t seed)
+{
+    const int dst = 3;
+    int last = -1;
+    for (int i = 0; i < lane.count; ++i)
+        if (jackinBarOf (lane.notes[i].start) == dst && (last < 0 || lane.notes[i].start > lane.notes[last].start))
+            last = i;
+    if (last < 0)
+        return;
+    const int slot = (int) std::lround (lane.notes[last].start) - dst * 16;
+    const int oldPc = pcOf (lane.notes[last].chord[0]);
+    bool near[12] {};
+    bool inHook[12] {};
+    for (int i = 0; i < lane.count; ++i)
+    {
+        const int st = (int) std::lround (lane.notes[i].start);
+        const int bar = jackinBarOf (lane.notes[i].start);
+        const int pc = pcOf (lane.notes[i].chord[0]);
+        if (bar == 1 && std::abs ((st - 16) - slot) <= 1)
+            near[pc] = true;
+        if (bar == 0 || bar == 1)
+            inHook[pc] = true;
+    }
+    static const int alt[] = { 3, 10, 7, 8, 5, 0 };
+    const int spin = (int) (((seed ? seed : 1u) >> 4) % 6u);
+    int want = -1;
+    for (int pass = 0; pass < 2 && want < 0; ++pass)
+        for (int t = 0; t < 6 && want < 0; ++t)
+        {
+            const int d = alt[(spin + t) % 6];
+            if (d == oldPc || near[d] || ! phrase::inMode (d, phrase::Phrygian))
+                continue;
+            if (pass == 0 && ! inHook[d])
+                continue;
+            // Root on slot 1 or 3 is half of the banned reaction figure.
+            if (d == 0 && (slot == 1 || slot == 3))
+                continue;
+            want = d;
+        }
+    if (want < 0)
+        return;
+    int delta = want - oldPc;
+    if (delta > 6)
+        delta -= 12;
+    if (delta < -6)
+        delta += 12;
+    lane.notes[last].chord[0] = (std::int8_t) (lane.notes[last].chord[0] + delta);
+}
+
+void loopJackinBass (Lane& lane, int bars, std::uint32_t seed)
+{
+    const int nb = std::min (bars, kMaxBars);
+    if (nb < 4 || lane.count <= 0)
+        return;
+    std::sort (lane.notes, lane.notes + lane.count,
+               [] (const Note& a, const Note& b) { return a.start < b.start; });
+    const Lane src = lane;
+    const int hook = pickJackinHook (src, nb);
+    const float loopEnd = (float) (nb * 16);
+    const float turnCut = (float) ((nb - 1) * 16 + 12);
+
+    lane.count = 0;
+    for (int bar = 0; bar < nb; ++bar)
+    {
+        const int from = hook * 2 + (bar & 1);
+        const float shift = (float) ((bar - from) * 16);
+        for (int i = 0; i < src.count && lane.count < kMaxNotes; ++i)
+        {
+            if (jackinBarOf (src.notes[i].start) != from)
+                continue;
+            Note n = src.notes[i];
+            n.start += shift;
+            if (bar == nb - 1)
+            {
+                // B8: B up to step 12, then the turn rest.
+                if (n.start >= turnCut - 1.0e-3f)
+                    continue;
+                n.length = std::min (n.length, turnCut - n.start);
+            }
+            n.length = std::min (n.length, loopEnd - n.start);
+            if (n.length < 0.25f)
+                continue;
+            lane.notes[lane.count++] = n;
+        }
+    }
+    bool lastBar = false;
+    for (int i = 0; i < lane.count; ++i)
+        if (jackinBarOf (lane.notes[i].start) == nb - 1)
+            lastBar = true;
+    if (! lastBar && lane.count < kMaxNotes)
+    {
+        // A wiped bar is a hard fail. A short in-scale root, as lockFromBook does.
+        Note n;
+        n.start = (float) ((nb - 1) * 16 + 2);
+        n.length = 2.f;
+        n.chord[0] = 0;
+        n.nChord = 1;
+        n.vel = 112;
+        lane.notes[lane.count++] = n;
+    }
+    std::sort (lane.notes, lane.notes + lane.count,
+               [] (const Note& a, const Note& b) { return a.start < b.start; });
+    // One onset per 16th; a held note ends at the next onset (B's tail rings
+    // into A's first slots, as it did into bar 3).
+    int w = 0;
+    for (int i = 0; i < lane.count; ++i)
+    {
+        if (w > 0 && std::lround (lane.notes[w - 1].start) == std::lround (lane.notes[i].start))
+            continue;
+        lane.notes[w++] = lane.notes[i];
+    }
+    lane.count = w;
+    for (int i = 0; i + 1 < lane.count; ++i)
+    {
+        const float room = lane.notes[i + 1].start - lane.notes[i].start;
+        if (lane.notes[i].length > room)
+            lane.notes[i].length = std::max (0.25f, room);
+    }
+    // Same share and hash as differBar4, so the bar-4 answer rate is unchanged.
+    if (nb >= 8 && (((seed ? seed : 1u) * 0xC2B2AE35u) % 100u) < 58u)
+        answerJackinBar4 (lane, seed);
+}
+
 void softenFifths (Lane& lane, std::uint32_t seed)
 {
     static const int alt[] = { 3, 10, 2, 5 };
@@ -4370,8 +4575,13 @@ void fixBassClashes (Groove& g, int mode, float cap, std::uint32_t seed)
             return ! makesReaction (lane, i, retarget (semi, pc));
         };
         // Resample: bounded, deterministic from the bass seed and the note.
+        // JACKIN keys it on the note's place in its 2-bar loop, so the
+        // repeats of one note take the same pitch.
+        const std::uint32_t key = g.dialect == Gaskin
+                                      ? 0x10000u + (std::uint32_t) (((int) std::lround (lane.notes[i].start) % 32 + 32) % 32)
+                                      : (std::uint32_t) i;
         int chosen = -1;
-        Rng r (seed ^ (0x5EC0DEu + (std::uint32_t) i * 0x9E3779B9u));
+        Rng r (seed ^ (0x5EC0DEu + key * 0x9E3779B9u));
         for (int tryN = 0; tryN < kClashTries && chosen < 0; ++tryN)
         {
             const int pc = phrase::degreeToSemis ((int) (r.nextU() % 7u), mode);
@@ -4400,6 +4610,52 @@ void fixBassClashes (Groove& g, int mode, float cap, std::uint32_t seed)
             lane.notes[i].chord[0] = (std::int8_t) retarget (semi, chosen);
             b2Used += (chosen == 1 ? t : 0.f) - (wasB2 ? t : 0.f);
         }
+    }
+}
+
+// conformBass's rule for a b2 outside phrygian: a one-16th passing note with
+// the root or the 2 on both sides.
+bool b2Passing (const Lane& lane, int i) noexcept
+{
+    if (i <= 0 || i + 1 >= lane.count || lane.notes[i].length > 1.05f)
+        return false;
+    const Note& p = lane.notes[i - 1];
+    const Note& n = lane.notes[i + 1];
+    auto edgePc = [] (int pc) { return pc == 0 || pc == 2; };
+    return edgePc (pcOf (p.chord[0])) && edgePc (pcOf (n.chord[0]))
+        && lane.notes[i].start - (p.start + p.length) <= 1.05f
+        && n.start - (lane.notes[i].start + lane.notes[i].length) <= 1.05f;
+}
+
+// A&R 490 #2 (ROLLER roll_04, Eb bass in D minor). fixBassClashes can move a
+// passing b2's neighbour (a 2 under a b3 stab), which leaves a b2 that is no
+// longer passing: out of the roll's mode. Outside phrygian such a b2 takes
+// the root, else the b3, else the nearest in-mode pitch with no semitone
+// clash and no reaction figure. Phrygian rolls keep their b2 (in mode).
+void settleStrandedB2 (Groove& g, int mode)
+{
+    if (mode == phrase::Phrygian)
+        return;
+    Lane& lane = g.lane[Bass];
+    sortByStart (lane);
+    static const int order[] = { 0, 3, 2, 10, 5, 7, 8, 9 };
+    for (int i = 0; i < lane.count; ++i)
+    {
+        const int semi = lane.notes[i].chord[0];
+        if (pcOf (semi) != 1 || b2Passing (lane, i))
+            continue;
+        const std::uint32_t bad = clashMask (upperPcsWith (g, i));
+        int chosen = -1;
+        for (int pc : order)
+        {
+            if (! phrase::inMode (pc, mode) || (bad & (1u << pc)) != 0)
+                continue;
+            if (makesReaction (lane, i, retarget (semi, pc)))
+                continue;
+            chosen = pc;
+            break;
+        }
+        lane.notes[i].chord[0] = (std::int8_t) retarget (semi, chosen >= 0 ? chosen : 0);
     }
 }
 
@@ -4688,6 +4944,8 @@ void harmonizeRoll (Groove& g, const Settings& s, std::uint32_t bassSeed, std::u
         conformBass (g.lane[Bass], mode, cap);
         // Outside phrygian the fixer never adds a b2; inside it stays under the cap.
         fixBassClashes (g, mode, cap, bassSeed);
+        // ...but it can strand a passing b2 by moving its neighbour.
+        settleStrandedB2 (g, mode);
     }
     else
     {
@@ -4806,8 +5064,16 @@ void placeBassOnKicks (Lane& lane, int dialect, int bars, std::uint32_t seed)
                 return a.prio < b.prio;
             return a.i < b.i;
         });
-        for (int m = 0; m < nm && onKick < want; ++m)
+        // JACKIN repeats a 2-bar hook: once a position moves, its other repeats
+        // (same key, same priority) move too, as long as the 35% cap holds.
+        const bool wholeGroups = dialect == Gaskin;
+        bool haveLast = false;
+        std::uint32_t lastPrio = 0;
+        for (int m = 0; m < nm; ++m)
         {
+            const bool groupTail = wholeGroups && haveLast && moves[m].prio == lastPrio && onKick < cap;
+            if (onKick >= want && ! groupTail)
+                break;
             const int i = moves[m].i;
             const int q = moves[m].q;
             if (moved[i] || used[q])
@@ -4820,6 +5086,8 @@ void placeBassOnKicks (Lane& lane, int dialect, int bars, std::uint32_t seed)
             moved[i] = true;
             lane.notes[i].start = (float) q;
             ++onKick;
+            haveLast = true;
+            lastPrio = moves[m].prio;
         }
     }
     sortByStart (lane);
@@ -5134,10 +5402,14 @@ void holdBassNotes (Lane& lane, int dialect, int bars, std::uint32_t seed)
         if (room[i] < 2.f || forced[i])
             continue;
         cand[nc] = i;
-        prio[i] = postHash (seed ^ 0x401Du, (std::uint32_t) i);
+        // JACKIN's repeats breathe in the same places: keyed on the 2-bar position.
+        const std::uint32_t key = dialect == Gaskin
+                                      ? 0x10000u + (std::uint32_t) (((int) std::lround (lane.notes[i].start)) % 32)
+                                      : (std::uint32_t) i;
+        prio[i] = postHash (seed ^ 0x401Du, key);
         ++nc;
     }
-    std::sort (cand, cand + nc, [&] (int a, int b) { return prio[a] < prio[b]; });
+    std::sort (cand, cand + nc, [&] (int a, int b) { return prio[a] != prio[b] ? prio[a] < prio[b] : a < b; });
     const int wantBreaths = (int) std::lround (bassBreathShare (dialect) * (float) nc);
     for (int k = 0; k < wantBreaths && k < nc; ++k)
     {
@@ -5442,6 +5714,8 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
             contrastCallAnswer (g.lane[Bass], s.bars);
             enforceMonophonic (g.lane[Bass]);
             contrastCallAnswer (g.lane[Bass], s.bars);
+            // The loop repeats on the bar grid: A B A B4 A B A B8 from one bar pair.
+            loopJackinBass (g.lane[Bass], s.bars, bassSeed);
         }
         enforceMonophonic (g.lane[Bass]);
         avoidReaction (g.lane[Bass]);
