@@ -109,6 +109,9 @@ struct SampleFeatures
     std::string pack;   // source pack code (tendency: same pack x3)
     std::string family; // pack family (same family x1.5)
     int tier = 0;       // manifest tier, higher is better; 0 unknown
+    // Missing from the feature index or unusable (e.g. digitally silent): kept in
+    // the pool so pick ordinals still line up, but never drawn.
+    bool excluded = false;
 
     std::vector<float> vector; // Fingerprint::vector(), raw (normalise with GenreTargets::norm)
     float centroidHz = 0.f;
