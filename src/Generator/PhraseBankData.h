@@ -39,91 +39,76 @@ inline constexpr int kKickSteps[] = { 0, 4, 8, 12 };
 inline constexpr float kMaxKickShare = 0.35f;
 
 inline constexpr PbCell kDeepCells[] = {
-    { "off8", 1, { 2, 0, 0, 0 }, { 6, 0, 0, 0 }, 1.4f, 1 },
-    { "off8_pair", 2, { 2, 6, 0, 0 }, { 3, 2, 0, 0 }, 1.2f, 2 },
-    { "push3", 1, { 3, 0, 0, 0 }, { 5, 0, 0, 0 }, 1.0f, 1 },
-    { "push3_tail", 2, { 3, 6, 0, 0 }, { 3, 2, 0, 0 }, 1.0f, 2 },
-    { "down_push", 2, { 0, 3, 0, 0 }, { 3, 4, 0, 0 }, 0.5f, 2 },
-    { "dotted", 2, { 2, 5, 0, 0 }, { 3, 3, 0, 0 }, 1.0f, 2 },
-    { "late_tie", 2, { 1, 6, 0, 0 }, { 4, 2, 0, 0 }, 0.7f, 2 },
-    { "pickup", 1, { 6, 0, 0, 0 }, { 2, 0, 0, 0 }, 0.8f, 1 },
-    { "ghost_main", 2, { 2, 3, 0, 0 }, { 1, 4, 0, 0 }, 0.6f, 2 },
-    { "late5", 1, { 5, 0, 0, 0 }, { 3, 0, 0, 0 }, 0.7f, 1 },
-    { "off_and_end", 2, { 2, 7, 0, 0 }, { 4, 1, 0, 0 }, 0.7f, 2 },
-    { "triplet_ish", 3, { 3, 5, 7, 0 }, { 2, 2, 1, 0 }, 0.4f, 2 },
-    { "long_down", 1, { 0, 0, 0, 0 }, { 7, 0, 0, 0 }, 0.3f, 1 },
-    { "rest", 0, { 0, 0, 0, 0 }, { 0, 0, 0, 0 }, 0.5f, 0 },
-    { "one_e", 1, { 1, 0, 0, 0 }, { 3, 0, 0, 0 }, 0.5f, 1 },
-    { "ah_push", 2, { 3, 7, 0, 0 }, { 3, 1, 0, 0 }, 0.6f, 2 },
+    { "mix_136", 3, { 1, 3, 6, 0 }, { 3, 2, 2, 0 }, 2.0f, 2 },
+    { "mix_257", 3, { 2, 5, 7, 0 }, { 2, 3, 2, 0 }, 2.0f, 2 },
+    { "mix_157", 3, { 1, 5, 7, 0 }, { 3, 2, 2, 0 }, 1.6f, 2 },
+    { "mix_235", 3, { 2, 3, 6, 0 }, { 2, 2, 3, 0 }, 1.5f, 2 },
+    { "mix_357", 3, { 3, 5, 7, 0 }, { 2, 2, 2, 0 }, 1.4f, 2 },
+    { "hold_15", 2, { 1, 5, 0, 0 }, { 3, 3, 0, 0 }, 0.9f, 2 },
+    { "hold_26", 2, { 2, 6, 0, 0 }, { 3, 2, 0, 0 }, 0.8f, 2 },
+    { "hold_37", 2, { 3, 7, 0, 0 }, { 3, 2, 0, 0 }, 0.8f, 2 },
+    { "pair_16", 2, { 1, 6, 0, 0 }, { 3, 2, 0, 0 }, 0.6f, 2 },
+    { "rest", 0, { 0, 0, 0, 0 }, { 0, 0, 0, 0 }, 0.05f, 0 },
 };
 inline constexpr PbDeg kDeepDegrees[] = {
-    { 0, 5.0f },
-    { -1, 2.6f },
-    { -3, 1.8f },
-    { 2, 1.3f },
-    { 3, 0.9f },
-    { 4, 0.8f },
-    { -2, 0.6f },
-    { 7, 0.5f },
+    { 0, 3.4f },
+    { 2, 2.0f },
+    { 4, 1.4f },
+    { 3, 1.1f },
+    { 1, 0.8f },
 };
 inline constexpr PbContour kDeepContours[] = {
-    { "pedal", 1, { 0, 0, 0, 0 }, 1.0f },
-    { "root_b7", 2, { 0, -1, 0, 0 }, 1.2f },
-    { "root_5below", 2, { 0, -3, 0, 0 }, 1.0f },
-    { "fall", 3, { 0, -1, -3, 0 }, 0.8f },
-    { "rise3", 3, { 0, 2, 0, 0 }, 0.8f },
-    { "neighbour", 3, { 0, 1, 0, 0 }, 0.5f },
-    { "fourth", 3, { 0, 0, 3, 0 }, 0.6f },
-    { "walk_down", 4, { 0, -1, -2, -3 }, 0.6f },
-    { "octave_lift", 3, { 0, 7, 0, 0 }, 0.4f },
-    { "answer_low", 4, { 0, 0, -1, -3 }, 0.7f },
+    { "root_third", 2, { 0, 2, 0, 0 }, 1.5f },
+    { "root_fifth", 2, { 0, 4, 0, 0 }, 1.3f },
+    { "rise", 3, { 0, 2, 4, 0 }, 1.1f },
+    { "fourth", 2, { 0, 3, 0, 0 }, 0.9f },
+    { "colour", 3, { 0, 2, 3, 0 }, 0.9f },
+    { "neighbour", 3, { 0, 1, 0, 0 }, 0.6f },
+    { "pedal", 1, { 0, 0, 0, 0 }, 0.3f },
 };
 inline constexpr PbVar kDeepVars[] = {
-    { 1, 1.2f }, // retail
-    { 2, 0.9f }, // nudge
-    { 3, 1.0f }, // last_degree
-    { 4, 0.6f }, // drop_one
-    { 5, 0.7f }, // pickup_fill
-    { 6, 0.4f }, // octave_swap
-    { 0, 0.3f }, // same
+    { 1, 2.0f }, // retail
+    { 2, 1.2f }, // nudge
+    { 4, 0.5f }, // drop_one
+    { 5, 0.5f }, // pickup_fill
+    { 3, 0.4f }, // last_degree
+    { 6, 0.0f }, // octave_swap
+    { 0, 0.05f }, // same
 };
 inline constexpr PbStyle kDeep {
     kDeepCells, (int) std::size (kDeepCells),
     kDeepDegrees, (int) std::size (kDeepDegrees),
     kDeepContours, (int) std::size (kDeepContours),
     kDeepVars, (int) std::size (kDeepVars),
-    0.08f, 0.04f, 0.6f, 1.0f,
-    0.55f, 0.12f, 0.2f, 0.22f, 0.85f, 8.0f,
+    0.0f, 0.0f, 1.0f, 1.0f,
+    1.0f, 0.1f, 0.16f, 0.18f, 0.72f, 4.0f,
     nullptr, 0, nullptr, 0, nullptr, 0, 1, 2, 0.5f,
 };
 
 inline constexpr PbCell kJackinCells[] = {
-    { "jab", 1, { 2, 0, 0, 0 }, { 1, 0, 0, 0 }, 0.8f, 1 },
-    { "and_a", 2, { 2, 3, 0, 0 }, { 1, 1, 0, 0 }, 1.1f, 2 },
-    { "e_and", 2, { 1, 2, 0, 0 }, { 1, 2, 0, 0 }, 0.8f, 2 },
-    { "down_a", 2, { 0, 3, 0, 0 }, { 2, 1, 0, 0 }, 0.7f, 2 },
-    { "three_jack", 3, { 2, 3, 6, 0 }, { 1, 1, 2, 0 }, 1.0f, 2 },
-    { "skip", 3, { 1, 3, 6, 0 }, { 1, 2, 1, 0 }, 0.9f, 2 },
-    { "late_pair", 2, { 6, 7, 0, 0 }, { 1, 1, 0, 0 }, 0.8f, 1 },
-    { "ah", 1, { 3, 0, 0, 0 }, { 2, 0, 0, 0 }, 0.7f, 1 },
-    { "stutter", 3, { 2, 3, 5, 0 }, { 1, 1, 2, 0 }, 0.8f, 2 },
-    { "push_end", 2, { 5, 7, 0, 0 }, { 1, 1, 0, 0 }, 0.7f, 1 },
-    { "rest", 0, { 0, 0, 0, 0 }, { 0, 0, 0, 0 }, 0.9f, 0 },
-    { "one_ghost", 1, { 6, 0, 0, 0 }, { 1, 0, 0, 0 }, 0.6f, 1 },
-    { "roll3", 3, { 1, 2, 3, 0 }, { 1, 1, 1, 0 }, 0.4f, 2 },
-    { "and_tail", 3, { 2, 6, 7, 0 }, { 2, 1, 1, 0 }, 0.8f, 2 },
-    { "syncop", 2, { 3, 6, 0, 0 }, { 2, 1, 0, 0 }, 0.9f, 2 },
-    { "down_jab", 2, { 0, 2, 0, 0 }, { 1, 1, 0, 0 }, 0.5f, 2 },
+    { "jab", 1, { 2, 0, 0, 0 }, { 2, 0, 0, 0 }, 0.5f, 1 },
+    { "and_a", 2, { 1, 3, 0, 0 }, { 2, 2, 0, 0 }, 1.3f, 2 },
+    { "e_and", 2, { 1, 6, 0, 0 }, { 2, 2, 0, 0 }, 1.2f, 2 },
+    { "down_a", 2, { 3, 6, 0, 0 }, { 2, 2, 0, 0 }, 1.2f, 2 },
+    { "three_jack", 3, { 1, 3, 6, 0 }, { 2, 2, 2, 0 }, 1.6f, 2 },
+    { "skip", 3, { 2, 5, 7, 0 }, { 2, 2, 1, 0 }, 1.4f, 2 },
+    { "late_pair", 2, { 5, 7, 0, 0 }, { 2, 1, 0, 0 }, 0.8f, 1 },
+    { "ah", 1, { 3, 0, 0, 0 }, { 2, 0, 0, 0 }, 0.6f, 1 },
+    { "stutter", 3, { 1, 5, 6, 0 }, { 2, 1, 2, 0 }, 1.0f, 2 },
+    { "push_end", 2, { 2, 7, 0, 0 }, { 2, 1, 0, 0 }, 0.9f, 2 },
+    { "rest", 0, { 0, 0, 0, 0 }, { 0, 0, 0, 0 }, 0.15f, 0 },
+    { "one_ghost", 1, { 6, 0, 0, 0 }, { 2, 0, 0, 0 }, 0.4f, 1 },
+    { "dotted_36", 2, { 3, 6, 0, 0 }, { 2, 2, 0, 0 }, 1.3f, 2 },
+    { "and_tail", 2, { 2, 6, 0, 0 }, { 2, 2, 0, 0 }, 1.0f, 2 },
+    { "syncop", 2, { 3, 5, 0, 0 }, { 2, 2, 0, 0 }, 1.0f, 2 },
+    { "e_late", 2, { 1, 7, 0, 0 }, { 2, 1, 0, 0 }, 0.9f, 2 },
 };
 inline constexpr PbDeg kJackinDegrees[] = {
-    { 0, 5.0f },
-    { 7, 1.6f },
-    { -1, 1.6f },
-    { 2, 1.2f },
-    { 4, 1.2f },
-    { -3, 1.0f },
-    { 3, 0.7f },
-    { 6, 0.5f },
+    { 0, 4.0f },
+    { 1, 1.6f },
+    { 2, 1.3f },
+    { 4, 1.1f },
+    { 3, 0.6f },
 };
 inline constexpr PbContour kJackinContours[] = {
     { "pedal", 1, { 0, 0, 0, 0 }, 0.8f },
@@ -172,8 +157,8 @@ inline constexpr PbStyle kJackin {
     kJackinDegrees, (int) std::size (kJackinDegrees),
     kJackinContours, (int) std::size (kJackinContours),
     kJackinVars, (int) std::size (kJackinVars),
-    0.14f, 0.03f, 0.8f, 1.0f,
-    0.15f, 0.2f, 0.05f, 0.25f, 0.8f, 3.0f,
+    0.0f, 0.0f, 1.0f, 1.0f,
+    0.0f, 0.2f, 0.05f, 0.25f, 0.8f, 3.0f,
     kJackinPairs, (int) std::size (kJackinPairs),
     kJackinVoicings, (int) std::size (kJackinVoicings),
     kJackinAnswerDegrees, (int) std::size (kJackinAnswerDegrees),

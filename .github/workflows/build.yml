@@ -199,7 +199,7 @@ jobs:
       - name: Configure and build
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --target ROLLA_VST3 rolla-render rolla-sampler-test rolla-sample-check rolla-roll-test rolla-knob-test
+          cmake --build build --target ROLLA_VST3 rolla-render rolla-rolls rolla-sampler-test rolla-sample-check rolla-roll-test rolla-knob-test rolla-phrase-test rolla-arrange-test rolla-tp-test
 
       - name: Sampler tests
         run: |
@@ -211,6 +211,17 @@ jobs:
         run: |
           set -euo pipefail
           ./build/rolla-roll-test
+
+      - name: Phrase grammar and arrangement
+        run: |
+          set -euo pipefail
+          ./build/rolla-phrase-test
+          ./build/rolla-arrange-test
+
+      - name: True-peak guard tests
+        run: |
+          set -euo pipefail
+          ./build/rolla-tp-test
 
       - name: Knob and export tests
         run: |
@@ -266,6 +277,25 @@ jobs:
           name: ROLLA-linux-renders
           path: renders/*.wav
           if-no-files-found: error
+
+      - name: Upload headless roll renderer
+        uses: actions/upload-artifact@v4
+        with:
+          name: rolla-rolls-linux
+          path: |
+            build/rolla-rolls
+          if-no-files-found: error
+
+      - name: MIDI score, audio checks skipped without samples
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          ./build/rolla-rolls --style all --count 20 --seed 1 --out "$GITHUB_WORKSPACE/ci-rolls"
+          python3 -m pip install --user --break-system-packages mido || true
+          for style in ukmin long pop gaskin; do
+            python3 tools/score_rolls.py "$GITHUB_WORKSPACE/ci-rolls/$style" --style "$style" --no-orig || true
+          done
+          echo "clicks, tails, loudness: SKIPPED (no sample pack on this runner)"
 
   mix:
     name: Mix strip renders

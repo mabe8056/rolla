@@ -45,7 +45,7 @@ enum Dialect : int
 inline constexpr int kMaxBars = 8;
 inline constexpr int kStepsPerBar = 16;
 inline constexpr int kMaxSteps = kMaxBars * kStepsPerBar;
-inline constexpr int kMaxNotes = 72;
+inline constexpr int kMaxNotes = 96;
 
 enum NoteFlags : std::uint8_t
 {
@@ -87,6 +87,12 @@ struct Groove
     float guardScore = 0.f;
     int guardLevel = 0; // 0 pass, 1 flag, 2 fail
     char guardRef[24] = "ORIGINAL";
+    // plan|contour|cells|soft breaks. Soft breaks are the freedom budget, not a reject.
+    char brokenRules[192] = "";
+    float penalty = 0.f;
+    // Candidates drawn this call, and how many a hard rule threw out.
+    int draws = 0;
+    int hardDraws = 0;
     Lane lane[NumParts] {};
     DrumLane drums {};
 };
@@ -97,10 +103,19 @@ struct Settings
     float busy = 0.40f;
     float bounce = 0.45f;
     float stab = 0.55f;
+    // How hard the selected style's own weights apply. 0 is a stripped skeleton,
+    // 0.5 is the normal style, 1 is the full style: denser cells, more lanes,
+    // and polymeter. This is not the 0-100 arrangement slider.
+    float styleIntensity = 0.5f;
     int dialect = UkMin;
     int key = 2;
     int bars = 8;
     bool fill = false;
+    // 0 hugs the soft bands, 0.35 is the normal lane, 0.6 is wild.
+    // BUSY and BOUNCE extremes raise the effective value. Soft rules never reject.
+    float freedom = 0.35f;
+    // Optional global chaos. 0 leaves the hidden per-roll bump as the only extra.
+    float chaos = 0.f;
 };
 
 inline const char* partId (int p) noexcept

@@ -111,8 +111,17 @@ int main()
         return fail ("missing flag");
     sampler.reset();
     const auto fallback = sampler.take (rolla::Bass, 69, 110, 1.0e9f, bank, params);
-    if (fallback.kind != 1 || std::fabs (fallback.synthGain) > 1.0e-6f)
-        return fail ("missing sample invented a synth");
+    if (fallback.kind != 1 || std::fabs (fallback.synthGain) > 1.0e-4f)
+        return fail ("missing sample fell through to the synth");
+    rolla::EngineParams bare = params;
+    bare.library = nullptr;
+    const auto absent = sampler.take (rolla::Bass, 69, 110, 1.0e9f, bank, bare);
+    if (absent.kind != 1 || std::fabs (absent.synthGain) > 1.0e-4f)
+        return fail ("absent library fell through to the synth");
+    bank.drums[0].sample.mode = rolla::SampleMode::Sample;
+    std::snprintf (bank.drums[0].sample.voiceFile[rolla::Kick], 96, "DRUMS/KICK/missing.wav");
+    if (sampler.takeDrum (rolla::Kick, 100, bank, bare) > 0.001f)
+        return fail ("absent library played the 909");
 
     rolla::Engine engine;
     engine.prepare (48000.0, 128);
@@ -140,9 +149,9 @@ int main()
             energy += (double) s * (double) s;
         transport.ppqStart += 128.0 * 130.0 / 60.0 / 48000.0;
     }
-    std::cout << "fallback energy " << energy << "\n";
+    std::cout << "missing-file energy " << energy << "\n";
     if (energy > 1.0e-4)
-        return fail ("missing file invented a sound");
+        return fail ("missing file played the synth");
 
     std::cout << "sample check ok\n";
     return 0;

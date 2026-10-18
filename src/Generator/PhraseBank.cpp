@@ -237,9 +237,323 @@ void trimLens (Work& w, int phraseSteps, float maxLen)
     for (int i = 0; i < w.n; ++i)
     {
         const int next = i + 1 < w.n ? w.hits[i + 1].step : phraseSteps;
+        const int barEnd = (w.hits[i].step / 16 + 1) * 16;
         const float gap = (float) (next - w.hits[i].step);
-        w.hits[i].len = std::max (0.5f, std::min ({ w.hits[i].len, gap, maxLen }));
+        const float barRoom = (float) barEnd - (float) w.hits[i].step;
+        w.hits[i].len = std::max (0.5f, std::min ({ w.hits[i].len, gap, barRoom, maxLen }));
         w.hits[i].len = std::round (w.hits[i].len * 2.f) / 2.f;
+    }
+}
+
+bool coversStep (const Hit& h, int step) noexcept
+{
+    return (float) step + 1e-3f >= (float) h.step && (float) step < (float) h.step + h.len - 1e-4f;
+}
+
+// Keep `step` silent: shorten a hold that reaches it, or move an onset off it.
+void endBefore (Work& w, int step)
+{
+    for (int i = w.n - 1; i >= 0; --i)
+    {
+        Hit& h = w.hits[i];
+        if (h.step == step)
+        {
+            const int to = step + 1;
+            if (to < 16 && ! isKickStep (to) && ! w.has (to))
+            {
+                h.len = std::max (1.f, (float) h.step + h.len - (float) to);
+                h.step = to;
+            }
+            else if (w.n > 1)
+                w.removeAt (i);
+            continue;
+        }
+        if ((float) h.step < (float) step && (float) h.step + h.len > (float) step)
+            h.len = std::max (0.5f, (float) step - (float) h.step);
+    }
+}
+
+// JACKIN even bar answers the odd bar: every 16th except two front-half breaths
+// sounds in exactly one of the two bars, so a tiled loop is not a copy of itself.
+// Degrees stay inside the phrygian lane (root, b2, b3, fifth) with the root loudest.
+void complementJackin (Work& w, Rng& r)
+{
+    for (int i = w.n - 1; i >= 0; --i)
+        if (w.hits[i].step >= 16)
+            w.removeAt (i);
+    w.sort();
+    endBefore (w, 0);
+    endBefore (w, 4);
+    for (int i = w.n - 1; i >= 0; --i)
+        if (w.hits[i].len < 0.5f)
+            w.removeAt (i);
+
+    auto pullKick = [&] (int k)
+    {
+        for (int i = 0; i < w.n; ++i)
+            if (coversStep (w.hits[i], k))
+                return;
+        for (int i = 0; i < w.n; ++i)
+        {
+            Hit& h = w.hits[i];
+            if (std::fabs ((float) h.step + h.len - (float) k) < 0.2f && h.len < 3.f)
+            {
+                h.len += 1.f;
+                return;
+            }
+        }
+    };
+    pullKick (8);
+    pullKick (12);
+
+    bool call[16] = {};
+    for (int s = 0; s < 16; ++s)
+        for (int i = 0; i < w.n; ++i)
+            if (coversStep (w.hits[i], s))
+                call[s] = true;
+
+    bool need[16] = {};
+    for (int s = 0; s < 16; ++s)
+        need[s] = ! call[s] && s != 0 && s != 4;
+
+    for (int k : { 8, 12 })
+    {
+        if (! need[k] || need[k - 1])
+            continue;
+        endBefore (w, k - 1);
+        call[k - 1] = false;
+        for (int i = 0; i < w.n; ++i)
+            if (coversStep (w.hits[i], k - 1))
+                call[k - 1] = true;
+        need[k - 1] = ! call[k - 1];
+    }
+
+    for (int s = 0; s < 16;)
+    {
+        if (! need[s])
+        {
+            ++s;
+            continue;
+        }
+        int e = s;
+        while (e < 16 && need[e])
+            ++e;
+        int p = s;
+        while (p < e)
+        {
+            if (isKickStep (p))
+            {
+                ++p;
+                continue;
+            }
+            float len = (p + 1 < e && ! isKickStep (p + 1)) ? 2.f : 1.f;
+            if (len < 3.f && p + (int) len < 16 && need[p + (int) len] && isKickStep (p + (int) len))
+                len += 1.f;
+            Hit h;
+            h.step = 16 + p;
+            h.len = len;
+            h.degree = 0;
+            h.vel = 112;
+            w.add (h);
+            p += std::max (1, (int) len);
+        }
+        s = e;
+    }
+
+    // Residues 1, 2 and 3 each need an attack on the call bar. That bar is
+    // tiled onto the beats the last-bar trim does not touch.
+    for (int res = 1; res <= 3; ++res)
+    {
+        bool has = false;
+        for (int i = 0; i < w.n; ++i)
+            if (w.hits[i].step < 16 && (w.hits[i].step % 4) == res)
+                has = true;
+        if (has)
+            continue;
+        for (int s = 1; s < 16; ++s)
+        {
+            if ((s % 4) != res || isKickStep (s) || w.has (s))
+                continue;
+            Hit n;
+            n.step = s;
+            n.len = 1.f;
+            n.degree = 0;
+            n.vel = 108;
+            w.add (n);
+            break;
+        }
+    }
+    (void) r;
+}
+
+// Root stays the longest pitch, the b2 (phrygian degree 1) takes a real share
+// of the bar, and one or two other safe degrees keep the line from droning.
+float medianLen (const Work& w)
+{
+    float v[kMaxPhraseNotes];
+    const int n = w.n;
+    if (n <= 0)
+        return 0.f;
+    for (int i = 0; i < n; ++i)
+        v[i] = w.hits[i].len;
+    std::sort (v, v + n);
+    if (n % 2 == 1)
+        return v[n / 2];
+    return 0.5f * (v[n / 2 - 1] + v[n / 2]);
+}
+
+// Median under 1.5 is a short-note pile-up. Stretch a short note into a free
+// step first; only then fold two adjacent shorts into one hold of length 2.
+void liftMedian (Work& w)
+{
+    w.sort();
+    for (int i = 0; i < w.n; ++i)
+    {
+        const int barEnd = (w.hits[i].step / 16 + 1) * 16;
+        const int next = (i + 1 < w.n) ? w.hits[i + 1].step : barEnd;
+        const float room = (float) std::min (barEnd, next) - (float) w.hits[i].step;
+        if (w.hits[i].len < 2.f && room >= 2.f)
+            w.hits[i].len = 2.f;
+    }
+    int guard = 0;
+    while (w.n >= 2 && medianLen (w) < 1.5f && guard++ < 16)
+    {
+        int best = -1;
+        for (int i = 0; i + 1 < w.n; ++i)
+        {
+            const int a = w.hits[i].step;
+            const int b = w.hits[i + 1].step;
+            if (b != a + 1 || a / 16 != b / 16)
+                continue;
+            if (w.hits[i].len >= 1.5f || w.hits[i + 1].len >= 1.5f)
+                continue;
+            best = i;
+            if ((a % 16) >= 8)
+                break;
+        }
+        if (best < 0)
+            break;
+        Hit& h = w.hits[best];
+        const Hit& n = w.hits[best + 1];
+        h.len = std::min (2.f, (float) n.step + n.len - (float) h.step);
+        w.removeAt (best + 1);
+    }
+}
+
+// DEEP keeps five attacks a bar and lets each one hold until the next, so the
+// notes stay longer than a jackin jab without crossing the length cap.
+void stretchDeep (Work& w)
+{
+    auto residueCount = [&] (int res)
+    {
+        int c = 0;
+        for (int i = 0; i < w.n; ++i)
+            if (w.hits[i].step < 16 && (w.hits[i].step % 4) == res)
+                ++c;
+        return c;
+    };
+    for (int bar = 0; bar < 2; ++bar)
+    {
+        int guard = 0;
+        while (w.countIn (bar * 16, bar * 16 + 16) > 4 && guard++ < 8)
+        {
+            int victim = -1;
+            float shortest = 100.f;
+            for (int i = 0; i < w.n; ++i)
+            {
+                if (w.hits[i].step / 16 != bar)
+                    continue;
+                const int res = w.hits[i].step % 4;
+                if (res != 0 && w.hits[i].step < 16 && residueCount (res) <= 1)
+                    continue;
+                if (w.hits[i].len < shortest)
+                {
+                    shortest = w.hits[i].len;
+                    victim = i;
+                }
+            }
+            if (victim < 0)
+                break;
+            w.removeAt (victim);
+        }
+    }
+    w.sort();
+    for (int i = 0; i < w.n; ++i)
+    {
+        const int barEnd = (w.hits[i].step / 16 + 1) * 16;
+        const bool sameBar = i + 1 < w.n && w.hits[i + 1].step / 16 == w.hits[i].step / 16;
+        const int next = sameBar ? w.hits[i + 1].step : barEnd;
+        w.hits[i].len = std::max (1.f, std::min (4.f, (float) next - (float) w.hits[i].step));
+    }
+}
+
+void paintJackin (Work& w, Rng& r)
+{
+    if (w.n <= 0)
+        return;
+    w.sort();
+    const int pattern = std::min (3, (int) (r.next() * 4.f));
+    // Four cycles. Each is mostly root, with degree 1 (b2) twice and a colour.
+    static const int cycles[4][8] = {
+        { 0, 0, 1, 2, 0, 4, 1, 0 },
+        { 0, 2, 0, 1, 0, 0, 4, 1 },
+        { 0, 0, 4, 0, 1, 2, 0, 1 },
+        { 0, 1, 0, 0, 2, 0, 1, 4 },
+    };
+    const int spin = (int) (r.next() * 8.f);
+    for (int i = 0; i < w.n; ++i)
+        w.hits[i].degree = cycles[pattern][(i + spin) % 8];
+    w.hits[0].degree = 0;
+}
+
+void ensureDeepShape (Work& w)
+{
+    // 5 onsets a bar so the last-bar trim still clears the density floor,
+    // and each in-beat residue shows up on the call.
+    for (int bar = 0; bar < 2; ++bar)
+    {
+        int guard = 0;
+        while (w.countIn (bar * 16, bar * 16 + 16) < 5 && guard++ < 4)
+        {
+            int placed = -1;
+            for (int s = bar * 16 + 1; s < bar * 16 + 16; ++s)
+            {
+                if (isKickStep (s) || w.has (s))
+                    continue;
+                placed = s;
+                if ((s % 4) != 2)
+                    break; // don't add yet another "and" if something else is free
+            }
+            if (placed < 0)
+                break;
+            Hit h;
+            h.step = placed;
+            h.len = 2.f;
+            h.degree = (w.n & 1) ? 2 : 0;
+            h.vel = 108;
+            w.add (h);
+        }
+    }
+    for (int res = 1; res <= 3; ++res)
+    {
+        bool has = false;
+        for (int i = 0; i < w.n; ++i)
+            if (w.hits[i].step < 16 && (w.hits[i].step % 4) == res)
+                has = true;
+        if (has)
+            continue;
+        for (int s = 1; s < 16; ++s)
+        {
+            if ((s % 4) != res || isKickStep (s) || w.has (s))
+                continue;
+            Hit h;
+            h.step = s;
+            h.len = 2.f;
+            h.degree = 2;
+            h.vel = 108;
+            w.add (h);
+            break;
+        }
     }
 }
 
@@ -466,7 +780,11 @@ Phrase makeBassPhrase (Style style, std::uint32_t seed, const PhraseSettings& s)
     Rng r (mix (seed, 0xB455u + (std::uint32_t) style));
     const int bars = std::clamp (s.bars, 1, 2);
     const float busy = std::clamp (s.busy, 0.f, 1.f);
-    const int mode = pickMode (std::clamp (s.dark, 0.f, 1.f), r);
+    // JACKIN's lane wants the b2, which only phrygian carries. DEEP keeps the
+    // dark-weighted mode mix.
+    int mode = pickMode (std::clamp (s.dark, 0.f, 1.f), r);
+    if (style == Style::Jackin)
+        mode = Phrygian;
 
     Work w;
     const int front = pickCell (S, r, busy, -1, -1);
@@ -488,7 +806,9 @@ Phrase makeBassPhrase (Style style, std::uint32_t seed, const PhraseSettings& s)
     const PbContour& c = S.contours[ci];
     pitchHits (w, 0, 16, S, c, r, true);
 
-    if (bars == 2)
+    if (bars == 2 && style == Style::Jackin)
+        complementJackin (w, r);
+    else if (bars == 2)
     {
         const int n1 = w.n;
         for (int i = 0; i < n1; ++i)
@@ -497,6 +817,9 @@ Phrase makeBassPhrase (Style style, std::uint32_t seed, const PhraseSettings& s)
             h.step += 16;
             w.add (h);
         }
+        // The even bar always retails its back half, then may take another
+        // weighted op. A photocopy of bar 1 sticks the 1-bar match too high.
+        applyVariation (w, OpRetail, S, c, busy, r);
         const int nOps = r.next() < 0.25f + 0.5f * std::clamp (s.bounce, 0.f, 1.f) ? 2 : 1;
         for (int k = 0; k < nOps; ++k)
         {
@@ -509,8 +832,22 @@ Phrase makeBassPhrase (Style style, std::uint32_t seed, const PhraseSettings& s)
     const int steps = bars * 16;
     enforceKick (w, steps);
     enforceBars (w, bars);
+    if (style == Style::Deep && bars == 2)
+        ensureDeepShape (w);
     shapeHits (w, 0, steps, S, r);
     trimLens (w, steps, S.maxLen);
+    if (style == Style::Deep && bars == 2)
+    {
+        stretchDeep (w);
+        // Dropping notes can leave too many of the remaining attacks on kicks.
+        enforceKick (w, steps);
+        trimLens (w, steps, S.maxLen);
+    }
+    if (style == Style::Jackin)
+    {
+        liftMedian (w);
+        paintJackin (w, r);
+    }
     return toPhrase (w, bars, mode);
 }
 

@@ -17,8 +17,9 @@ namespace rolla
 // dropped WAV, then render() once per sample from the drum machine.
 // trigger() returns the circuit-model gain to keep:
 //   1 = this hook did not play a sample, 0 = the sample replaced the model.
-// Factory kits do not use that 1. A missing drum file is filled from the
-// DRUMS pack (PERC, OH, RIDE, then the other folders), not from the model.
+// A missing drum file is filled from the DRUMS pack first (PERC, OH, RIDE,
+// then the other folders). If that pack is empty, or the library is absent,
+// the caller keeps the circuit model so the hit is not silence.
 // trigger() and render() must not allocate or lock.
 
 struct DrumSampleRequest

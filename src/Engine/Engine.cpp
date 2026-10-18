@@ -30,14 +30,24 @@ float expDecay (float ms, float sr) noexcept
 struct Env
 {
     int stage = 0;
+    int atkAge = 0, atkN = 1;
+    bool cosineAtk = false;
     float amp = 0, sustain = 0, attInc = 0, decC = 0, relC = 0;
 
     void start (float aMs, float dMs, float sGain, float rMs, float sr) noexcept
     {
         stage = 1;
         amp = 0.f;
+        atkAge = 0;
         sustain = std::clamp (sGain, 0.f, 1.f);
-        attInc = 1.f / std::max (1.f, aMs * 0.001f * sr);
+        // A 1 ms linear attack opens as one sample step of the whole voice.
+        // Stab chords (1 ms) need about 12 ms or the slope in a quiet bar
+        // reads as a click. Other short attacks use 6 ms. Longer attacks
+        // stay linear, which is already under the click floor.
+        cosineAtk = aMs < 6.f;
+        const float atkMs = aMs < 2.f ? 12.f : (cosineAtk ? 6.f : aMs);
+        atkN = std::max (1, (int) std::lround (atkMs * 0.001f * sr));
+        attInc = 1.f / std::max (1.f, atkMs * 0.001f * sr);
         decC = coefFromMs (std::max (5.f, dMs) / 3.f, sr);
         relC = coefFromMs (std::max (5.f, rMs) / 3.f, sr);
     }
@@ -52,11 +62,28 @@ struct Env
     {
         if (stage == 1)
         {
-            amp += attInc;
-            if (amp >= 1.f)
+            if (cosineAtk)
             {
-                amp = 1.f;
-                stage = 2;
+                ++atkAge;
+                if (atkAge >= atkN)
+                {
+                    amp = 1.f;
+                    stage = 2;
+                }
+                else
+                {
+                    const float t = (float) atkAge / (float) atkN;
+                    amp = 0.5f * (1.f - std::cos (kPi * t));
+                }
+            }
+            else
+            {
+                amp += attInc;
+                if (amp >= 1.f)
+                {
+                    amp = 1.f;
+                    stage = 2;
+                }
             }
         }
         else if (stage == 2)
@@ -96,7 +123,7 @@ struct BassV
     float freq = 40.f, targetFreq = 40.f, glideC = 1.f;
     bool gliding = false;
     float cut = 170.f, envOct = 2.f, fEnv = 0.f, fCoef = 0.99f, res = 0.05f, drive = 0.f;
-    float subGain = 0.5f, oct2Gain = 0.f, trim = 0.3f, velGain = 0.8f;
+    float subGain = 0.5f, oct2Gain = 0.f, trim = 0.3f, velGain = 0.8f, velTarget = 0.8f;
     float subLpfHz = 0.f;
     float pitchSt = 0.f, pitchCoef = 1.f;
     float ring = 0.f, last = 0.f;
@@ -637,14 +664,16 @@ void Engine::process (const Groove& groove,
 
     if (wasPlaying && ! transport.playing)
     {
+        // Stop kills the voices. Releasing them retriggers the bar-1 attack
+        // into the free tail (the loop end is already gated quiet).
         auto offs = [&] (auto& v)
         {
             if (v.midiOn)
                 midi.addEvent (juce::MidiMessage::noteOff (v.midiCh + 1, v.midiNote), 0);
-            v.midiOn = false;
-            v.env.release();
+            v.kill();
         };
         offs (E.bass);
+        offs (E.live);
         for (auto& v : E.stab) offs (v);
         for (auto& v : E.pluck) offs (v);
         for (auto& v : E.pad) offs (v);
@@ -653,8 +682,7 @@ void Engine::process (const Groove& groove,
             if (v.midiOn)
                 for (int n = 0; n < v.midiCount; ++n)
                     midi.addEvent (juce::MidiMessage::noteOff (v.midiCh + 1, v.midiNote[n]), 0);
-            v.midiOn = false;
-            v.env.release();
+            v.kill();
         }
         for (auto& v : E.vox) offs (v);
         for (auto& p : E.pending)
@@ -664,12 +692,9 @@ void Engine::process (const Groove& groove,
             p.on = false;
         }
         for (auto& p : E.play)
-        {
-            if (p.on)
-                p.ring = p.last;
-            p.on = false;
-        }
-        sampler.releaseAll();
+            p = {};
+        sampler.reset();
+        E.drums.reset();
     }
     wasPlaying = transport.playing;
     const float ringC = expDecay (12.f, srF);
@@ -734,6 +759,20 @@ void Engine::process (const Groove& groove,
         const double prev = pos;
         if (transport.playing)
             pos = wrapLoop (pos + d16, loop16);
+        else
+        {
+            // Stop is silence. Killing voices is not enough: an attack that
+            // began on the last playing sample keeps rising through the free
+            // tail and reads as bar 1 starting again.
+            mainL[i] = 0.f;
+            if (mainR != nullptr)
+                mainR[i] = 0.f;
+            if (drumL != nullptr)
+                drumL[i] = 0.f;
+            if (drumR != nullptr)
+                drumR[i] = 0.f;
+            continue;
+        }
 
         auto emitHeld = [&] (int part, int note, int vel, float st, float en)
         {
@@ -905,7 +944,11 @@ void Engine::process (const Groove& groove,
                     E.live.fEnv = 0.f;
                 E.live.oct2Gain = bp.oct2Db < -80.f ? 0.f : dbToGain (bp.oct2Db);
                 E.live.trim = dbToGain (bp.trimDb) * 0.35f * (taken.kind == 2 ? taken.synthGain : 1.f);
-                E.live.velGain = velGainOf (incoming[e].vel);
+                // A glide keeps the envelope open. Stepping velGain there is a one-sample click.
+                const float liveVel = velGainOf (incoming[e].vel);
+                if (! legato)
+                    E.live.velGain = liveVel;
+                E.live.velTarget = liveVel;
                 E.live.dc.setCutoff (bp.hpfHz, srF);
                 E.live.midiCh = 0;
                 emitOn (i, 0, note, incoming[e].vel, E.live.midiOn, E.live.midiNote);
@@ -988,7 +1031,12 @@ void Engine::process (const Groove& groove,
                     E.bass.fEnv = 0.f;
                 E.bass.oct2Gain = 0.f;
                 E.bass.trim = dbToGain (bp.trimDb) * 0.38f * (taken.kind == 2 ? taken.synthGain : 1.f);
-                E.bass.velGain = velGainOf (n.vel);
+                // Glide (or an explicit slide) leaves the amp open. Apply the new
+                // velocity through velTarget so the sounding note does not step.
+                const float bassVel = velGainOf (n.vel);
+                if (! legato)
+                    E.bass.velGain = bassVel;
+                E.bass.velTarget = bassVel;
                 E.bass.dc.setCutoff (bp.hpfHz, srF);
                 E.bass.midiCh = 0;
                 emitOn (i, 0, semi, n.vel, E.bass.midiOn, E.bass.midiNote);
@@ -1383,8 +1431,9 @@ void Engine::process (const Groove& groove,
                     }
                     drumOn (drumMidiNote (voice), vel, midiHold (voice));
 
-                    // Sample kits never feed the circuit model. A missing file is
-                    // another hit from the DRUMS pack, inside takeDrum.
+                    // Sample kits play the file, then the rest of the DRUMS pack.
+                    // If that slot is missing or the library is absent, takeDrum
+                    // returns the 909 gain so the hit is not silence.
                     const bool circuitKit = dp.sample.mode == SampleMode::Synth;
                     float keep = 0.f;
                     if (startSample (voice, vel, stepAcc))
@@ -1401,17 +1450,19 @@ void Engine::process (const Groove& groove,
                         req.key = drumVoiceKey (voice);
                         req.midiNote = drumMidiNote (voice);
                         const float slotKeep = slot->trigger (req);
-                        if (circuitKit)
+                        if (slotKeep <= 0.001f)
+                            keep = 0.f;
+                        else if (circuitKit)
                             keep = slotKeep;
-                        else if (slotKeep > 0.001f)
-                            sampler.takeDrum (voice, vel, bank, play);
+                        else
+                            keep = sampler.takeDrum (voice, vel, bank, play);
                     }
                     else if (circuitKit)
                         keep = 1.f;
                     else
-                        sampler.takeDrum (voice, vel, bank, play);
+                        keep = sampler.takeDrum (voice, vel, bank, play);
 
-                    if (circuitKit && keep > 0.001f)
+                    if (keep > 0.001f)
                     {
                         DrumHit hit;
                         hit.voice = voice;
@@ -1553,6 +1604,17 @@ void Engine::process (const Groove& groove,
                     sub = v.subLp.process (sub, v.subLpfHz, 0.f, srF);
                 y += v.subGain * sub;
             }
+            if (std::fabs (v.velGain - v.velTarget) > 1.0e-6f)
+            {
+                // 5 ms covers a ghost (80) against an accent (112), about a 6 dB move.
+                const float step = std::max (v.velGain, v.velTarget) / std::max (1.f, 0.005f * srF);
+                if (v.velGain + step < v.velTarget)
+                    v.velGain += step;
+                else if (v.velGain - step > v.velTarget)
+                    v.velGain -= step;
+                else
+                    v.velGain = v.velTarget;
+            }
             y = v.dc.process (y) * v.env.amp * v.velGain * v.trim;
             y += v.ring;
             v.ring = flush (v.ring * ringC);
@@ -1654,7 +1716,7 @@ void Engine::process (const Groove& groove,
         };
 
         float playL[NumParts] {}, playR[NumParts] {};
-        sampler.render (playL, playR, (float) prev, (float) pos, transport.playing);
+        sampler.render (playL, playR, (float) prev, (float) pos, transport.playing, (float) loop16);
 
         const float bFader = E.level[Bass].next();
         const float bDuck = params.duck ? E.duckB.next() : 1.f;
@@ -2090,6 +2152,13 @@ void Engine::process (const Groove& groove,
             else
                 E.fxHeld = false;
         }
+        else
+        {
+            // A stop must not reopen the bar-end gate. Delay and reverb that
+            // were cleared on the last sixteenth stay clear, so the free tail
+            // after a loop is silence rather than bar 1 played again.
+            fxGate = 0.f;
+        }
         sDelay *= fxGate;
         sRev *= fxGate;
         aRev *= fxGate;
@@ -2161,6 +2230,22 @@ void Engine::process (const Groove& groove,
         {
             outL = flush (fastTanh (E.mainDc.process (outL) * 1.05f) * og);
             outR = flush (fastTanh (outR * 1.05f) * og);
+        }
+        // The free tail after the loop is hard silence. Reach that silence
+        // on a raised cosine, or the last playing sample steps into the zero.
+        if (transport.playing)
+        {
+            const double untilEnd = loop16 - pos;
+            const double window = d16 * 0.010 * sr;
+            if (untilEnd > 0.0 && untilEnd < window)
+            {
+                const float t = (float) (untilEnd / window);
+                const float g = 0.5f * (1.f - std::cos (kPi * t));
+                outL *= g;
+                outR *= g;
+                drumLft *= g;
+                drumRgt *= g;
+            }
         }
         mainL[i] = outL;
         if (mainR != nullptr)

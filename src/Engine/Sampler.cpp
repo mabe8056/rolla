@@ -229,7 +229,8 @@ bool readyChoice (const SampleLibrary* library, const SampleSpec& spec, int midi
 }
 
 // The chosen preset wins. A confirmed-missing file tries the rest of the lane.
-// A file that is still loading does not get replaced, and nothing here selects the synth.
+// A file that is still loading does not get replaced by another sample.
+// If nothing is ready, take() plays the matching synth instead of silence.
 LaneHit resolveLane (const PresetBank& bank, const EngineParams& params, int part,
                      int midiNote, int sliceIndex) noexcept
 {
@@ -329,8 +330,53 @@ void Sampler::reset() noexcept
 {
     for (auto& v : voices)
         v = {};
+    for (auto& v : tails)
+        v = {};
     for (int& c : sliceCursor)
         c = 0;
+}
+
+void Sampler::armAttack (Voice& v) noexcept
+{
+    v.attackN = std::max (8, (int) (0.003 * sr));
+    v.attackLeft = v.attackN;
+    v.fade = 1.f;
+    v.fadeInc = 0.f;
+    v.releaseLeft = 0;
+    v.releaseN = 0;
+    v.noteEdge = 1.f;
+    v.stopping = false;
+}
+
+void Sampler::park (const Voice& dying) noexcept
+{
+    Voice* dest = nullptr;
+    Voice* quiet = nullptr;
+    float quietG = 1.0e9f;
+    for (auto& t : tails)
+    {
+        if (! t.on)
+        {
+            dest = &t;
+            break;
+        }
+        const float g = t.env.amp * (t.releaseN > 0 ? (float) t.releaseLeft / (float) std::max (1, t.releaseN) : t.fade);
+        if (g < quietG)
+        {
+            quietG = g;
+            quiet = &t;
+        }
+    }
+    if (dest == nullptr)
+        dest = quiet;
+    if (dest == nullptr)
+        return;
+    *dest = dying;
+    dest->attackLeft = 0;
+    dest->releaseN = std::max (8, (int) (0.004 * sr));
+    dest->releaseLeft = dest->releaseN;
+    dest->stopping = true;
+    dest->fadeInc = 0.f;
 }
 
 void Sampler::releaseNote (int part, int midiNote) noexcept
@@ -365,10 +411,7 @@ Sampler::Voice* Sampler::allocate (int) noexcept
     if (slot == nullptr)
         return nullptr;
     if (slot->on)
-    {
-        slot->stopping = true;
-        slot->fadeInc = -1.f / 64.f;
-    }
+        park (*slot);
     return slot;
 }
 
@@ -482,7 +525,9 @@ void Sampler::readVoice (Voice& v, float& l, float& r) noexcept
     else
         v.pos += v.ratio;
     if (! v.loop && v.pos >= n - 1.0)
-        v.env.release();
+        v.on = false;
+    if (v.releaseN > 0 && v.releaseLeft <= 0 && v.stopping)
+        v.on = false;
 
     const float srF = (float) sr;
     if (v.fEnv > 0.f)
@@ -497,9 +542,33 @@ void Sampler::readVoice (Voice& v, float& l, float& r) noexcept
     }
     rs = ls + (rs - ls) * 0.85f;
 
+    float edge = v.noteEdge;
+    if (v.attackN > 0 && v.attackLeft > 0)
+    {
+        const float t = 1.f - (float) v.attackLeft / (float) v.attackN;
+        edge *= 0.5f * (1.f - std::cos (kSincPi * t));
+        --v.attackLeft;
+    }
+    if (v.releaseN > 0 && v.releaseLeft > 0)
+    {
+        const float t = (float) v.releaseLeft / (float) v.releaseN;
+        edge *= 0.5f * (1.f - std::cos (kSincPi * t));
+        --v.releaseLeft;
+    }
+    if (! v.loop)
+    {
+        const double remain = n - v.pos;
+        const double fade = std::max (8.0, 0.004 * (v.audio->rate > 1.0 ? v.audio->rate : sr));
+        if (remain < fade)
+        {
+            const float t = std::clamp ((float) (remain / fade), 0.f, 1.f);
+            edge *= 0.5f * (1.f - std::cos (kSincPi * t));
+        }
+    }
+
     const float env = v.env.amp;
     v.fade = std::clamp (v.fade + v.fadeInc, 0.f, 1.f);
-    const float g = env * v.gain * v.fade;
+    const float g = env * v.gain * v.fade * edge;
     l = ls * g * (1.f - v.pan * 0.5f);
     r = rs * g * (1.f + v.pan * 0.5f);
     if (! v.env.tick() || (v.stopping && v.fade <= 0.f))
@@ -594,8 +663,10 @@ bool Sampler::playUserSlot (int part, int drumVoice, int midiNote, int velocity,
         return false;
     if (! decision.fromSlot)
     {
-        take = {};
-        drumKeep = 1.f;
+        // The slot owns the voice. Until its file is ready the synth stays off.
+        take.kind = 1;
+        take.synthGain = 0.f;
+        drumKeep = 0.f;
         return true;
     }
 
@@ -627,7 +698,7 @@ bool Sampler::playUserSlot (int part, int drumVoice, int midiNote, int velocity,
     fresh.ratio = std::clamp (std::pow (2.0, semis / 12.0) * (pod.audio->rate / sr), ratioMin, ratioMax);
     fresh.end16 = end16;
     fresh.fade = 0.f;
-    fresh.fadeInc = 1.f / (drumVoice >= 0 ? 32.f : 64.f);
+    fresh.fadeInc = drumVoice >= 0 ? 1.f / std::max (8.f, 0.002f * srF) : 1.f / 64.f;
     fresh.stopping = false;
     float trim = amp.trim * std::clamp (velocity / 127.f, 0.05f, 1.f);
     if (drumVoice >= 0)
@@ -663,6 +734,7 @@ bool Sampler::playUserSlot (int part, int drumVoice, int midiNote, int velocity,
     fresh.loopA = region.a;
     fresh.loopB = region.b;
     fresh.xfade = region.xfade;
+    armAttack (fresh);
     *voice = fresh;
 
     take.kind = decision.kind;
@@ -683,6 +755,8 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     const auto& spec = sampleSpecFor (bank, part, presetOf (params, part));
     if (spec.mode == SampleMode::Synth)
         return result;
+    // No library: the factory file cannot load. Same-pool swap needs a library,
+    // and a missing sample never falls through to the lane synth.
     if (params.library == nullptr)
     {
         result.kind = 1;
@@ -753,6 +827,8 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
             }
         }
     }
+    // Still loading, or confirmed missing after the same-pool swap: the sample
+    // owns this note. The lane synth does not fill the gap.
     if (audio == nullptr || audio->frames < 8)
     {
         result.kind = 1;
@@ -762,11 +838,7 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
 
     Voice* slot = allocate (part);
     if (slot == nullptr)
-    {
-        result.kind = 1;
-        result.synthGain = 0.f;
         return result;
-    }
 
     const auto amp = ampFor (bank, part, presetOf (params, part));
     const float srF = (float) sr;
@@ -827,6 +899,7 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
         fresh.spliceLeft = 0;
     }
 
+    armAttack (fresh);
     *slot = fresh;
     if (layered)
     {
@@ -853,6 +926,7 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
     const auto& spec = sampleSpecFor (bank, Drums, preset);
     if (spec.mode == SampleMode::Synth)
         return 1.f;
+    // No library: there is no pool to swap from, and the 909 is not a fallback.
     if (params.library == nullptr)
         return 0.f;
 
@@ -952,6 +1026,7 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
             }
         }
     }
+    // Still loading, or the pool has nothing ready: stay silent. Not the 909.
     if (audio == nullptr || audio->frames < 8)
         return 0.f;
 
@@ -971,7 +1046,7 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
     fresh.ratio = std::clamp (tune * (audio->rate / sr), 0.25, 4.0);
     fresh.end16 = 1.0e9f;
     fresh.fade = 0.f;
-    fresh.fadeInc = 1.f / 32.f;
+    fresh.fadeInc = 1.f / std::max (8.f, 0.002f * (float) sr);
     fresh.gain = amp.trim * std::clamp (velocity / 127.f, 0.05f, 1.f) * ampDb (params.drumLevelDb[voice]);
     if (spec.mode == SampleMode::Layer)
         fresh.gain *= std::clamp (spec.layerMix, 0.f, 1.f);
@@ -990,12 +1065,13 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
     fresh.loopA = region.a;
     fresh.loopB = region.b;
     fresh.xfade = region.xfade;
+    armAttack (fresh);
     *slot = fresh;
 
     return 0.f;
 }
 
-void Sampler::render (float* laneL, float* laneR, float prev16, float pos16, bool playing) noexcept
+void Sampler::render (float* laneL, float* laneR, float prev16, float pos16, bool playing, float loopEnd16) noexcept
 {
     if (laneL == nullptr || laneR == nullptr)
         return;
@@ -1004,11 +1080,34 @@ void Sampler::render (float* laneL, float* laneR, float prev16, float pos16, boo
     for (int v = 0; v < NumDrumVoices; ++v)
         drumOutL[v] = drumOutR[v] = 0.f;
 
-    for (auto& v : voices)
+    auto renderOne = [&] (Voice& v)
     {
         if (! v.on)
-            continue;
-        if (playing && v.end16 < 1.0e8f)
+            return;
+        v.noteEdge = 1.f;
+        if (playing && loopEnd16 > 1.f)
+        {
+            const float stop = std::min (v.end16, loopEnd16);
+            const float step = pos16 - prev16;
+            if (step > 0.f)
+            {
+                const float window = std::max (step, step * (float) (0.010 * sr));
+                const float remain = stop - pos16;
+                if (remain <= 0.f)
+                {
+                    v.on = false;
+                    return;
+                }
+                if (remain < window)
+                    v.noteEdge = 0.5f * (1.f - std::cos (kSincPi * remain / window));
+            }
+            else if (prev16 < stop && pos16 + 1.0e-3f < prev16)
+            {
+                v.on = false;
+                return;
+            }
+        }
+        else if (playing && v.end16 < 1.0e8f)
         {
             const bool hit = (prev16 < v.end16 && pos16 >= v.end16)
                           || (pos16 < prev16 && v.end16 >= prev16);
@@ -1027,7 +1126,11 @@ void Sampler::render (float* laneL, float* laneR, float prev16, float pos16, boo
                 drumOutR[v.drumVoice] += r;
             }
         }
-    }
+    };
+    for (auto& v : voices)
+        renderOne (v);
+    for (auto& v : tails)
+        renderOne (v);
 }
 
 } // namespace rolla

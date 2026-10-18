@@ -65,6 +65,7 @@ target_sources(ROLLA
         src/Sampler/SamplePrep.cpp
         src/Sampler/UserSlots.cpp
         src/Generator/Generator.cpp
+        src/Generator/PhraseBank.cpp
         src/Generator/Presets.cpp
         src/Generator/MidiFile.cpp
         src/Drums/DrumMachine.cpp
@@ -102,6 +103,7 @@ add_executable(rolla-render
     src/Engine/SampleLibrary.cpp
     src/Sampler/SamplePrep.cpp
     src/Generator/Generator.cpp
+    src/Generator/PhraseBank.cpp
     src/Generator/Presets.cpp
     src/Generator/MidiFile.cpp
     src/Drums/DrumMachine.cpp
@@ -137,6 +139,7 @@ add_executable(rolla-sample-check
     src/Engine/SampleLibrary.cpp
     src/Sampler/SamplePrep.cpp
     src/Generator/Generator.cpp
+    src/Generator/PhraseBank.cpp
     src/Generator/Presets.cpp
     src/Drums/DrumMachine.cpp
     src/Drums/DrumPattern.cpp
@@ -172,6 +175,7 @@ add_executable(rolla-ui-shot
     src/Sampler/SamplePrep.cpp
     src/Sampler/UserSlots.cpp
     src/Generator/Generator.cpp
+    src/Generator/PhraseBank.cpp
     src/Generator/Presets.cpp
     src/Generator/MidiFile.cpp
     src/Drums/DrumMachine.cpp
@@ -206,6 +210,7 @@ add_executable(rolla-sampler-test
     src/Sampler/SamplePrep.cpp
     src/Sampler/UserSlots.cpp
     src/Generator/Generator.cpp
+    src/Generator/PhraseBank.cpp
     src/Generator/Presets.cpp
     src/Drums/DrumMachine.cpp
     src/Drums/DrumPattern.cpp
@@ -242,6 +247,8 @@ add_executable(rolla-tp-test
     src/Sampler/UserSlots.cpp
     src/Generator/Generator.cpp
     src/Generator/Presets.cpp
+    src/Generator/PhraseBank.cpp
+    src/Generator/Arrangement.cpp
     src/Drums/DrumMachine.cpp
     src/Drums/DrumPattern.cpp
     src/Mix/MixProgram.cpp
@@ -279,6 +286,7 @@ add_executable(rolla-roll-test
     src/Sampler/SamplePrep.cpp
     src/Sampler/UserSlots.cpp
     src/Generator/Generator.cpp
+    src/Generator/PhraseBank.cpp
     src/Generator/Presets.cpp
     src/Generator/MidiFile.cpp
     src/Drums/DrumMachine.cpp
@@ -323,6 +331,7 @@ add_executable(rolla-mix-render
     src/Sampler/SamplePrep.cpp
     src/Sampler/UserSlots.cpp
     src/Generator/Generator.cpp
+    src/Generator/PhraseBank.cpp
     src/Generator/Presets.cpp
     src/Drums/DrumMachine.cpp
     src/Drums/DrumPattern.cpp
@@ -367,6 +376,7 @@ add_executable(rolla-knob-test
     src/Sampler/SamplePrep.cpp
     src/Sampler/UserSlots.cpp
     src/Generator/Generator.cpp
+    src/Generator/PhraseBank.cpp
     src/Generator/Presets.cpp
     src/Generator/MidiFile.cpp
     src/Drums/DrumMachine.cpp
@@ -386,6 +396,62 @@ target_compile_definitions(rolla-knob-test
 )
 
 target_link_libraries(rolla-knob-test
+    PRIVATE
+        RollaData
+        juce::juce_audio_utils
+        juce::juce_dsp
+        juce::juce_audio_formats
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags
+)
+
+# Offline variety check. No JUCE. Not part of the CI workflow.
+add_executable(rolla-variety
+    tools/variety_main.cpp
+    tools/PatternStats.cpp
+    src/Generator/Generator.cpp
+    src/Generator/PhraseBank.cpp
+)
+target_include_directories(rolla-variety PRIVATE src tools)
+target_compile_options(rolla-variety PRIVATE -Wall -Wextra -Wpedantic)
+
+# JSONL grooves for tools/score_rolls. No JUCE. Not part of CI.
+add_executable(rolla-dump
+    tools/dump_grooves.cpp
+    src/Generator/Generator.cpp
+    src/Generator/PhraseBank.cpp
+)
+target_include_directories(rolla-dump PRIVATE src)
+target_compile_options(rolla-dump PRIVATE -Wall -Wextra -Wpedantic)
+
+# Headless roll renderer. With --samples DIR --style ID --count N --seed S
+# it writes that batch. Without those flags it still writes the local 20-roll set.
+add_executable(rolla-rolls
+    tools/roll_batch.cpp
+    tools/PatternStats.cpp
+    src/Engine/Engine.cpp
+    src/Engine/Sampler.cpp
+    src/Engine/SampleLibrary.cpp
+    src/Sampler/SamplePrep.cpp
+    src/Sampler/UserSlots.cpp
+    src/Generator/Generator.cpp
+    src/Generator/PhraseBank.cpp
+    src/Generator/Presets.cpp
+    src/Generator/MidiFile.cpp
+    src/Drums/DrumMachine.cpp
+    src/Drums/DrumPattern.cpp
+    src/Mix/MixProgram.cpp
+    src/Mix/MixRuntime.cpp
+)
+target_include_directories(rolla-rolls PRIVATE src tools)
+target_compile_definitions(rolla-rolls
+    PRIVATE
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_DISPLAY_SPLASH_SCREEN=0
+        JUCE_REPORT_APP_USAGE=0
+)
+target_link_libraries(rolla-rolls
     PRIVATE
         RollaData
         juce::juce_audio_utils

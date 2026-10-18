@@ -31,7 +31,8 @@ public:
     void releaseNote (int part, int midiNote) noexcept;
 
     void releaseAll() noexcept;
-    void render (float* laneL, float* laneR, float prev16, float pos16, bool playing) noexcept;
+    // loopEnd16 > 0 fades every voice out at the phrase end so nothing runs into the next bar.
+    void render (float* laneL, float* laneR, float prev16, float pos16, bool playing, float loopEnd16 = 0.f) noexcept;
 
     // Filled by render(). Melodic playback stays on the lane buses; drum hits are also split per voice.
     float drumOutL[NumDrumVoices] {};
@@ -59,9 +60,15 @@ private:
         double anchor = 0.0;
         double splicePos = 0.0;
         int spliceLeft = 0;
-        float fade = 0.f;
-        float fadeInc = 1.f;
+        float fade = 1.f;
+        float fadeInc = 0.f;
         bool stopping = false;
+        // Raised-cosine edges. A linear step at a sample boundary is a click.
+        int attackLeft = 0;
+        int attackN = 0;
+        int releaseLeft = 0;
+        int releaseN = 0;
+        float noteEdge = 1.f;
         float gain = 0.2f;
         float pan = 0.f;
         float end16 = 1.0e9f;
@@ -84,6 +91,8 @@ private:
     };
 
     Voice* allocate (int part) noexcept;
+    void park (const Voice& dying) noexcept;
+    void armAttack (Voice& voice) noexcept;
     float readSinc (const std::vector<float>& src, double index) const noexcept;
     void readVoice (Voice& v, float& l, float& r) noexcept;
     // True when a user slot owns this note (playing, or still loading).
@@ -95,6 +104,7 @@ private:
     int serial = 1;
     int sliceCursor[NumParts] {};
     Voice voices[40];
+    Voice tails[16];
 };
 
 const SampleSpec& sampleSpecFor (const PresetBank& bank, int part, int preset) noexcept;

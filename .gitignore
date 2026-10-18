@@ -1,6 +1,7 @@
 build/
 uploads/
 out/
+tools/out/
 dist/
 renders/
 .DS_Store

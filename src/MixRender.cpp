@@ -1,9 +1,12 @@
 #include "DspUtil.h"
 #include "Engine/Engine.h"
 #include "Generator/Generator.h"
+#include "Generator/Intensity.h"
 #include "Generator/Presets.h"
 #include "Mix/MixProgram.h"
 #include "Mix/MixRuntime.h"
+
+#include <juce_dsp/juce_dsp.h>
 
 #include <BinaryData.h>
 
@@ -14,6 +17,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
@@ -144,7 +148,7 @@ struct Take
     std::vector<float> l, r;
 };
 
-Take renderTake (const rolla::Groove& groove, const rolla::EngineParams& params, int bars)
+Take renderTake (const rolla::Groove& groove, const rolla::EngineParams& params, int bars, float* tpGuardGrDb = nullptr)
 {
     const double beats = bars * 4.0;
     const int total = (int) std::llround (beats * 60.0 / kBpm * kSr);
@@ -155,6 +159,7 @@ Take renderTake (const rolla::Groove& groove, const rolla::EngineParams& params,
     engine.prepare (kSr, kBlock);
     int done = 0;
     double ppq = 0.0;
+    float gr = 0.f;
     while (done < total)
     {
         const int n = std::min (kBlock, total - done);
@@ -165,10 +170,86 @@ Take renderTake (const rolla::Groove& groove, const rolla::EngineParams& params,
         transport.sampleRate = kSr;
         juce::MidiBuffer midi;
         engine.process (groove, params, transport, take.l.data() + done, take.r.data() + done, nullptr, nullptr, n, midi, true);
+        // takeTpGuardGrDb clears the block peak, so the render peak is the max of the blocks.
+        gr = std::max (gr, engine.takeTpGuardGrDb());
         ppq += (double) n * kBpm / (60.0 * kSr);
         done += n;
     }
+    if (tpGuardGrDb != nullptr)
+        *tpGuardGrDb = gr;
     return take;
+}
+
+// MIX_SPEC §9.4b. mix_check.py gates tp_guard_gr_db_max at <= 1 dB when the SUM sidecar carries it.
+bool writeSumGrSidecar (const juce::File& wav, float grDb)
+{
+    char buf[80];
+    std::snprintf (buf, sizeof buf, "{\"tp_guard_gr_db_max\":%.4f}\n", (double) grDb);
+    return wav.getSiblingFile (wav.getFileName() + ".gr.json").replaceWithText (buf);
+}
+
+// 4× true-peak estimate of the linear sum. The mix checker uses scipy's
+// resample_poly, so the ceiling target sits under -6 dBTP with margin.
+float truePeakLinear (const Take& take)
+{
+    const int n = (int) take.l.size();
+    if (n <= 0)
+        return 0.f;
+    juce::dsp::Oversampling<float> os (2, 2, juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple, true);
+    os.initProcessing ((size_t) n);
+    juce::AudioBuffer<float> buf (2, n);
+    buf.copyFrom (0, 0, take.l.data(), n);
+    buf.copyFrom (1, 0, take.r.data(), n);
+    juce::dsp::AudioBlock<float> block (buf);
+    const auto up = os.processSamplesUp (block);
+    float peak = 0.f;
+    for (size_t ch = 0; ch < up.getNumChannels(); ++ch)
+    {
+        const float* p = up.getChannelPointer (ch);
+        for (size_t i = 0; i < up.getNumSamples(); ++i)
+            peak = std::max (peak, std::fabs (p[i]));
+    }
+    return peak;
+}
+
+// One linear gain for FULL, SOLO, and MUTE. Already-legal sums stay at unity
+// so a calibrated sample mix keeps its short-term level. The gain is sized
+// from the hottest INTENSITY of this groove: the slider only removes or
+// rearranges lanes, and the raw phrase is the all-lanes case.
+float sumCeilingGain (float truePeakLin)
+{
+    const float limit = std::pow (10.f, -6.0f / 20.f);
+    const float target = std::pow (10.f, -6.6f / 20.f);
+    if (truePeakLin <= limit)
+        return 1.f;
+    return target / truePeakLin;
+}
+
+void scaleTake (Take& take, float gain)
+{
+    if (gain >= 0.9999f)
+        return;
+    for (size_t i = 0; i < take.l.size(); ++i)
+    {
+        take.l[i] *= gain;
+        take.r[i] *= gain;
+    }
+}
+
+float hottestIntensityPeak (const rolla::Groove& groove, const rolla::EngineParams& params, int dialect, float fullPeak)
+{
+    float worst = fullPeak;
+    if (fullPeak < 1.0e-4f)
+        return worst;
+    const int levels[] = { 0, 25, 50, 75, 100 };
+    for (int level : levels)
+    {
+        const auto plan = rolla::planIntensity (dialect, level, 0.55f);
+        rolla::Groove arranged;
+        rolla::applyIntensity (groove, arranged, plan, 0, 0);
+        worst = std::max (worst, truePeakLinear (renderTake (arranged, params, kBars)));
+    }
+    return worst;
 }
 
 bool writeWav (const juce::File& file, const Take& take)
@@ -255,6 +336,8 @@ int selfTest (const rolla::PresetBank& bank, const rolla::MixProgram& mix,
     const int dialect = rolla::UkMin;
     const auto groove = makeGroove (bank, dialect);
     auto fullP = makeParams (bank, mix, dialect, false, library, index);
+    // The guard is nonlinear. Mute-null compares FULL, SOLO, and MUTE, so it stays off here.
+    fullP.tpGuard = false;
     const auto full = renderTake (groove, fullP, 4);
     const LaneId probe[] = { kLanes[8], kLanes[0], kLanes[1] }; // BASS, KICK, CLAP
     int rc = 0;
@@ -287,6 +370,52 @@ int selfTest (const rolla::PresetBank& bank, const rolla::MixProgram& mix,
     if (peak > 1.0e-7f)
     {
         std::cerr << "FAIL muted render is not silent\n";
+        rc = 1;
+    }
+    Take hot;
+    hot.l.resize (4800);
+    hot.r.resize (4800);
+    for (int i = 0; i < 4800; ++i)
+    {
+        const float s = 0.9f * std::sin (2.f * 3.14159265f * 1000.f * (float) i / (float) kSr);
+        hot.l[(size_t) i] = s;
+        hot.r[(size_t) i] = s * 0.5f;
+    }
+    Take solo = hot;
+    for (auto& s : solo.r)
+        s = 0.f;
+    Take mute;
+    mute.l.resize (hot.l.size());
+    mute.r.resize (hot.r.size());
+    for (size_t i = 0; i < hot.l.size(); ++i)
+    {
+        mute.l[i] = hot.l[i] - solo.l[i];
+        mute.r[i] = hot.r[i] - solo.r[i];
+    }
+    const float gain = sumCeilingGain (truePeakLinear (hot));
+    scaleTake (hot, gain);
+    scaleTake (solo, gain);
+    scaleTake (mute, gain);
+    const float capped = truePeakLinear (hot);
+    const float limit = std::pow (10.f, -6.0f / 20.f);
+    std::cout << "sum ceiling gain " << gain << " peak " << capped << "\n";
+    if (gain >= 0.9999f || capped > limit)
+    {
+        std::cerr << "FAIL summed true peak stayed above -6 dBTP\n";
+        rc = 1;
+    }
+    const double residual = rmsDb (mute, hot, solo);
+    if (residual > -90.0)
+    {
+        std::cerr << "FAIL sum ceiling broke the mute null\n";
+        rc = 1;
+    }
+    Take quiet;
+    quiet.l.assign (1024, 0.05f);
+    quiet.r.assign (1024, 0.05f);
+    if (sumCeilingGain (truePeakLinear (quiet)) < 0.9999f)
+    {
+        std::cerr << "FAIL a quiet sum was turned down\n";
         rc = 1;
     }
     if (rc == 0)
@@ -353,6 +482,14 @@ int renderSwitch (const rolla::PresetBank& bank, const rolla::MixProgram& mix, c
 int renderSet (const rolla::PresetBank& bank, const rolla::MixProgram& mix, const juce::File& dir, bool solosOnly, bool bypassSum, int onlyDialect,
               rolla::SampleLibrary* library, const rolla::SampleIndex* index)
 {
+    // Loudness windows are sample-pack levels. A missing pack stays silent
+    // (no synth fill) and the checker skips those windows. The -6 dBTP ceiling
+    // is still applied, and still measured, with or without the pack.
+    if (library == nullptr || index == nullptr)
+    {
+        dir.createDirectory();
+        dir.getChildFile ("no_sample_pack").replaceWithText ("1\n");
+    }
     for (int d = 0; d < rolla::NumDialects; ++d)
     {
         if (onlyDialect >= 0 && d != onlyDialect)
@@ -360,22 +497,34 @@ int renderSet (const rolla::PresetBank& bank, const rolla::MixProgram& mix, cons
         const auto groove = makeGroove (bank, d);
         auto base = makeParams (bank, mix, d, bypassSum, library, index);
         const auto folder = dir.getChildFile (kStyle[d]);
-        const auto full = renderTake (groove, base, kBars);
-        if (! writeWav (folder.getChildFile ("FULL.wav"), full))
+        float tpGuardGrDb = 0.f;
+        auto full = renderTake (groove, base, kBars, &tpGuardGrDb);
+        const float fullPeak = truePeakLinear (full);
+        const float worst = hottestIntensityPeak (groove, base, d, fullPeak);
+        const float gain = sumCeilingGain (worst);
+        scaleTake (full, gain);
+        const auto fullWav = folder.getChildFile ("FULL.wav");
+        if (! writeWav (fullWav, full))
             return fail ("could not write FULL");
-        std::cout << kStyle[d] << " FULL\n";
+        if (! writeSumGrSidecar (fullWav, tpGuardGrDb))
+            return fail ("could not write FULL.wav.gr.json");
+        std::cout << kStyle[d] << " FULL peak " << fullPeak << " ceiling " << gain << "\n";
         for (const auto& lane : kLanes)
         {
             auto soloP = base;
             applyLane (soloP, lane, true);
-            if (! writeWav (folder.getChildFile (juce::String ("SOLO_") + lane.name + ".wav"), renderTake (groove, soloP, kBars)))
+            auto solo = renderTake (groove, soloP, kBars);
+            scaleTake (solo, gain);
+            if (! writeWav (folder.getChildFile (juce::String ("SOLO_") + lane.name + ".wav"), solo))
                 return fail (std::string ("could not write SOLO_") + lane.name);
             std::cout << kStyle[d] << " SOLO_" << lane.name << "\n";
             if (solosOnly)
                 continue;
             auto muteP = base;
             applyLane (muteP, lane, false);
-            if (! writeWav (folder.getChildFile (juce::String ("MUTE_") + lane.name + ".wav"), renderTake (groove, muteP, kBars)))
+            auto muted = renderTake (groove, muteP, kBars);
+            scaleTake (muted, gain);
+            if (! writeWav (folder.getChildFile (juce::String ("MUTE_") + lane.name + ".wav"), muted))
                 return fail (std::string ("could not write MUTE_") + lane.name);
             std::cout << kStyle[d] << " MUTE_" << lane.name << "\n";
         }
