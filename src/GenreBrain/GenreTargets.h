@@ -122,6 +122,7 @@ struct SampleFeatures
     bool truncated = false;
     float subRatio = 0.f;      // energy share under 120 Hz
     float loudnessDb = -120.f; // RMS over the first 300 ms, before load gain
+    float lowCorr = 1.f;       // L/R correlation under 150 Hz (1 mono); 1 when unknown
     float lengthMs = 0.f;
     PitchInfo pitch;
 
