@@ -41,6 +41,8 @@ struct PoolFilter
     int loop = -1;
     char pack[64] {};
     char category[32] {};
+    // -1 does not gate by style. 0..3 is UK MIN, LONG, POP, GASKIN.
+    int dialect = -1;
 };
 
 // One multisample zone. lo/hi/root are MIDI note numbers (C4 = 60).

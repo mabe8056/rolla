@@ -42,6 +42,10 @@ private:
     struct Voice
     {
         bool on = false;
+        // Set for the sample that starts the voice. The transport rewind that
+        // opens a downbeat looks like a loop wrap, and that wrap must not kill
+        // a voice that has not sounded yet.
+        bool born = false;
         int part = 0;
         int drumVoice = -1;
         int midiNote = 60;
