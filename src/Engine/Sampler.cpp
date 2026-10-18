@@ -1220,6 +1220,7 @@ void Sampler::render (float* laneL, float* laneR, float prev16, float pos16, boo
         // the downbeat. That wrap is how step 0 is reached, not the end of the note.
         const bool born = v.born;
         v.born = false;
+        const float prevEdge = v.noteEdge;
         v.noteEdge = 1.f;
         if (playing && loopEnd16 > 1.f)
         {
@@ -1244,6 +1245,9 @@ void Sampler::render (float* laneL, float* laneR, float prev16, float pos16, boo
                 v.releaseN = std::max (8, (int) (0.004 * sr));
                 v.releaseLeft = v.releaseN;
                 v.stopping = true;
+                // The loop-end edge already faded this voice. Release from that
+                // level: snapping back to 1 stepped every tail still ringing on beat 1.
+                v.gain *= std::clamp (prevEdge, 0.f, 1.f);
             }
         }
         else if (playing && v.end16 < 1.0e8f)
