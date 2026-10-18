@@ -233,6 +233,11 @@ private:
     SampleLibrary library;
     UserSlots slots;
     std::atomic<int> samplePick[NumParts] {};
+    // Genre brain (Job G2): the bundle's Genre/ data, loaded on the first roll. With
+    // no data a roll keeps today's seed draw. Message thread only.
+    struct GenreBrainState;
+    std::shared_ptr<GenreBrainState> genreBrain;
+    void applyGenreBrain (std::uint32_t mask, const Settings& s, const std::uint32_t* seeds, const int* presetFor);
     std::atomic<int> samplesFoundCount { -1 };
     std::atomic<int> samplesMissingCount { -1 };
 

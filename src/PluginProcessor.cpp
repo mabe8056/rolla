@@ -6,6 +6,8 @@
 #include "Generator/MidiFile.h"
 #include "Export/RollExport.h"
 #include "Engine/RollaSettings.h"
+#include "GenreBrain/GenreTargetsJson.h"
+#include "GenreBrain/LanePools.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
 
@@ -583,6 +585,9 @@ void RollaProcessor::regenerate (int onlyPart)
     Groove next = copySource();
     uint32_t seeds[NumParts] {};
     uint32_t mask = 0;
+    int presetFor[NumParts];
+    for (int i = 0; i < NumParts; ++i)
+        presetFor[i] = (int) std::lround (raw (apvts, (juce::String (partId (i)) + "Preset").toRawUTF8()));
 
     for (int i = 0; i < NumParts; ++i)
     {
@@ -603,6 +608,7 @@ void RollaProcessor::regenerate (int onlyPart)
             const int picked = sound != nullptr ? pickPresetForRoll (*sound, i, s.dialect, seeds[i]) : -1;
             if (picked >= 0)
             {
+                presetFor[i] = picked;
                 if (auto* param = apvts.getParameter (juce::String (partId (i)) + "Preset"))
                 {
                     const float norm = param->convertTo0to1 ((float) picked);
@@ -616,9 +622,77 @@ void RollaProcessor::regenerate (int onlyPart)
     if (mask == 0)
         return;
 
+    applyGenreBrain (mask, s, seeds, presetFor);
     reshapeLanes (next, s, seeds, mask);
     storeSource (next);
     publishDerived();
+}
+
+struct RollaProcessor::GenreBrainState
+{
+    genre::GenreTargets targets;
+    genre::FeatureIndex features;
+    genre::Kit last;
+};
+
+// The genre brain picks each re-rolled melodic lane's file from its pool: one seeded
+// kit draw weighted by fit to the style's targets (SoundSelector.h). The choice goes
+// back as samplePick, so the existing pick path plays it. Drums share one pick
+// across voices today and keep the seed draw until they have per-voice picks.
+// No feature data (tests, CI, a build without Genre/): nothing changes.
+void RollaProcessor::applyGenreBrain (std::uint32_t mask, const Settings& s, const std::uint32_t* seeds, const int* presetFor)
+{
+    if (genreBrain == nullptr)
+    {
+        // ROLLA_GENRE_DATA_DIR (box, tests), else <bundle>/Contents/Resources/Genre,
+        // beside the injected sample pack. Not the host's executable folder.
+        const auto env = juce::SystemStats::getEnvironmentVariable ("ROLLA_GENRE_DATA_DIR", {});
+        const juce::File dir = env.isNotEmpty() ? juce::File (env) : SampleLibrary::bundledRoot().getSiblingFile ("Genre");
+        genreBrain = std::make_shared<GenreBrainState>();
+        genreBrain->features = genre::loadSampleFeatures (dir.getChildFile ("sample_features.json"));
+        genreBrain->targets = genre::loadGenreTargets (dir.getChildFile ("genre_targets.json"));
+        if (genreBrain->features.size() > 0)
+            juce::Logger::writeToLog ("ROLLA genre brain: " + juce::String ((int) genreBrain->features.size()) + " sample features, targets "
+                                      + (genreBrain->targets.fromData ? "from data" : "neutral"));
+    }
+    auto& genreState = *genreBrain;
+    if (genreState.features.size() == 0)
+        return;
+    const auto index = library.index();
+    const auto bank = sharePresets();
+    if (index == nullptr || bank == nullptr)
+        return;
+
+    std::array<std::vector<genre::SampleFeatures>, genre::kLanes> pools;
+    std::uint64_t seed = 0x9e3779b97f4a7c15ull;
+    bool any = false;
+    for (int part : { Bass, Stab, Hits, Pluck, Pad, Vox })
+    {
+        if ((mask & (1u << (unsigned) part)) == 0)
+            continue;
+        const auto& spec = sampleSpecFor (*bank, part, presetSlot (*bank, part, presetFor[part]));
+        if (! spec.filter.on)
+            continue; // a fixed preset file, not a pool
+        const genre::Lane lane = genre::laneForPart (part, -1);
+        const PoolFilter filter = poolFilterFor (spec, part, spec.filter.voice, s.dialect);
+        pools[(size_t) lane] = genre::featurePool (*index, part, filter, genreState.features, lane);
+        any = any || ! pools[(size_t) lane].empty();
+        seed = (seed ^ seeds[part]) * 0x100000001b3ull;
+    }
+    if (! any)
+        return;
+
+    const auto style = (genre::Style) std::clamp (s.dialect, 0, genre::kStyles - 1);
+    const genre::Kit kit = genre::drawKit (pools, style, genreState.targets, seed, &genreState.last);
+    for (int part : { Bass, Stab, Hits, Pluck, Pad, Vox })
+    {
+        const genre::Lane lane = genre::laneForPart (part, -1);
+        const int chosen = kit.at (lane);
+        if ((mask & (1u << (unsigned) part)) == 0 || chosen < 0)
+            continue;
+        samplePick[part].store (chosen, std::memory_order_relaxed);
+        genreState.last.pick[(size_t) lane] = chosen;
+    }
 }
 
 void RollaProcessor::requestReshape()
