@@ -13,11 +13,6 @@ namespace
 
 constexpr float kSincPi = 3.14159265358979323846f;
 
-float midiHz (int note) noexcept
-{
-    return 440.f * std::pow (2.f, (note - 69) / 12.f);
-}
-
 float ampDb (float db) noexcept
 {
     return std::pow (10.f, db / 20.f);
@@ -90,6 +85,18 @@ FileState peekFile (const SampleLibrary* library, const char* file, const Sample
     if (library->missing (file))
         return FileState::Absent;
     return FileState::Pending;
+}
+
+// Bass may move a full octave from its file (octave bounces); other lanes 7 st.
+// Vox one-shots and chops keep the voice they were recorded with.
+ShiftRule shiftRuleFor (int part) noexcept
+{
+    ShiftRule rule;
+    if (part == Bass)
+        rule.cap = 12.0;
+    else if (part == Vox)
+        rule.retune = false;
+    return rule;
 }
 
 struct LaneHit
@@ -751,7 +758,7 @@ bool Sampler::playUserSlot (int part, int drumVoice, int midiNote, int velocity,
 }
 
 Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
-                             const PresetBank& bank, const EngineParams& params) noexcept
+                             const PresetBank& bank, const EngineParams& params, ChordAsk ask) noexcept
 {
     Take result;
     if (part < 0 || part >= Drums)
@@ -859,7 +866,13 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     fresh.audio = audio;
     notePicked (part, -1, audio);
     fresh.reverse = played.reverse;
-    fresh.ratio = std::clamp ((midiHz (midiNote) / std::max (20.f, midiHz (choice.root))) * (audio->rate / sr), 0.05, 16.0);
+    // Pitch comes from the measured root (PitchProbe.h), not the manifest or a
+    // default C: unpitched, low-confidence and vox files play as recorded.
+    const auto& pitch = audio->pitch;
+    const bool chordFile = pitch.isChord && pitch.conf >= kPitchConfMin && part != Bass && part != Vox;
+    const int toward = midiNote + (chordFile ? ask.rootDelta + chordFileOffset (pitch.quality, ask.quality) : 0);
+    const double semis = tonalShift (pitch, audio->namedRoot, (double) toward, shiftRuleFor (part));
+    fresh.ratio = std::clamp (std::pow (2.0, semis / 12.0) * (audio->rate / sr), 0.05, 16.0);
     fresh.end16 = end16;
     fresh.fade = 0.f;
     fresh.fadeInc = 1.f / 64.f;
@@ -927,6 +940,7 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
         result.kind = 1;
         result.synthGain = 0.f;
     }
+    result.chordFile = chordFile && ! fresh.tempoSync;
     return result;
 }
 

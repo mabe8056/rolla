@@ -1,5 +1,6 @@
 #include "Engine/Engine.h"
 #include "Engine/Sampler.h"
+#include "Sampler/PitchProbe.h"
 #include "Sampler/PlayDecision.h"
 #include "Sampler/SamplePrep.h"
 #include "Sampler/UserSlots.h"
@@ -144,11 +145,119 @@ rolla::SlotQuery slotQuery (int mode, bool ready, bool missing, bool loading)
     return slot;
 }
 
+// Sawtooth-like notes (harmonics at 1/h), summed, 1 s at 48 kHz after 20 ms of silence.
+std::vector<float> sawNotes (std::initializer_list<double> midis)
+{
+    const int lead = 960, n = 48000;
+    std::vector<float> out ((size_t) (lead + n), 0.f);
+    for (double m : midis)
+    {
+        const double f = 440.0 * std::pow (2.0, (m - 69.0) / 12.0);
+        for (int h = 1; h <= 10 && f * h < 20000.0; ++h)
+            for (int i = 0; i < n; ++i)
+                out[(size_t) (lead + i)] += (float) (0.15 / h * std::sin (2.0 * 3.14159265358979 * f * h * i / 48000.0));
+    }
+    return out;
+}
+
+void testPitchProbe()
+{
+    using rolla::ChordQuality;
+    {
+        const auto a3 = sawNotes ({ 57.0 });
+        const auto p = rolla::probePitch (a3.data(), nullptr, (int) a3.size(), 48000.0);
+        expect (p.pitched() && ! p.isChord && std::fabs (p.rootPitch - 57.f) < 0.2f && p.conf >= rolla::kPitchConfMin,
+                "probe: a saw at A3 is one note at 57 (got " + std::to_string (p.rootPitch) + ", conf " + std::to_string (p.conf) + ")");
+    }
+    {
+        const auto sharp = sawNotes ({ 60.3 });
+        const auto p = rolla::probePitch (sharp.data(), nullptr, (int) sharp.size(), 48000.0);
+        expect (std::fabs (p.rootPitch - 60.3f) < 0.1f, "probe: 30 cents sharp is measured (got " + std::to_string (p.rootPitch) + ")");
+    }
+    {
+        const auto d1 = sawNotes ({ 26.0 });
+        const auto p = rolla::probePitch (d1.data(), nullptr, (int) d1.size(), 48000.0);
+        expect (p.pitched() && ! p.isChord && std::fabs (p.rootPitch - 26.f) < 0.3f,
+                "probe: a D1 bass is one note at 26 (got " + std::to_string (p.rootPitch) + ")");
+    }
+    {
+        const auto cm = sawNotes ({ 60.0, 63.0, 67.0 });
+        const auto p = rolla::probePitch (cm.data(), nullptr, (int) cm.size(), 48000.0);
+        expect (p.isChord && p.quality == ChordQuality::Minor && ((int) std::lround (p.rootPitch) % 12) == 0,
+                "probe: C-Eb-G is a C minor chord (root " + std::to_string (p.rootPitch) + ")");
+    }
+    {
+        const auto inv = sawNotes ({ 63.0, 67.0, 72.0 });
+        const auto p = rolla::probePitch (inv.data(), nullptr, (int) inv.size(), 48000.0);
+        expect (p.isChord && p.quality == ChordQuality::Minor && ((int) std::lround (p.rootPitch) % 12) == 0,
+                "probe: Eb-G-C (first inversion) is still C minor (root " + std::to_string (p.rootPitch) + ")");
+    }
+    {
+        const auto fmaj = sawNotes ({ 53.0, 57.0, 60.0 });
+        const auto p = rolla::probePitch (fmaj.data(), nullptr, (int) fmaj.size(), 48000.0);
+        expect (p.isChord && p.quality == ChordQuality::Major && ((int) std::lround (p.rootPitch) % 12) == 5,
+                "probe: F-A-C is an F major chord");
+    }
+    {
+        const auto power = sawNotes ({ 48.0, 55.0 });
+        const auto p = rolla::probePitch (power.data(), nullptr, (int) power.size(), 48000.0);
+        expect (p.isChord && p.quality == ChordQuality::Neutral && ((int) std::lround (p.rootPitch) % 12) == 0,
+                "probe: C-G is a neutral (fifth) chord on C");
+    }
+    {
+        std::vector<float> noise (48000);
+        std::uint32_t s = 12345u;
+        for (auto& x : noise)
+        {
+            s = s * 1664525u + 1013904223u;
+            x = 0.3f * ((float) (s >> 8) / 8388608.f - 1.f);
+        }
+        const auto p = rolla::probePitch (noise.data(), nullptr, (int) noise.size(), 48000.0);
+        expect (! p.pitched(), "probe: white noise is unpitched");
+    }
+
+    rolla::PitchInfo c4;
+    c4.rootPitch = 60.f;
+    c4.conf = 0.9f;
+    rolla::ShiftRule lane;
+    expect (std::fabs (rolla::tonalShift (c4, -1, 62.0, lane) - 2.0) < 1.0e-9, "shift: C4 file plays D4 at +2");
+    expect (std::fabs (rolla::tonalShift (c4, -1, 74.0, lane) - 2.0) < 1.0e-9, "shift: +14 folds to +2 (7 st cap)");
+    expect (std::fabs (rolla::tonalShift (c4, -1, 52.0, lane) - 4.0) < 1.0e-9, "shift: -8 folds to +4");
+    rolla::ShiftRule bass;
+    bass.cap = 12.0;
+    rolla::PitchInfo d1 = c4;
+    d1.rootPitch = 26.f;
+    expect (std::fabs (rolla::tonalShift (d1, -1, 38.0, bass) - 12.0) < 1.0e-9, "shift: bass keeps a full octave up");
+    rolla::ShiftRule vox;
+    vox.retune = false;
+    expect (rolla::tonalShift (c4, -1, 66.0, vox) == 0.0, "shift: vox is never retuned");
+    rolla::PitchInfo weak = c4;
+    weak.conf = 0.3f;
+    expect (rolla::tonalShift (weak, 67, 62.0, lane) == 0.0, "shift: a weak measurement the label contradicts is not retuned");
+    expect (std::fabs (rolla::tonalShift (weak, 49, 62.0, lane) - 1.0) < 1.0e-9,
+            "shift: a weak measurement the label agrees with uses the label's note (C#) in the measured octave");
+    expect (rolla::tonalShift (rolla::PitchInfo {}, 60, 62.0, lane) == 0.0, "shift: unpitched files play as recorded");
+
+    const int maj[] = { 0, 4, 7 }, mnr[] = { 0, 3, 7 }, fifth[] = { 0, 7 }, inv[] = { 4, 7, 12 };
+    expect (rolla::chordAskOf (maj, 3).quality == ChordQuality::Major, "intervals 0-4-7 are major");
+    expect (rolla::chordAskOf (mnr, 3).quality == ChordQuality::Minor, "intervals 0-3-7 are minor");
+    expect (rolla::chordAskOf (fifth, 2).quality == ChordQuality::Neutral, "intervals 0-7 are neutral");
+    const auto first = rolla::chordAskOf (inv, 3);
+    expect (first.quality == ChordQuality::Major && first.rootDelta == 8,
+            "E-G-C (first inversion) asks for C major, root 8 st above the E");
+    expect (rolla::chordFileOffset (ChordQuality::Minor, ChordQuality::Major) == 4, "minor file on a major chord plays from the third");
+    expect (rolla::chordFileOffset (ChordQuality::Major, ChordQuality::Minor) == 3, "major file on a minor chord plays from the minor third");
+    expect (rolla::chordFileOffset (ChordQuality::Minor, ChordQuality::Minor) == 0, "matching quality stays put");
+    expect (rolla::chordFileOffset (ChordQuality::Neutral, ChordQuality::Major) == 0, "neutral fits either");
+}
+
 } // namespace
 
 int main()
 {
     juce::ScopedJuceInitialiser_GUI juce;
+
+    testPitchProbe();
 
     static_assert (rolla::kUserSlotCount == 14, "14 user slots");
     expect (rolla::userSlotForPart (rolla::Bass) == rolla::SlotBass, "bass slot");

@@ -580,6 +580,8 @@ void SampleLibrary::loadOne (const std::string& relative)
         }
     }
     findSlices (*audio);
+    audio->pitch = probePitch (audio->left.data(), audio->right.data(), audio->frames, audio->rate);
+    audio->namedRoot = midiFromFilename (relative.c_str());
 
     {
         std::lock_guard<std::mutex> lock (slotMu);
