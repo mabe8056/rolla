@@ -153,7 +153,9 @@
      "estimate": false,
      "desc": "% bass attacks on a kick (slots 1/5/9/13)",
      "generator_max": 32.7,
-     "note": "audio measure (looser window); generator MIDI on-kick (+/-0.49 16th) is HARD <= 35"
+     "note": "audio measure (looser window); generator MIDI on-kick (+/-0.49 16th) is HARD <= 35",
+     "gate": "audio_only",
+     "gate_note": "Composer 434: measure on audio only, never gate on MIDI"
     },
     "bass_onbeat_pct": {
      "min": 6.3,
@@ -415,7 +417,9 @@
      "n_refs": 2,
      "confidence": "low",
      "estimate": false,
-     "desc": "% stab hits on a bass attack"
+     "desc": "% stab hits on a bass attack",
+     "gate": "ceiling_only",
+     "gate_note": "Composer 434: a ceiling, not a target; fewer stab-on-bass hits is fine"
     },
     "stab_len_med": {
      "min": 2.0,
@@ -875,16 +879,16 @@
      "b2 (neighbour only)": 0.02
     },
     "chromatic": {
-     "b2_bass_time_max_pct": 6,
+     "b2_bass_time_max_pct": 12,
      "neighbour_max_len16": 1,
-     "note": "b2 only as a one-sixteenth passing note to 1 or 2, <= 6% outside Phrygian (Composer msg 409; refs 0-12%, one ref 11.7)"
+     "note": "b2 only as a one-sixteenth passing note to 1 or 2, <= 12% outside Phrygian (Composer msg 434 per-style limit; refs 0-12%, one ref 11.7)"
     },
     "source": "mode weights ESTIMATE informed by key_est (minor in 8/11 refs) and MIDI bass degree histograms"
    },
    "hard": [
     {
      "id": "H1_key_scale",
-     "rule": "bass+stab out-of-scale time <= 5% for the chosen mode; tonic in the bass top-2 pitch classes; b2 time <= 6% and only as <= 1-sixteenth neighbour unless mode=Phrygian; no bass/stab semitone clash",
+     "rule": "bass+stab out-of-scale time <= 5% for the chosen mode; tonic in the bass top-2 pitch classes; b2 time <= 12% and only as <= 1-sixteenth neighbour unless mode=Phrygian; no bass/stab semitone clash",
      "src": "GR v2 hard rule 1 + refs"
     },
     {
@@ -1358,7 +1362,9 @@
      "n_refs": 2,
      "confidence": "low",
      "estimate": false,
-     "desc": "% stab hits on a bass attack"
+     "desc": "% stab hits on a bass attack",
+     "gate": "ceiling_only",
+     "gate_note": "Composer 434: a ceiling, not a target; fewer stab-on-bass hits is fine"
     },
     "stab_len_med": {
      "min": 2.0,
@@ -2303,7 +2309,9 @@
      "n_refs": 1,
      "confidence": "low",
      "estimate": false,
-     "desc": "% stab hits on a bass attack"
+     "desc": "% stab hits on a bass attack",
+     "gate": "ceiling_only",
+     "gate_note": "Composer 434: a ceiling, not a target; fewer stab-on-bass hits is fine"
     },
     "stab_len_med": {
      "min": 2.0,
@@ -3273,7 +3281,9 @@
      "n_refs": 3,
      "confidence": "low",
      "estimate": false,
-     "desc": "% stab hits on a bass attack"
+     "desc": "% stab hits on a bass attack",
+     "gate": "ceiling_only",
+     "gate_note": "Composer 434: a ceiling, not a target; fewer stab-on-bass hits is fine"
     },
     "stab_len_med": {
      "min": 1.8,
