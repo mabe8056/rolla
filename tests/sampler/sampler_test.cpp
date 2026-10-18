@@ -1,7 +1,13 @@
+#include "Drums/DrumMachine.h"
 #include "Engine/Engine.h"
 #include "Engine/SampleChop.h"
 #include "Engine/Sampler.h"
+#include "GenreBrain/GenreTargetsJson.h"
+#include "GenreBrain/KitMeshJson.h"
 #include "Mix/TruePeakGuard.h"
+#include "Sampler/Fingerprint.h"
+#include "Sampler/PitchProbe.h"
+#include "Tools/FingerprintTool.h"
 #include "Sampler/PlayDecision.h"
 #include "Sampler/SamplePrep.h"
 #include "Sampler/UserSlots.h"
@@ -149,11 +155,538 @@ rolla::SlotQuery slotQuery (int mode, bool ready, bool missing, bool loading)
     return slot;
 }
 
+// Sawtooth-like notes (harmonics at 1/h), summed, 1 s at 48 kHz after 20 ms of silence.
+std::vector<float> sawNotes (std::initializer_list<double> midis)
+{
+    const int lead = 960, n = 48000;
+    std::vector<float> out ((size_t) (lead + n), 0.f);
+    for (double m : midis)
+    {
+        const double f = 440.0 * std::pow (2.0, (m - 69.0) / 12.0);
+        for (int h = 1; h <= 10 && f * h < 20000.0; ++h)
+            for (int i = 0; i < n; ++i)
+                out[(size_t) (lead + i)] += (float) (0.15 / h * std::sin (2.0 * 3.14159265358979 * f * h * i / 48000.0));
+    }
+    return out;
+}
+
+void writeWave (const juce::File& file, const std::vector<float>& samples)
+{
+    file.getParentDirectory().createDirectory();
+    juce::WavAudioFormat wav;
+    auto fileStream = std::make_unique<juce::FileOutputStream> (file);
+    if (fileStream == nullptr || ! fileStream->openedOk())
+        return;
+    std::unique_ptr<juce::OutputStream> stream (fileStream.release());
+    const auto options = juce::AudioFormatWriterOptions().withSampleRate (48000.0)
+                                                          .withNumChannels (1)
+                                                          .withBitsPerSample (24);
+    auto writer = wav.createWriterFor (stream, options);
+    if (writer == nullptr)
+        return;
+    juce::AudioBuffer<float> buf (1, (int) samples.size());
+    for (int i = 0; i < (int) samples.size(); ++i)
+        buf.setSample (0, i, samples[(size_t) i]);
+    writer->writeFromAudioSampleBuffer (buf, 0, buf.getNumSamples());
+}
+
+void testPitchProbe()
+{
+    using rolla::ChordQuality;
+    {
+        const auto a3 = sawNotes ({ 57.0 });
+        const auto p = rolla::probePitch (a3.data(), nullptr, (int) a3.size(), 48000.0);
+        expect (p.pitched() && ! p.isChord && std::fabs (p.rootPitch - 57.f) < 0.2f && p.conf >= rolla::kPitchConfMin,
+                "probe: a saw at A3 is one note at 57 (got " + std::to_string (p.rootPitch) + ", conf " + std::to_string (p.conf) + ")");
+    }
+    {
+        const auto sharp = sawNotes ({ 60.3 });
+        const auto p = rolla::probePitch (sharp.data(), nullptr, (int) sharp.size(), 48000.0);
+        expect (std::fabs (p.rootPitch - 60.3f) < 0.1f, "probe: 30 cents sharp is measured (got " + std::to_string (p.rootPitch) + ")");
+    }
+    {
+        const auto d1 = sawNotes ({ 26.0 });
+        const auto p = rolla::probePitch (d1.data(), nullptr, (int) d1.size(), 48000.0);
+        expect (p.pitched() && ! p.isChord && std::fabs (p.rootPitch - 26.f) < 0.3f,
+                "probe: a D1 bass is one note at 26 (got " + std::to_string (p.rootPitch) + ")");
+    }
+    {
+        const auto cm = sawNotes ({ 60.0, 63.0, 67.0 });
+        const auto p = rolla::probePitch (cm.data(), nullptr, (int) cm.size(), 48000.0);
+        expect (p.isChord && p.quality == ChordQuality::Minor && ((int) std::lround (p.rootPitch) % 12) == 0,
+                "probe: C-Eb-G is a C minor chord (root " + std::to_string (p.rootPitch) + ")");
+    }
+    {
+        const auto inv = sawNotes ({ 63.0, 67.0, 72.0 });
+        const auto p = rolla::probePitch (inv.data(), nullptr, (int) inv.size(), 48000.0);
+        expect (p.isChord && p.quality == ChordQuality::Minor && ((int) std::lround (p.rootPitch) % 12) == 0,
+                "probe: Eb-G-C (first inversion) is still C minor (root " + std::to_string (p.rootPitch) + ")");
+    }
+    {
+        const auto fmaj = sawNotes ({ 53.0, 57.0, 60.0 });
+        const auto p = rolla::probePitch (fmaj.data(), nullptr, (int) fmaj.size(), 48000.0);
+        expect (p.isChord && p.quality == ChordQuality::Major && ((int) std::lround (p.rootPitch) % 12) == 5,
+                "probe: F-A-C is an F major chord");
+    }
+    {
+        const auto power = sawNotes ({ 48.0, 55.0 });
+        const auto p = rolla::probePitch (power.data(), nullptr, (int) power.size(), 48000.0);
+        expect (p.isChord && p.quality == ChordQuality::Neutral && ((int) std::lround (p.rootPitch) % 12) == 0,
+                "probe: C-G is a neutral (fifth) chord on C");
+    }
+    {
+        // A 120 ms stab (5 ms attack, exponential decay) must measure with enough
+        // confidence to be retuned, at 48k and 44.1k.
+        for (const double rate : { 48000.0, 44100.0 })
+            for (const double m : { 48.0, 57.0, 63.0, 70.0 })
+            {
+                const int lead = (int) (0.01 * rate), n = (int) (0.12 * rate);
+                std::vector<float> stab ((size_t) (lead + n), 0.f);
+                const double f = 440.0 * std::pow (2.0, (m - 69.0) / 12.0);
+                for (int i = 0; i < n; ++i)
+                {
+                    const double t = (double) i / rate;
+                    const double env = std::min (1.0, t / 0.005) * std::exp (-t / 0.05);
+                    double x = 0.0;
+                    for (int h = 1; h <= 10 && f * h < 18000.0; ++h)
+                        x += 0.3 / h * std::sin (2.0 * 3.14159265358979 * f * h * t);
+                    stab[(size_t) (lead + i)] = (float) (env * x);
+                }
+                const auto p = rolla::probePitch (stab.data(), nullptr, (int) stab.size(), rate, rolla::kPitchFloorTonalHz);
+                expect (p.pitched() && ! p.isChord && std::fabs (p.rootPitch - (float) m) < 0.3f && p.conf >= rolla::kPitchConfMin,
+                        "probe: a 120 ms stab at " + std::to_string ((int) m) + " (" + std::to_string ((int) rate)
+                            + " Hz) is retunable (got " + std::to_string (p.rootPitch) + ", conf " + std::to_string (p.conf) + ")");
+            }
+    }
+    {
+        // Sub rumble at 40 Hz under a C4 stab: the tonal-lane floor keeps C4 the root.
+        auto c4 = sawNotes ({ 60.0 });
+        for (size_t i = 960; i < c4.size(); ++i)
+            c4[i] += (float) (0.25 * std::sin (2.0 * 3.14159265358979 * 40.0 * (double) (i - 960) / 48000.0));
+        const auto p = rolla::probePitch (c4.data(), nullptr, (int) c4.size(), 48000.0, rolla::kPitchFloorTonalHz);
+        expect (p.pitched() && ((int) std::lround (p.rootPitch) % 12) == 0 && p.rootPitch > 50.f,
+                "probe: 40 Hz rumble under a C4 stab is not the root (got " + std::to_string (p.rootPitch) + ")");
+    }
+    {
+        std::vector<float> noise (48000);
+        std::uint32_t s = 12345u;
+        for (auto& x : noise)
+        {
+            s = s * 1664525u + 1013904223u;
+            x = 0.3f * ((float) (s >> 8) / 8388608.f - 1.f);
+        }
+        const auto p = rolla::probePitch (noise.data(), nullptr, (int) noise.size(), 48000.0);
+        expect (! p.pitched(), "probe: white noise is unpitched");
+    }
+
+    rolla::PitchInfo c4;
+    c4.rootPitch = 60.f;
+    c4.conf = 0.9f;
+    rolla::ShiftRule lane;
+    expect (std::fabs (rolla::tonalShift (c4, -1, 62.0, lane) - 2.0) < 1.0e-9, "shift: C4 file plays D4 at +2");
+    expect (std::fabs (rolla::tonalShift (c4, -1, 74.0, lane) - 2.0) < 1.0e-9, "shift: +14 folds to +2 (7 st cap)");
+    expect (std::fabs (rolla::tonalShift (c4, -1, 52.0, lane) - 4.0) < 1.0e-9, "shift: -8 folds to +4");
+    rolla::ShiftRule bass;
+    bass.cap = 12.0;
+    rolla::PitchInfo d1 = c4;
+    d1.rootPitch = 26.f;
+    expect (std::fabs (rolla::tonalShift (d1, -1, 38.0, bass) - 12.0) < 1.0e-9, "shift: bass keeps a full octave up");
+    rolla::ShiftRule vox;
+    vox.retune = false;
+    expect (rolla::tonalShift (c4, -1, 66.0, vox) == 0.0, "shift: vox is never retuned");
+    rolla::PitchInfo weak = c4;
+    weak.conf = 0.3f;
+    expect (rolla::tonalShift (weak, 67, 62.0, lane) == 0.0, "shift: a weak measurement the label contradicts is not retuned");
+    expect (std::fabs (rolla::tonalShift (weak, 49, 62.0, lane) - 1.0) < 1.0e-9,
+            "shift: a weak measurement the label agrees with uses the label's note (C#) in the measured octave");
+    expect (rolla::tonalShift (rolla::PitchInfo {}, 60, 62.0, lane) == 0.0, "shift: unpitched files play as recorded");
+
+    const int maj[] = { 0, 4, 7 }, mnr[] = { 0, 3, 7 }, fifth[] = { 0, 7 }, inv[] = { 4, 7, 12 };
+    expect (rolla::chordAskOf (maj, 3).quality == ChordQuality::Major, "intervals 0-4-7 are major");
+    expect (rolla::chordAskOf (mnr, 3).quality == ChordQuality::Minor, "intervals 0-3-7 are minor");
+    expect (rolla::chordAskOf (fifth, 2).quality == ChordQuality::Neutral, "intervals 0-7 are neutral");
+    const auto first = rolla::chordAskOf (inv, 3);
+    expect (first.quality == ChordQuality::Major && first.rootDelta == 8,
+            "E-G-C (first inversion) asks for C major, root 8 st above the E");
+    expect (rolla::chordFileOffset (ChordQuality::Minor, ChordQuality::Major) == 4, "minor file on a major chord plays from the third");
+    expect (rolla::chordFileOffset (ChordQuality::Major, ChordQuality::Minor) == 3, "major file on a minor chord plays from the minor third");
+    expect (rolla::chordFileOffset (ChordQuality::Minor, ChordQuality::Minor) == 0, "matching quality stays put");
+    expect (rolla::chordFileOffset (ChordQuality::Neutral, ChordQuality::Major) == 0, "neutral fits either");
+}
+
+std::vector<float> kickHit (double seconds = 0.4)
+{
+    std::vector<float> x ((size_t) (seconds * 48000.0));
+    double phase = 0.0;
+    for (size_t i = 0; i < x.size(); ++i)
+    {
+        const double t = (double) i / 48000.0;
+        phase += 2.0 * 3.14159265358979 * (50.0 + 70.0 * std::exp (-t / 0.03)) / 48000.0;
+        x[i] = (float) (0.8 * std::exp (-t / 0.06) * std::sin (phase));
+    }
+    return x;
+}
+
+std::vector<float> hatHit (std::uint32_t seed, double seconds = 0.15)
+{
+    std::vector<float> x ((size_t) (seconds * 48000.0));
+    float prev = 0.f, prev2 = 0.f;
+    for (size_t i = 0; i < x.size(); ++i)
+    {
+        seed = seed * 1664525u + 1013904223u;
+        const float w = (float) (seed >> 8) / 8388608.f - 1.f;
+        const float d1 = w - prev, d2 = d1 - prev2; // two differentiators: energy sits high
+        prev = w;
+        prev2 = d1;
+        x[i] = (float) (0.3 * std::exp (-(double) i / 48000.0 / 0.012)) * d2;
+    }
+    return x;
+}
+
+void testFingerprint()
+{
+    const auto kick = kickHit();
+    const auto hat = hatHit (7u);
+    auto stab = sawNotes ({ 60.0 });
+    for (size_t i = 0; i < stab.size(); ++i)
+        stab[i] *= (float) std::exp (-(double) i / 48000.0 / 0.25);
+    const auto k = rolla::fingerprintOf (kick.data(), (int) kick.size());
+    const auto h = rolla::fingerprintOf (hat.data(), (int) hat.size());
+    const auto s = rolla::fingerprintOf (stab.data(), (int) stab.size());
+    expect (k.valid && k.subRatio > 0.4f && k.centroidHz < 400.f,
+            "fingerprint: a kick owns the sub (sub " + std::to_string (k.subRatio) + ", centroid " + std::to_string (k.centroidHz) + ")");
+    expect (h.valid && h.centroidHz > 4000.f && h.decay40Ms < 200.f && h.subRatio < 0.05f,
+            "fingerprint: a hat is bright and short (centroid " + std::to_string (h.centroidHz) + ", decay40 " + std::to_string (h.decay40Ms) + ")");
+    expect (s.valid && std::fabs (s.pitch.rootPitch - 60.f) < 0.3f, "fingerprint: a C4 stab keeps its pitch beside the vector");
+    expect ((int) k.vector().size() == rolla::kFingerprintDims && rolla::fingerprintName (rolla::kFingerprintDims - 1) == "sub_ratio"
+                && rolla::fingerprintName (rolla::kDecay40Dim) == "log2_decay40_ms",
+            "fingerprint: vector and names line up (level and pitch stay out of the distance)");
+    expect (! k.truncated && ! std::isnan (k.vector()[(size_t) rolla::kDecay40Dim]), "fingerprint: a kick is not truncated");
+    {
+        std::vector<float> drone ((size_t) (48000 * 3));
+        for (size_t i = 0; i < drone.size(); ++i)
+            drone[i] = 0.4f * (float) std::sin (2.0 * 3.14159265358979 * 220.0 * (double) i / 48000.0);
+        const auto d = rolla::fingerprintOf (drone.data(), (int) drone.size());
+        expect (d.truncated && std::isnan (d.vector()[(size_t) rolla::kDecay40Dim]),
+                "fingerprint: a sound ringing past 1.5 s is truncated and its decay40 is skipped");
+    }
+
+    // Target regions: two blobs give two clusters; a point in one is a hit, a far point is not.
+    std::vector<std::vector<float>> xs;
+    std::uint32_t seed = 3u;
+    auto jitter = [&seed]
+    {
+        seed = seed * 1664525u + 1013904223u;
+        return ((float) (seed >> 8) / 16777216.f - 0.5f) * 0.6f;
+    };
+    for (int i = 0; i < 40; ++i)
+    {
+        const float c = i % 2 == 0 ? 0.f : 5.f;
+        xs.push_back ({ c + jitter(), c + jitter(), c + jitter() });
+    }
+    xs[3][2] = std::numeric_limits<float>::quiet_NaN(); // a truncated sound's missing dimension
+    const auto t = rolla::fitTarget (xs, 3);
+    expect (t.clusters.size() >= 2, "targets: two blobs give at least two clusters");
+    expect (rolla::targetDistance ({ 0.1f, 0.f, -0.1f }, t) <= t.threshold, "targets: a point in a blob is a hit");
+    expect (rolla::targetDistance ({ 20.f, -20.f, 20.f }, t) > t.threshold, "targets: a far point is a miss");
+    expect (rolla::targetDistance ({ 0.1f, 0.f, std::numeric_limits<float>::quiet_NaN() }, t) <= t.threshold,
+            "targets: a missing dimension is skipped, not counted as far");
+    std::vector<std::vector<float>> few (xs.begin(), xs.begin() + 12);
+    expect (rolla::fitTarget (few, 3).clusters.size() == 1, "targets: under 20 hits is one region");
+}
+
+int runTool (std::initializer_list<juce::String> words)
+{
+    juce::StringArray args;
+    for (const auto& w : words)
+        args.add (w);
+    return rolla::fptool::run (args);
+}
+
+void testFingerprintTool()
+{
+    namespace fp = rolla::fptool;
+    expect (fp::laneFromPath ("DRUMS/CH/x.wav") == "HAT_C" && fp::laneFromPath ("VOX/chops/y.wav") == "VOX"
+                && fp::laneFromPath ("STAB/z.wav") == "STAB" && fp::laneFromPath ("misc/z.wav").isEmpty(),
+            "fingerprint tool: lanes come from folders");
+
+    const auto base = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("rolla-fp-test");
+    base.deleteRecursively();
+    for (int i = 0; i < 3; ++i)
+        writeWave (base.getChildFile ("lib/DRUMS/KICK/k" + juce::String (i) + ".wav"), kickHit());
+    writeWave (base.getChildFile ("lib/DRUMS/CH/h0.wav"), hatHit (11u));
+    const auto libJson = base.getChildFile ("lib.json");
+    expect (runTool ({ "scan", base.getChildFile ("lib").getFullPathName(), "--out", libJson.getFullPathName() }) == 0,
+            "fingerprint tool: scan runs");
+    const auto lib = fp::entriesFromJson (juce::JSON::parse (libJson));
+    int kicks = 0, hats = 0;
+    for (const auto& e : lib)
+    {
+        kicks += e.lane == "KICK" ? 1 : 0;
+        hats += e.lane == "HAT_C" ? 1 : 0;
+    }
+    expect (lib.size() == 4 && kicks == 3 && hats == 1, "fingerprint tool: scan finds 3 kicks and a hat");
+
+    // A Demucs-style track: kicks on the beat, hats between, a four-note bass.
+    std::vector<float> drums ((size_t) (48000 * 6), 0.f), bass ((size_t) (48000 * 6), 0.f);
+    for (int b = 0; b < 12; ++b)
+    {
+        const auto kk = kickHit (0.3);
+        const auto hh = hatHit (100u + (std::uint32_t) b, 0.1);
+        const size_t at = (size_t) (b * 24000);
+        for (size_t i = 0; i < kk.size() && at + i < drums.size(); ++i)
+            drums[at + i] += kk[i];
+        for (size_t i = 0; i < hh.size() && at + 12000 + i < drums.size(); ++i)
+            drums[at + 12000 + i] += hh[i];
+    }
+    const auto note = sawNotes ({ 36.0 });
+    for (int b = 0; b < 4; ++b)
+        for (size_t i = 0; i < 30000 && b * 60000 + i < bass.size(); ++i)
+            bass[(size_t) (b * 60000) + i] = note[960 + i] * (float) std::exp (-(double) i / 48000.0 / 0.3);
+    writeWave (base.getChildFile ("stems/trackA/sep/drums.wav"), drums);
+    writeWave (base.getChildFile ("stems/trackA/sep/bass.wav"), bass);
+    // Not tracks: a tools folder and a track missing from the CSV are skipped.
+    writeWave (base.getChildFile ("stems/_tools/sep/drums.wav"), drums);
+    writeWave (base.getChildFile ("stems/trackB/sep/drums.wav"), drums);
+    // The box CSV's header: track,style,mode_or_role.
+    base.getChildFile ("styles.csv").replaceWithText ("track,style,mode_or_role\ntrackA,ukmin,support\n");
+    {
+        juce::StringArray skipped;
+        const auto got = fp::sliceStems (base.getChildFile ("stems"), fp::readStyles (base.getChildFile ("styles.csv")), 0.f, &skipped);
+        bool onlyA = ! got.empty();
+        for (const auto& e : got)
+            onlyA = onlyA && e.track == "trackA";
+        expect (onlyA && skipped.contains ("_tools") && skipped.contains ("trackB"),
+                "fingerprint tool: stems skips '_' folders and tracks missing from the CSV, and lists them");
+    }
+    const auto stemJson = base.getChildFile ("stems.json");
+    expect (runTool ({ "stems", base.getChildFile ("stems").getFullPathName(), "--styles",
+                       base.getChildFile ("styles.csv").getFullPathName(), "--out", stemJson.getFullPathName() }) == 0,
+            "fingerprint tool: stems runs");
+    const auto sliced = fp::entriesFromJson (juce::JSON::parse (stemJson));
+    int sk = 0, sh = 0, sb = 0;
+    for (const auto& e : sliced)
+    {
+        sk += e.lane == "KICK" ? 1 : 0;
+        sh += e.lane.startsWith ("HAT") ? 1 : 0;
+        sb += e.lane == "BASS" ? 1 : 0;
+        expect (e.style == "ukmin" && e.track == "trackA", "fingerprint tool: slices carry track and style");
+    }
+    expect (sk >= 10 && sh >= 10 && sb >= 3,
+            "fingerprint tool: stems slice into kicks, hats and bass (" + std::to_string (sk) + "/" + std::to_string (sh)
+                + "/" + std::to_string (sb) + ")");
+    const auto stemDoc = juce::JSON::parse (stemJson);
+    expect (fp::nonIdString (stemDoc).isEmpty(), "privacy: a stem fp.json holds only ids, labels and styles as strings");
+    auto* leaky = new juce::DynamicObject();
+    leaky->setProperty ("path", "Some Artist - Some Track/sep/drums.wav");
+    expect (fp::nonIdString (juce::var (leaky)) == "path", "privacy: a path string is caught");
+
+    const auto oneJson = base.getChildFile ("one.json");
+    expect (runTool ({ "scan-stems", base.getChildFile ("stems/trackA").getFullPathName(), "--track-id", "t01", "--style", "pop",
+                       "--min-conf", "0.55", "--out", oneJson.getFullPathName() }) == 0,
+            "fingerprint tool: scan-stems runs on one track");
+    const auto one = fp::entriesFromJson (juce::JSON::parse (oneJson));
+    bool idsOk = ! one.empty();
+    for (const auto& e : one)
+        idsOk = idsOk && e.track == "t01" && e.style == "pop";
+    expect (idsOk, "fingerprint tool: scan-stems keys slices by the given track id and style");
+    expect (one.size() <= sliced.size(), "fingerprint tool: --min-conf only drops slices");
+
+    base.getChildFile ("ids.csv").replaceWithText ("folder,track_id,style\ntrackA,t07,long\n");
+    const auto idMap = fp::readStyles (base.getChildFile ("ids.csv"));
+    expect (idMap.count ("trackA") == 1 && idMap.at ("trackA").id == "t07" && idMap.at ("trackA").style == "long",
+            "fingerprint tool: a folder,track_id,style CSV writes the id, not the folder");
+
+    const auto targetsJson = base.getChildFile ("targets.json");
+    expect (runTool ({ "targets", stemJson.getFullPathName(), "--out", targetsJson.getFullPathName() }) == 0,
+            "fingerprint tool: targets runs");
+    const auto targets = juce::JSON::parse (targetsJson);
+    const auto* kickClusters = targets["styles"]["ukmin"]["KICK"]["clusters"].getArray();
+    expect (kickClusters != nullptr && ! kickClusters->isEmpty(), "fingerprint tool: targets hold ukmin KICK clusters");
+    const auto* names = targets["features"].getArray();
+    expect (names != nullptr && names->size() == rolla::kFingerprintDims, "fingerprint tool: targets list every feature");
+    expect (! (bool) targets["styles"]["ukmin"]["KICK"]["pooled"] && (bool) targets["styles"]["ukmin"]["BASS"]["pooled"],
+            "fingerprint tool: a lane with under 8 hits takes the pooled region");
+    base.deleteRecursively();
+}
+
+void testGenreTargets()
+{
+    using namespace rolla::genre;
+    const auto mock = GenreTargets::mock();
+    expect (! mock.fromData && mock.lane (Style::Deep, Lane::Stab).centroidHz.hi < mock.lane (Style::Bouncy, Lane::Stab).centroidHz.hi
+                && mock.lane (Style::Deep, Lane::Pad).decayMs.hi > mock.lane (Style::Bouncy, Lane::Pad).decayMs.hi,
+            "genre mock: DEEP is darker and longer than BOUNCY");
+    expect (std::string (laneName (Lane::HatC)) == "HAT_C" && laneFromName ("VOX") == Lane::Vox && styleFromId ("gaskin") == Style::Jackin,
+            "genre names round-trip");
+
+    SampleFeatures kick;
+    kick.lane = Lane::Kick;
+    kick.centroidHz = 150.f;
+    kick.tiltDbPerOct = -6.f;
+    kick.attackMs = 2.f;
+    kick.decay20Ms = 200.f;
+    kick.subRatio = 0.6f;
+    expect (mock.bandMiss (Style::Roller, kick) == 0.f, "genre mock: a typical kick sits inside the kick bands");
+    kick.centroidHz = 3000.f;
+    expect (mock.bandMiss (Style::Roller, kick) > 1.f, "genre mock: a bright 'kick' misses the bands");
+    expect (mock.timbreDistance (Style::Roller, kick) == 0.f, "genre mock: no timbre regions, distance 0 (bands decide)");
+
+    // Partial real data: one style, one lane, overrides what it has and keeps the rest.
+    const char* text = R"JSON({"version":1,"norm":{"mean":[0,0,0],"std":[1,1,1]},
+      "styles":{"long":{"groove":{"swing":[0.53,0.58]},
+        "STAB":{"clusters":[{"centroid":[0,0,null],"spread":[1,1,1],"weight":1}],"threshold":1.5,"count":40,
+                "bands":{"centroid_hz":[300,900]},"pitch":{"min_conf":0.6},"loudness_db":-9}}}})JSON";
+    const auto g = parseGenreTargets (juce::JSON::parse (text));
+    const auto& stab = g.lane (Style::Deep, Lane::Stab);
+    expect (g.fromData && stab.present && stab.count == 40 && stab.timbre.clusters.size() == 1
+                && std::isnan (stab.timbre.clusters[0].centroid[2]) && stab.centroidHz.hi == 900.f && stab.minPitchConf == 0.6f
+                && g.style (Style::Deep).groove.swing.lo == 0.53f,
+            "genre json: given fields override (null centroid = NaN)");
+    expect (stab.attackMs.set && stab.attackMs.hi == mock.lane (Style::Deep, Lane::Stab).attackMs.hi
+                && g.lane (Style::Roller, Lane::Kick).centroidHz.hi == mock.lane (Style::Roller, Lane::Kick).centroidHz.hi,
+            "genre json: missing fields and styles keep the neutral values");
+    SampleFeatures s;
+    s.lane = Lane::Stab;
+    s.vector = { 0.2f, -0.1f, 5.f };
+    expect (g.timbreDistance (Style::Deep, s) < 1.f, "genre json: timbre distance skips the null dimension");
+    expect (! loadGenreTargets (juce::File ("/nonexistent/genre_targets.json")).fromData, "genre json: no file means the mock");
+
+    // The box's shape: style names (roller...), and the ext block's p10..p90 bands
+    // (ALL, then per style) and swing in percent.
+    const char* boxText = R"JSON({"version":1,"styles":{"roller":{"KICK":{"clusters":[{"centroid":[1],"spread":[1]}],"threshold":1.2,"pooled":false}}},
+      "ext":{"schema":"rolla.genre_targets.ext/1",
+        "bands":{"ALL":{"stab_chord":{"features":{"centroid_hz":{"p10":400,"p50":700,"p90":1200}}}},
+                 "DEEP":{"kick":{"n_hits":10,"features":{"centroid_hz":{"p10":200,"p50":261,"p90":330},"decay20_ms":{"p10":60,"p50":90,"p90":140}}}}},
+        "groove":{"JACKIN":{"hat_16th_swing_pct":{"p10":51.1,"p50":56.5,"p90":64.6}}}}})JSON";
+    const auto box = parseGenreTargets (juce::JSON::parse (boxText));
+    expect (box.lane (Style::Roller, Lane::Kick).timbre.clusters.size() == 1 && box.lane (Style::Roller, Lane::Kick).timbre.threshold == 1.2f,
+            "genre json: 'roller' maps to ROLLER");
+    expect (box.lane (Style::Deep, Lane::Kick).centroidHz.lo == 200.f && box.lane (Style::Deep, Lane::Kick).decayMs.hi == 140.f
+                && box.lane (Style::Bouncy, Lane::Pluck).centroidHz.hi == 1200.f,
+            "genre json: ext bands (per style over ALL) become p10..p90 bands");
+    expect (box.lane (Style::Bouncy, Lane::Hits).centroidHz.hi == mock.lane (Style::Bouncy, Lane::Hits).centroidHz.hi,
+            "genre json: stab_chord covers STAB and PLUCK only; HITS keeps its own values");
+    expect (std::fabs (box.style (Style::Jackin).groove.swing.hi - 0.646f) < 1.0e-4f, "genre json: ext swing percent becomes a ratio band");
+}
+
+// Kit meshing rules (KitMesh.h) on mock features: no audio, no library.
+void testKitMesh()
+{
+    using namespace rolla::genre;
+    auto make = [] (Lane lane, float sub, float centroid, float root, float conf)
+    {
+        SampleFeatures s;
+        s.lane = lane;
+        s.subRatio = sub;
+        s.centroidHz = centroid;
+        s.attackMs = 5.f;
+        s.decay20Ms = 150.f;
+        s.pitch.rootPitch = root;
+        s.pitch.conf = conf;
+        s.pitch.chordPcs = (std::uint16_t) (root >= 0.f ? 1 : 0);
+        return s;
+    };
+    MeshContext ctx;
+    ctx.keyRootPc = 0; // C minor
+    const float at = ctx.rules.conflictAt;
+
+    // Kick vs bass. The bass is retuned to the line (the key root, C); the kick is not.
+    const auto bass = make (Lane::Bass, 0.8f, 90.f, 36.f, 0.9f);
+    const auto kickClash = make (Lane::Kick, 0.8f, 80.f, 35.f, 0.8f); // B1, a semitone under C
+    const auto r1 = pairPenalty (kickClash, bass, ctx);
+    expect (r1.penalty >= at && r1.reason == MeshReason::FundamentalClash,
+            "mesh: sub-heavy kick a semitone off a sub-heavy bass conflicts");
+    expect (pairPenalty (bass, kickClash, ctx).penalty == r1.penalty, "mesh: pair order does not matter");
+    const auto cleanBass = make (Lane::Bass, 0.6f, 90.f, 36.f, 0.9f);
+    const auto cleanKick = make (Lane::Kick, 0.6f, 80.f, 36.f, 0.8f); // tuned to the key root
+    expect (pairPenalty (cleanKick, cleanBass, ctx).penalty == 0.f, "mesh: a kick on the key root with a normal bass is clean");
+    auto longKick = cleanKick;
+    longKick.decay20Ms = 400.f; // still over -20 dB when the offbeat bass is up (238 ms at 126 BPM)
+    const auto r2 = pairPenalty (longKick, cleanBass, ctx);
+    expect (r2.penalty >= at && r2.reason == MeshReason::KickTailOverlap, "mesh: a long kick tail over the bass conflicts");
+    const auto proxyKick = make (Lane::Kick, 0.8f, 93.5f, -1.f, 0.f); // no tail pitch: f0 from the centroid (~62 Hz, B1)
+    const float proxy = pairPenalty (proxyKick, bass, ctx).penalty;
+    expect (proxy > 0.f && proxy < at, "mesh: a centroid-proxy fundamental clash counts, but not alone");
+
+    // Bass vs stab: low-mid masking and register.
+    const auto muddyStab = make (Lane::Stab, 0.35f, 250.f, 40.f, 0.8f);
+    const auto r3 = pairPenalty (bass, muddyStab, ctx);
+    expect (r3.penalty >= at && r3.reason == MeshReason::LowMidMasking, "mesh: a dark, sub-heavy low stab over the bass conflicts");
+    const auto stab = make (Lane::Stab, 0.05f, 900.f, 60.f, 0.85f);
+    expect (pairPenalty (bass, stab, ctx).penalty == 0.f, "mesh: a bright stab two octaves up is clean against the bass");
+
+    // Stab vs pad register spacing.
+    const auto padClose = make (Lane::Pad, 0.02f, 800.f, 62.f, 0.8f);
+    const auto r4 = pairPenalty (stab, padClose, ctx);
+    expect (r4.penalty >= at && r4.reason == MeshReason::RegisterCrowding, "mesh: stab and pad roots a tone apart conflict");
+    const auto padUnder = make (Lane::Pad, 0.02f, 500.f, 48.f, 0.8f);
+    expect (pairPenalty (stab, padUnder, ctx).penalty == 0.f, "mesh: a pad an octave under the stab is clean");
+
+    // Key: a confident major-triad file on one-finger lines in C minor sounds E natural.
+    auto majorStab = stab;
+    majorStab.pitch.isChord = true;
+    majorStab.pitch.quality = rolla::ChordQuality::Major;
+    majorStab.pitch.chordPcs = (std::uint16_t) ((1u << 0) | (1u << 4) | (1u << 7));
+    const auto k1 = keyPenalty (majorStab, ctx);
+    expect (k1.penalty >= at && k1.reason == MeshReason::OutOfKey, "mesh: a major chord file conflicts in minor");
+    auto inMajor = ctx;
+    inMajor.scaleMask = kScaleMajor;
+    expect (keyPenalty (majorStab, inMajor).penalty == 0.f, "mesh: the same chord file fits a major key");
+    auto asked = ctx;
+    asked.chordAsk = true; // written minor triads: the sampler plays it from the minor third (Eb G Bb)
+    expect (keyPenalty (majorStab, asked).penalty == 0.f, "mesh: chordFileOffset rescues a major file on asked minor triads");
+    expect (keyPenalty (stab, ctx).penalty == 0.f, "mesh: a confident single note always lands in key");
+    const auto vox = make (Lane::Vox, 0.0f, 1600.f, 61.f, 0.9f); // C#, not retuned
+    expect (keyPenalty (vox, ctx).penalty >= at, "mesh: an unretuned vox on a wrong pitch class conflicts");
+    const auto weakStab = make (Lane::Stab, 0.05f, 900.f, 61.f, 0.4f); // plays as recorded
+    const float weak = keyPenalty (weakStab, ctx).penalty;
+    expect (weak > 0.f && weak < at, "mesh: a low-confidence wrong pitch counts, scaled by its confidence");
+    auto noKey = ctx;
+    noKey.keyRootPc = -1;
+    expect (keyPenalty (majorStab, noKey).penalty == 0.f, "mesh: no key, no key rule");
+
+    // Top band.
+    const auto hat = make (Lane::HatC, 0.f, 8700.f, -1.f, 0.f);
+    const auto ride = make (Lane::Ride, 0.f, 8900.f, -1.f, 0.f);
+    const auto hatO = make (Lane::HatO, 0.f, 8800.f, -1.f, 0.f);
+    expect (pairPenalty (hat, ride, ctx).reason == MeshReason::TopBandClash && pairPenalty (hat, ride, ctx).penalty >= at,
+            "mesh: a ride on the closed hat's band conflicts");
+    expect (pairPenalty (hat, hatO, ctx).penalty == 0.f, "mesh: closed and open hat are a pair by design");
+
+    // Whole kit, and the selector hook.
+    const std::vector<SampleFeatures> kit { kickClash, bass, majorStab };
+    const auto conflicts = kitConflicts (kit, ctx);
+    expect (conflicts.size() == 2 && conflicts[0].a == 0 && conflicts[0].b == 1 && conflicts[1].a == 2 && conflicts[1].b == -1
+                && conflicts[1].reason == MeshReason::OutOfKey,
+            "mesh: kitConflicts lists the kick/bass clash and the out-of-key chord");
+    const auto hook = pairPenaltyHook (ctx);
+    expect (hook (cleanKick, majorStab) >= at && hook (cleanKick, stab) == 0.f, "mesh: the hook adds each member's key penalty");
+    expect (pairPenaltyHook (ctx, false) (cleanKick, majorStab) == 0.f, "mesh: the hook without key is pairs only");
+
+    // Config: a file overrides what it has and keeps the rest.
+    const auto rules = parseMeshRules (juce::JSON::parse (R"JSON({"crowding":{"full_clear_st":[1.0,1.5]},"conflict_at":1.5})JSON"));
+    expect (rules.crowdFullSt == 1.f && rules.crowdClearSt == 1.5f && rules.conflictAt == 1.5f
+                && rules.subHeavy == MeshRules::fromMixSpec().subHeavy,
+            "mesh json: given numbers override, missing keep the mix-spec defaults");
+    auto tuned = ctx;
+    tuned.rules = rules;
+    expect (pairPenalty (stab, padClose, tuned).penalty == 0.f, "mesh json: a tighter crowding tolerance clears a tone apart");
+    expect (loadMeshRules (juce::File ("/nonexistent/mesh_rules.json")).crowdClearSt == MeshRules::fromMixSpec().crowdClearSt,
+            "mesh json: no file means the defaults");
+}
+
 } // namespace
 
 int main()
 {
     juce::ScopedJuceInitialiser_GUI juce;
+
+    testPitchProbe();
+    testFingerprint();
+    testFingerprintTool();
+    testGenreTargets();
+    testKitMesh();
 
     static_assert (rolla::kUserSlotCount == 14, "14 user slots");
     expect (rolla::userSlotForPart (rolla::Bass) == rolla::SlotBass, "bass slot");
@@ -163,6 +696,23 @@ int main()
     expect (rolla::userSlotForDrum (rolla::Perc) == rolla::SlotPerc, "perc slot");
     expect (rolla::userSlotForDrum (rolla::TomLow) < 0, "toms stay on the dropped-wav path");
     expect (std::string (rolla::userSlotFolder (rolla::SlotPerc)) == "DRUMS/PERC", "perc folder");
+
+    // Kick key follow: every key gets a root / 4th / 5th inside 40-70 Hz,
+    // never an out-of-key 55 Hz fallback.
+    for (int key = 0; key < 12; ++key)
+    {
+        const float hz = rolla::DrumMachine::kickHzForKey (key);
+        const std::string tag = "kick key follow key " + std::to_string (key);
+        expect (hz >= 40.f && hz <= 70.f, tag + " in 40-70 Hz");
+        const int midi = (int) std::lround (69.0 + 12.0 * std::log2 ((double) hz / 440.0));
+        const int interval = ((midi % 12) - key + 12) % 12;
+        expect (interval == 0 || interval == 5 || interval == 7, tag + " is root/4th/5th");
+    }
+    expect (std::fabs (rolla::DrumMachine::kickHzForKey (10) - 55.f) > 0.5f, "kick key follow A# not 55 Hz");
+    expect (std::fabs (rolla::DrumMachine::kickHzForKey (11) - 55.f) > 0.5f, "kick key follow B not 55 Hz");
+    expect (std::fabs (rolla::DrumMachine::kickHzForKey (2) - 55.f) < 0.1f, "kick key follow D keeps A1");
+    expect (std::fabs (rolla::DrumMachine::kickHzForKey (10) - 58.27f) < 0.1f, "kick key follow A# -> A#1");
+    expect (std::fabs (rolla::DrumMachine::kickHzForKey (6) - 46.25f) < 0.1f, "kick key follow F# -> F#1");
 
     expect (rolla::midiFromFilename ("BASS/THMAG_Bass_One_Shot_4_Fm.wav") == 53, "Fm -> F3");
     expect (rolla::midiFromFilename ("STAB/thing_C#.wav") == 49, "C# -> C#3");
@@ -644,6 +1194,84 @@ int main()
             lanePack = std::max (lanePack, std::fabs (laneL[rolla::Bass]));
         }
         expect (lanePack > 0.01f, "the drum-pack substitute is audible on the lane");
+    }
+
+    {
+        // Neutral CI versions of the A&R pitch checks: play library files through
+        // the sampler and measure what comes out.
+        const auto pitchRoot = rootDir.getChildFile ("pitch");
+        pitchRoot.deleteRecursively();
+        writeWave (pitchRoot.getChildFile ("STAB/saw_C4.wav"), sawNotes ({ 60.0 }));
+        // A factory-style wrong label: the voice is A4, the filename says B0.
+        writeWave (pitchRoot.getChildFile ("VOX/chops/yeah_B0.wav"), sawNotes ({ 69.0 }));
+        writeWave (pitchRoot.getChildFile ("PAD/chord_Cmin.wav"), sawNotes ({ 60.0, 63.0, 67.0 }));
+
+        rolla::PresetBank bank;
+        rolla::loadDefaultPresets (bank);
+        auto useFile = [] (rolla::SampleSpec& spec, const char* file)
+        {
+            spec.mode = rolla::SampleMode::Sample;
+            spec.filter.on = false;
+            std::snprintf (spec.file, sizeof spec.file, "%s", file);
+        };
+        bank.count[rolla::Stab] = 1;
+        useFile (bank.stab[0].sample, "STAB/saw_C4.wav");
+        bank.count[rolla::Vox] = 1;
+        useFile (bank.vox[0].sample, "VOX/chops/yeah_B0.wav");
+        bank.count[rolla::Pad] = 1;
+        useFile (bank.pad[0].sample, "PAD/chord_Cmin.wav");
+
+        rolla::SampleLibrary lib;
+        lib.setRoot (pitchRoot);
+        lib.watch (bank);
+        expect (waitUntil ([&] { return lib.ready ("STAB/saw_C4.wav") && lib.ready ("VOX/chops/yeah_B0.wav")
+                                        && lib.ready ("PAD/chord_Cmin.wav"); }),
+                "pitch-check files load");
+        rolla::EngineParams params;
+        params.presets = &bank;
+        params.library = &lib;
+
+        float outPeak = 0.f;
+        auto played = [&] (int part, int note, rolla::ChordAsk ask, bool& chordFile)
+        {
+            rolla::Sampler s;
+            s.prepare (48000.0);
+            chordFile = s.take (part, note, 110, 1.0e9f, bank, params, ask).chordFile;
+            std::vector<float> out (36000);
+            outPeak = 0.f;
+            for (auto& x : out)
+            {
+                float laneL[rolla::NumParts] {};
+                float laneR[rolla::NumParts] {};
+                s.render (laneL, laneR, 0.f, 0.f, false);
+                x = laneL[part];
+                outPeak = std::max (outPeak, std::fabs (x));
+            }
+            return rolla::probePitch (out.data(), nullptr, (int) out.size(), 48000.0);
+        };
+        auto got = [&] (const rolla::PitchInfo& p)
+        {
+            return " (got root " + std::to_string (p.rootPitch) + ", conf " + std::to_string (p.conf) + ", chord "
+                 + std::to_string ((int) p.isChord) + ", output peak " + std::to_string (outPeak) + ")";
+        };
+
+        bool chord = false;
+        const auto stab = played (rolla::Stab, 62, {}, chord);
+        expect (stab.pitched() && rolla::pitchprobe::pcDistance (stab.rootPitch, 62.0) < 0.3,
+                "SAMPLE_OUT_OF_KEY: a C4 stab asked for D sounds D" + got (stab));
+        expect (! chord, "a single-note file is not a chord file");
+
+        const auto vox = played (rolla::Vox, 64, {}, chord);
+        expect (vox.pitched() && std::fabs (vox.rootPitch - 69.f) < 1.f,
+                "VOX_PITCH_SHIFTED: a vox chop keeps its voice, whatever the label" + got (vox));
+
+        rolla::ChordAsk cMajor;
+        cMajor.quality = rolla::ChordQuality::Major;
+        const auto pad = played (rolla::Pad, 60, cMajor, chord);
+        expect (chord, "CHORD_STACK: a recorded chord reports itself, so the engine plays it once per chord");
+        expect (pad.isChord && rolla::pitchprobe::pcDistance (pad.rootPitch, 64.0) < 0.3 && pad.quality == rolla::ChordQuality::Minor,
+                "a C minor file on a C major chord plays from the third (E minor)" + got (pad));
+        pitchRoot.deleteRecursively();
     }
 
     {

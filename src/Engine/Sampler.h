@@ -20,16 +20,24 @@ public:
     {
         int kind = 0;       // 0 synth only, 1 sample replaces synth, 2 layer
         float synthGain = 1.f;
+        // The sample is a recorded chord: it already sounds the other chord
+        // tones, so the caller plays it once per chord, not once per note.
+        bool chordFile = false;
     };
 
     void prepare (double sampleRate) noexcept;
     void reset() noexcept;
 
+    // ask: the chord this note opens (empty for a single note). A chord file plays
+    // from that chord's root, and moves to a root where its quality fits.
     Take take (int part, int midiNote, int velocity, float end16,
-               const PresetBank& bank, const EngineParams& params) noexcept;
+               const PresetBank& bank, const EngineParams& params,
+               ChordAsk ask = {}) noexcept;
 
     // Returns the gain the synthesized drum voice should keep (0 = sample replaced it).
-    float takeDrum (int voice, int velocity, const PresetBank& bank, const EngineParams& params) noexcept;
+    // gainScale: per-hit accent (DRUMS ACCENT on the downbeat, the voice's ACCENT).
+    float takeDrum (int voice, int velocity, const PresetBank& bank, const EngineParams& params,
+                    float gainScale = 1.f) noexcept;
     void releaseNote (int part, int midiNote) noexcept;
 
     void releaseAll() noexcept;
@@ -135,6 +143,8 @@ private:
                        Take& take, float& drumKeep) noexcept;
 
     double sr = 48000.0;
+    // takeDrum's gainScale, seen by playUserSlot for a drum voice. Audio thread only.
+    float drumGain = 1.f;
     int serial = 1;
     int sliceCursor[NumParts] {};
     Voice voices[40];

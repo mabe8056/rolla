@@ -325,7 +325,8 @@ jobs:
       - name: Knob and export tests
         run: |
           set -euo pipefail
-          ./build/rolla-knob-test
+          # Tone pack from the export step: every knob's audio check runs.
+          ./build/rolla-knob-test --samples /tmp/rolla-tone-pack
 
       - name: Offline renders
         if: ${{ !github.event.pull_request.draft }}

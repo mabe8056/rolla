@@ -182,6 +182,7 @@ rolla::EngineParams paramsFor (rolla::RollaProcessor& proc, const rolla::PresetB
     params.library = &proc.sampleLibrary();
     params.sampleIndex = index;
     params.bpm = (float) kBpm;
+    params.sampleShaping = true; // as RollaProcessor sets it
     auto raw = [&] (const juce::String& id, float fallback)
     {
         auto* v = proc.apvts.getRawParameterValue (id);
@@ -757,9 +758,10 @@ void testFidelity (const juce::File& scratch)
         auto out = renderSolo (*bank, params, c.part, c.voice, c.note, frames, picked);
         const std::string tag = std::string ("(e) ") + c.name;
         expect (picked == c.file, tag + " plays " + c.file + (picked == c.file ? std::string() : " (got " + picked + ")"));
-        // Compare the file's length; what follows it must be silence.
+        // Compare the file's length; what follows it must be silence. 3% of slack:
+        // #40 retunes a tonal file to its measured pitch, a few cents off 1:1.
         float after = 0.f;
-        for (size_t i = c.src->l.size(); i < out.l.size(); ++i)
+        for (size_t i = c.src->l.size() + c.src->l.size() * 3 / 100; i < out.l.size(); ++i)
             after = std::max ({ after, std::fabs (out.l[i]), std::fabs (out.r[i]) });
         out.l.resize (c.src->l.size());
         out.r.resize (c.src->r.size());

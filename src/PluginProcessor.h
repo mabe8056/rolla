@@ -19,6 +19,24 @@
 namespace rolla
 {
 
+inline bool anyLaneSoloed (const bool (&solo)[NumParts]) noexcept
+{
+    for (bool s : solo)
+        if (s)
+            return true;
+    return false;
+}
+
+// Solo is playback-only. With any lane soloed, every other lane plays as muted;
+// a soloed lane the user also muted stays muted. With no solo this changes nothing.
+inline void foldSolo (bool (&mute)[NumParts], const bool (&solo)[NumParts]) noexcept
+{
+    if (! anyLaneSoloed (solo))
+        return;
+    for (int i = 0; i < NumParts; ++i)
+        mute[i] = mute[i] || ! solo[i];
+}
+
 class RollaProcessor : public juce::AudioProcessor,
                        private juce::AudioProcessorValueTreeState::Listener
 {
@@ -94,6 +112,9 @@ public:
     juce::String exportMidiToDocuments();
     // One type-1 MIDI file: tempo track, then one track per lane.
     juce::StringArray writeTempMidi();
+    // One single-track MIDI file per lane (all 7, empty lanes included), one loop
+    // (LENGTH) long, in one fresh cache folder. Same names as writeLaneMidi.
+    juce::StringArray writeLaneMidiFiles();
     // One WAV stem per lane, one loop long (the LENGTH setting), seamless and
     // downbeat-aligned. Same cache and drag path as the MIDI file.
     juce::StringArray writeStemAudio();
@@ -113,6 +134,8 @@ public:
 
     void triggerRoll();
     void triggerShuffle (int part);
+    // Alt-click on a solo button: solo `part` and clear every other lane's solo.
+    void setExclusiveSolo (int part);
 
     bool laneSampleMissing (int part) const;
     void setSamplesRoot (const juce::File& folder);
@@ -256,6 +279,14 @@ private:
     std::atomic<double> playPpq { 0.0 };
     std::atomic<float> lastBpm { 130.f };
     double previewPpq = 0.0;
+    // Free-running phrase (audio thread only). FL Studio loops its pattern, so its
+    // ppq wraps every pattern length while the transport keeps playing. Each host
+    // loop wrap adds the wrapped distance here, so an 8-bar roll plays through a
+    // 4-bar host loop. Cleared on stop -> start and on a real seek.
+    double phraseOffset = 0.0;
+    double hostExpectPpq = 0.0;
+    double hostLastBeats = 0.0;
+    bool hostRolling = false;
     double preparedRate = 48000.0;
     // Pattern MIDI held back by the tp_guard latency (see delayMidiOut). Audio thread only.
     juce::MidiBuffer midiLate, midiNow, midiNext;
