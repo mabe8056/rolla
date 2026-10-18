@@ -1,6 +1,8 @@
 #include "Engine/Engine.h"
 #include "Engine/Sampler.h"
+#include "Sampler/Fingerprint.h"
 #include "Sampler/PitchProbe.h"
+#include "Tools/FingerprintTool.h"
 #include "Sampler/PlayDecision.h"
 #include "Sampler/SamplePrep.h"
 #include "Sampler/UserSlots.h"
@@ -271,6 +273,151 @@ void testPitchProbe()
     expect (rolla::chordFileOffset (ChordQuality::Neutral, ChordQuality::Major) == 0, "neutral fits either");
 }
 
+std::vector<float> kickHit (double seconds = 0.4)
+{
+    std::vector<float> x ((size_t) (seconds * 48000.0));
+    double phase = 0.0;
+    for (size_t i = 0; i < x.size(); ++i)
+    {
+        const double t = (double) i / 48000.0;
+        phase += 2.0 * 3.14159265358979 * (50.0 + 70.0 * std::exp (-t / 0.03)) / 48000.0;
+        x[i] = (float) (0.8 * std::exp (-t / 0.06) * std::sin (phase));
+    }
+    return x;
+}
+
+std::vector<float> hatHit (std::uint32_t seed, double seconds = 0.15)
+{
+    std::vector<float> x ((size_t) (seconds * 48000.0));
+    float prev = 0.f, prev2 = 0.f;
+    for (size_t i = 0; i < x.size(); ++i)
+    {
+        seed = seed * 1664525u + 1013904223u;
+        const float w = (float) (seed >> 8) / 8388608.f - 1.f;
+        const float d1 = w - prev, d2 = d1 - prev2; // two differentiators: energy sits high
+        prev = w;
+        prev2 = d1;
+        x[i] = (float) (0.3 * std::exp (-(double) i / 48000.0 / 0.012)) * d2;
+    }
+    return x;
+}
+
+void testFingerprint()
+{
+    const auto kick = kickHit();
+    const auto hat = hatHit (7u);
+    auto stab = sawNotes ({ 60.0 });
+    for (size_t i = 0; i < stab.size(); ++i)
+        stab[i] *= (float) std::exp (-(double) i / 48000.0 / 0.25);
+    const auto k = rolla::fingerprintOf (kick.data(), (int) kick.size());
+    const auto h = rolla::fingerprintOf (hat.data(), (int) hat.size());
+    const auto s = rolla::fingerprintOf (stab.data(), (int) stab.size());
+    expect (k.valid && k.subRatio > 0.4f && k.centroidHz < 400.f,
+            "fingerprint: a kick owns the sub (sub " + std::to_string (k.subRatio) + ", centroid " + std::to_string (k.centroidHz) + ")");
+    expect (h.valid && h.centroidHz > 4000.f && h.decay40Ms < 200.f && h.subRatio < 0.05f,
+            "fingerprint: a hat is bright and short (centroid " + std::to_string (h.centroidHz) + ", decay40 " + std::to_string (h.decay40Ms) + ")");
+    expect (s.valid && std::fabs (s.pitch.rootPitch - 60.f) < 0.3f, "fingerprint: a C4 stab keeps its pitch beside the vector");
+    expect ((int) k.vector().size() == rolla::kFingerprintDims && rolla::fingerprintName (rolla::kFingerprintDims - 1) == "rms_db",
+            "fingerprint: vector and names line up");
+
+    // Target regions: two blobs give two clusters; a point in one is a hit, a far point is not.
+    std::vector<std::vector<float>> xs;
+    std::uint32_t seed = 3u;
+    auto jitter = [&seed]
+    {
+        seed = seed * 1664525u + 1013904223u;
+        return ((float) (seed >> 8) / 16777216.f - 0.5f) * 0.6f;
+    };
+    for (int i = 0; i < 40; ++i)
+    {
+        const float c = i % 2 == 0 ? 0.f : 5.f;
+        xs.push_back ({ c + jitter(), c + jitter(), c + jitter() });
+    }
+    const auto t = rolla::fitTarget (xs, 3);
+    expect (t.clusters.size() >= 2, "targets: two blobs give at least two clusters");
+    expect (rolla::targetDistance ({ 0.1f, 0.f, -0.1f }, t) <= t.threshold, "targets: a point in a blob is a hit");
+    expect (rolla::targetDistance ({ 20.f, -20.f, 20.f }, t) > t.threshold, "targets: a far point is a miss");
+}
+
+int runTool (std::initializer_list<juce::String> words)
+{
+    juce::StringArray args;
+    for (const auto& w : words)
+        args.add (w);
+    return rolla::fptool::run (args);
+}
+
+void testFingerprintTool()
+{
+    namespace fp = rolla::fptool;
+    expect (fp::laneFromPath ("DRUMS/CH/x.wav") == "HAT_C" && fp::laneFromPath ("VOX/chops/y.wav") == "VOX"
+                && fp::laneFromPath ("STAB/z.wav") == "STAB" && fp::laneFromPath ("misc/z.wav").isEmpty(),
+            "fingerprint tool: lanes come from folders");
+
+    const auto base = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("rolla-fp-test");
+    base.deleteRecursively();
+    for (int i = 0; i < 3; ++i)
+        writeWave (base.getChildFile ("lib/DRUMS/KICK/k" + juce::String (i) + ".wav"), kickHit());
+    writeWave (base.getChildFile ("lib/DRUMS/CH/h0.wav"), hatHit (11u));
+    const auto libJson = base.getChildFile ("lib.json");
+    expect (runTool ({ "scan", base.getChildFile ("lib").getFullPathName(), "--out", libJson.getFullPathName() }) == 0,
+            "fingerprint tool: scan runs");
+    const auto lib = fp::entriesFromJson (juce::JSON::parse (libJson));
+    int kicks = 0, hats = 0;
+    for (const auto& e : lib)
+    {
+        kicks += e.lane == "KICK" ? 1 : 0;
+        hats += e.lane == "HAT_C" ? 1 : 0;
+    }
+    expect (lib.size() == 4 && kicks == 3 && hats == 1, "fingerprint tool: scan finds 3 kicks and a hat");
+
+    // A Demucs-style track: kicks on the beat, hats between, a four-note bass.
+    std::vector<float> drums ((size_t) (48000 * 6), 0.f), bass ((size_t) (48000 * 6), 0.f);
+    for (int b = 0; b < 12; ++b)
+    {
+        const auto kk = kickHit (0.3);
+        const auto hh = hatHit (100u + (std::uint32_t) b, 0.1);
+        const size_t at = (size_t) (b * 24000);
+        for (size_t i = 0; i < kk.size() && at + i < drums.size(); ++i)
+            drums[at + i] += kk[i];
+        for (size_t i = 0; i < hh.size() && at + 12000 + i < drums.size(); ++i)
+            drums[at + 12000 + i] += hh[i];
+    }
+    const auto note = sawNotes ({ 36.0 });
+    for (int b = 0; b < 4; ++b)
+        for (size_t i = 0; i < 30000 && b * 60000 + i < bass.size(); ++i)
+            bass[(size_t) (b * 60000) + i] = note[960 + i] * (float) std::exp (-(double) i / 48000.0 / 0.3);
+    writeWave (base.getChildFile ("stems/trackA/sep/drums.wav"), drums);
+    writeWave (base.getChildFile ("stems/trackA/sep/bass.wav"), bass);
+    base.getChildFile ("styles.csv").replaceWithText ("track_id,style\ntrackA,ukmin\n");
+    const auto stemJson = base.getChildFile ("stems.json");
+    expect (runTool ({ "stems", base.getChildFile ("stems").getFullPathName(), "--styles",
+                       base.getChildFile ("styles.csv").getFullPathName(), "--out", stemJson.getFullPathName() }) == 0,
+            "fingerprint tool: stems runs");
+    const auto sliced = fp::entriesFromJson (juce::JSON::parse (stemJson));
+    int sk = 0, sh = 0, sb = 0;
+    for (const auto& e : sliced)
+    {
+        sk += e.lane == "KICK" ? 1 : 0;
+        sh += e.lane.startsWith ("HAT") ? 1 : 0;
+        sb += e.lane == "BASS" ? 1 : 0;
+        expect (e.style == "ukmin" && e.track == "trackA", "fingerprint tool: slices carry track and style");
+    }
+    expect (sk >= 10 && sh >= 10 && sb >= 3,
+            "fingerprint tool: stems slice into kicks, hats and bass (" + std::to_string (sk) + "/" + std::to_string (sh)
+                + "/" + std::to_string (sb) + ")");
+
+    const auto targetsJson = base.getChildFile ("targets.json");
+    expect (runTool ({ "targets", stemJson.getFullPathName(), "--out", targetsJson.getFullPathName() }) == 0,
+            "fingerprint tool: targets runs");
+    const auto targets = juce::JSON::parse (targetsJson);
+    const auto* kickClusters = targets["styles"]["ukmin"]["KICK"]["clusters"].getArray();
+    expect (kickClusters != nullptr && ! kickClusters->isEmpty(), "fingerprint tool: targets hold ukmin KICK clusters");
+    const auto* names = targets["features"].getArray();
+    expect (names != nullptr && names->size() == rolla::kFingerprintDims, "fingerprint tool: targets list every feature");
+    base.deleteRecursively();
+}
+
 } // namespace
 
 int main()
@@ -278,6 +425,8 @@ int main()
     juce::ScopedJuceInitialiser_GUI juce;
 
     testPitchProbe();
+    testFingerprint();
+    testFingerprintTool();
 
     static_assert (rolla::kUserSlotCount == 14, "14 user slots");
     expect (rolla::userSlotForPart (rolla::Bass) == rolla::SlotBass, "bass slot");
