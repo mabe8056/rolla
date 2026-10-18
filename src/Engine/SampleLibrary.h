@@ -658,6 +658,18 @@ void ensureSampleFolders (const juce::File& root);
 void collectPlayFiles (const PresetBank& bank, const SampleIndex& index, const int preset[NumParts],
                        const int samplePick[NumParts], int dialect, int window, std::vector<std::string>& out);
 
+// Offline renders (tools, tests). Loads these files ahead of the background list
+// and blocks until each one is loaded or confirmed missing, at most timeoutMs.
+// Files still loading at the deadline are logged to stderr with `who`.
+// Returns true when none is still loading.
+bool waitForSampleFiles (SampleLibrary& library, const std::vector<std::string>& paths, int timeoutMs, const char* who);
+
+// collectPlayFiles (window 8, the plugin's PrefetchTimer list) + waitForSampleFiles,
+// so an offline render never starts its first block before a lane's file is in memory.
+bool prefetchPlayFiles (SampleLibrary& library, const PresetBank& bank, const SampleIndex& index,
+                        const int preset[NumParts], const int samplePick[NumParts], int dialect,
+                        int timeoutMs, const char* who);
+
 // Per-user cache files (kind "index" or "loudness"). Never inside the sample root.
 juce::File sampleCacheFor (const juce::File& sampleRoot, const char* kind);
 juce::File loudnessCacheFor (const juce::File& sampleRoot);

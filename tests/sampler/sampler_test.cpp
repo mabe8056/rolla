@@ -2562,6 +2562,130 @@ int main()
         expect (checksum (voxFile) == voxSum, "the vox source file is unchanged");
     }
 
+    {
+        // A&R roll 15 (PAD -inf) and issue #68 (first VOX note silent): a note whose
+        // file is still loading must be held and start late, not be dropped; an
+        // absent (unreadable) file must fall back to the next file in the pool.
+        const auto hRoot = rootDir.getChildFile ("held");
+        for (const char* kind : { "index", "loudness" })
+            rolla::sampleCacheFor (hRoot, kind).deleteFile();
+        hRoot.deleteRecursively();
+        writeTone (hRoot.getChildFile ("PAD/warm_one.wav"), 2.0, 0.5f, 440.f, false);
+        writeTone (hRoot.getChildFile ("PAD/warm_two.wav"), 2.0, 0.5f, 523.f, false);
+        hRoot.getChildFile ("PAD/warm_bad.wav").replaceWithText ("this is not a wav file");
+        const char* manifest = R"JSON({"files":[
+            {"file":"PAD/warm_one.wav","lane":"PAD","category":"pad"},
+            {"file":"PAD/warm_two.wav","lane":"PAD","category":"pad"},
+            {"file":"PAD/warm_bad.wav","lane":"PAD","category":"pad"}]})JSON";
+
+        rolla::PresetBank hBank;
+        rolla::loadDefaultPresets (hBank);
+        hBank.count[rolla::Pad] = 1;
+        auto& padSpec = hBank.pad[0].sample;
+        padSpec.mode = rolla::SampleMode::Sample;
+        padSpec.file[0] = 0;
+        padSpec.poolCount = 0;
+        padSpec.zoneCount = 0;
+        padSpec.reverse = false;
+        padSpec.start = 0.f;
+        padSpec.loop.on = false;
+        padSpec.filter = rolla::PoolFilter {};
+        padSpec.filter.on = true;
+        padSpec.filter.lane = rolla::Pad;
+
+        constexpr float kD16 = (float) (130.0 / 60.0 * 4.0 / 48000.0);
+        constexpr float kEnd16 = 12.f;
+        const int noteN = (int) (kEnd16 / kD16) - 8;
+
+        struct HeldRun
+        {
+            float latePeak = 0.f;
+            int heldAfterTake = 0;
+            int heldAtEnd = -1;
+            std::string picked;
+        };
+        auto runHeld = [&] (rolla::SampleLibrary& lib, const char* pickPath, const std::function<bool()>& loaded)
+        {
+            HeldRun out;
+            const auto snap = lib.index();
+            if (snap == nullptr)
+                return out;
+            rolla::EngineParams hp;
+            hp.presets = &hBank;
+            hp.library = &lib;
+            hp.sampleIndex = snap.get();
+            hp.dialect = rolla::UkMin;
+            hp.bpm = 130.f;
+            for (int i = 0; i < rolla::NumDrumVoices; ++i)
+                hp.drumDecay[i] = 0.5f;
+            const auto& spec = rolla::sampleSpecFor (hBank, rolla::Pad, 0);
+            const auto filter = rolla::poolFilterWithFiles (*snap, spec, rolla::Pad, spec.filter.voice, hp.dialect);
+            const int n = rolla::sampleIndexCount (*snap, rolla::Pad, filter);
+            int ordinal = -1;
+            for (int i = 0; i < n; ++i)
+                if (const auto* e = rolla::sampleIndexAt (*snap, rolla::Pad, filter, i))
+                    if (std::strcmp (e->path, pickPath) == 0)
+                        ordinal = i;
+            expect (n == 3 && ordinal >= 0, "held-note pool holds the three PAD files (n=" + std::to_string (n) + ")");
+            hp.samplePick[rolla::Pad] = std::max (0, ordinal);
+
+            rolla::Sampler s;
+            s.prepare (48000.0);
+            s.take (rolla::Pad, 60, 110, kEnd16, hBank, hp);
+            out.heldAfterTake = s.heldNotes();
+            float pos16 = 0.f;
+            for (int i = 0; i < noteN; ++i)
+            {
+                // The first block runs while the file loads; then the loader catches up.
+                if (i == 256)
+                    expect (waitUntil (loaded), "held-note file finishes loading");
+                const float prev16 = pos16;
+                pos16 += kD16;
+                float laneL[rolla::NumParts] {};
+                float laneR[rolla::NumParts] {};
+                s.retryHeld (hBank, hp, prev16, pos16, true);
+                s.render (laneL, laneR, prev16, pos16, true, 32.f);
+                const float a = std::max (std::fabs (laneL[rolla::Pad]), std::fabs (laneR[rolla::Pad]));
+                out.latePeak = std::max (out.latePeak, a);
+            }
+            out.heldAtEnd = s.heldNotes();
+            out.picked = s.lastPickedFile (rolla::Pad);
+            return out;
+        };
+
+        {
+            rolla::SampleLibrary lib;
+            lib.setRoot (hRoot);
+            lib.startIndex (manifest, (int) std::strlen (manifest));
+            expect (waitUntil ([&] { return lib.indexedFound() >= 0; }), "held-note index publishes");
+            expect (! lib.ready ("PAD/warm_one.wav"), "the PAD file is not loaded before its note");
+            const auto run = runHeld (lib, "PAD/warm_one.wav", [&] { return lib.ready ("PAD/warm_one.wav"); });
+            expect (run.heldAfterTake == 1, "a PAD note on a still-loading file is held, not dropped");
+            expect (run.latePeak > 1.0e-4f,
+                    "the held PAD note sounds once its file loads, within the note's length (peak "
+                        + std::to_string (run.latePeak) + ")");
+            expect (run.heldAtEnd == 0, "the held note is released from the hold once started");
+            expect (run.picked == "PAD/warm_one.wav", "the late start plays the file the note asked for (" + run.picked + ")");
+        }
+        {
+            rolla::SampleLibrary lib;
+            lib.setRoot (hRoot);
+            lib.startIndex (manifest, (int) std::strlen (manifest));
+            expect (waitUntil ([&] { return lib.indexedFound() >= 0; }), "absent-file index publishes");
+            lib.preload ({ std::string ("PAD/warm_bad.wav") });
+            expect (waitUntil ([&] { return lib.missing ("PAD/warm_bad.wav"); }), "an unreadable PAD file is marked missing");
+            const auto run = runHeld (lib, "PAD/warm_bad.wav", [&] {
+                return lib.ready ("PAD/warm_one.wav") || lib.ready ("PAD/warm_two.wav");
+            });
+            expect (run.latePeak > 1.0e-4f,
+                    "a PAD note whose file is absent falls back to another pool file and sounds (peak "
+                        + std::to_string (run.latePeak) + ")");
+            expect (run.picked == "PAD/warm_one.wav" || run.picked == "PAD/warm_two.wav",
+                    "the absent file is swapped for another file in the lane's pool (" + run.picked + ")");
+            expect (run.heldAtEnd == 0, "the fallback note leaves the hold");
+        }
+    }
+
     outside.deleteFile();
     tooLong.deleteFile();
     rootDir.deleteRecursively();

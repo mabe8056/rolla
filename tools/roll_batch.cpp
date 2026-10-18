@@ -390,35 +390,6 @@ std::string pickedFile (const rolla::SampleIndex* index, const rolla::SampleSpec
     return entry != nullptr ? entry->path : "";
 }
 
-void waitReady (rolla::SampleLibrary& library, const std::vector<std::string>& paths)
-{
-    const auto readyBy = juce::Time::getMillisecondCounter() + 60000;
-    bool waiting = true;
-    while (waiting && juce::Time::getMillisecondCounter() < readyBy)
-    {
-        waiting = false;
-        for (const auto& path : paths)
-            if (! library.ready (path.c_str()) && ! library.missing (path.c_str()))
-                waiting = true;
-        if (waiting)
-            juce::Thread::sleep (10);
-    }
-    // Say so loudly: a file still loading here plays as a silent note.
-    // Missing files are only counted: the sampler swaps them from the same pool.
-    int absent = 0;
-    for (const auto& path : paths)
-    {
-        if (library.ready (path.c_str()))
-            continue;
-        if (library.missing (path.c_str()))
-            ++absent;
-        else
-            std::cerr << "SAMPLE NOT READY (timeout) " << path << "\n";
-    }
-    if (absent > 0)
-        std::cerr << "samples not on disk for this roll: " << absent << " (swapped from the same pool)\n";
-}
-
 void writeSidecar (const juce::File& wav, int style, const Knobs& knobs, bool hitsMute, float swing,
                    const rolla::PresetBank& bank, const int preset[rolla::NumParts],
                    const int samplePick[rolla::NumParts], const std::string fileOf[rolla::NumParts],
@@ -556,10 +527,8 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
                 for (int voice : voices)
                     drumOf[voice] = pickedFile (index.get(), drums, rolla::Drums, voice, samplePick[rolla::Drums], style);
                 // The same list the plugin preloads on ROLL, so the renderer cannot drift from it.
-                std::vector<std::string> paths;
-                rolla::collectPlayFiles (bank, *index, preset, samplePick, style, 8, paths);
-                library->preload (paths);
-                waitReady (*library, paths);
+                // Bounded wait (logged) so no lane's first note plays before its file is in memory.
+                rolla::prefetchPlayFiles (*library, bank, *index, preset, samplePick, style, 60000, "roll_batch");
             }
             std::vector<std::string> written;
             std::string error;
