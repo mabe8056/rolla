@@ -1320,6 +1320,12 @@ void Engine::process (const Groove& groove,
                 const float accentAmt = params.drumsAccent;
                 const bool accent = groove.drums.accent[t] != 0;
                 const float acc = accent ? std::pow (10.f, accentAmt * 8.f / 20.f) : 1.f;
+                // Sample kits: the generator writes no step accents, so DRUMS ACCENT
+                // sets how hard the kick and clap land on the quarter grid.
+                // The 0.6 default is unity; 0 is -4.8 dB, 1 is +3.2 dB.
+                const float quarterAcc = params.sampleShaping && (t % 4) == 0
+                                             ? std::pow (10.f, (accentAmt - 0.6f) * 8.f / 20.f)
+                                             : 1.f;
                 const float tone = params.tone[Drums] - 0.5f;
                 const float punch = params.punch[Drums] - 0.5f;
                 auto tuneOf = [&] (int voice)
@@ -1422,6 +1428,7 @@ void Engine::process (const Groove& groove,
                     if (vel <= 0)
                         continue;
                     const float stepAcc = (voice == Kick || voice == Clap) ? acc : 1.f;
+                    const float sampleGain = accentOf (voice) * ((voice == Kick || voice == Clap) ? quarterAcc : 1.f);
                     // Mix path: muting drums must not drop the kick duck, or SOLO/MUTE/FULL
                     // bass envelopes stop nulling. The legacy path still skips it.
                     if (voice == Kick && params.duck && (params.mix != nullptr || ! params.mute[Drums]))
@@ -1471,12 +1478,12 @@ void Engine::process (const Groove& groove,
                         else if (circuitKit)
                             keep = slotKeep;
                         else
-                            keep = sampler.takeDrum (voice, vel, bank, play);
+                            keep = sampler.takeDrum (voice, vel, bank, play, sampleGain);
                     }
                     else if (circuitKit)
                         keep = 1.f;
                     else
-                        keep = sampler.takeDrum (voice, vel, bank, play);
+                        keep = sampler.takeDrum (voice, vel, bank, play, sampleGain);
 
                     if (keep > 0.001f)
                     {

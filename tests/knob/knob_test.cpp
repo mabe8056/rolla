@@ -231,9 +231,15 @@ std::uint64_t hashAll (const rolla::Groove& g)
     return h;
 }
 
+// --samples DIR (CI passes the generated tone pack). Without it the scratch
+// profile has no samples and the audio checks are skipped.
+juce::File gPack;
+
 bool packOnDisk (rolla::RollaProcessor& proc)
 {
-    pumpUntil ([&] { return proc.samplesFound() >= 0; }, 8000);
+    if (gPack.isDirectory() && proc.samplesRoot() != gPack)
+        proc.setSamplesRoot (gPack);
+    pumpUntil ([&] { return proc.samplesFound() > 0; }, gPack.isDirectory() ? 15000 : 8000);
     return proc.samplesFound() > 0;
 }
 
@@ -362,7 +368,31 @@ void testSoundControls()
         expectHeard (proc, head, std::string (rolla::panelVoiceLabel (voice)) + " LEVEL",
                      [&] (float v) { setDenorm (proc, ("dLevel" + id).c_str(), v); }, -24.f, 6.f);
         setDenorm (proc, ("dLevel" + id).c_str(), 0.f);
+        // Per-voice ACCENT: off vs on at full amount (+6 dB on that voice).
+        setDenorm (proc, ("dAccAmt" + id).c_str(), 1.f);
+        expectHeard (proc, head, std::string (rolla::panelVoiceLabel (voice)) + " ACCENT",
+                     [&] (float v) { setDenorm (proc, ("dAccent" + id).c_str(), v); }, 0.f, 1.f);
+        setDenorm (proc, ("dAccent" + id).c_str(), 1.f);
+        expectHeard (proc, head, std::string (rolla::panelVoiceLabel (voice)) + " ACCENT AMOUNT",
+                     [&] (float v) { setDenorm (proc, ("dAccAmt" + id).c_str(), v); }, 0.f, 1.f);
+        setDenorm (proc, ("dAccent" + id).c_str(), 0.f);
+        setDenorm (proc, ("dAccAmt" + id).c_str(), 0.6f);
     }
+    for (int voice : voices)
+        setDenorm (proc, ("dLevel" + std::to_string (voice)).c_str(), 0.f);
+
+    // DRUMS lane strip (host-only on screen: the panel shows the kit instead).
+    expectHeard (proc, head, "DRUMS TONE", [&] (float v) { setDenorm (proc, "drumsTone", v); }, 0.f, 1.f);
+    setDenorm (proc, "drumsTone", 0.5f);
+    expectHeard (proc, head, "DRUMS PUNCH", [&] (float v) { setDenorm (proc, "drumsPunch", v); }, 0.f, 1.f);
+    setDenorm (proc, "drumsPunch", 0.5f);
+    expectHeard (proc, head, "DRUMS LEVEL", [&] (float v) { setDenorm (proc, "drumsLevel", v); }, -24.f, 6.f);
+    setDenorm (proc, "drumsLevel", 0.f);
+    expectHeard (proc, head, "DRUMS ACCENT", [&] (float v) { setDenorm (proc, "drumsAccent", v); }, 0.f, 1.f);
+    setDenorm (proc, "drumsAccent", 0.6f);
+    expectHeard (proc, head, "DRUMS MUTE", [&] (float v) { setDenorm (proc, "drumsMute", v); }, 1.f, 0.f);
+    expectHeard (proc, head, "OUTPUT", [&] (float v) { setDenorm (proc, "output", v); }, -24.f, 6.f);
+    setDenorm (proc, "output", 0.f);
 
     proc.setPlayHead (nullptr);
 }
@@ -444,6 +474,77 @@ void testGeneratorControls()
     compareMacro ("stab", "STAB");
     compareMacro ("styleIntensity", "STYLE INTENSITY");
 
+    // FILL: the last beat of the drums becomes a run.
+    expect (! flagOf (proc, "fill"), "FILL starts off");
+    const auto fillOff = hashPart (proc.copyGroove(), rolla::Drums);
+    expect (reshapeTo (proc, "fill", 1.f), "FILL reshape");
+    expect (hashPart (proc.copyGroove(), rolla::Drums) != fillOff, "FILL changes the drum pattern");
+    {
+        const auto g = proc.copyGroove();
+        const int last = g.bars * 16 - 1;
+        expect (g.drums.vel[rolla::TomLow][last] > 0, "FILL ends on a low tom into the downbeat");
+    }
+    expect (reshapeTo (proc, "fill", 0.f), "FILL back off");
+
+    // IN STAB: hits move onto the stab's onsets. INTENSITY 100 so HITS is in.
+    setDenorm (proc, "intensity", 100.f);
+    pumpUntil ([&] { return (int) rawOf (proc, "intensity") == 100; });
+    pumpUntil ([] { return false; }, 100);
+    expect (reshapeTo (proc, "stab", 0.8f), "stab up for IN STAB");
+    const auto hitsOut = hashPart (proc.copyGroove(), rolla::Hits);
+    expect (reshapeTo (proc, "hitsInStab", 1.f), "IN STAB reshape");
+    {
+        const auto g = proc.copyGroove();
+        int onStab = 0;
+        for (int i = 0; i < g.lane[rolla::Hits].count; ++i)
+            for (int k = 0; k < g.lane[rolla::Stab].count; ++k)
+                if (std::abs (g.lane[rolla::Hits].notes[i].start - g.lane[rolla::Stab].notes[k].start) < 0.01f)
+                {
+                    ++onStab;
+                    break;
+                }
+        expect (hashPart (g, rolla::Hits) != hitsOut, "IN STAB changes the hits pattern");
+        expect (g.lane[rolla::Hits].count > 0 && onStab == g.lane[rolla::Hits].count,
+                "IN STAB puts every hit on a stab onset (" + std::to_string (onStab) + " of "
+                    + std::to_string (g.lane[rolla::Hits].count) + ")");
+    }
+    expect (reshapeTo (proc, "hitsInStab", 0.f), "IN STAB off");
+
+    // INTENSITY arranges the published phrase without a new generation.
+    {
+        setDenorm (proc, "intensity", 0.f);
+        pumpUntil ([&] { return proc.copyGroove().lane[rolla::Vox].count == 0 && proc.copyGroove().lane[rolla::Hits].count == 0; });
+        const auto lo = hashAll (proc.copyGroove());
+        setDenorm (proc, "intensity", 100.f);
+        expect (pumpUntil ([&] { return hashAll (proc.copyGroove()) != lo; }), "INTENSITY changes the arrangement from 0 to 100");
+    }
+
+    // LENGTH: the engine loops (and exports) 2 bars instead of 8.
+    {
+        setDenorm (proc, "length", 2.f);
+        const auto eight = proc.writeTempMidi();
+        setDenorm (proc, "length", 0.f);
+        const auto two = proc.writeTempMidi();
+        expect (eight.size() == 1 && two.size() == 1
+                    && juce::File (eight[0]).getSize() > juce::File (two[0]).getSize(),
+                "LENGTH 8 -> 2 shortens the generated MIDI");
+        setDenorm (proc, "length", 2.f);
+    }
+
+    // ROLL and a lane's dice (shuffle) as host parameters.
+    {
+        const auto before = proc.copyGroove().generation;
+        setDenorm (proc, "roll", 0.f);
+        setDenorm (proc, "roll", 1.f);
+        expect (pumpUntil ([&] { return proc.copyGroove().generation != before; }), "ROLL parameter re-rolls");
+        setDenorm (proc, "roll", 0.f);
+        const auto bass = hashPart (proc.copyGroove(), rolla::Bass);
+        setDenorm (proc, "bassShuffle", 0.f);
+        setDenorm (proc, "bassShuffle", 1.f);
+        expect (pumpUntil ([&] { return hashPart (proc.copyGroove(), rolla::Bass) != bass; }), "BASS SHUFFLE parameter re-rolls the bass");
+        setDenorm (proc, "bassShuffle", 0.f);
+    }
+
     expect (reshapeTo (proc, "busy", 0.f), "busy back to min");
     setDenorm (proc, "bassKeep", 1.f);
     const auto keptBass = hashPart (proc.copyGroove(), rolla::Bass);
@@ -464,6 +565,23 @@ void testGeneratorControls()
         auto* param = proc.apvts.getParameter (id);
         expect (param != nullptr && param->isAutomatable(), std::string (id) + " automatable");
     }
+
+    // Every parameter in the layout is automatable, except REDUCE MOTION (a UI
+    // preference that never touches the sound).
+    int params = 0;
+    for (auto* p : proc.getParameters())
+    {
+        auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (p);
+        if (ranged == nullptr)
+            continue;
+        ++params;
+        const auto id = ranged->getParameterID();
+        if (id == "reduceMotion")
+            expect (! p->isAutomatable(), "reduceMotion stays out of host automation");
+        else
+            expect (p->isAutomatable(), id.toStdString() + " automatable");
+    }
+    expect (params > 60, "parameter layout is complete (" + std::to_string (params) + ")");
 }
 
 void testState()
@@ -837,8 +955,13 @@ void testStabDice()
 
 } // namespace
 
-int main()
+int main (int argc, char** argv)
 {
+    // rolla-knob-test [--samples DIR]: with the tone pack every audio check runs.
+    std::string packArg;
+    for (int i = 1; i < argc; ++i)
+        if (std::string (argv[i]) == "--samples" && i + 1 < argc)
+            packArg = argv[++i];
     // Never the real user profile: settings, caches and sample folders go to a scratch folder.
     if (rolla::test::useScratchProfile ("knob").empty())
     {
@@ -846,6 +969,8 @@ int main()
         return 1;
     }
     juce::ScopedJuceInitialiser_GUI juce;
+    if (! packArg.empty())
+        gPack = juce::File::getCurrentWorkingDirectory().getChildFile (juce::String (packArg));
     testBindings();
     testBusyDensity();
     testGeneratorControls();

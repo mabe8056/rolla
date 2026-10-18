@@ -94,6 +94,9 @@ public:
     juce::String exportMidiToDocuments();
     // One type-1 MIDI file: tempo track, then one track per lane.
     juce::StringArray writeTempMidi();
+    // One single-track MIDI file per lane (all 7, empty lanes included), one loop
+    // (LENGTH) long, in one fresh cache folder. Same names as writeLaneMidi.
+    juce::StringArray writeLaneMidiFiles();
     // One WAV stem per lane, one loop long (the LENGTH setting), seamless and
     // downbeat-aligned. Same cache and drag path as the MIDI file.
     juce::StringArray writeStemAudio();

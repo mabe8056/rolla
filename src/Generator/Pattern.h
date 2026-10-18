@@ -110,7 +110,10 @@ struct Settings
     int dialect = UkMin;
     int key = 2;
     int bars = 8;
+    // A drum fill on the last beat of the phrase (snare / tom run into the downbeat).
     bool fill = false;
+    // HITS land on the stab's onsets (its answer slots) instead of avoiding them.
+    bool hitsInStab = false;
     // 0 hugs the soft bands, 0.35 is the normal lane, 0.6 is wild.
     // BUSY and BOUNCE extremes raise the effective value. Soft rules never reject.
     float freedom = 0.35f;

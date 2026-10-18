@@ -264,6 +264,62 @@ Wav readWav (const juce::File& file)
 
 bool nameOk (const juce::File& f, const rolla::Groove& g, int part);
 
+// Absolute tick of the first track's end-of-track meta event, -1 if unreadable.
+long endOfTrackTick (const juce::File& file)
+{
+    juce::MemoryBlock block;
+    if (! file.loadFileAsData (block) || block.getSize() < 22)
+        return -1;
+    const auto* d = static_cast<const unsigned char*> (block.getData());
+    const size_t size = block.getSize();
+    size_t pos = 14;
+    if (d[pos] != 'M' || d[pos + 1] != 'T' || d[pos + 2] != 'r' || d[pos + 3] != 'k')
+        return -1;
+    const size_t len = ((size_t) d[pos + 4] << 24) | ((size_t) d[pos + 5] << 16) | ((size_t) d[pos + 6] << 8) | (size_t) d[pos + 7];
+    pos += 8;
+    const size_t end = std::min (size, pos + len);
+    long tick = 0;
+    int status = 0;
+    auto vlq = [&] () -> long
+    {
+        long v = 0;
+        for (int i = 0; i < 4 && pos < end; ++i)
+        {
+            const int b = d[pos++];
+            v = (v << 7) | (b & 0x7f);
+            if ((b & 0x80) == 0)
+                break;
+        }
+        return v;
+    };
+    while (pos < end)
+    {
+        tick += vlq();
+        if (pos >= end)
+            break;
+        if ((d[pos] & 0x80) != 0)
+            status = d[pos++];
+        if (status == 0xff)
+        {
+            if (pos >= end)
+                break;
+            const int type = d[pos++];
+            const long n = vlq();
+            if (type == 0x2f)
+                return tick;
+            pos += (size_t) n;
+            status = 0;
+        }
+        else if (status == 0xf0 || status == 0xf7)
+            pos += (size_t) vlq();
+        else if ((status & 0xf0) == 0xc0 || (status & 0xf0) == 0xd0)
+            pos += 1;
+        else
+            pos += 2;
+    }
+    return -1;
+}
+
 int lengthBars (rolla::RollaProcessor& proc)
 {
     return rolla::barsFromIndex ((int) proc.apvts.getRawParameterValue ("length")->load());
@@ -383,6 +439,50 @@ void testStyle (rolla::RollaProcessor& proc, int style, bool pack, const juce::F
                     + " vs " + std::to_string (inFull) + ") " + lf.getFileName().toStdString());
     }
 
+    // Every lane as its own MIDI file (Shift-drag): 7 files, one folder, each
+    // one track, named per lane, exactly one loop long, = that lane's track.
+    {
+        const auto laneFiles = proc.writeLaneMidiFiles();
+        expect (laneFiles.size() == rolla::NumParts, tag + ": one MIDI file per lane (" + std::to_string (laneFiles.size()) + ")");
+        for (int part = 0; part < laneFiles.size() && part < rolla::NumParts; ++part)
+        {
+            const juce::File lf (laneFiles[part]);
+            const std::string lane = rolla::partId (part);
+            const auto ln = readMidi (lf, loopTicks);
+            int inFull = 0;
+            const int ch = part == rolla::Drums ? 10 : part + 1;
+            for (const auto& n : fn.ons)
+                inFull += n.channel == ch;
+            expect (lf.getParentDirectory() == juce::File (laneFiles[0]).getParentDirectory(),
+                    tag + " " + lane + ": lane MIDI files share one drag folder");
+            expect (nameOk (lf, g, part) && ln.tracks == 1 && ln.tempos == 1 && (int) ln.ons.size() == inFull
+                        && ln.pastLoop == 0 && ln.badVel == 0,
+                    tag + " " + lane + " lane MIDI file: " + std::to_string (ln.ons.size()) + " notes vs "
+                        + std::to_string (inFull) + " in the full file, " + lf.getFileName().toStdString());
+            // The track ends on the loop end, so FL sizes the pattern to the loop.
+            const long end = endOfTrackTick (lf);
+            expect (end == loopTicks, tag + " " + lane + " lane MIDI file is exactly " + std::to_string (bars)
+                                          + " bars (end of track at " + std::to_string (end) + " ticks)");
+        }
+    }
+
+    // Every lane's WAV stem on its own (lane drag in audio mode).
+    for (int part = 0; part < rolla::NumParts; ++part)
+    {
+        const auto wav = proc.writeLaneAudio (part);
+        const std::string lane = rolla::partId (part);
+        if (wav.isEmpty())
+        {
+            expect (false, tag + " " + lane + ": lane WAV");
+            continue;
+        }
+        const juce::File wf (wav[0]);
+        const auto w = readWav (wf);
+        expect (nameOk (wf, g, part) && w.channels == 2 && w.rate == kRate && w.length == loopN,
+                tag + " " + lane + " lane WAV: " + std::to_string (w.length) + " vs " + std::to_string (loopN)
+                    + " samples, " + wf.getFileName().toStdString());
+    }
+
     // Folder exports.
     const auto dir = scratch.getChildFile (tag);
     dir.deleteRecursively();
@@ -394,12 +494,10 @@ void testStyle (rolla::RollaProcessor& proc, int style, bool pack, const juce::F
         mid += e.getFile().hasFileExtension ("mid");
         wav += e.getFile().hasFileExtension ("wav");
     }
-    int lanesWithNotes = 1; // drums
-    for (int p = 0; p < rolla::Drums; ++p)
-        lanesWithNotes += g.lane[p].count > 0;
-    expect (mid == lanesWithNotes + 1 && wav == rolla::NumParts + 1,
-            tag + ": folder export has " + std::to_string (mid) + " MIDI (want " + std::to_string (lanesWithNotes + 1)
-                + ") and " + std::to_string (wav) + " WAV (want 8: 7 stems + full mix)");
+    // Every lane gets a MIDI file and a stem, empty lanes included.
+    expect (mid == rolla::NumParts + 1 && wav == rolla::NumParts + 1,
+            tag + ": folder export has " + std::to_string (mid) + " MIDI (want 8: 7 lanes + full) and "
+                + std::to_string (wav) + " WAV (want 8: 7 stems + full mix)");
 }
 } // namespace
 
