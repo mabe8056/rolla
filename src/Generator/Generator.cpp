@@ -7,6 +7,10 @@
 #include <cstring>
 #include <initializer_list>
 
+#if defined (_MSC_VER)
+#include <intrin.h>
+#endif
+
 namespace rolla
 {
 namespace
@@ -3894,7 +3898,11 @@ RhythmRing& rhythmRing (int dialect)
 
 int popBits (std::uint64_t x) noexcept
 {
+#if defined (_MSC_VER)
+    return (int) __popcnt64 (x);
+#else
     return __builtin_popcountll (x);
+#endif
 }
 
 RhythmSnap rhythmSnap (const Lane& lane) noexcept

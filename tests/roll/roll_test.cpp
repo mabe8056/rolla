@@ -15,6 +15,10 @@
 #include <string>
 #include <vector>
 
+#if defined (_MSC_VER)
+#include <intrin.h>
+#endif
+
 // JUCE builds with modal loops off, so MessageManager::runDispatchLoopUntil is not in the
 // library. The roll and shuffle handlers post to the message queue; this drains it.
 namespace juce::detail
@@ -629,12 +633,20 @@ int bassHoldTicks (const rolla::Lane& lane)
 
 int popcount32 (std::uint32_t x)
 {
+#if defined (_MSC_VER)
+    return (int) __popcnt (x);
+#else
     return __builtin_popcount (x);
+#endif
 }
 
 int popcount64 (std::uint64_t x)
 {
+#if defined (_MSC_VER)
+    return (int) __popcnt64 (x);
+#else
     return __builtin_popcountll (x);
+#endif
 }
 
 float jaccard32 (std::uint32_t a, std::uint32_t b)
