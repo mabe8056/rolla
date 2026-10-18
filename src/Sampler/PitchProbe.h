@@ -110,12 +110,15 @@ struct Peak
     bool used = false;
 };
 
-// Averaged magnitude spectrum peaks, 30 Hz (B0) to 5 kHz, of mono[0..n).
-inline std::vector<Peak> spectrumPeaks (const std::vector<float>& mono, double rate)
+// Averaged magnitude spectrum peaks, minHz (30 Hz = B0 by default) to 5 kHz, of mono[0..n).
+inline std::vector<Peak> spectrumPeaks (const std::vector<float>& mono, double rate, double minHz = 30.0)
 {
     std::vector<Peak> peaks;
     const size_t N = rate > 50000.0 ? 32768 : 16384;
     const size_t hop = N / 2;
+    // A file shorter than the FFT is windowed over its own length and zero-padded,
+    // so a short stab is not weighted towards its decayed tail.
+    const size_t L = std::max<size_t> (2, std::min (N, mono.size()));
     std::vector<double> mag (N / 2, 0.0);
     std::vector<std::complex<double>> buf (N);
     int frames = 0;
@@ -123,7 +126,7 @@ inline std::vector<Peak> spectrumPeaks (const std::vector<float>& mono, double r
     {
         for (size_t i = 0; i < N; ++i)
         {
-            const double w = 0.5 - 0.5 * std::cos (2.0 * kPi * (double) i / (double) (N - 1));
+            const double w = i < L ? 0.5 - 0.5 * std::cos (2.0 * kPi * (double) i / (double) (L - 1)) : 0.0;
             const float s = start + i < mono.size() ? mono[start + i] : 0.f;
             buf[i] = std::complex<double> ((double) s * w, 0.0);
         }
@@ -138,7 +141,7 @@ inline std::vector<Peak> spectrumPeaks (const std::vector<float>& mono, double r
     if (top <= 1.0e-9)
         return peaks;
     const double binHz = rate / (double) N;
-    const size_t lo = std::max<size_t> (2, (size_t) (30.0 / binHz));
+    const size_t lo = std::max<size_t> (2, (size_t) (std::max (30.0, minHz) / binHz));
     const size_t hi = std::min (N / 2 - 2, (size_t) (5000.0 / binHz));
     for (size_t k = lo; k <= hi; ++k)
     {
@@ -166,9 +169,13 @@ inline double refineNsdf (const std::vector<float>& mono, double rate, double gu
     const double f = 440.0 * std::pow (2.0, (guessMidi - 69.0) / 12.0);
     const int lagLo = std::max (2, (int) std::floor (rate / (f * 1.06)));
     const int lagHi = (int) std::ceil (rate / (f / 1.06));
-    const int W = std::max (2 * lagHi + 2, rate > 50000.0 ? 8192 : 4096);
-    if ((int) mono.size() < W + lagHi + 2)
+    // The window shrinks to fit short files (80-200 ms stabs), down to about two
+    // periods at the longest lag. Only a file shorter than that gives no clarity.
+    const int minW = 2 * lagHi + 2;
+    const int fitW = (int) mono.size() - lagHi - 2;
+    if (fitW < minW)
         return 0.0;
+    const int W = std::min (std::max (minW, rate > 50000.0 ? 8192 : 4096), fitW);
     double best = -1.0, bestClarity = 0.0;
     int hops = 0;
     for (int start = 0; start + W + lagHi + 2 <= (int) mono.size() && hops < 6; start += W, ++hops)
@@ -205,7 +212,14 @@ inline double refineNsdf (const std::vector<float>& mono, double rate, double gu
 
 } // namespace pitchprobe
 
-inline PitchInfo probePitch (const float* left, const float* right, int frames, double rate)
+// Lowest root a lane can have. Sub rumble under this on a stab or pad is not
+// read as the root (bass, vox and unknown lanes keep the full 30 Hz range).
+inline constexpr double kPitchFloorHz = 30.0;
+inline constexpr double kPitchFloorTonalHz = 80.0;
+
+// minHz: the lane's floor, kPitchFloorTonalHz for stabs, hits, plucks and pads.
+inline PitchInfo probePitch (const float* left, const float* right, int frames, double rate,
+                             double minHz = kPitchFloorHz)
 {
     using namespace pitchprobe;
     PitchInfo info;
@@ -228,7 +242,7 @@ inline PitchInfo probePitch (const float* left, const float* right, int frames, 
     if (mono.size() < 256)
         return info;
 
-    auto peaks = spectrumPeaks (mono, rate);
+    auto peaks = spectrumPeaks (mono, rate, minHz);
     if (peaks.empty())
         return info;
     double total = 0.0;

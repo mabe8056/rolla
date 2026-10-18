@@ -580,7 +580,16 @@ void SampleLibrary::loadOne (const std::string& relative)
         }
     }
     findSlices (*audio);
-    audio->pitch = probePitch (audio->left.data(), audio->right.data(), audio->frames, audio->rate);
+    {
+        // Lane from the first path component ("STAB/foo.wav"): stabs, hits, plucks
+        // and pads get an 80 Hz floor so sub rumble is not read as the root.
+        const auto cut = relative.find_first_of ("/\\");
+        const std::string head = cut == std::string::npos ? std::string() : relative.substr (0, cut);
+        const int part = partFromLaneName (head.c_str());
+        const bool tonalLane = part == Stab || part == Hits || part == Pluck || part == Pad;
+        audio->pitch = probePitch (audio->left.data(), audio->right.data(), audio->frames, audio->rate,
+                                   tonalLane ? kPitchFloorTonalHz : kPitchFloorHz);
+    }
     audio->namedRoot = midiFromFilename (relative.c_str());
 
     {
