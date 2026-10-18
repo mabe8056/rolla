@@ -137,4 +137,14 @@ private:
 
 const SampleSpec& sampleSpecFor (const PresetBank& bank, int part, int preset) noexcept;
 
+// Kick key follow (PRESET_SPEC 9.2). Pitch confidence a kick needs before it is retuned:
+// lower than kPitchConfMin, since a kick's tail is a decaying sine with a chirp on top.
+inline constexpr float kKickFollowConfMin = 0.3f;
+inline constexpr double kKickFollowMaxSt = 3.0;
+
+// Playback ratio that moves a sampled kick's measured fundamental (tail f0, folded
+// into 40-80 Hz) toward DrumMachine::kickHzForKey (key), within +-3 st so the body
+// keeps its character. 1 for an unpitched or low-confidence file.
+double kickKeyFollowRatio (const PitchInfo& pitch, int key) noexcept;
+
 } // namespace rolla

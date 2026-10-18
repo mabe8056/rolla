@@ -18,6 +18,8 @@ struct UserSlotView;
 class DrumSampleSlot;
 struct MixProgram;
 
+static_assert (NumDrumVoices == 10, "EngineParams::drumPick lists one -1 per drum voice");
+
 struct EngineParams
 {
     float tone[NumParts] {};
@@ -46,6 +48,12 @@ struct EngineParams
     // Published by UserSlots. Null keeps the preset sample block only.
     const UserSlotView* userSlots = nullptr;
     int samplePick[NumParts] {};
+    // Per-voice drum pick into the voice's scanned pool (genre brain). -1 keeps the
+    // shared samplePick[Drums] + tom shift, so old sessions and tests play as before.
+    int drumPick[NumDrumVoices] { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
+    // Kick key follow (PRESET_SPEC 9.2): a pitched sampled kick is tuned toward
+    // kickHzForKey (key). Off by default so tools and frozen renders stay identical.
+    bool kickKeyFollow = false;
     float bpm = 130.f;
     // Baked mix strip (MIX_SPEC). Null keeps the legacy sum.
     const MixProgram* mix = nullptr;

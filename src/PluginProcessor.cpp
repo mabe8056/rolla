@@ -231,6 +231,8 @@ RollaProcessor::RollaProcessor()
       presets (makeStartupBank()),
       apvts (*this, &undo, "ROLLA", createLayout (*presets))
 {
+    for (auto& pick : drumPick)
+        pick.store (-1, std::memory_order_relaxed);
     apvts.addParameterListener ("roll", this);
     apvts.addParameterListener ("dialect", this);
     for (const char* id : { "dark", "busy", "bounce", "stab", "styleIntensity" })
@@ -293,11 +295,17 @@ void RollaProcessor::prefetchPlayFiles()
         mix ((std::uint64_t) (std::uint32_t) preset[i]);
         mix ((std::uint64_t) (std::uint32_t) pick[i]);
     }
+    int voicePick[NumDrumVoices] {};
+    for (int v = 0; v < NumDrumVoices; ++v)
+    {
+        voicePick[v] = drumPick[v].load (std::memory_order_relaxed);
+        mix ((std::uint64_t) (std::uint32_t) voicePick[v]);
+    }
     if (key == prefetchedKey)
         return;
     prefetchedKey = key;
     std::vector<std::string> paths;
-    collectPlayFiles (*bank, *index, preset, pick, dialect, 8, paths);
+    collectPlayFiles (*bank, *index, preset, pick, dialect, 8, paths, voicePick);
     library.preload (paths);
 }
 
@@ -606,6 +614,10 @@ void RollaProcessor::regenerate (int onlyPart)
             seeds[i] = freshSeed();
             mask |= 1u << (unsigned) i;
             samplePick[i].store ((int) (seeds[i] % 10007u), std::memory_order_relaxed);
+            // A re-rolled kit drops the last genre draw; applyGenreBrain may set new picks.
+            if (i == Drums)
+                for (auto& pick : drumPick)
+                    pick.store (-1, std::memory_order_relaxed);
             const int picked = sound != nullptr ? pickPresetForRoll (*sound, i, s.dialect, seeds[i]) : -1;
             if (picked >= 0)
             {
@@ -639,8 +651,8 @@ struct RollaProcessor::GenreBrainState
 
 // The genre brain picks each re-rolled melodic lane's file from its pool: one seeded
 // kit draw weighted by fit to the style's targets (SoundSelector.h). The choice goes
-// back as samplePick, so the existing pick path plays it. Drums share one pick
-// across voices today and keep the seed draw until they have per-voice picks.
+// back as samplePick, so the existing pick path plays it. Drum voices draw in the
+// same kit and go back as drumPick[voice] (takeDrum reads it for the voice's pool).
 // No feature data (tests, CI, a build without Genre/): nothing changes.
 void RollaProcessor::applyGenreBrain (std::uint32_t mask, const Settings& s, const std::uint32_t* seeds, const int* presetFor)
 {
@@ -686,6 +698,34 @@ void RollaProcessor::applyGenreBrain (std::uint32_t mask, const Settings& s, con
         any = any || ! pools[(size_t) lane].empty();
         seed = (seed ^ seeds[part]) * 0x100000001b3ull;
     }
+
+    // Drums: each voice's scanned pool joins the same draw, so the kick anchors the
+    // pack tendency and meshes with the bass. A voice with an explicit voicePool keeps
+    // today's pick. Rim shares the PERC lane with Perc, so Perc fills it and Rim keeps
+    // the shared pick; the toms follow Perc's draw (same pool) with today's +1/+2 offset.
+    std::array<int, genre::kLanes> drumVoiceOf {};
+    drumVoiceOf.fill (-1);
+    const bool drumsRolled = (mask & (1u << (unsigned) Drums)) != 0;
+    const int drumKit = presetSlot (*bank, Drums, presetFor[Drums]);
+    if (drumsRolled)
+    {
+        const auto& drums = sampleSpecFor (*bank, Drums, drumKit);
+        for (int voice : { Kick, Snare, Clap, HatC, HatO, Ride, Perc })
+        {
+            if (! bank->drums[drumKit].voicePool[voice].empty())
+                continue;
+            const genre::Lane lane = genre::laneForPart (Drums, voice);
+            if (lane == genre::Lane::Count || drumVoiceOf[(size_t) lane] >= 0)
+                continue;
+            const PoolFilter filter = poolFilterFor (drums, Drums, voice, s.dialect);
+            pools[(size_t) lane] = genre::featurePool (*index, Drums, filter, genreState.features, lane);
+            if (pools[(size_t) lane].empty())
+                continue;
+            drumVoiceOf[(size_t) lane] = voice;
+            any = true;
+        }
+        seed = (seed ^ seeds[Drums]) * 0x100000001b3ull;
+    }
     if (! any)
         return;
 
@@ -711,6 +751,20 @@ void RollaProcessor::applyGenreBrain (std::uint32_t mask, const Settings& s, con
             continue;
         samplePick[part].store (chosen, std::memory_order_relaxed);
         genreState.last.pick[(size_t) lane] = chosen;
+    }
+    for (int li = 0; li < genre::kLanes; ++li)
+    {
+        const int voice = drumVoiceOf[(size_t) li];
+        const int chosen = kit.pick[(size_t) li];
+        if (voice < 0 || chosen < 0)
+            continue;
+        drumPick[voice].store (chosen, std::memory_order_relaxed);
+        genreState.last.pick[(size_t) li] = chosen;
+        if (voice != Perc)
+            continue;
+        for (int tom : { TomMid, TomLow })
+            if (bank->drums[drumKit].voicePool[tom].empty())
+                drumPick[tom].store (chosen + (tom == TomMid ? 1 : 2), std::memory_order_relaxed);
     }
 }
 
@@ -856,8 +910,10 @@ EngineParams RollaProcessor::readParams (std::shared_ptr<const PresetBank>& hold
         params.preset[i] = (int) raw (apvts, (id + "Preset").toRawUTF8());
         params.samplePick[i] = samplePick[i].load (std::memory_order_relaxed);
     }
+    params.kickKeyFollow = true;
     for (int v = 0; v < NumDrumVoices; ++v)
     {
+        params.drumPick[v] = drumPick[v].load (std::memory_order_relaxed);
         const auto id = juce::String (v);
         params.drumTuneSt[v] = raw (apvts, ("dTune" + id).toRawUTF8());
         params.drumDecay[v] = raw (apvts, ("dDecay" + id).toRawUTF8());
@@ -1004,6 +1060,16 @@ void RollaProcessor::getStateInformation (juce::MemoryBlock& destData)
         for (int i = 0; i < NumParts; ++i)
             tree.setProperty ("samplePick" + juce::String (i), samplePick[i].load(), nullptr);
     }
+    // Only drawn voices are written, so a session without genre picks saves as before.
+    for (int v = 0; v < NumDrumVoices; ++v)
+    {
+        const auto key = "drumPick" + juce::String (v);
+        const int pick = drumPick[v].load (std::memory_order_relaxed);
+        if (pick >= 0)
+            tree.setProperty (key, pick, nullptr);
+        else
+            tree.removeProperty (key, nullptr);
+    }
     {
         std::lock_guard<std::mutex> lock (sampleMu);
         for (int v = 0; v < NumDrumVoices; ++v)
@@ -1101,6 +1167,13 @@ void RollaProcessor::setStateInformation (const void* data, int sizeInBytes)
     for (int i = 0; i < NumParts; ++i)
         if (tree.hasProperty ("samplePick" + juce::String (i)))
             samplePick[i].store ((int) tree.getProperty ("samplePick" + juce::String (i)), std::memory_order_relaxed);
+    // An old session has no drumPick: every voice goes back to the shared drum pick.
+    for (int v = 0; v < NumDrumVoices; ++v)
+    {
+        const auto key = "drumPick" + juce::String (v);
+        const int pick = tree.hasProperty (key) ? (int) tree.getProperty (key) : -1;
+        drumPick[v].store (pick < 0 ? -1 : pick, std::memory_order_relaxed);
+    }
 
     slots.readState (tree);
     // The sound panel is editor-only. A project load closes it; it is not restored.

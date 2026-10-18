@@ -149,6 +149,17 @@ public:
     // Library-relative file the last note on a lane (or drum voice) played. Tests only.
     std::string lastPickedFile (int part, int drumVoice = -1) const { return engine.lastPickedFile (part, drumVoice); }
 
+    // Per-voice drum pick (genre brain); -1 plays the shared drum pick. Tests and status.
+    int drumVoicePick (int voice) const noexcept
+    {
+        return voice >= 0 && voice < NumDrumVoices ? drumPick[voice].load (std::memory_order_relaxed) : -1;
+    }
+    void setDrumVoicePick (int voice, int pick) noexcept
+    {
+        if (voice >= 0 && voice < NumDrumVoices)
+            drumPick[voice].store (pick < 0 ? -1 : pick, std::memory_order_relaxed);
+    }
+
     // 14 session slots (6 lanes + 8 drum voices). Paths persist; audio does not.
     bool loadUserSlot (int slot, const juce::File& file, juce::String& error);
     void clearUserSlot (int slot);
@@ -233,6 +244,9 @@ private:
     SampleLibrary library;
     UserSlots slots;
     std::atomic<int> samplePick[NumParts] {};
+    // One pick per drum voice, -1 (set in the constructor) until the genre brain
+    // draws it. A plain roll or an old session resets it, so drums use samplePick[Drums].
+    std::atomic<int> drumPick[NumDrumVoices] {};
     // Genre brain (Job G2): the bundle's Genre/ data, loaded on the first roll. With
     // no data a roll keeps today's seed draw. Message thread only.
     struct GenreBrainState;
