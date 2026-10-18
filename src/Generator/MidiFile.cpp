@@ -216,21 +216,10 @@ bool writeFile (const std::string& path, const std::vector<std::uint8_t>& bytes,
     return out.good();
 }
 
-void anchorDownbeat (std::vector<Event>& ev, const Groove& groove, int part, int key)
-{
-    const int anchorPitch = part == Drums ? 36 : std::clamp (basePitch (part, key, groove.dialect), 0, 127);
-    const int anchorCh = part == Drums ? 9 : part;
-    for (const auto& e : ev)
-        if (e.tick == 0 && (e.status & 0xf0) == 0x90)
-            return;
-    addNote (ev, anchorCh, anchorPitch, 1, 0, 1);
-}
-
 std::vector<Event> laneEvents (const Groove& groove, int part, int key, float swing)
 {
     std::vector<Event> ev;
     collectPart (ev, groove, part, key, swing);
-    anchorDownbeat (ev, groove, part, key);
     return ev;
 }
 

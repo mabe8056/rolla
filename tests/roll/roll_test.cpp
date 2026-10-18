@@ -1,11 +1,17 @@
 #include "PluginProcessor.h"
+#include "Generator/MidiFile.h"
 
 #include <juce_events/juce_events.h>
 
+#include <cmath>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
+#include <set>
 #include <string>
+#include <vector>
 
 // JUCE builds with modal loops off, so MessageManager::runDispatchLoopUntil is not in the
 // library. The roll and shuffle handlers post to the message queue; this drains it.
@@ -176,8 +182,9 @@ void testIntensityChangesOutput()
     setDenorm (proc, "intensity", 100.f);
     expect (pumpUntil ([&]
     {
-        return proc.copyGroove().lane[rolla::Pluck].count > 0;
-    }), "intensity 100 brings pluck back");
+        return proc.copyGroove().lane[rolla::Pluck].count == 0
+            && noteSig (proc.copyGroove(), rolla::Bass) == bass75;
+    }), "roller stays without pluck at full intensity");
     const auto full = proc.copyGroove();
     for (int i = 0; i < rolla::NumParts; ++i)
         expect (seedOf (full, i) == seedOf (seeds, i), std::string ("intensity keeps the ") + rolla::partId (i) + " seed");
@@ -206,6 +213,242 @@ void testIntensityChangesOutput()
     expect (seedOf (proc.copyGroove(), rolla::Stab) == seedOf (seeds, rolla::Stab), "the knob does not re-roll stab");
 }
 
+int noteOnVelocityOne (const std::string& path)
+{
+    std::ifstream in (path, std::ios::binary);
+    std::vector<std::uint8_t> b ((std::istreambuf_iterator<char> (in)), {});
+    if (b.size() < 14)
+        return 99;
+    const int tracks = (b[10] << 8) | b[11];
+    std::size_t i = 14;
+    int bad = 0;
+    for (int t = 0; t < tracks; ++t)
+    {
+        if (i + 8 > b.size() || b[i] != 'M')
+            return 99;
+        const std::uint32_t len = ((std::uint32_t) b[i + 4] << 24) | ((std::uint32_t) b[i + 5] << 16)
+                                 | ((std::uint32_t) b[i + 6] << 8) | b[i + 7];
+        std::size_t p = i + 8;
+        const std::size_t end = std::min (b.size(), p + len);
+        std::uint8_t run = 0;
+        while (p < end)
+        {
+            int guard = 0;
+            while (p < end && guard++ < 5)
+            {
+                const std::uint8_t v = b[p++];
+                if ((v & 0x80) == 0)
+                    break;
+            }
+            if (p >= end)
+                break;
+            std::uint8_t st = b[p];
+            if (st >= 0x80)
+            {
+                run = st;
+                ++p;
+            }
+            else
+                st = run;
+            if (st == 0xff)
+            {
+                if (p >= end)
+                    break;
+                ++p;
+                std::uint32_t n = 0;
+                int g2 = 0;
+                while (p < end && g2++ < 5)
+                {
+                    const std::uint8_t v = b[p++];
+                    n = (n << 7) | (v & 0x7f);
+                    if ((v & 0x80) == 0)
+                        break;
+                }
+                p += n;
+            }
+            else
+            {
+                const int need = ((st & 0xf0) == 0xc0 || (st & 0xf0) == 0xd0) ? 1 : 2;
+                if ((st & 0xf0) == 0x90 && need == 2 && p + 1 < end && b[p + 1] == 1 && b[p] != 0)
+                    ++bad;
+                p += (std::size_t) need;
+            }
+        }
+        i = end;
+    }
+    return bad;
+}
+
+int pcOfNote (int semi)
+{
+    int pc = semi % 12;
+    if (pc < 0)
+        pc += 12;
+    return pc;
+}
+
+void testEarReview()
+{
+    const std::uint32_t base = 2517220185u;
+    std::cout << "ear seeds from " << base << "\n";
+    const char* names[] = { "ROLLER", "DEEP", "BOUNCY", "JACKIN" };
+    int flavour[4] {};
+    int darkN = 0;
+    double darkNpb = 0;
+    double brightNpb = 0;
+    int brightN = 0;
+    int pulseN = 0;
+    double popOct = 0;
+    int popN = 0;
+    std::set<std::string> jackinRhythms;
+    double jackinLen = 0;
+    int jackinStabs = 0;
+
+    for (int style = 0; style < 4; ++style)
+    {
+        int reaction = 0;
+        int stackedBass = 0;
+        int stackedStab = 0;
+        int pluck = 0;
+        for (int roll = 0; roll < 20; ++roll)
+        {
+            rolla::Settings s;
+            s.dialect = style;
+            s.bars = 8;
+            std::uint32_t seeds[rolla::NumParts] {};
+            for (int p = 0; p < rolla::NumParts; ++p)
+                seeds[p] = base + (std::uint32_t) roll * 0x9E3779B9u + (std::uint32_t) p * 17u
+                         + (std::uint32_t) style * 101u;
+            rolla::Groove g {};
+            rolla::generate (g, s, seeds, 0x7fu);
+
+            std::set<int> bassAt;
+            std::string rhythm;
+            for (int i = 0; i < g.lane[rolla::Bass].count; ++i)
+            {
+                const int st = (int) std::lround (g.lane[rolla::Bass].notes[i].start);
+                if (! bassAt.insert (st).second)
+                    ++stackedBass;
+                rhythm.push_back ((char) (st + 1));
+            }
+            std::set<int> stabAt;
+            for (int i = 0; i < g.lane[rolla::Stab].count; ++i)
+            {
+                const int st = (int) std::lround (g.lane[rolla::Stab].notes[i].start);
+                if (! stabAt.insert (st).second)
+                    ++stackedStab;
+                if (style == rolla::Gaskin)
+                {
+                    jackinLen += g.lane[rolla::Stab].notes[i].length;
+                    ++jackinStabs;
+                }
+            }
+            for (int b = 0; b < g.bars; ++b)
+            {
+                bool s1 = false;
+                bool s3 = false;
+                for (int i = 0; i < g.lane[rolla::Bass].count; ++i)
+                {
+                    const int st = (int) std::lround (g.lane[rolla::Bass].notes[i].start);
+                    if (st / 16 != b || pcOfNote (g.lane[rolla::Bass].notes[i].chord[0]) != 0)
+                        continue;
+                    if (st % 16 == 1)
+                        s1 = true;
+                    if (st % 16 == 3)
+                        s3 = true;
+                }
+                if (s1 && s3)
+                    ++reaction;
+            }
+            pluck += g.lane[rolla::Pluck].count;
+
+            if (style == rolla::Gaskin)
+            {
+                jackinRhythms.insert (rhythm);
+                const int flav = (int) (((seeds[rolla::Bass] ? seeds[rolla::Bass] : 1u) * 0x9E3779B9u) % 4u);
+                if (flav >= 0 && flav < 4)
+                    ++flavour[flav];
+            }
+            if (style == rolla::Long)
+            {
+                const float npb = g.bars > 0 ? (float) g.lane[rolla::Bass].count / (float) g.bars : 0.f;
+                const bool dark = s.dark >= 0.75f || (s.dark > 0.25f && ((seeds[rolla::Bass] * 0x85EBCA6Bu) % 100u) < 40u);
+                if (dark)
+                {
+                    ++darkN;
+                    darkNpb += npb;
+                }
+                else
+                {
+                    ++brightN;
+                    brightNpb += npb;
+                }
+            }
+            if (style == rolla::Pop)
+            {
+                ++popN;
+                int moves = 0;
+                int oct = 0;
+                const auto& lane = g.lane[rolla::Bass];
+                for (int i = 1; i < lane.count; ++i)
+                {
+                    const int d = std::abs ((int) lane.notes[i].chord[0] - (int) lane.notes[i - 1].chord[0]);
+                    ++moves;
+                    if (d == 12 || d == 24)
+                        ++oct;
+                }
+                if (moves > 0)
+                    popOct += 100.0 * oct / moves;
+                double lens = 0;
+                for (int i = 0; i < lane.count; ++i)
+                    lens += lane.notes[i].length;
+                if (lane.count > 0 && lens / lane.count >= 1.8)
+                    ++pulseN;
+            }
+            if (roll == 0)
+            {
+                const auto dir = std::filesystem::path ("/tmp/rolla_ear_midi") / names[style];
+                std::filesystem::create_directories (dir);
+                std::vector<std::string> written;
+                std::string error;
+                expect (rolla::MidiExport::writeAll (dir.string(), g, s.key, 0.5f, 130.0, written, error),
+                        "midi export");
+                int vel1 = 0;
+                for (const auto& path : written)
+                    vel1 += noteOnVelocityOne (path);
+                expect (vel1 == 0, std::string (names[style]) + " export has no velocity-1 note");
+            }
+        }
+        std::cout << names[style] << " stacked bass " << stackedBass << " stacked stab " << stackedStab
+                  << " reaction bars " << reaction << " pluck notes " << pluck << "\n";
+        expect (stackedBass == 0, std::string (names[style]) + " bass is monophonic");
+        expect (stackedStab == 0, std::string (names[style]) + " stabs do not stack");
+        expect (reaction == 0, std::string (names[style]) + " avoids the reaction figure");
+        if (style == rolla::Long || style == rolla::Pop)
+            expect (pluck > 0, std::string (names[style]) + " plays pluck");
+        else
+            expect (pluck == 0, std::string (names[style]) + " gates pluck");
+    }
+    std::cout << "JACKIN distinct 8-bar rhythms " << jackinRhythms.size() << "/20"
+              << " flavours dotted " << flavour[0] << " b2 " << flavour[1]
+              << " sustained " << flavour[2] << " offbeat " << flavour[3] << "\n";
+    if (jackinStabs > 0)
+        std::cout << "JACKIN stab length mean " << (jackinLen / jackinStabs) << "\n";
+    if (darkN > 0)
+        std::cout << "DEEP dark " << darkN << "/20 npb " << (darkNpb / darkN) << "\n";
+    if (brightN > 0)
+        std::cout << "DEEP bright " << brightN << "/20 npb " << (brightNpb / brightN) << "\n";
+    if (popN > 0)
+        std::cout << "BOUNCY octave moves " << (popOct / popN) << "%  pulse-length rolls " << pulseN << "/20\n";
+    expect (popN > 0 && popOct / popN >= 15.0 && popOct / popN <= 30.0, "BOUNCY octaves land in 15-30%");
+    expect (pulseN >= 3, "BOUNCY has a pulse mode");
+    expect (jackinRhythms.size() >= 18, "JACKIN 8-bar rhythms are almost all distinct");
+    expect (flavour[0] > 0 && flavour[1] > 0 && flavour[2] > 0 && flavour[3] > 0, "JACKIN uses all four flavours");
+    expect (darkN >= 4 && darkN <= 16, "DEEP dark is about two fifths of the rolls");
+    if (darkN > 0)
+        expect (darkNpb / darkN >= 5.5, "DEEP dark bass is busier");
+}
+
 void testShuffleKeepsManualLock()
 {
     rolla::RollaProcessor proc;
@@ -230,6 +473,7 @@ int main()
 {
     juce::ScopedJuceInitialiser_GUI juce;
 
+    testEarReview();
     testRollSkipsMutedAndKept();
     testShuffleClearsAutoKeep();
     testShuffleKeepsManualLock();
