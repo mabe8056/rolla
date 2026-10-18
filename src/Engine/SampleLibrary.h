@@ -47,6 +47,133 @@ struct SampleIndex
     int missing = 0;
 };
 
+inline const char* sampleBaseName (const char* path) noexcept
+{
+    if (path == nullptr)
+        return "";
+    const char* base = path;
+    for (const char* p = path; *p != 0; ++p)
+        if (*p == '/' || *p == '\\')
+            base = p + 1;
+    return base;
+}
+
+// Case-insensitive token. Word tokens need a non-alphanumeric boundary on both
+// sides. A digit token such as "303" may be followed by a letter (303fx) and
+// is rejected when a digit sits on either side (1303, 3031).
+inline bool sampleHasToken (const char* text, const char* token) noexcept
+{
+    if (text == nullptr || token == nullptr || token[0] == 0)
+        return false;
+    int n = 0;
+    bool digits = true;
+    for (; token[n] != 0; ++n)
+    {
+        const char c = token[n];
+        if (c < '0' || c > '9')
+            digits = false;
+    }
+    auto lower = [] (char c) noexcept
+    {
+        if (c >= 'A' && c <= 'Z')
+            return (char) (c + 32);
+        return c;
+    };
+    auto alnum = [] (char c) noexcept
+    {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
+    };
+    for (int i = 0; text[i] != 0; ++i)
+    {
+        bool match = true;
+        for (int k = 0; k < n; ++k)
+        {
+            if (text[i + k] == 0 || lower (text[i + k]) != lower (token[k]))
+            {
+                match = false;
+                break;
+            }
+        }
+        if (! match)
+            continue;
+        const char before = i > 0 ? text[i - 1] : 0;
+        const char after = text[i + n];
+        if (digits)
+        {
+            if (before >= '0' && before <= '9')
+                continue;
+            if (after >= '0' && after <= '9')
+                continue;
+            return true;
+        }
+        if (i > 0 && alnum (before))
+            continue;
+        if (after != 0 && alnum (after))
+            continue;
+        return true;
+    }
+    return false;
+}
+
+inline bool sampleTextEqual (const char* a, const char* b) noexcept;
+
+// styles 0 fits every dialect. Otherwise bit 0 is UK MIN, then LONG, POP, GASKIN.
+inline bool sampleStyleAllows (std::uint8_t styles, int dialect) noexcept
+{
+    if (styles == 0 || dialect < 0 || dialect >= NumDialects)
+        return true;
+    return (styles & (std::uint8_t) (1u << dialect)) != 0;
+}
+
+// Generic filename and category rules for one style's pool. Not a list of files.
+// A vinyl crackle cannot be a pad. An acid hit stays out of UK MIN and LONG.
+// Transition noises stay out of the hits lane in every style.
+inline bool samplePoolAllows (const SampleEntry& entry, int lane, int dialect) noexcept
+{
+    if (dialect < 0 || dialect >= NumDialects)
+        return true;
+    if (! sampleStyleAllows (entry.styles, dialect))
+        return false;
+    const char* base = sampleBaseName (entry.path);
+    if (lane == Pad)
+    {
+        if (sampleHasToken (base, "vinyl") || sampleHasToken (base, "crackle")
+            || sampleHasToken (entry.category, "vinyl") || sampleHasToken (entry.category, "crackle"))
+            return false;
+    }
+    if (lane == Hits)
+    {
+        static const char* noise[] = {
+            "riser", "sweep", "impact", "uplift", "downlift", "siren",
+            "laser", "scratch", "glitch", "alarm", "vinyl", "crackle"
+        };
+        for (const char* token : noise)
+            if (sampleHasToken (base, token) || sampleHasToken (entry.category, token))
+                return false;
+        const bool acid = sampleTextEqual (entry.category, "acid_hit")
+                       || sampleHasToken (entry.category, "acid")
+                       || sampleHasToken (base, "acid")
+                       || sampleHasToken (base, "303")
+                       || sampleHasToken (entry.category, "303");
+        if (acid && dialect != Pop && dialect != Gaskin)
+            return false;
+    }
+    return true;
+}
+
+// The filter the sampler and the offline renderer both use to draw one file.
+inline PoolFilter poolFilterFor (const SampleSpec& spec, int part, int voice, int dialect) noexcept
+{
+    PoolFilter filter = spec.filter;
+    filter.on = true;
+    if (filter.lane < 0)
+        filter.lane = part;
+    if (voice >= 0)
+        filter.voice = (voice == TomLow || voice == TomMid) ? Perc : voice;
+    filter.dialect = dialect;
+    return filter;
+}
+
 inline bool sampleTextEqual (const char* a, const char* b) noexcept
 {
     if (a == nullptr || b == nullptr)
@@ -85,6 +212,8 @@ inline bool sampleEntryMatches (const SampleEntry& entry, int part, const PoolFi
     if (filter.pack[0] != 0 && ! sampleTextEqual (entry.pack, filter.pack))
         return false;
     if (filter.category[0] != 0 && ! sampleTextEqual (entry.category, filter.category))
+        return false;
+    if (! samplePoolAllows (entry, lane, filter.dialect))
         return false;
     return true;
 }

@@ -1,8 +1,10 @@
 #include "PatternStats.h"
 #include "Engine/Engine.h"
 #include "Generator/Generator.h"
+#include "Generator/Intensity.h"
 #include "Generator/MidiFile.h"
 #include "Generator/Presets.h"
+#include "Mix/MixProgram.h"
 
 #include <BinaryData.h>
 
@@ -10,8 +12,11 @@
 #include <juce_core/juce_core.h>
 #include <juce_events/juce_events.h>
 
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -20,6 +25,8 @@
 #include <sstream>
 #include <string>
 #include <vector>
+
+const char* usageText();
 
 namespace
 {
@@ -34,18 +41,130 @@ float swingFor (int dialect)
     }
 }
 
-rolla::Settings rollSettings (int dialect)
+struct Knobs
+{
+    float dark = 0.55f;
+    float busy = 0.40f;
+    float bounce = 0.45f;
+    float stab = 0.55f;
+    float styleIntensity = 0.5f;
+    float tone[rolla::NumParts] {};
+    float punch[rolla::NumParts] {};
+    float levelDb[rolla::NumParts] {};
+    int intensity = 75;
+    bool stems = false;
+
+    Knobs()
+    {
+        for (int i = 0; i < rolla::NumParts; ++i)
+        {
+            tone[i] = 0.5f;
+            punch[i] = 0.5f;
+            levelDb[i] = 0.f;
+        }
+    }
+};
+
+int laneOf (const std::string& name)
+{
+    if (name == "BASS") return rolla::Bass;
+    if (name == "STAB") return rolla::Stab;
+    if (name == "HITS") return rolla::Hits;
+    if (name == "PLUCK") return rolla::Pluck;
+    if (name == "PAD") return rolla::Pad;
+    if (name == "VOX") return rolla::Vox;
+    if (name == "DRUMS") return rolla::Drums;
+    return -1;
+}
+
+std::string upperCopy (std::string text)
+{
+    for (char& c : text)
+        c = (char) std::toupper ((unsigned char) c);
+    return text;
+}
+
+bool parseKnob (const std::string& text, Knobs& knobs)
+{
+    const auto eq = text.find ('=');
+    if (eq == std::string::npos || eq == 0)
+        return false;
+    const std::string name = upperCopy (text.substr (0, eq));
+    const float value = std::strtof (text.c_str() + eq + 1, nullptr);
+    const auto unit = [] (float v) { return std::clamp (v, 0.f, 1.f); };
+    if (name == "DARK") knobs.dark = unit (value);
+    else if (name == "BUSY") knobs.busy = unit (value);
+    else if (name == "BOUNCE") knobs.bounce = unit (value);
+    else if (name == "STAB") knobs.stab = unit (value);
+    else if (name == "STYLE" || name == "STYLEINTENSITY") knobs.styleIntensity = unit (value);
+    else if (name == "TONE")
+        for (int i = 0; i < rolla::NumParts; ++i) knobs.tone[i] = unit (value);
+    else if (name == "PUNCH")
+        for (int i = 0; i < rolla::NumParts; ++i) knobs.punch[i] = unit (value);
+    else if (name == "LEVEL")
+        for (int i = 0; i < rolla::NumParts; ++i) knobs.levelDb[i] = value;
+    else if (name == "INTENSITY")
+        knobs.intensity = std::clamp ((int) std::lround (value), 0, 100);
+    else
+    {
+        const auto dot = name.find ('.');
+        if (dot == std::string::npos)
+            return false;
+        const int lane = laneOf (name.substr (0, dot));
+        const std::string which = name.substr (dot + 1);
+        if (lane < 0)
+            return false;
+        if (which == "TONE") knobs.tone[lane] = unit (value);
+        else if (which == "PUNCH") knobs.punch[lane] = unit (value);
+        else if (which == "LEVEL") knobs.levelDb[lane] = value;
+        else return false;
+    }
+    return true;
+}
+
+rolla::Settings rollSettings (int dialect, const Knobs& knobs)
 {
     rolla::Settings s;
-    s.dark = 0.55f;
-    s.busy = 0.40f;
-    s.bounce = 0.45f;
-    s.stab = 0.55f;
+    s.dark = knobs.dark;
+    s.busy = knobs.busy;
+    s.bounce = knobs.bounce;
+    s.stab = knobs.stab;
+    s.styleIntensity = knobs.styleIntensity;
     s.dialect = dialect;
     s.key = 2;
     s.bars = 8;
     s.fill = false;
     return s;
+}
+
+const char* presetName (const rolla::PresetBank& bank, int part, int index)
+{
+    const int i = rolla::presetSlot (bank, part, index);
+    switch (part)
+    {
+        case rolla::Bass: return bank.bass[i].id;
+        case rolla::Stab: return bank.stab[i].id;
+        case rolla::Hits: return bank.hits[i].id;
+        case rolla::Pluck: return bank.pluck[i].id;
+        case rolla::Pad: return bank.pad[i].id;
+        case rolla::Vox: return bank.vox[i].id;
+        case rolla::Drums: return bank.drums[i].id;
+        default: break;
+    }
+    return "";
+}
+
+const char* stemName (int part)
+{
+    static const char* names[] = { "BASS", "STAB", "HITS", "PLUCK", "PAD", "VOX", "DRUMS" };
+    return names[part];
+}
+
+bool loadMix (rolla::MixProgram& program)
+{
+    return program.loadFromMemory (BinaryData::mix_profiles_json, BinaryData::mix_profiles_jsonSize,
+                                   BinaryData::main_sum_trim_json, BinaryData::main_sum_trim_jsonSize,
+                                   BinaryData::mix_makeup_json, BinaryData::mix_makeup_jsonSize);
 }
 
 void seedsFor (int style, int roll, std::uint32_t seeds[rolla::NumParts])
@@ -55,7 +174,7 @@ void seedsFor (int style, int roll, std::uint32_t seeds[rolla::NumParts])
                  ^ ((std::uint32_t) style * 0xC2B2AE35u + (std::uint32_t) p * 0x27D4EB2Du);
 }
 
-bool writeWav (const juce::File& file, const juce::AudioBuffer<float>& audio, double sr)
+bool writeWav (const juce::File& file, const juce::AudioBuffer<float>& audio, double sr, int start, int num)
 {
     file.getParentDirectory().createDirectory();
     file.deleteFile();
@@ -68,11 +187,23 @@ bool writeWav (const juce::File& file, const juce::AudioBuffer<float>& audio, do
     auto writer = wav.createWriterFor (stream, options);
     if (writer == nullptr)
         return false;
-    return writer->writeFromAudioSampleBuffer (audio, 0, audio.getNumSamples());
+    return writer->writeFromAudioSampleBuffer (audio, start, num);
 }
 
-float renderWav (const rolla::PresetBank& bank, const rolla::Groove& groove, int dialect, const juce::File& file,
-                const rolla::SampleLibrary* library, const rolla::SampleIndex* index)
+struct Rendered
+{
+    float peak = 0.f;
+    int kickMidiSample = -1;
+};
+
+// Renders the plugin path: mix program, sum trim from the lanes that are
+// actually open, and the master true-peak guard. The guard's delay is dropped
+// from the front so the downbeat sits at file sample 0, the way a host that
+// honours setLatencySamples hears it.
+Rendered renderWav (const rolla::PresetBank& bank, const rolla::Groove& groove, int dialect,
+                    const juce::File& file, const rolla::SampleLibrary* library, const rolla::SampleIndex* index,
+                    const rolla::MixProgram* mix, const Knobs& knobs, const int preset[rolla::NumParts],
+                    const int samplePick[rolla::NumParts], bool hitsMute, float swing, bool soloPart, int solo)
 {
     constexpr double sr = 48000.0;
     constexpr double bpm = 130.0;
@@ -86,15 +217,20 @@ float renderWav (const rolla::PresetBank& bank, const rolla::Groove& groove, int
     rolla::EngineParams params;
     for (int i = 0; i < rolla::NumParts; ++i)
     {
-        params.tone[i] = 0.5f;
-        params.punch[i] = 0.5f;
-        params.levelDb[i] = 0.f;
-        params.mute[i] = false;
-        params.preset[i] = 0;
+        params.tone[i] = knobs.tone[i];
+        params.punch[i] = knobs.punch[i];
+        params.levelDb[i] = knobs.levelDb[i];
+        params.mute[i] = soloPart ? i != solo : false;
+        params.preset[i] = preset != nullptr ? preset[i] : 0;
+        params.samplePick[i] = samplePick != nullptr ? samplePick[i] : 0;
     }
+    for (int v = 0; v < rolla::NumDrumVoices; ++v)
+        params.drumDecay[v] = 0.5f;
+    if (! soloPart && hitsMute)
+        params.mute[rolla::Hits] = true;
     params.duck = true;
     params.drumsToMain = true;
-    params.swing = swingFor (dialect);
+    params.swing = swing;
     params.outputDb = 0.f;
     params.drumsAccent = 0.6f;
     params.bars = bars;
@@ -103,11 +239,15 @@ float renderWav (const rolla::PresetBank& bank, const rolla::Groove& groove, int
     params.presets = &bank;
     params.library = library;
     params.sampleIndex = index;
+    params.bpm = (float) bpm;
+    params.mix = mix != nullptr && mix->loaded ? mix : nullptr;
+    params.tpGuard = true;
 
     juce::AudioBuffer<float> audio (2, total);
     audio.clear();
     int done = 0;
     double ppq = 0.0;
+    int kickAt = -1;
     while (done < total)
     {
         int n = std::min (256, total - done);
@@ -126,21 +266,33 @@ float renderWav (const rolla::PresetBank& bank, const rolla::Groove& groove, int
                         audio.getWritePointer (0, done),
                         audio.getWritePointer (1, done),
                         nullptr, nullptr, n, midi, true);
+        for (const auto meta : midi)
+        {
+            const auto msg = meta.getMessage();
+            if (! msg.isNoteOn() || msg.getChannel() != 10 || msg.getNoteNumber() != rolla::drumMidiNote (rolla::Kick))
+                continue;
+            const int at = done + meta.samplePosition;
+            if (kickAt < 0 || at < kickAt)
+                kickAt = at;
+        }
         if (transport.playing)
             ppq += (double) n * bpm / (60.0 * sr);
         done += n;
     }
 
-    float peak = 0.f;
+    const int lat = std::clamp (engine.latencySamples(), 0, total - 1);
+    const int keep = total - lat;
+    Rendered out;
+    out.kickMidiSample = kickAt;
     for (int ch = 0; ch < 2; ++ch)
     {
         const float* data = audio.getReadPointer (ch);
-        for (int i = 0; i < total; ++i)
-            peak = std::max (peak, std::fabs (data[i]));
+        for (int i = lat; i < total; ++i)
+            out.peak = std::max (out.peak, std::fabs (data[i]));
     }
-    if (! writeWav (file, audio, sr))
+    if (! writeWav (file, audio, sr, lat, keep))
         std::cerr << "wav write failed " << file.getFullPathName() << "\n";
-    return peak;
+    return out;
 }
 
 void writeStats (const std::filesystem::path& path,
@@ -207,27 +359,59 @@ int styleId (const std::string& name)
     return -1;
 }
 
-void preloadPack (rolla::SampleLibrary& library, const rolla::SampleIndex& index)
+std::string jsonEscape (const std::string& text)
 {
-    std::vector<std::string> paths;
-    auto add = [&] (int part, int voice)
+    std::string out;
+    out.reserve (text.size());
+    for (char c : text)
     {
-        rolla::PoolFilter filter;
-        filter.on = true;
-        filter.lane = part;
-        filter.voice = voice;
-        if (const auto* entry = rolla::sampleIndexAt (index, part, filter, 0))
-        {
-            library.request (entry->path);
-            paths.emplace_back (entry->path);
-        }
-    };
-    const int parts[] = { rolla::Bass, rolla::Stab, rolla::Hits, rolla::Pluck, rolla::Pad, rolla::Vox };
-    for (int part : parts)
-        add (part, -1);
-    const int voices[] = { rolla::Kick, rolla::Snare, rolla::Clap, rolla::Rim, rolla::HatC, rolla::HatO, rolla::Ride, rolla::Perc };
-    for (int voice : voices)
-        add (rolla::Drums, voice);
+        if (c == '\\' || c == '"')
+            out.push_back ('\\');
+        out.push_back (c);
+    }
+    return out;
+}
+
+std::string pickedFile (const rolla::SampleIndex* index, const rolla::SampleSpec& spec,
+                        int part, int voice, int pick, int dialect)
+{
+    if (index == nullptr)
+        return {};
+    const int queryVoice = voice >= 0 ? voice : spec.filter.voice;
+    const rolla::PoolFilter filter = rolla::poolFilterFor (spec, part, queryVoice, dialect);
+    const int n = rolla::sampleIndexCount (*index, part, filter);
+    if (n <= 0)
+        return {};
+    if (pick < 0)
+        pick = 0;
+    const auto* entry = rolla::sampleIndexAt (*index, part, filter, pick % n);
+    return entry != nullptr ? entry->path : "";
+}
+
+void requestPicked (rolla::SampleLibrary& library, const rolla::SampleIndex& index, const rolla::SampleSpec& spec,
+                    int part, int voice, int pick, int dialect, std::vector<std::string>& paths)
+{
+    const int queryVoice = voice >= 0 ? voice : spec.filter.voice;
+    const rolla::PoolFilter filter = rolla::poolFilterFor (spec, part, queryVoice, dialect);
+    const int n = rolla::sampleIndexCount (index, part, filter);
+    if (n <= 0)
+        return;
+    if (pick < 0)
+        pick = 0;
+    const int start = pick % n;
+    const int window = std::min (n, 8);
+    for (int i = 0; i < window; ++i)
+    {
+        const auto* entry = rolla::sampleIndexAt (index, part, filter, (start + i) % n);
+        if (entry == nullptr)
+            continue;
+        library.request (entry->path);
+        paths.emplace_back (entry->path);
+    }
+}
+
+void waitReady (rolla::SampleLibrary& library, const std::vector<std::string>& paths)
+{
     const auto readyBy = juce::Time::getMillisecondCounter() + 20000;
     while (juce::Time::getMillisecondCounter() < readyBy)
     {
@@ -241,16 +425,65 @@ void preloadPack (rolla::SampleLibrary& library, const rolla::SampleIndex& index
     }
 }
 
-int renderBatch (const std::string& samples, const std::string& styleName, int count, std::uint32_t seed, const std::string& outDir)
+void writeSidecar (const juce::File& wav, int style, const Knobs& knobs, bool hitsMute, float swing,
+                   const rolla::PresetBank& bank, const int preset[rolla::NumParts],
+                   const int samplePick[rolla::NumParts], const std::string fileOf[rolla::NumParts],
+                   const std::string drumOf[rolla::NumDrumVoices], int kickMidi)
+{
+    std::ostringstream out;
+    out << std::fixed << std::setprecision (3);
+    out << "{\n  \"style\": \"" << rolla::dialectId (style) << "\",\n";
+    out << "  \"intensity\": " << knobs.intensity << ",\n";
+    out << "  \"hitsMute\": " << (hitsMute ? "true" : "false") << ",\n";
+    out << "  \"swing\": " << swing << ",\n";
+    out << "  \"kickMidiSample\": " << kickMidi << ",\n";
+    out << "  \"presets\": {";
+    for (int i = 0; i < rolla::NumParts; ++i)
+        out << (i ? ", " : "") << "\"" << rolla::partId (i) << "\": \"" << jsonEscape (presetName (bank, i, preset[i])) << "\"";
+    out << "},\n  \"presetIndex\": {";
+    for (int i = 0; i < rolla::NumParts; ++i)
+        out << (i ? ", " : "") << "\"" << rolla::partId (i) << "\": " << preset[i];
+    out << "},\n  \"samplePick\": {";
+    for (int i = 0; i < rolla::NumParts; ++i)
+        out << (i ? ", " : "") << "\"" << rolla::partId (i) << "\": " << samplePick[i];
+    out << "},\n  \"files\": {";
+    bool first = true;
+    for (int i = 0; i < rolla::NumParts; ++i)
+    {
+        if (fileOf[i].empty())
+            continue;
+        out << (first ? "" : ", ") << "\"" << rolla::partId (i) << "\": \"" << jsonEscape (fileOf[i]) << "\"";
+        first = false;
+    }
+    static const char* voiceName[] = { "kick", "snare", "clap", "rim", "tomLow", "tomMid", "hatC", "hatO", "ride", "perc" };
+    for (int v = 0; v < rolla::NumDrumVoices; ++v)
+    {
+        if (drumOf[v].empty())
+            continue;
+        out << (first ? "" : ", ") << "\"" << voiceName[v] << "\": \"" << jsonEscape (drumOf[v]) << "\"";
+        first = false;
+    }
+    out << "}\n}\n";
+    wav.withFileExtension (".json").replaceWithText (out.str());
+}
+
+int renderBatch (const std::string& samples, const std::string& styleName, int count, std::uint32_t seed,
+                 const std::string& outDir, const Knobs& knobs)
 {
     const int one = styleId (styleName);
     if (one == -1 || count < 1)
     {
-        std::cerr << "usage: rolla-rolls --samples DIR --style ukmin|long|pop|gaskin|all --count N --seed S [--out DIR]\n";
+        std::cerr << usageText();
         return 2;
     }
     rolla::PresetBank bank;
     rolla::loadPresetsFromJson (bank, BinaryData::presets_json, BinaryData::presets_jsonSize);
+    rolla::MixProgram mix;
+    if (! loadMix (mix) || ! mix.loaded)
+    {
+        std::cerr << "FAIL mix program did not load\n";
+        return 1;
+    }
 
     std::unique_ptr<rolla::SampleLibrary> library;
     std::shared_ptr<const rolla::SampleIndex> index;
@@ -264,9 +497,7 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
         while (library->indexedFound() < 0 && juce::Time::getMillisecondCounter() < indexedBy)
             juce::Thread::sleep (20);
         index = library->index();
-        if (index != nullptr)
-            preloadPack (*library, *index);
-        else
+        if (index == nullptr)
             std::cerr << "sample index did not finish; WAV energy may be missing\n";
     }
 
@@ -277,7 +508,9 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
     for (int s = 0; s < nStyles; ++s)
     {
         const int style = one == -2 ? styles[s] : one;
-        const auto settings = rollSettings (style);
+        const auto settings = rollSettings (style, knobs);
+        const auto& row = bank.dialect[style];
+        const float swing = row.swing > 0.f ? row.swing : swingFor (style);
         std::vector<rolla::Groove> seen;
         seen.reserve ((size_t) count);
         for (int roll = 0; roll < count; ++roll)
@@ -304,9 +537,48 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
                 rolla::generate (groove, settings, seeds, 0x7fu);
             }
             seen.push_back (groove);
+            rolla::Groove arranged;
+            const auto plan = rolla::planIntensity (style, knobs.intensity, settings.stab);
+            rolla::applyIntensity (groove, arranged, plan, 0, 0);
+            int preset[rolla::NumParts] {};
+            int samplePick[rolla::NumParts] {};
+            for (int p = 0; p < rolla::NumParts; ++p)
+            {
+                preset[p] = row.presetIndex[p] >= 0 ? row.presetIndex[p] : 0;
+                const int rolled = rolla::pickPresetForRoll (bank, p, style, seeds[p]);
+                if (rolled >= 0)
+                    preset[p] = rolled;
+                samplePick[p] = (int) (seeds[p] % 10007u);
+            }
+            std::string fileOf[rolla::NumParts];
+            std::string drumOf[rolla::NumDrumVoices];
+            if (index != nullptr && library != nullptr)
+            {
+                std::vector<std::string> paths;
+                for (int p = 0; p < rolla::Drums; ++p)
+                {
+                    const auto& spec = rolla::specAt (bank, p, preset[p]);
+                    fileOf[p] = pickedFile (index.get(), spec, p, -1, samplePick[p], style);
+                    requestPicked (*library, *index, spec, p, -1, samplePick[p], style, paths);
+                }
+                const auto& drums = rolla::specAt (bank, rolla::Drums, preset[rolla::Drums]);
+                fileOf[rolla::Drums] = pickedFile (index.get(), drums, rolla::Drums, rolla::Kick, samplePick[rolla::Drums], style);
+                const int voices[] = { rolla::Kick, rolla::Snare, rolla::Clap, rolla::Rim, rolla::HatC, rolla::HatO, rolla::Ride, rolla::Perc };
+                for (int voice : voices)
+                {
+                    int shift = 0;
+                    if (voice == rolla::TomMid)
+                        shift = 1;
+                    else if (voice == rolla::TomLow)
+                        shift = 2;
+                    drumOf[voice] = pickedFile (index.get(), drums, rolla::Drums, voice, samplePick[rolla::Drums] + shift, style);
+                    requestPicked (*library, *index, drums, rolla::Drums, voice, samplePick[rolla::Drums] + shift, style, paths);
+                }
+                waitReady (*library, paths);
+            }
             std::vector<std::string> written;
             std::string error;
-            if (! rolla::MidiExport::writeAll (dir.string(), groove, settings.key, swingFor (style), 130.0, written, error))
+            if (! rolla::MidiExport::writeAll (dir.string(), arranged, settings.key, swing, 130.0, written, error))
             {
                 std::cerr << "FAIL " << error << "\n";
                 return 1;
@@ -314,18 +586,34 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
             const auto wav = juce::File (dir.string())
                                  .getChildFile ("ROLLA_" + juce::String (rolla::keyName (settings.key)) + "min_"
                                                 + rolla::dialectId (style) + ".wav");
-            const float peak = renderWav (bank, groove, style, wav, library.get(), index.get());
-            if (peak < 0.01f)
+            const Rendered rendered = renderWav (bank, arranged, style, wav, library.get(), index.get(),
+                                                 &mix, knobs, preset, samplePick, row.hitsMute, swing, false, -1);
+            if (rendered.peak < 0.01f)
             {
                 wav.deleteFile();
+                wav.withFileExtension (".json").deleteFile();
                 ++silent;
                 std::cout << "SKIPPED clicks tails loudness " << rolla::dialectId (style) << " " << name.str()
                           << " (no sample energy)\n";
             }
             else
             {
+                writeSidecar (wav, style, knobs, row.hitsMute, swing, bank, preset, samplePick, fileOf, drumOf, rendered.kickMidiSample);
+                if (knobs.stems)
+                {
+                    for (int part = 0; part < rolla::NumParts; ++part)
+                    {
+                        const auto stem = wav.getSiblingFile (wav.getFileNameWithoutExtension() + "_" + stemName (part) + ".wav");
+                        renderWav (bank, arranged, style, stem, library.get(), index.get(),
+                                   &mix, knobs, preset, samplePick, row.hitsMute, swing, true, part);
+                    }
+                }
                 ++wavs;
-                std::cout << rolla::dialectId (style) << " " << name.str() << " peak=" << peak << "\n";
+                std::cout << rolla::dialectId (style) << " " << name.str()
+                          << " peak=" << rendered.peak
+                          << " kickMidi=" << rendered.kickMidiSample
+                          << " bass=" << presetName (bank, rolla::Bass, preset[rolla::Bass])
+                          << " kick=" << drumOf[rolla::Kick] << "\n";
             }
         }
     }
@@ -337,6 +625,14 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
 
 } // namespace
 
+const char* usageText()
+{
+    return "rolla-rolls --samples DIR --style ukmin|long|pop|gaskin|all --count N --seed S [--out DIR] [--stems]\n"
+           "            [--knob DARK=0.55] [--knob BUSY=0.40] [--knob BOUNCE=0.45] [--knob STAB=0.55]\n"
+           "            [--knob TONE=0.5] [--knob PUNCH=0.5] [--knob LEVEL=0] [--knob INTENSITY=75]\n"
+           "            [--knob BASS.TONE=0.5] [--knob BASS.PUNCH=0.5] [--knob BASS.LEVEL=0]\n";
+}
+
 int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI juce;
@@ -345,28 +641,41 @@ int main (int argc, char** argv)
     int count = 20;
     std::uint32_t seed = 1;
     bool batch = false;
+    Knobs knobs;
     for (int i = 1; i < argc; ++i)
     {
         const std::string arg = argv[i];
-        auto take = [&] (const char* flag) -> const char*
+        const char* value = nullptr;
+        auto take = [&] (const char* flag) -> bool
         {
             if (arg != flag || i + 1 >= argc)
-                return nullptr;
-            return argv[++i];
+                return false;
+            value = argv[++i];
+            return true;
         };
         if (arg == "--help")
         {
-            std::cout << "rolla-rolls --samples DIR --style ukmin|long|pop|gaskin|all --count N --seed S [--out DIR]\n";
+            std::cout << usageText();
             return 0;
         }
-        if (const char* v = take ("--samples")) { samples = v; batch = true; }
-        else if (const char* v = take ("--style")) { style = v; batch = true; }
-        else if (const char* v = take ("--count")) { count = std::max (1, std::atoi (v)); batch = true; }
-        else if (const char* v = take ("--seed")) { seed = (std::uint32_t) std::strtoul (v, nullptr, 0); batch = true; }
-        else if (const char* v = take ("--out")) { out = v; batch = true; }
+        if (arg == "--stems") { knobs.stems = true; batch = true; }
+        else if (take ("--samples")) { samples = value; batch = true; }
+        else if (take ("--style")) { style = value; batch = true; }
+        else if (take ("--count")) { count = std::max (1, std::atoi (value)); batch = true; }
+        else if (take ("--seed")) { seed = (std::uint32_t) std::strtoul (value, nullptr, 0); batch = true; }
+        else if (take ("--out")) { out = value; batch = true; }
+        else if (take ("--knob"))
+        {
+            if (! parseKnob (value, knobs))
+            {
+                std::cerr << "bad knob " << value << "\n" << usageText();
+                return 2;
+            }
+            batch = true;
+        }
     }
     if (batch)
-        return renderBatch (samples, style, count, seed, out);
+        return renderBatch (samples, style, count, seed, out, knobs);
 
     const std::filesystem::path root = argc > 1 ? argv[1] : "tools/out";
     std::filesystem::create_directories (root);
@@ -379,17 +688,17 @@ int main (int argc, char** argv)
     std::cout << "wrote " << (root / "STATS.md") << "\n";
 
     int failures = nondet;
-    for (int style = 0; style < rolla::NumDialects; ++style)
+    for (int dialect = 0; dialect < rolla::NumDialects; ++dialect)
     {
-        std::cout << rolla::dialectName (style) << " rules " << stats[style].rulesPassed
-                  << "/" << stats[style].rolls << "\n";
+        std::cout << rolla::dialectName (dialect) << " rules " << stats[dialect].rulesPassed
+                  << "/" << stats[dialect].rolls << "\n";
         const int lanes[] = { rolla::Bass, rolla::Stab, rolla::Hits, rolla::Pluck, rolla::Pad, rolla::Vox, rolla::Drums };
         for (int part : lanes)
         {
-            const auto& lane = stats[style].lane[part];
+            const auto& lane = stats[dialect].lane[part];
             std::cout << "  " << rolla::partId (part) << " unique " << lane.unique
                       << " edit " << lane.meanEdit << "\n";
-            if (lane.unique < 5000 || stats[style].rulesPassed != stats[style].rolls)
+            if (lane.unique < 5000 || stats[dialect].rulesPassed != stats[dialect].rolls)
                 ++failures;
         }
     }
@@ -403,24 +712,25 @@ int main (int argc, char** argv)
     int wavs = 0;
     bool toldSilence = false;
     std::vector<rolla::Groove> seen[rolla::NumDialects];
-    for (int style = 0; style < rolla::NumDialects; ++style)
+    for (int dialect = 0; dialect < rolla::NumDialects; ++dialect)
     {
-        const auto settings = rollSettings (style);
+        const Knobs plain;
+        const auto settings = rollSettings (dialect, plain);
         for (int roll = 0; roll < kRolls; ++roll)
         {
             std::ostringstream name;
             name << "roll_" << std::setw (2) << std::setfill ('0') << roll;
-            const auto dir = root / rolla::dialectId (style) / name.str();
+            const auto dir = root / rolla::dialectId (dialect) / name.str();
             std::filesystem::create_directories (dir);
 
             std::uint32_t seeds[rolla::NumParts];
-            seedsFor (style, roll, seeds);
+            seedsFor (dialect, roll, seeds);
             rolla::Groove groove {};
             rolla::generate (groove, settings, seeds, 0x7fu);
             for (int guard = 0; guard < 16; ++guard)
             {
                 bool close = false;
-                for (const auto& prev : seen[style])
+                for (const auto& prev : seen[dialect])
                     if (rolla::bassSkeletonSimilarity (groove, prev) >= 0.55f)
                         close = true;
                 if (! close)
@@ -428,11 +738,11 @@ int main (int argc, char** argv)
                 seeds[rolla::Bass] ^= 0x9E3779B9u + (std::uint32_t) guard * 0x85EBCA6Bu;
                 rolla::generate (groove, settings, seeds, 0x7fu);
             }
-            seen[style].push_back (groove);
+            seen[dialect].push_back (groove);
 
             std::vector<std::string> written;
             std::string error;
-            if (! rolla::MidiExport::writeAll (dir.string(), groove, settings.key, swingFor (style), bpm, written, error))
+            if (! rolla::MidiExport::writeAll (dir.string(), groove, settings.key, swingFor (dialect), bpm, written, error))
             {
                 std::cerr << "FAIL " << error << "\n";
                 ++failures;
@@ -442,8 +752,11 @@ int main (int argc, char** argv)
 
             const auto wav = juce::File (dir.string())
                                  .getChildFile ("ROLLA_" + juce::String (rolla::keyName (settings.key)) + "min_"
-                                                + rolla::dialectId (style) + ".wav");
-            const float peak = renderWav (bank, groove, style, wav, nullptr, nullptr);
+                                                + rolla::dialectId (dialect) + ".wav");
+            int preset[rolla::NumParts] {};
+            int samplePick[rolla::NumParts] {};
+            const float peak = renderWav (bank, groove, dialect, wav, nullptr, nullptr, nullptr, plain,
+                                          preset, samplePick, false, swingFor (dialect), false, -1).peak;
             if (peak < 0.01f)
             {
                 wav.deleteFile();
@@ -455,7 +768,7 @@ int main (int argc, char** argv)
             }
             else
                 ++wavs;
-            std::cout << rolla::dialectId (style) << " " << name.str()
+            std::cout << rolla::dialectId (dialect) << " " << name.str()
                       << " bass=" << groove.lane[rolla::Bass].count
                       << " stab=" << groove.lane[rolla::Stab].count
                       << " guard=" << groove.guardRef
