@@ -638,6 +638,87 @@ void applyVariation (Work& w, int op, const PbStyle& S, const PbContour& c, floa
     }
 }
 
+// A 1-bar DEEP phrase is two half-cells and one contour. That grid is small
+// enough that two seeds land on the same onset mask, and one shared contour
+// keeps the pitches on top of each other (similarity 1). Slide one half onto
+// a different off-kick shape of the same size, using the same sixteenths the
+// cells already use, and draw a fresh degree for
+// every hit after the first. 2-bar phrases are left alone.
+void spreadDeepOneBar (Work& w, const PbStyle& S, Rng& r)
+{
+    w.sort();
+    int half = r.next() < 0.5 ? 0 : 8;
+    if (w.countIn (half, half + 8) == 0)
+        half = 8 - half;
+
+    int idx[8];
+    int m = 0;
+    bool cur[8] = {};
+    for (int i = 0; i < w.n; ++i)
+        if (w.hits[i].step >= half && w.hits[i].step < half + 8)
+        {
+            idx[m++] = i;
+            cur[w.hits[i].step - half] = true;
+        }
+
+    constexpr int legal[6] = { 1, 2, 3, 5, 6, 7 };
+    const int nChoose = std::min (m, 6);
+    if (nChoose > 0)
+    {
+        int bag[6];
+        for (int i = 0; i < 6; ++i)
+            bag[i] = legal[i];
+        for (int i = 5; i > 0; --i)
+        {
+            const int j = std::min (i, (int) (r.next() * (double) (i + 1)));
+            std::swap (bag[i], bag[j]);
+        }
+        int chosen[6];
+        for (int i = 0; i < nChoose; ++i)
+            chosen[i] = bag[i];
+
+        int nCur = 0;
+        for (int rel : legal)
+            if (cur[rel])
+                ++nCur;
+        bool same = nCur == nChoose;
+        for (int i = 0; same && i < nChoose; ++i)
+            if (! cur[chosen[i]])
+                same = false;
+        if (same && nChoose < 6)
+        {
+            for (int alt : legal)
+            {
+                bool taken = false;
+                for (int i = 0; i < nChoose; ++i)
+                    if (chosen[i] == alt)
+                        taken = true;
+                if (! taken)
+                {
+                    chosen[0] = alt;
+                    break;
+                }
+            }
+        }
+
+        for (int i = m - 1; i >= 0; --i)
+            w.removeAt (idx[i]);
+        for (int i = 0; i < nChoose; ++i)
+        {
+            Hit h;
+            h.step = half + chosen[i];
+            h.len = 2.f;
+            h.degree = 0;
+            h.vel = 108;
+            w.add (h);
+        }
+        w.sort();
+    }
+
+    for (int i = 1; i < w.n; ++i)
+        w.hits[i].degree = pickDegree (S.degrees, S.nDegrees, r);
+}
+
 // Hard rule: bass attacks on kick steps stay at or under kMaxKickShare.
 void enforceKick (Work& w, int phraseSteps)
 {
@@ -805,6 +886,10 @@ Phrase makeBassPhrase (Style style, std::uint32_t seed, const PhraseSettings& s)
     const int ci = std::max (0, pickIndex (S.contours, S.nContours, r, &plainWeight<PbContour>, nullptr));
     const PbContour& c = S.contours[ci];
     pitchHits (w, 0, 16, S, c, r, true);
+
+    // 1-bar DEEP skips the even-bar variation below, so widen that shape here.
+    if (bars == 1 && style == Style::Deep)
+        spreadDeepOneBar (w, S, r);
 
     if (bars == 2 && style == Style::Jackin)
         complementJackin (w, r);
