@@ -36,7 +36,7 @@ float swingFor (int dialect)
     switch (dialect)
     {
         case rolla::UkMin: return 0.52f;
-        case rolla::Long: return 0.51f;
+        case rolla::Long: return 0.53f;
         default: return 0.50f;
     }
 }

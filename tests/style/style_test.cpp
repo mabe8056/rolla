@@ -471,6 +471,8 @@ int main (int argc, char** argv)
     // A style's hashes change only in the PR that means to change that style
     // (regenerate with --golden). ROLLER changed in claude/roller-phrasing;
     // BOUNCY in #28 (relegato); JACKIN in #25 (STAB) and claude/jackin-identity.
+    // DEEP changes in claude/style-deep (StyleDeep.h): its two hashes must be
+    // regenerated with --golden on the first build of that branch.
     const struct { int style; std::uint32_t base; std::uint64_t hash; } frozen[] = {
         { UkMin, 1u, 0x7c9dcbee6dddc8eaull }, { UkMin, 2u, 0x47a4548b99fd9987ull },
         { Long, 1u, 0x3881ed002bc4c2ebull }, { Long, 2u, 0x8682efccde9fe80bull },

@@ -888,6 +888,111 @@ void testScorerV23()
     }
 }
 
+// DEEP style pass (data/genre/style_rules.json styles.DEEP), 20 fresh seeds at
+// the default knobs: bass 4-6.5 onsets a bar, <= 15% on the kick, 8-13 high-band
+// onsets a bar, a b3 every 4 bars, <= 25% open-5th-only stabs, bars 4 / 8 answer,
+// bar 8 turns around, no busy line without a hole, swing preset 52-60%.
+void testDeepStyle()
+{
+    const std::uint32_t base = 5200650u;
+    int bassOn = 0, onKick = 0, hiOn = 0, bars = 0, b3Miss = 0, chords = 0, bare = 0;
+    int ans4 = 0, ans8 = 0, turned = 0, busyNoHole = 0;
+    for (int roll = 0; roll < 20; ++roll)
+    {
+        rolla::Settings s;
+        s.dialect = rolla::Long;
+        s.bars = 8;
+        std::uint32_t seeds[rolla::NumParts] {};
+        for (int p = 0; p < rolla::NumParts; ++p)
+            seeds[p] = base + (std::uint32_t) roll * 0x9E3779B9u + (std::uint32_t) p * 17u + 101u;
+        rolla::Groove g {};
+        rolla::generate (g, s, seeds, 0x7fu);
+        const auto& bass = g.lane[rolla::Bass];
+        const auto& stab = g.lane[rolla::Stab];
+        bars += g.bars;
+        int perBar[8] {};
+        std::set<int> tok4, tok8;
+        for (int i = 0; i < bass.count; ++i)
+        {
+            const int st = (int) std::lround (bass.notes[i].start);
+            ++bassOn;
+            onKick += (st % 4) == 0 ? 1 : 0;
+            const int bar = std::clamp (st / 16, 0, 7);
+            ++perBar[bar];
+            if (bar == 3)
+                tok4.insert ((st % 16) * 16 + pcOfNote (bass.notes[i].chord[0]));
+            if (bar == 7)
+                tok8.insert ((st % 16) * 16 + pcOfNote (bass.notes[i].chord[0]));
+        }
+        ans4 += perBar[3] != perBar[2] ? 1 : 0;
+        ans8 += perBar[7] != perBar[6] ? 1 : 0;
+        turned += tok4 != tok8 ? 1 : 0;
+        int run = 0, hole = 0;
+        for (int t = 0; t < g.bars * 16; ++t)
+        {
+            run = bassSoundsAt (bass, t) ? 0 : run + 1;
+            hole = std::max (hole, run);
+        }
+        if ((float) bass.count / (float) g.bars > 8.5f && hole < 4)
+            ++busyNoHole;
+        for (int t = 0; t < g.bars * 16; ++t)
+            if (g.drums.vel[rolla::HatC][t] || g.drums.vel[rolla::HatO][t] || g.drums.vel[rolla::Ride][t]
+                || g.drums.vel[rolla::Perc][t])
+                ++hiOn;
+        for (int w0 = 0; w0 < g.bars; w0 += 4)
+        {
+            const float lo = (float) (w0 * 16), hi = (float) (std::min (g.bars, w0 + 4) * 16);
+            bool has = false;
+            for (int i = 0; i < bass.count; ++i)
+                has = has || (bass.notes[i].start >= lo && bass.notes[i].start < hi && pcOfNote (bass.notes[i].chord[0]) == 3);
+            for (int i = 0; i < stab.count; ++i)
+                if (stab.notes[i].start < hi && stab.notes[i].start + stab.notes[i].length > lo)
+                    for (int c = 0; c < stab.notes[i].nChord && c < 4; ++c)
+                        has = has || pcOfNote (stab.notes[i].chord[c]) == 3;
+            b3Miss += has ? 0 : 1;
+        }
+        for (int i = 0; i < stab.count; ++i)
+        {
+            const auto& n = stab.notes[i];
+            if (n.nChord < 2)
+                continue;
+            ++chords;
+            int lowest = n.chord[0];
+            for (int c = 1; c < n.nChord && c < 4; ++c)
+                lowest = std::min (lowest, (int) n.chord[c]);
+            bool fifthOnly = true;
+            for (int c = 0; c < n.nChord && c < 4; ++c)
+            {
+                const int d = pcOfNote (n.chord[c] - lowest);
+                fifthOnly = fifthOnly && (d == 0 || d == 7);
+            }
+            bare += fifthOnly ? 1 : 0;
+        }
+    }
+    const double npb = bars > 0 ? (double) bassOn / bars : 0.0;
+    const double kick = bassOn > 0 ? 100.0 * onKick / bassOn : 0.0;
+    const double hiPerBar = bars > 0 ? (double) hiOn / bars : 0.0;
+    const double barePct = chords > 0 ? 100.0 * bare / chords : 0.0;
+    std::cout << "DEEP style bass " << npb << "/bar on-kick " << kick << "% hi-band " << hiPerBar
+              << "/bar b3-miss " << b3Miss << " open5 " << barePct << "% answers " << ans4 << "/" << ans8
+              << " turned " << turned << "/20 busy-no-hole " << busyNoHole << "\n";
+    expect (npb >= 4.0 && npb <= 6.5, "DEEP bass onsets per bar land in 4-6.5");
+    expect (kick <= 15.0, "DEEP bass avoids the kick (<= 15% of onsets)");
+    expect (hiPerBar >= 8.0 && hiPerBar <= 13.0, "DEEP high-band onsets per bar land in 8-13");
+    expect (b3Miss == 0, "DEEP states a minor 3rd every 4 bars");
+    expect (barePct <= 25.0, "DEEP open-5th-only stabs stay <= 25%");
+    expect (ans4 >= 18 && ans8 >= 18, "DEEP bars 4 and 8 change the density");
+    expect (turned >= 16, "DEEP bar 8 turns around against bar 4");
+    expect (busyNoHole == 0, "DEEP busy bass keeps a 4-16th hole");
+
+    rolla::RollaProcessor proc;
+    proc.waitUntilReady();
+    const auto bank = proc.sharePresets();
+    const float swing = bank != nullptr ? bank->dialect[rolla::Long].swing : 0.f;
+    std::cout << "DEEP swing preset " << swing << "\n";
+    expect (swing >= 0.52f && swing <= 0.60f, "DEEP swing preset lands in 52-60%");
+}
+
 void testShuffleKeepsManualLock()
 {
     rolla::RollaProcessor proc;
@@ -914,6 +1019,7 @@ int main()
 
     testEarReview();
     testScorerV23();
+    testDeepStyle();
     testRollSkipsMutedAndKept();
     testShuffleClearsAutoKeep();
     testShuffleKeepsManualLock();

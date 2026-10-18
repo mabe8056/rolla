@@ -3,6 +3,7 @@
 #include "RollerPass.h"
 #include "JackinLoop.h"
 #include "PhraseBank.h"
+#include "StyleDeep.h"
 
 #include <algorithm>
 #include <cmath>
@@ -3493,6 +3494,9 @@ void writeDrums (DrumLane& drums, std::uint32_t seed, const Settings& s, Rng& rn
                 drums.vel[Perc][t] = 62;
         }
     }
+    // DEEP: 16th hat ghosts toward the reference high-band density (StyleDeep.h).
+    if (s.dialect == Long)
+        deep::hiBand (drums, s.bars, seed, s.busy);
 }
 
 bool neighbourPc (int a, int b) noexcept
@@ -4308,7 +4312,11 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
         enforceMonophonic (g.lane[Bass]);
         avoidReaction (g.lane[Bass]);
         if (s.dialect == Long)
+        {
             deepbouncy::deepArc (g.lane[Bass], s.bars, bassSeed, s.busy);
+            // DEEP style pass: density, kick anchor, bar-8 palette, answers (StyleDeep.h).
+            deep::shapeBass (g.lane[Bass], s.bars, bassSeed, s.busy, deepIsDark (s.dark, bassSeed));
+        }
         else if (s.dialect == Pop)
             deepbouncy::relegato (g.lane[Bass], s.bars);
         else if (s.dialect == UkMin)
@@ -4347,10 +4355,16 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
             // DEEP: about a third of the stabs answer in bass gaps, never half (it was 84%).
             deepbouncy::stabsInGaps (g.lane[Stab], g.lane[Bass], s.bars, s.dialect == Pop ? 0.92f : 0.55f,
                                      s.dialect == Long ? 0.35f : 1.f);
+        // DEEP: no bare open-5th stabs (StyleDeep.h).
+        if (s.dialect == Long && regen (Stab))
+            deep::fixOpenFifths (g.lane[Stab], g.lane[Bass]);
         if (regen (Bass))
         {
             deepbouncy::pickup (g.lane[Bass], s.bars, bassSeed, s.dialect == Pop ? 0.6f : 0.45f);
             deepbouncy::fixAnswers (g.lane[Bass], s.bars);
+            // DEEP: a minor 3rd every 4 bars, after the last note moves (StyleDeep.h).
+            if (s.dialect == Long)
+                deep::stateMinorThird (g.lane[Bass], g.lane[Stab], s.bars);
             if (s.dialect == Pop)
                 deepbouncy::steerOctaves (g.lane[Bass], s.bounce, bassSeed);
         }
