@@ -227,6 +227,39 @@ void testPitchProbe()
                 "probe: C-G is a neutral (fifth) chord on C");
     }
     {
+        // A 120 ms stab (5 ms attack, exponential decay) must measure with enough
+        // confidence to be retuned, at 48k and 44.1k.
+        for (const double rate : { 48000.0, 44100.0 })
+            for (const double m : { 48.0, 57.0, 63.0, 70.0 })
+            {
+                const int lead = (int) (0.01 * rate), n = (int) (0.12 * rate);
+                std::vector<float> stab ((size_t) (lead + n), 0.f);
+                const double f = 440.0 * std::pow (2.0, (m - 69.0) / 12.0);
+                for (int i = 0; i < n; ++i)
+                {
+                    const double t = (double) i / rate;
+                    const double env = std::min (1.0, t / 0.005) * std::exp (-t / 0.05);
+                    double x = 0.0;
+                    for (int h = 1; h <= 10 && f * h < 18000.0; ++h)
+                        x += 0.3 / h * std::sin (2.0 * 3.14159265358979 * f * h * t);
+                    stab[(size_t) (lead + i)] = (float) (env * x);
+                }
+                const auto p = rolla::probePitch (stab.data(), nullptr, (int) stab.size(), rate, rolla::kPitchFloorTonalHz);
+                expect (p.pitched() && ! p.isChord && std::fabs (p.rootPitch - (float) m) < 0.3f && p.conf >= rolla::kPitchConfMin,
+                        "probe: a 120 ms stab at " + std::to_string ((int) m) + " (" + std::to_string ((int) rate)
+                            + " Hz) is retunable (got " + std::to_string (p.rootPitch) + ", conf " + std::to_string (p.conf) + ")");
+            }
+    }
+    {
+        // Sub rumble at 40 Hz under a C4 stab: the tonal-lane floor keeps C4 the root.
+        auto c4 = sawNotes ({ 60.0 });
+        for (size_t i = 960; i < c4.size(); ++i)
+            c4[i] += (float) (0.25 * std::sin (2.0 * 3.14159265358979 * 40.0 * (double) (i - 960) / 48000.0));
+        const auto p = rolla::probePitch (c4.data(), nullptr, (int) c4.size(), 48000.0, rolla::kPitchFloorTonalHz);
+        expect (p.pitched() && ((int) std::lround (p.rootPitch) % 12) == 0 && p.rootPitch > 50.f,
+                "probe: 40 Hz rumble under a C4 stab is not the root (got " + std::to_string (p.rootPitch) + ")");
+    }
+    {
         std::vector<float> noise (48000);
         std::uint32_t s = 12345u;
         for (auto& x : noise)
