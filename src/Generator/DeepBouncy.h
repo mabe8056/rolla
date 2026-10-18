@@ -4,7 +4,8 @@
 // Long and Pop only, so ROLLER and JACKIN output stays byte-identical.
 //
 //  - bouncyBass: BOUNCY's bass from rules, not a shape book. About six notes
-//    a bar (BUSY scales it), played legato so the bass sounds ~90% of the loop,
+//    a bar (BUSY scales it). About half the rolls are the legato pulse (the
+//    bass sounds ~90% of the loop), the rest bounce (notes held <= 1.4/16),
 //    natural minor only, and octave bounces whose share rises with BOUNCE.
 //    An 8-bar arc A B A B4 A B' A B8: every answer bar changes the note count.
 //  - deepArc: DEEP's tiled grammar phrase gets answers that add or drop a note
@@ -515,6 +516,20 @@ inline bool inMinor (int semi) noexcept
     return minorPc (semi);
 }
 
+// BOUNCY has two modes (the scorer judges each roll by the one it fits): about
+// half the rolls are the legato pulse (notes run to the next onset), the rest
+// bounce (the same rhythm, notes held at most 1.4/16). Drawn from the lane seed,
+// so relegato() keeps the roll's mode.
+inline bool bouncyPulse (std::uint32_t laneSeed) noexcept
+{
+    return ((mix (laneSeed, 0x9017u) >> 9) & 1u) != 0u;
+}
+
+inline float bouncyMaxLen (std::uint32_t laneSeed) noexcept
+{
+    return bouncyPulse (laneSeed) ? 6.f : 1.4f;
+}
+
 inline void bouncyBass (Lane& lane, int bars, std::uint32_t seed, float dark, float bounce, float busy)
 {
     bars = std::clamp (bars, 2, kMaxBars);
@@ -548,7 +563,7 @@ inline void bouncyBass (Lane& lane, int bars, std::uint32_t seed, float dark, fl
         const Bar* src = bars >= 8 ? arc8[bar & 7] : (bars >= 4 ? arc4[bar & 3] : arc2[bar & 1]);
         putBar (lane, *src, bar, bars);
     }
-    legatoBass (lane, bars, 0.12f, 6.f);
+    legatoBass (lane, bars, 0.12f, bouncyMaxLen (keptSeed));
 
     // Bar 8 turns: nothing sounds after step 11, so the loop rests 4/16 before
     // bar 1 (a pickup may still land on step 15).
@@ -574,7 +589,7 @@ inline void relegato (Lane& lane, int bars)
     if (lane.count <= 0)
         return;
     bars = std::clamp (bars, 2, kMaxBars);
-    legatoBass (lane, bars, 0.12f, 6.f);
+    legatoBass (lane, bars, 0.12f, bouncyMaxLen (lane.seed));
     const float origin = (float) ((bars - 1) * 16);
     for (int i = 0; i < lane.count; ++i)
     {
@@ -697,15 +712,25 @@ inline void deepStabVoicing (Lane& stab, const Lane& bass, std::uint32_t seed)
     }
 }
 
-inline void stabsInGaps (Lane& stab, Lane& bass, int bars, float minBassSound)
+// maxGapShare caps the running share of stabs that sit in bass gaps: past it a
+// stab on the bass stays there, so the line is answered, not abandoned (the
+// scorer's bonus complaint starts at half the stabs in rests).
+inline void stabsInGaps (Lane& stab, Lane& bass, int bars, float minBassSound, float maxGapShare = 1.f)
 {
     const float loop = (float) (bars * 16);
     sortLane (stab);
     sortLane (bass);
+    int seen = 0, inGap = 0;
     for (int i = 0; i < stab.count; ++i)
     {
         Note& s = stab.notes[i];
+        ++seen;
         if (! sounding (bass, s.start))
+        {
+            ++inGap;
+            continue;
+        }
+        if ((float) (inGap + 1) > maxGapShare * (float) seen)
             continue;
         const int bar = (int) std::floor (s.start / 16.f + 1e-4f);
         const float lo = (float) (bar * 16), hi = lo + 16.f;
@@ -723,7 +748,10 @@ inline void stabsInGaps (Lane& stab, Lane& bass, int bars, float minBassSound)
             break;
         }
         if (moved)
+        {
+            ++inGap;
             continue;
+        }
         // End the bass note where the stab answers.
         for (int k = 0; k < bass.count; ++k)
         {
@@ -734,6 +762,8 @@ inline void stabsInGaps (Lane& stab, Lane& bass, int bars, float minBassSound)
             b.length = s.start - b.start;
             if (soundShare (bass, bars) < minBassSound)
                 b.length = was;
+            else
+                ++inGap;
             break;
         }
     }

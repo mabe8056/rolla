@@ -4299,7 +4299,9 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
         if (regen (Stab) && s.dialect == Long)
             deepbouncy::deepStabVoicing (g.lane[Stab], g.lane[Bass], g.lane[Stab].seed);
         if (regen (Bass) || regen (Stab))
-            deepbouncy::stabsInGaps (g.lane[Stab], g.lane[Bass], s.bars, s.dialect == Pop ? 0.92f : 0.55f);
+            // DEEP: about a third of the stabs answer in bass gaps, never half (it was 84%).
+            deepbouncy::stabsInGaps (g.lane[Stab], g.lane[Bass], s.bars, s.dialect == Pop ? 0.92f : 0.55f,
+                                     s.dialect == Long ? 0.35f : 1.f);
         if (regen (Bass))
         {
             deepbouncy::pickup (g.lane[Bass], s.bars, bassSeed, s.dialect == Pop ? 0.6f : 0.45f);
