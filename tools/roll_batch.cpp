@@ -287,6 +287,8 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
     {
         const int style = one == -2 ? styles[s] : one;
         const auto settings = rollSettings (style);
+        std::vector<rolla::Groove> seen;
+        seen.reserve ((size_t) count);
         for (int roll = 0; roll < count; ++roll)
         {
             std::ostringstream name;
@@ -298,6 +300,19 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
                 seeds[p] = seed + (std::uint32_t) roll * 0x9E3779B9u + (std::uint32_t) p * 17u + (std::uint32_t) style * 101u;
             rolla::Groove groove {};
             rolla::generate (groove, settings, seeds, 0x7fu);
+            // v2.1 skeleton cap is a runtime redraw, not a constant fitted to the gate seeds.
+            for (int guard = 0; guard < 8; ++guard)
+            {
+                bool close = false;
+                for (const auto& prev : seen)
+                    if (rolla::bassSkeletonSimilarity (groove, prev) >= 0.55f)
+                        close = true;
+                if (! close)
+                    break;
+                seeds[rolla::Bass] ^= 0x6D2B79F5u * (std::uint32_t) (guard + 1);
+                rolla::generate (groove, settings, seeds, 0x7fu);
+            }
+            seen.push_back (groove);
             std::vector<std::string> written;
             std::string error;
             if (! rolla::MidiExport::writeAll (dir.string(), groove, settings.key, swingFor (style), 130.0, written, error))
