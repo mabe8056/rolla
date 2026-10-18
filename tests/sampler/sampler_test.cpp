@@ -563,6 +563,8 @@ void testGenreTargets()
     expect (box.lane (Style::Deep, Lane::Kick).centroidHz.lo == 200.f && box.lane (Style::Deep, Lane::Kick).decayMs.hi == 140.f
                 && box.lane (Style::Bouncy, Lane::Pluck).centroidHz.hi == 1200.f,
             "genre json: ext bands (per style over ALL) become p10..p90 bands");
+    expect (box.lane (Style::Bouncy, Lane::Hits).centroidHz.hi == mock.lane (Style::Bouncy, Lane::Hits).centroidHz.hi,
+            "genre json: stab_chord covers STAB and PLUCK only; HITS keeps its own values");
     expect (std::fabs (box.style (Style::Jackin).groove.swing.hi - 0.646f) < 1.0e-4f, "genre json: ext swing percent becomes a ratio band");
 }
 
@@ -625,11 +627,21 @@ void testSoundSelector()
             at (pools, Lane::Kick).push_back (mockSample (Lane::Kick, tag ("on", i), "", true));
         for (int i = 0; i < 4; ++i)
             at (pools, Lane::Kick).push_back (mockSample (Lane::Kick, tag ("off", i), "", false));
+        // A soft temperature shows the weighting; the default (0.35) is sharper but
+        // still never filters an off-target file out.
+        SelectorOptions soft;
+        soft.temperature = 1.f;
         int on = 0, off = 0;
         for (std::uint64_t seed = 1; seed <= 400; ++seed)
-            (drawKit (pools, Style::Roller, targets, seed).at (Lane::Kick) < 4 ? on : off) += 1;
+            (drawKit (pools, Style::Roller, targets, seed, nullptr, soft).at (Lane::Kick) < 4 ? on : off) += 1;
         expect (on > 3 * off, "selector: on-target kicks win most draws (" + std::to_string (on) + " vs " + std::to_string (off) + ")");
         expect (off > 10, "selector: off-target kicks are still drawn sometimes (" + std::to_string (off) + ")");
+        int sharpOn = 0, sharpOff = 0;
+        for (std::uint64_t seed = 1; seed <= 4000; ++seed)
+            (drawKit (pools, Style::Roller, targets, seed).at (Lane::Kick) < 4 ? sharpOn : sharpOff) += 1;
+        expect (sharpOff >= 1 && sharpOn > 20 * sharpOff,
+                "selector: the default temperature is sharp but never a hard filter (" + std::to_string (sharpOn) + " vs "
+                    + std::to_string (sharpOff) + ")");
     }
 
     Pools full;
@@ -676,6 +688,12 @@ void testSoundSelector()
     expect (fitScore (targets, Style::Roller, Lane::Bass, mockSample (Lane::Bass, "a", "", true))
                 < fitScore (targets, Style::Roller, Lane::Bass, mockSample (Lane::Bass, "b", "", false)),
             "selector: low pitch confidence costs on a pitched lane");
+    {
+        auto mono = mockSample (Lane::Bass, "m", "", true), wide = mono;
+        wide.lowCorr = 0.6f;
+        expect (fitScore (targets, Style::Roller, Lane::Bass, wide) > fitScore (targets, Style::Roller, Lane::Bass, mono) + 2.5f,
+                "selector: a stereo bass (low L/R correlation under 150 Hz) costs, since BASS is summed to mono");
+    }
 
     // Pack tendency: the hat leans to the kick's pack.
     {
