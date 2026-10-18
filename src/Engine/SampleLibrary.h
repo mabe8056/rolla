@@ -1,6 +1,7 @@
 #pragma once
 
 #include "SampleSpec.h"
+#include "../Sampler/SamplePrep.h"
 
 #include <atomic>
 #include <condition_variable>
@@ -47,24 +48,15 @@ struct SampleIndex
     int missing = 0;
 };
 
-inline const char* sampleBaseName (const char* path) noexcept
+// End index of a case-insensitive token, or -1. Search starts at `from`.
+// Word tokens need a non-alphanumeric boundary on both sides, so "Effects"
+// and a separated "_FX" match and a longer word that only contains the
+// letters does not. A digit token such as "303" may be followed by a letter
+// (303fx) and is rejected when a digit sits on either side (1303, 3031).
+inline int sampleTokenEnd (const char* text, const char* token, int from) noexcept
 {
-    if (path == nullptr)
-        return "";
-    const char* base = path;
-    for (const char* p = path; *p != 0; ++p)
-        if (*p == '/' || *p == '\\')
-            base = p + 1;
-    return base;
-}
-
-// Case-insensitive token. Word tokens need a non-alphanumeric boundary on both
-// sides. A digit token such as "303" may be followed by a letter (303fx) and
-// is rejected when a digit sits on either side (1303, 3031).
-inline bool sampleHasToken (const char* text, const char* token) noexcept
-{
-    if (text == nullptr || token == nullptr || token[0] == 0)
-        return false;
+    if (text == nullptr || token == nullptr || token[0] == 0 || from < 0)
+        return -1;
     int n = 0;
     bool digits = true;
     for (; token[n] != 0; ++n)
@@ -83,7 +75,7 @@ inline bool sampleHasToken (const char* text, const char* token) noexcept
     {
         return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
     };
-    for (int i = 0; text[i] != 0; ++i)
+    for (int i = from; text[i] != 0; ++i)
     {
         bool match = true;
         for (int k = 0; k < n; ++k)
@@ -104,15 +96,38 @@ inline bool sampleHasToken (const char* text, const char* token) noexcept
                 continue;
             if (after >= '0' && after <= '9')
                 continue;
-            return true;
+            return i + n;
         }
         if (i > 0 && alnum (before))
             continue;
         if (after != 0 && alnum (after))
             continue;
-        return true;
+        return i + n;
     }
-    return false;
+    return -1;
+}
+
+inline bool sampleHasToken (const char* text, const char* token) noexcept
+{
+    return sampleTokenEnd (text, token, 0) >= 0;
+}
+
+// Tokens in order. A null later token ends the phrase.
+inline bool samplePhrase (const char* text, const char* a, const char* b, const char* c) noexcept
+{
+    if (a == nullptr || a[0] == 0)
+        return false;
+    const int endA = sampleTokenEnd (text, a, 0);
+    if (endA < 0)
+        return false;
+    if (b == nullptr || b[0] == 0)
+        return true;
+    const int endB = sampleTokenEnd (text, b, endA);
+    if (endB < 0)
+        return false;
+    if (c == nullptr || c[0] == 0)
+        return true;
+    return sampleTokenEnd (text, c, endB) >= 0;
 }
 
 inline bool sampleTextEqual (const char* a, const char* b) noexcept;
@@ -125,40 +140,136 @@ inline bool sampleStyleAllows (std::uint8_t styles, int dialect) noexcept
     return (styles & (std::uint8_t) (1u << dialect)) != 0;
 }
 
-// Generic filename and category rules for one style's pool. Not a list of files.
-// A vinyl crackle cannot be a pad. An acid hit stays out of UK MIN and LONG.
-// Transition noises stay out of the hits lane in every style.
+// Edit this table. lanes 0 means PAD, PLUCK, STAB and HITS.
+// Reject rows drop a filename or folder that contains the token.
+// "fx" plus the whole words effect / effects, so "Effects" and "_FX" match.
+// HitsAllow rows are the HITS allow-list (tokens in order).
+// HitsPitch is the word Hit plus a pitch or key already in the name.
+inline constexpr int kRolePad = 1 << 0;
+inline constexpr int kRolePluck = 1 << 1;
+inline constexpr int kRoleStab = 1 << 2;
+inline constexpr int kRoleHits = 1 << 3;
+
+enum class RoleRule : int
+{
+    Reject = 0,
+    HitsAllow = 1,
+    HitsPitch = 2
+};
+
+struct RoleRow
+{
+    RoleRule rule;
+    int lanes;
+    const char* a;
+    const char* b;
+    const char* c;
+};
+
+inline constexpr RoleRow kRoleTable[] = {
+    { RoleRule::Reject, 0, "fx", nullptr, nullptr },
+    { RoleRule::Reject, 0, "effect", nullptr, nullptr },
+    { RoleRule::Reject, 0, "effects", nullptr, nullptr },
+    { RoleRule::Reject, 0, "sfx", nullptr, nullptr },
+    { RoleRule::Reject, 0, "noise", nullptr, nullptr },
+    { RoleRule::Reject, 0, "vinyl", nullptr, nullptr },
+    { RoleRule::Reject, 0, "crackle", nullptr, nullptr },
+    { RoleRule::Reject, 0, "texture", nullptr, nullptr },
+    { RoleRule::Reject, 0, "background", nullptr, nullptr },
+    { RoleRule::Reject, 0, "drone", nullptr, nullptr },
+    { RoleRule::Reject, 0, "riser", nullptr, nullptr },
+    { RoleRule::Reject, 0, "sweep", nullptr, nullptr },
+    { RoleRule::Reject, 0, "impact", nullptr, nullptr },
+    { RoleRule::Reject, 0, "lazer", nullptr, nullptr },
+    { RoleRule::Reject, 0, "laser", nullptr, nullptr },
+    { RoleRule::Reject, 0, "razor", nullptr, nullptr },
+    { RoleRule::Reject, 0, "telephone", nullptr, nullptr },
+    { RoleRule::Reject, 0, "whoosh", nullptr, nullptr },
+    { RoleRule::Reject, 0, "downlifter", nullptr, nullptr },
+    { RoleRule::Reject, 0, "uplifter", nullptr, nullptr },
+    { RoleRule::Reject, 0, "downlift", nullptr, nullptr },
+    { RoleRule::Reject, 0, "uplift", nullptr, nullptr },
+    { RoleRule::Reject, 0, "atmos", nullptr, nullptr },
+    { RoleRule::Reject, 0, "siren", nullptr, nullptr },
+    { RoleRule::Reject, 0, "scratch", nullptr, nullptr },
+    { RoleRule::Reject, 0, "glitch", nullptr, nullptr },
+    { RoleRule::Reject, 0, "alarm", nullptr, nullptr },
+    { RoleRule::Reject, kRoleHits, "acid", nullptr, nullptr },
+    { RoleRule::Reject, kRoleHits, "303", nullptr, nullptr },
+    { RoleRule::HitsAllow, kRoleHits, "chord", nullptr, nullptr },
+    { RoleRule::HitsAllow, kRoleHits, "stab", nullptr, nullptr },
+    { RoleRule::HitsAllow, kRoleHits, "stabber", nullptr, nullptr },
+    { RoleRule::HitsAllow, kRoleHits, "rave", nullptr, nullptr },
+    { RoleRule::HitsAllow, kRoleHits, "organ", nullptr, nullptr },
+    { RoleRule::HitsAllow, kRoleHits, "piano", nullptr, nullptr },
+    { RoleRule::HitsAllow, kRoleHits, "keys", nullptr, nullptr },
+    { RoleRule::HitsAllow, kRoleHits, "synth", "hit", nullptr },
+    { RoleRule::HitsAllow, kRoleHits, "tat", "synth", nullptr },
+    { RoleRule::HitsAllow, kRoleHits, "ver", "synth", "hit" },
+    { RoleRule::HitsPitch, kRoleHits, "hit", nullptr, nullptr },
+};
+
+inline int roleBit (int lane) noexcept
+{
+    switch (lane)
+    {
+        case Pad: return kRolePad;
+        case Pluck: return kRolePluck;
+        case Stab: return kRoleStab;
+        case Hits: return kRoleHits;
+        default: return 0;
+    }
+}
+
+inline bool roleRowApplies (const RoleRow& row, int lane) noexcept
+{
+    const int bit = roleBit (lane);
+    if (bit == 0)
+        return false;
+    return row.lanes == 0 || (row.lanes & bit) != 0;
+}
+
+inline bool sampleRoleRejected (const char* text, int lane) noexcept
+{
+    if (text == nullptr || text[0] == 0)
+        return false;
+    for (const auto& row : kRoleTable)
+    {
+        if (row.rule != RoleRule::Reject || ! roleRowApplies (row, lane))
+            continue;
+        if (samplePhrase (text, row.a, row.b, row.c))
+            return true;
+    }
+    return false;
+}
+
+inline bool sampleHitsAllowed (const char* text) noexcept
+{
+    if (text == nullptr || text[0] == 0)
+        return false;
+    for (const auto& row : kRoleTable)
+    {
+        if (row.rule == RoleRule::HitsAllow && samplePhrase (text, row.a, row.b, row.c))
+            return true;
+        if (row.rule == RoleRule::HitsPitch && row.a != nullptr
+            && sampleHasToken (text, row.a) && midiFromFilename (text) >= 0)
+            return true;
+    }
+    return false;
+}
+
+// Role lanes reject noise, fx and vinyl on the whole relative path and on the
+// category. HITS then keeps only the allow-list. Acid is out of HITS in every
+// dialect. Style bits still apply only when a dialect is set.
 inline bool samplePoolAllows (const SampleEntry& entry, int lane, int dialect) noexcept
 {
+    if (sampleRoleRejected (entry.path, lane) || sampleRoleRejected (entry.category, lane))
+        return false;
+    if (lane == Hits && ! sampleHitsAllowed (entry.path) && ! sampleHitsAllowed (entry.category))
+        return false;
     if (dialect < 0 || dialect >= NumDialects)
         return true;
-    if (! sampleStyleAllows (entry.styles, dialect))
-        return false;
-    const char* base = sampleBaseName (entry.path);
-    if (lane == Pad)
-    {
-        if (sampleHasToken (base, "vinyl") || sampleHasToken (base, "crackle")
-            || sampleHasToken (entry.category, "vinyl") || sampleHasToken (entry.category, "crackle"))
-            return false;
-    }
-    if (lane == Hits)
-    {
-        static const char* noise[] = {
-            "riser", "sweep", "impact", "uplift", "downlift", "siren",
-            "laser", "scratch", "glitch", "alarm", "vinyl", "crackle"
-        };
-        for (const char* token : noise)
-            if (sampleHasToken (base, token) || sampleHasToken (entry.category, token))
-                return false;
-        const bool acid = sampleTextEqual (entry.category, "acid_hit")
-                       || sampleHasToken (entry.category, "acid")
-                       || sampleHasToken (base, "acid")
-                       || sampleHasToken (base, "303")
-                       || sampleHasToken (entry.category, "303");
-        if (acid && dialect != Pop && dialect != Gaskin)
-            return false;
-    }
-    return true;
+    return sampleStyleAllows (entry.styles, dialect);
 }
 
 // The filter the sampler and the offline renderer both use to draw one file.
@@ -194,7 +305,7 @@ inline bool sampleTextEqual (const char* a, const char* b) noexcept
     return *a == 0 && *b == 0;
 }
 
-inline bool sampleEntryMatches (const SampleEntry& entry, int part, const PoolFilter& filter) noexcept
+inline bool sampleEntryShape (const SampleEntry& entry, int part, const PoolFilter& filter, bool useCategory) noexcept
 {
     if (! entry.onDisk || entry.path[0] == 0)
         return false;
@@ -211,36 +322,100 @@ inline bool sampleEntryMatches (const SampleEntry& entry, int part, const PoolFi
         return false;
     if (filter.pack[0] != 0 && ! sampleTextEqual (entry.pack, filter.pack))
         return false;
-    if (filter.category[0] != 0 && ! sampleTextEqual (entry.category, filter.category))
+    if (useCategory && filter.category[0] != 0 && ! sampleTextEqual (entry.category, filter.category))
         return false;
-    if (! samplePoolAllows (entry, lane, filter.dialect))
+    if (filter.dialect >= 0 && filter.dialect < NumDialects && ! sampleStyleAllows (entry.styles, filter.dialect))
         return false;
+    return true;
+}
+
+inline bool sampleEntryMatches (const SampleEntry& entry, int part, const PoolFilter& filter) noexcept
+{
+    const int lane = filter.lane >= 0 ? filter.lane : part;
+    if (! sampleEntryShape (entry, part, filter, true))
+        return false;
+    return samplePoolAllows (entry, lane, filter.dialect);
+}
+
+// Same lane, after the strict list came up empty. Category is ignored.
+// Noise, fx, vinyl and acid stay out. HITS then accepts a pitched name that
+// missed the allow-list. PAD, PLUCK and STAB accept whatever the reject list left.
+inline bool sampleEntryFallback (const SampleEntry& entry, int part, const PoolFilter& filter) noexcept
+{
+    const int lane = filter.lane >= 0 ? filter.lane : part;
+    if (roleBit (lane) == 0)
+        return false;
+    if (! sampleEntryShape (entry, part, filter, false))
+        return false;
+    if (sampleRoleRejected (entry.path, lane) || sampleRoleRejected (entry.category, lane))
+        return false;
+    if (lane == Hits)
+        return sampleHitsAllowed (entry.path) || sampleHitsAllowed (entry.category)
+            || midiFromFilename (entry.path) >= 0;
     return true;
 }
 
 inline int sampleIndexCount (const SampleIndex& index, int part, const PoolFilter& filter) noexcept
 {
-    int n = 0;
+    int strict = 0;
     for (const auto& entry : index.entries)
         if (sampleEntryMatches (entry, part, filter))
-            ++n;
-    return n;
+            ++strict;
+    if (strict > 0 || roleBit (filter.lane >= 0 ? filter.lane : part) == 0)
+        return strict;
+    int loose = 0;
+    for (const auto& entry : index.entries)
+        if (sampleEntryFallback (entry, part, filter))
+            ++loose;
+    return loose;
 }
 
 inline const SampleEntry* sampleIndexAt (const SampleIndex& index, int part, const PoolFilter& filter, int ordinal) noexcept
 {
     if (ordinal < 0)
         return nullptr;
+    const int lane = filter.lane >= 0 ? filter.lane : part;
+    int strict = 0;
+    for (const auto& entry : index.entries)
+        if (sampleEntryMatches (entry, part, filter))
+            ++strict;
+    const bool fallback = strict == 0 && roleBit (lane) != 0;
     int seen = 0;
     for (const auto& entry : index.entries)
     {
-        if (! sampleEntryMatches (entry, part, filter))
+        const bool keep = fallback ? sampleEntryFallback (entry, part, filter)
+                                   : sampleEntryMatches (entry, part, filter);
+        if (! keep)
             continue;
         if (seen == ordinal)
             return &entry;
         ++seen;
     }
     return nullptr;
+}
+
+// One roll's draw from a lane pool. mute is silence: the lane does not
+// fall through to a synth, and it does not borrow another lane.
+struct LanePick
+{
+    const SampleEntry* entry = nullptr;
+    bool mute = false;
+};
+
+inline LanePick pickLaneSample (const SampleIndex& index, int part, const PoolFilter& filter, int ordinal) noexcept
+{
+    LanePick pick;
+    const int n = sampleIndexCount (index, part, filter);
+    if (n <= 0)
+    {
+        pick.mute = true;
+        return pick;
+    }
+    if (ordinal < 0)
+        ordinal = 0;
+    pick.entry = sampleIndexAt (index, part, filter, ordinal % n);
+    pick.mute = pick.entry == nullptr;
+    return pick;
 }
 
 // Immutable audio published to the realtime thread. Never freed while the library is alive.
@@ -297,6 +472,15 @@ public:
     bool missing (const char* relative) const noexcept;
     bool ready (const char* relative) const noexcept;
 
+    // Any thread. True when no request or job is queued, no index scan is due,
+    // and the worker is not loading. Offline export waits on this so a lane
+    // whose file was requested during a pre-roll is loaded before the bounce.
+    bool idle() const;
+    // How many times playback asked for a file that was not loaded yet,
+    // duplicates and full-ring drops included. An offline bounce that saw this
+    // move (from any engine) may have played a note without its sample.
+    std::uint64_t notReadyRequests() const noexcept { return notReady.load (std::memory_order_acquire); }
+
 private:
     struct Slot
     {
@@ -317,7 +501,7 @@ private:
 
     mutable std::mutex rootMu;
     juce::File rootDir;
-    std::mutex jobMu;
+    mutable std::mutex jobMu;
     mutable std::condition_variable jobCv;
     std::vector<std::string> jobs;
     std::thread worker;
@@ -346,6 +530,8 @@ private:
     mutable char reqRing[kReq][256] {};
     mutable std::atomic<int> reqHead { 0 };
     mutable std::atomic<int> reqTail { 0 };
+    mutable std::atomic<std::uint64_t> notReady { 0 };
+    std::atomic<int> working { 0 };
 
     // Power of two. Larger than the 2,697-file manifest so a session of rolls never runs out.
     static constexpr int kSlots = 8192;

@@ -641,7 +641,7 @@ void testExport()
         return;
     juce::File bassFile (bass[0]);
     juce::File drumFile (drums[0]);
-    expect (bassFile.getParentDirectory() == cache, "lane midi is in the cache");
+    expect (bassFile.isAChildOf (cache), "lane midi is in the cache");
     expect (bassFile.getFileExtension() == ".mid", "lane midi is .mid");
     expect (bassFile.getSize() > 32 && drumFile.getSize() > 32, "lane midi has bytes");
     expect (bassFile.getSize() != drumFile.getSize() || bass[0] != drums[0], "lanes are not the same file");
@@ -660,7 +660,7 @@ void testExport()
         return;
     juce::File wavFile (wavs[0]);
     expect (wavFile.getFileExtension() == ".wav", "wav extension");
-    expect (wavFile.getParentDirectory() == cache, "wav is in the cache");
+    expect (wavFile.isAChildOf (cache), "wav is in the cache");
     juce::AudioFormatManager formats;
     formats.registerBasicFormats();
     std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (wavFile));
@@ -688,7 +688,7 @@ void testExport()
     {
         juce::File allFile (all[0]);
         expect (allFile.getFileExtension() == ".mid", "full drag is .mid");
-        expect (allFile.getParentDirectory() == cache, "full midi is in the cache");
+        expect (allFile.isAChildOf (cache), "full midi is in the cache");
         juce::MemoryBlock allBytes;
         allFile.loadFileAsData (allBytes);
         const auto* allData = static_cast<const unsigned char*> (allBytes.getData());
@@ -710,7 +710,7 @@ void testExport()
     {
         juce::File stem (stems[i]);
         expect (stem.getFileExtension() == ".wav", std::string (rolla::partId (i)) + " stem is wav");
-        expect (stem.getParentDirectory() == cache, std::string (rolla::partId (i)) + " stem is in the cache");
+        expect (stem.isAChildOf (cache), std::string (rolla::partId (i)) + " stem is in the cache");
         std::unique_ptr<juce::AudioFormatReader> stemReader (stemFormats.createReaderFor (stem));
         expect (stemReader != nullptr, std::string (rolla::partId (i)) + " stem reads");
         if (stemReader == nullptr)

@@ -761,13 +761,15 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     const bool recipe = spec.filter.on && params.sampleIndex != nullptr;
     if (recipe)
         readyFromIndex (params.library, params.sampleIndex, part, spec, params.samplePick[part], -1, params.dialect, hit);
-    if (hit.audio == nullptr && ! hit.pending)
+    // A scanned lane stays in that lane. An empty filtered pool mutes the note.
+    // It does not borrow another preset file, the drum pack, or the synth.
+    if (hit.audio == nullptr && ! hit.pending && ! recipe)
         hit = resolveLane (bank, params, part, midiNote, sliceIndex);
     const SampleSpec& played = hit.spec != nullptr ? *hit.spec : spec;
     SampleChoice choice = hit.choice;
     const SampleAudio* audio = hit.audio;
     bool fromPack = false;
-    if ((audio == nullptr || audio->frames < 8) && ! hit.pending)
+    if ((audio == nullptr || audio->frames < 8) && ! hit.pending && ! recipe)
     {
         const int drumPreset = presetOf (params, Drums);
         const auto& drum = bank.drums[drumPreset];

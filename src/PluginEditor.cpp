@@ -845,7 +845,7 @@ void dragFilesOut (Component* source, const StringArray& files)
 }
 
 // One lane. Drag writes a MIDI clip. Alt, Ctrl, or Command (or the click
-// toggle) writes 8 bars of that lane as WAV instead.
+// toggle) writes one loop (LENGTH) of that lane as WAV instead.
 struct LaneDrag : Component
 {
     RollaProcessor* proc = nullptr;
@@ -960,7 +960,7 @@ struct LaneRow : Component, FileDragAndDropTarget
         strip.part = index;
         drag.proc = &processor;
         drag.part = index;
-        bindHelp (drag, "Drag this lane. MIDI clip, or WAV (click the handle, or hold Alt) for 8 bars.");
+        bindHelp (drag, "Drag this lane. MIDI clip, or WAV (click the handle, or hold Alt) for one loop.");
         const auto id = String (partId (part));
         muteA = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (processor.apvts, id + "Mute", mute);
         keepA = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (processor.apvts, id + "Keep", keep);
@@ -3020,8 +3020,10 @@ struct RollaEditor::Content : Component
         }
         const auto unit = drag.audioMode ? (tracks == 1 ? utf8 (" stem · ") : utf8 (" stems · "))
                                          : (tracks == 1 ? utf8 (" track · ") : utf8 (" tracks · "));
+        // Exports follow LENGTH (what the engine loops), not the groove's own length.
+        const int exportBars = barsFromIndex ((int) proc.apvts.getRawParameterValue ("length")->load());
         drag.caption = String (tracks) + unit
-                     + String (groove.bars) + (groove.bars == 1 ? " bar" : " bars");
+                     + String (exportBars) + (exportBars == 1 ? " bar" : " bars");
         drag.repaint();
         voxSlot.repaint();
         repaint();

@@ -199,7 +199,7 @@ jobs:
       - name: Configure and build
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --target ROLLA_VST3 rolla-render rolla-rolls rolla-sampler-test rolla-sample-check rolla-roll-test rolla-knob-test rolla-phrase-test rolla-arrange-test rolla-tp-test
+          cmake --build build --target ROLLA_VST3 rolla-render rolla-rolls rolla-sampler-test rolla-sample-check rolla-roll-test rolla-knob-test rolla-phrase-test rolla-arrange-test rolla-tp-test rolla-export-test
 
       - name: Sampler tests
         run: |
@@ -219,6 +219,12 @@ jobs:
           # Generated pack (no sample audio in git), bigger than the old load table.
           python3 tests/roll/sample_pack_check.py --rolls ./build/rolla-rolls \
             --seeds 1,2 --count 20 --full-count 6 --jobs 4 --stab-sweep
+
+      - name: Export end to end
+        run: |
+          set -euo pipefail
+          python3 -c "import sys; sys.path.insert(0, 'tests/roll'); import renderer_smoke as r; r.build_pack('/tmp/rolla-tone-pack')"
+          ./build/rolla-export-test --samples /tmp/rolla-tone-pack
 
       - name: Roll tests
         run: |

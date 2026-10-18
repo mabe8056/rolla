@@ -94,8 +94,10 @@ public:
     juce::String exportMidiToDocuments();
     // One type-1 MIDI file: tempo track, then one track per lane.
     juce::StringArray writeTempMidi();
-    // One 8-bar WAV stem per lane. Same cache and drag path as the MIDI file.
+    // One WAV stem per lane, one loop long (the LENGTH setting), seamless and
+    // downbeat-aligned. Same cache and drag path as the MIDI file.
     juce::StringArray writeStemAudio();
+    // Stems plus the full mix, written straight into `dir`.
     juce::String exportStemsTo (const juce::File& dir);
 
     // Drag-out files live here so FL Studio on macOS can read them after
@@ -160,8 +162,14 @@ private:
     void refreshSampleInventory();
     Settings currentSettings() const;
     void prepareOffline (Engine& offline, double rate) const;
-    juce::AudioBuffer<float> bounceLane (Engine& offline, int part, double rate, double bpm) const;
-    juce::File laneExportFile (int part, const char* extension) const;
+    // One loop of `part` (or rollexport::kFull for the whole mix) through the plugin path.
+    juce::AudioBuffer<float> bounceLoop (Engine& offline, const Groove& g, int part, double rate, double bpm) const;
+    // Bounces several parts at once, one offline engine per part.
+    std::vector<juce::AudioBuffer<float>> bounceParts (const Groove& g, const std::vector<int>& parts, double rate, double bpm) const;
+    // A fresh subfolder of the cache for one drag, so file names stay clean and unique.
+    juce::File newExportFolder() const;
+    // The playing groove, with the bass in the octave the engine plays (MIDI files).
+    Groove exportGroove() const;
     void pruneExportCache (const juce::File& keep) const;
     bool writeWav (const juce::File& file, const juce::AudioBuffer<float>& audio, double sampleRate) const;
     void publish (const Groove& g);
@@ -234,6 +242,11 @@ private:
     std::atomic<float> lastBpm { 130.f };
     double previewPpq = 0.0;
     double preparedRate = 48000.0;
+    // Pattern MIDI held back by the tp_guard latency (see delayMidiOut). Audio thread only.
+    juce::MidiBuffer midiLate, midiNow, midiNext;
+    void delayMidiOut (juce::MidiBuffer& midi, int n);
+    // The live engine's drum slot, so offline bounces hear the same user drum samples.
+    std::atomic<DrumSampleSlot*> drumSlot { nullptr };
 
     std::uint64_t prefetchedKey = 0;
     struct PrefetchTimer : juce::Timer

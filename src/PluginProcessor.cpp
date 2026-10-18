@@ -4,6 +4,7 @@
 #include "Generator/Drive.h"
 #include "Generator/Intensity.h"
 #include "Generator/MidiFile.h"
+#include "Export/RollExport.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
 
@@ -15,6 +16,7 @@
 #include <cstdio>
 #include <cstring>
 #include <random>
+#include <thread>
 #include <string>
 #include <vector>
 
@@ -706,6 +708,12 @@ void RollaProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     preparedRate = sampleRate > 1000.0 ? sampleRate : 48000.0;
     engine.prepare (preparedRate, samplesPerBlock);
     setLatencySamples (engine.latencySamples());
+    midiLate.clear();
+    midiNow.clear();
+    midiNext.clear();
+    midiLate.ensureSize (8192);
+    midiNow.ensureSize (8192);
+    midiNext.ensureSize (8192);
     applyRememberedSamples();
 }
 
@@ -845,6 +853,7 @@ void RollaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
 
     const Groove local = copyGroove();
     engine.process (local, params, transport, mainL, mainR, drumL, drumR, n, midi, true);
+    delayMidiOut (midi, n);
 
     for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
     {
@@ -852,6 +861,35 @@ void RollaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
         for (int i = 0; i < n; ++i)
             data[i] = flush (data[i]);
     }
+}
+
+// The master tp_guard delays the audio by its latency, and the host shifts the
+// whole plugin back by setLatencySamples. The pattern MIDI has to ride the same
+// delay, or it lands that many samples ahead of the sound.
+void RollaProcessor::delayMidiOut (juce::MidiBuffer& midi, int n)
+{
+    const int lat = getLatencySamples();
+    if (lat <= 0)
+        return;
+    midiNow.clear();
+    midiNext.clear();
+    for (const auto meta : midiLate)
+    {
+        if (meta.samplePosition < n)
+            midiNow.addEvent (meta.getMessage(), meta.samplePosition);
+        else
+            midiNext.addEvent (meta.getMessage(), meta.samplePosition - n);
+    }
+    for (const auto meta : midi)
+    {
+        const int at = meta.samplePosition + lat;
+        if (at < n)
+            midiNow.addEvent (meta.getMessage(), at);
+        else
+            midiNext.addEvent (meta.getMessage(), at - n);
+    }
+    midi.swapWith (midiNow);
+    midiLate.swapWith (midiNext);
 }
 
 void RollaProcessor::getStateInformation (juce::MemoryBlock& destData)
@@ -1212,23 +1250,45 @@ juce::String RollaProcessor::userSlotError (int slot) const
     return slots.lastError (slot);
 }
 
+namespace
+{
+std::atomic<int> exportSerial { 1 };
+
+float hostBpmOf (const RollaProcessor& proc)
+{
+    float bpm = proc.getPlayBpm();
+    if (auto* head = proc.getPlayHead())
+        if (auto pos = head->getPosition())
+            if (auto b = pos->getBpm())
+                bpm = (float) *b;
+    if (bpm < 20.f || bpm > 400.f)
+        bpm = 130.f;
+    return bpm;
+}
+}
+
 juce::String RollaProcessor::exportMidiTo (const juce::File& dir)
 {
     auto result = dir.createDirectory();
     if (result.failed())
         return "Could not create " + dir.getFullPathName();
 
-    std::vector<std::string> written;
+    waitUntilReady();
+    const Groove local = exportGroove();
+    const int key = (int) raw (apvts, "key");
+    const float swing = raw (apvts, "swing");
+    const double bpm = (double) hostBpmOf (*this);
     std::string error;
-    const Groove local = copyGroove();
-    const bool ok = MidiExport::writeAll (dir.getFullPathName().toStdString(),
-                                          local,
-                                          (int) raw (apvts, "key"),
-                                          raw (apvts, "swing"),
-                                          (double) lastBpm.load(),
-                                          written,
-                                          error);
-    if (! ok)
+    for (int p = 0; p < NumParts; ++p)
+    {
+        if (p != Drums && local.lane[p].count <= 0)
+            continue;
+        const auto file = dir.getChildFile (rollexport::baseName (local, key, bpm, p) + ".mid");
+        if (! MidiExport::writePart (file.getFullPathName().toStdString(), local, p, key, swing, bpm, error))
+            return juce::String (error);
+    }
+    const auto all = dir.getChildFile (rollexport::baseName (local, key, bpm, rollexport::kFull) + ".mid");
+    if (! MidiExport::writeMultitrack (all.getFullPathName().toStdString(), local, key, swing, bpm, error))
         return juce::String (error);
     return dir.getFullPathName();
 }
@@ -1258,6 +1318,7 @@ void RollaProcessor::applyRememberedSamples()
 
 void RollaProcessor::setDrumSampleSlot (DrumSampleSlot* slot) noexcept
 {
+    drumSlot.store (slot, std::memory_order_relaxed);
     engine.setDrumSampleSlot (slot);
 }
 
@@ -1344,53 +1405,50 @@ juce::File RollaProcessor::exportCache() const
 
 void RollaProcessor::pruneExportCache (const juce::File& keep) const
 {
+    // Drags leave their files behind for the host to copy. Anything older than
+    // 30 minutes is gone; the folder of the drag in progress always stays.
     const auto cutoff = juce::Time::getCurrentTime() - juce::RelativeTime::minutes (30.0);
-    for (const auto& entry : juce::RangedDirectoryIterator (exportCache(), false, "ROLLA_*", juce::File::findFiles))
+    const auto keepDir = keep.isDirectory() ? keep : keep.getParentDirectory();
+    for (const auto& entry : juce::RangedDirectoryIterator (exportCache(), false, "*", juce::File::findFilesAndDirectories))
     {
         const auto file = entry.getFile();
-        if (file == keep)
+        if (file == keep || file == keepDir)
             continue;
-        if (file.getLastModificationTime() < cutoff)
+        if (file.getLastModificationTime() >= cutoff)
+            continue;
+        if (file.isDirectory())
+            file.deleteRecursively();
+        else if (file.getFileName().startsWith ("ROLLA_"))
             file.deleteFile();
     }
 }
 
-namespace
+juce::File RollaProcessor::newExportFolder() const
 {
-std::atomic<int> exportSerial { 1 };
-
-float hostBpmOf (const RollaProcessor& proc)
-{
-    float bpm = proc.getPlayBpm();
-    if (auto* head = proc.getPlayHead())
-        if (auto pos = head->getPosition())
-            if (auto b = pos->getBpm())
-                bpm = (float) *b;
-    if (bpm < 20.f || bpm > 400.f)
-        bpm = 130.f;
-    return bpm;
-}
+    const auto dir = exportCache().getChildFile (juce::String (juce::Time::currentTimeMillis()) + "_"
+                                                 + juce::String (exportSerial.fetch_add (1)));
+    dir.createDirectory();
+    return dir;
 }
 
-juce::File RollaProcessor::laneExportFile (int part, const char* extension) const
+Groove RollaProcessor::exportGroove() const
 {
-    return exportCache().getChildFile ("ROLLA_" + juce::String (partId (part)) + "_"
-                                       + juce::String (exportSerial.fetch_add (1)) + extension);
+    std::shared_ptr<const PresetBank> held;
+    const EngineParams params = readParams (held);
+    return rollexport::midiGroove (rollexport::atLength (copyGroove(), params.bars), params.presets,
+                                   params.preset[Bass], params.dialect);
 }
 
 juce::StringArray RollaProcessor::writeTempMidi()
 {
     juce::StringArray files;
     waitUntilReady();
-    const auto file = exportCache().getChildFile ("ROLLA_all_" + juce::String (exportSerial.fetch_add (1)) + ".mid");
+    const Groove local = exportGroove();
+    const int key = (int) raw (apvts, "key");
+    const double bpm = (double) hostBpmOf (*this);
+    const auto file = newExportFolder().getChildFile (rollexport::baseName (local, key, bpm, rollexport::kFull) + ".mid");
     std::string error;
-    const bool ok = MidiExport::writeMultitrack (file.getFullPathName().toStdString(),
-                                                 copyGroove(),
-                                                 (int) raw (apvts, "key"),
-                                                 raw (apvts, "swing"),
-                                                 (double) hostBpmOf (*this),
-                                                 error);
-    if (! ok)
+    if (! MidiExport::writeMultitrack (file.getFullPathName().toStdString(), local, key, raw (apvts, "swing"), bpm, error))
         return files;
     pruneExportCache (file);
     files.add (file.getFullPathName());
@@ -1403,16 +1461,12 @@ juce::StringArray RollaProcessor::writeLaneMidi (int part)
     if (part < 0 || part >= NumParts)
         return files;
     waitUntilReady();
-    const auto file = laneExportFile (part, ".mid");
+    const Groove local = exportGroove();
+    const int key = (int) raw (apvts, "key");
+    const double bpm = (double) hostBpmOf (*this);
+    const auto file = newExportFolder().getChildFile (rollexport::baseName (local, key, bpm, part) + ".mid");
     std::string error;
-    const bool ok = MidiExport::writePart (file.getFullPathName().toStdString(),
-                                           copyGroove(),
-                                           part,
-                                           (int) raw (apvts, "key"),
-                                           raw (apvts, "swing"),
-                                           (double) hostBpmOf (*this),
-                                           error);
-    if (! ok)
+    if (! MidiExport::writePart (file.getFullPathName().toStdString(), local, part, key, raw (apvts, "swing"), bpm, error))
         return files;
     pruneExportCache (file);
     files.add (file.getFullPathName());
@@ -1443,54 +1497,50 @@ bool RollaProcessor::writeWav (const juce::File& file, const juce::AudioBuffer<f
 void RollaProcessor::prepareOffline (Engine& offline, double rate) const
 {
     offline.prepare (rate, 1024);
+    offline.setDrumSampleSlot (drumSlot.load (std::memory_order_relaxed));
     std::lock_guard<std::mutex> lock (sampleMu);
     for (int v = 0; v < NumDrumVoices; ++v)
         if (remembered[v].set && ! remembered[v].mono.empty())
             offline.loadDrumSample (v, remembered[v].mono.data(), (int) remembered[v].mono.size(), remembered[v].rate);
 }
 
-juce::AudioBuffer<float> RollaProcessor::bounceLane (Engine& offline, int part, double rate, double bpm) const
+juce::AudioBuffer<float> RollaProcessor::bounceLoop (Engine& offline, const Groove& g, int part, double rate, double bpm) const
 {
-    offline.reset();
-    const int total = (int) std::llround (8.0 * 4.0 * 60.0 / bpm * rate);
-    juce::AudioBuffer<float> audio (2, std::max (0, total));
-    if (total < 64 || part < 0 || part >= NumParts)
-        return audio;
-
     std::shared_ptr<const PresetBank> held;
     EngineParams params = readParams (held);
     const auto indexHold = library.index();
     params.sampleIndex = indexHold.get();
     params.bpm = (float) bpm;
-    // Solo the lane, but a lane the user muted stays muted: a muted lane never sounds.
-    for (int i = 0; i < NumParts; ++i)
-        params.mute[i] = params.mute[i] || i != part;
-    params.drumsToMain = true;
-
-    const Groove local = copyGroove();
-    audio.clear();
-    juce::AudioBuffer<float> block (2, 1024);
-    double ppq = 0.0;
-    int done = 0;
-    while (done < total)
+    if (part >= 0 && part < NumParts)
     {
-        const int n = std::min (1024, total - done);
-        block.clear();
-        Transport transport;
-        transport.playing = true;
-        transport.ppqStart = ppq;
-        transport.bpm = bpm;
-        transport.sampleRate = rate;
-        juce::MidiBuffer midi;
-        offline.process (local, params, transport,
-                        block.getWritePointer (0), block.getWritePointer (1),
-                        nullptr, nullptr, n, midi, false);
-        for (int ch = 0; ch < 2; ++ch)
-            audio.copyFrom (ch, done, block, ch, 0, n);
-        ppq += (double) n * bpm / (60.0 * rate);
-        done += n;
+        // A stem is that lane alone. Solo renders bypass E21 (MIX_SPEC §9.4), so
+        // the stems keep the lane balance the mix program sets.
+        // A lane the user muted stays muted: a muted lane never sounds.
+        for (int i = 0; i < NumParts; ++i)
+            params.mute[i] = params.mute[i] || i != part;
+        params.bypassSumTrim = true;
     }
-    return audio;
+    return rollexport::renderLoop (offline, g, params, rate, bpm, &library).audio;
+}
+
+std::vector<juce::AudioBuffer<float>> RollaProcessor::bounceParts (const Groove& g, const std::vector<int>& parts,
+                                                                    double rate, double bpm) const
+{
+    // One engine per stem, all at once: an 8-bar stem is several seconds of
+    // offline audio, and the drag waits for every file.
+    std::vector<juce::AudioBuffer<float>> out (parts.size());
+    std::vector<std::thread> workers;
+    workers.reserve (parts.size());
+    for (size_t i = 0; i < parts.size(); ++i)
+        workers.emplace_back ([this, &out, &g, &parts, i, rate, bpm]
+        {
+            Engine offline;
+            prepareOffline (offline, rate);
+            out[i] = bounceLoop (offline, g, parts[i], rate, bpm);
+        });
+    for (auto& w : workers)
+        w.join();
+    return out;
 }
 
 juce::StringArray RollaProcessor::writeLaneAudio (int part)
@@ -1501,12 +1551,13 @@ juce::StringArray RollaProcessor::writeLaneAudio (int part)
     waitUntilReady();
     constexpr double rate = 48000.0;
     const double bpm = (double) hostBpmOf (*this);
+    const Groove local = copyGroove();
     Engine offline;
     prepareOffline (offline, rate);
-    const auto audio = bounceLane (offline, part, rate, bpm);
+    const auto audio = bounceLoop (offline, local, part, rate, bpm);
     if (audio.getNumSamples() < 64)
         return files;
-    const auto file = laneExportFile (part, ".wav");
+    const auto file = newExportFolder().getChildFile (rollexport::baseName (local, (int) raw (apvts, "key"), bpm, part) + ".wav");
     if (! writeWav (file, audio, rate))
         return files;
     pruneExportCache (file);
@@ -1520,20 +1571,23 @@ juce::StringArray RollaProcessor::writeStemAudio()
     waitUntilReady();
     constexpr double rate = 48000.0;
     const double bpm = (double) hostBpmOf (*this);
-    Engine offline;
-    prepareOffline (offline, rate);
+    const Groove local = copyGroove();
+    const int key = (int) raw (apvts, "key");
+    std::vector<int> parts;
     for (int part = 0; part < NumParts; ++part)
+        parts.push_back (part);
+    const auto audio = bounceParts (local, parts, rate, bpm);
+    const auto dir = newExportFolder();
+    for (size_t i = 0; i < parts.size(); ++i)
     {
-        const auto audio = bounceLane (offline, part, rate, bpm);
-        if (audio.getNumSamples() < 64)
+        if (audio[i].getNumSamples() < 64)
             return {};
-        const auto file = laneExportFile (part, ".wav");
-        if (! writeWav (file, audio, rate))
+        const auto file = dir.getChildFile (rollexport::baseName (local, key, bpm, parts[i]) + ".wav");
+        if (! writeWav (file, audio[i], rate))
             return {};
         files.add (file.getFullPathName());
     }
-    if (! files.isEmpty())
-        pruneExportCache (juce::File (files[0]));
+    pruneExportCache (dir);
     return files;
 }
 
@@ -1542,15 +1596,20 @@ juce::String RollaProcessor::exportStemsTo (const juce::File& dir)
     auto result = dir.createDirectory();
     if (result.failed())
         return "Could not create " + dir.getFullPathName();
-    const auto stems = writeStemAudio();
-    if (stems.size() != NumParts)
-        return "Could not render the stems.";
-    for (const auto& path : stems)
+    waitUntilReady();
+    constexpr double rate = 48000.0;
+    const double bpm = (double) hostBpmOf (*this);
+    const Groove local = copyGroove();
+    const int key = (int) raw (apvts, "key");
+    std::vector<int> parts { rollexport::kFull };
+    for (int part = 0; part < NumParts; ++part)
+        parts.push_back (part);
+    const auto audio = bounceParts (local, parts, rate, bpm);
+    for (size_t i = 0; i < parts.size(); ++i)
     {
-        const auto src = juce::File (path);
-        const auto dest = dir.getChildFile (src.getFileName());
-        if (! src.copyFileTo (dest))
-            return "Could not write " + dest.getFullPathName();
+        const auto file = dir.getChildFile (rollexport::baseName (local, key, bpm, parts[i]) + ".wav");
+        if (audio[i].getNumSamples() < 64 || ! writeWav (file, audio[i], rate))
+            return "Could not write " + file.getFullPathName();
     }
     return dir.getFullPathName();
 }
