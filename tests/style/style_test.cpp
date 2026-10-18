@@ -157,7 +157,11 @@ struct Measures
     int pskel = 0, rolls = 0, stabOn = 0, stabGap = 0;
     // ROLLER review measures (rolls out of 20).
     int gridLocked = 0, noTurn = 0, b2Clash = 0;
+    // JACKIN loop identity: distinct bars per roll, 1- / 2-bar repetition, hooks across rolls.
+    double distinctBars = 0, rep1 = 0, rep2 = 0;
+    int maxDistinct = 0, hooks = 0, clones = 0;
     double onBeat = 0;
+    std::vector<std::string> hookKeys, rollKeys;
 };
 
 struct Skel
@@ -287,6 +291,43 @@ Measures measure (int style, std::uint32_t base, const Settings& s)
             }
             m.b2Clash += clash ? 1 : 0;
         }
+        {
+            // Per-16th token: sounding pitch (or -99 for rest).
+            const int steps = g.bars * 16;
+            std::vector<int> tok ((size_t) steps, -99);
+            for (int i = 0; i < bass.count; ++i)
+            {
+                const int a = (int) std::lround (bass.notes[i].start);
+                const int b = (int) std::lround (bass.notes[i].start + bass.notes[i].length);
+                for (int t = a; t < b && t < steps; ++t)
+                    tok[(size_t) t] = bass.notes[i].chord[0];
+            }
+            std::vector<std::string> barKeys;
+            for (int b = 0; b < g.bars; ++b)
+            {
+                std::string k;
+                for (int i = 0; i < bass.count; ++i)
+                    if ((int) (bass.notes[i].start / 16.f) == b)
+                        k += std::to_string ((int) std::lround (bass.notes[i].start) - b * 16) + ":" + std::to_string (bass.notes[i].chord[0]) + ",";
+                barKeys.push_back (k);
+            }
+            std::vector<std::string> uniq = barKeys;
+            std::sort (uniq.begin(), uniq.end());
+            uniq.erase (std::unique (uniq.begin(), uniq.end()), uniq.end());
+            m.distinctBars += (double) uniq.size();
+            m.maxDistinct = std::max (m.maxDistinct, (int) uniq.size());
+            auto rep = [&] (int lag)
+            {
+                int same = 0, n = 0;
+                for (int t = 0; t + lag * 16 < steps; ++t, ++n)
+                    same += tok[(size_t) t] == tok[(size_t) (t + lag * 16)] ? 1 : 0;
+                return n ? (double) same / n : 0.0;
+            };
+            m.rep1 += rep (1);
+            m.rep2 += rep (2);
+            m.hookKeys.push_back (barKeys.size() >= 2 ? barKeys[0] + "|" + barKeys[1] : "");
+            m.rollKeys.push_back ([&] { std::string all; for (auto& k : barKeys) all += k + "|"; return all; }());
+        }
         bool pick = false;
         for (const Lane* l : { &bass, &stab })
             for (int i = 0; i < l->count; ++i)
@@ -306,9 +347,26 @@ Measures measure (int style, std::uint32_t base, const Settings& s)
     m.dens /= m.rolls;
     m.pickup /= m.rolls;
     m.onBeat /= m.rolls;
+    m.distinctBars /= m.rolls;
+    m.rep1 /= m.rolls;
+    m.rep2 /= m.rolls;
+    {
+        auto h = m.hookKeys;
+        std::sort (h.begin(), h.end());
+        m.hooks = (int) (std::unique (h.begin(), h.end()) - h.begin());
+        auto r = m.rollKeys;
+        std::sort (r.begin(), r.end());
+        m.clones = (int) r.size() - (int) (std::unique (r.begin(), r.end()) - r.begin());
+    }
     m.oct = moves > 0 ? octMoves / moves : 0.0;
     m.gap = m.stabOn > 0 ? (double) m.stabGap / m.stabOn : 0.0;
     return m;
+}
+
+void printLoop (const char* label, std::uint32_t base, const Measures& m)
+{
+    std::printf ("%-8s seed %-10u distinct bars %.1f (max %d)  rep1 %.2f  rep2 %.2f  hooks %2d/20  clones %d\n",
+                 label, base, m.distinctBars, m.maxDistinct, m.rep1, m.rep2, m.hooks, m.clones);
 }
 
 void printRoller (const char* label, std::uint32_t base, const Measures& m)
@@ -398,12 +456,13 @@ int main (int argc, char** argv)
 
     // Every style frozen at its last intended change.
     // A style's hashes change only in the PR that means to change that style
-    // (regenerate with --golden). ROLLER changed in claude/roller-phrasing.
+    // (regenerate with --golden). ROLLER changed in claude/roller-phrasing; BOUNCY
+    // in #28 (relegato after the twin nudge); JACKIN in claude/jackin-identity.
     const struct { int style; std::uint32_t base; std::uint64_t hash; } frozen[] = {
         { UkMin, 1u, 0x7c9dcbee6dddc8eaull }, { UkMin, 2u, 0x47a4548b99fd9987ull },
         { Long, 1u, 0x25acd182b0de5395ull }, { Long, 2u, 0x57a23354bae60f43ull },
-        { Pop, 1u, 0x02bbaae811a3e146ull }, { Pop, 2u, 0xbad1804a344c769eull },
-        { Gaskin, 1u, 0x44c5f013a639f9aaull }, { Gaskin, 2u, 0x50bf5d0de012c522ull },
+        { Pop, 1u, 0x838aa9ad83510593ull }, { Pop, 2u, 0x65093c18c00d81ecull },
+        { Gaskin, 1u, 0xa9a88a1c4bd8365bull }, { Gaskin, 2u, 0xf232b930bde9761full },
     };
     for (const auto& f : frozen)
     {
@@ -447,6 +506,17 @@ int main (int argc, char** argv)
         std::snprintf (what, sizeof what, "ROLLER seed %u: grid-locked %d/20, no turn %d/20, b2 clashes %d/20, on-beat %.2f",
                        base, m.gridLocked, m.noTurn, m.b2Clash, m.onBeat);
         check (m.gridLocked <= 2 && m.noTurn == 0 && m.b2Clash == 0 && m.onBeat >= 0.10 && m.onBeat <= 0.30, what);
+    }
+
+    // JACKIN review: a hooky 2-bar loop (A B A B4 A B A B8) that still differs
+    // from roll to roll.
+    for (auto base : bases)
+    {
+        const auto m = measure (Gaskin, base, defaults (Gaskin));
+        printLoop ("gaskin", base, m);
+        std::snprintf (what, sizeof what, "JACKIN seed %u: <= %d distinct bars, 1-bar repeat %.2f, 2-bar repeat %.2f, %d/20 hooks, %d clones",
+                       base, m.maxDistinct, m.rep1, m.rep2, m.hooks, m.clones);
+        check (m.maxDistinct <= 4 && m.rep1 <= 0.11 && m.rep2 >= 0.60 && m.hooks >= 18 && m.clones == 0, what);
     }
 
     // BUSY: bass notes per bar rise (monotonic, >= 30%), as the knob test asks of
@@ -510,6 +580,7 @@ int main (int argc, char** argv)
                 const auto rm = measure (style, base, defaults (style));
                 print (dialectId (style), base, rm);
                 printRoller (dialectId (style), base, rm);
+                printLoop (dialectId (style), base, rm);
             }
     std::printf ("%s: %d failure(s)\n", failures == 0 ? "OK" : "FAILED", failures);
     return failures == 0 ? 0 : 1;

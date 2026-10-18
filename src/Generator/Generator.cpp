@@ -1,6 +1,7 @@
 #include "Generator.h"
 #include "DeepBouncy.h"
 #include "RollerPass.h"
+#include "JackinLoop.h"
 #include "PhraseBank.h"
 
 #include <algorithm>
@@ -4252,6 +4253,7 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
             contrastCallAnswer (g.lane[Bass], s.bars);
             enforceMonophonic (g.lane[Bass]);
             contrastCallAnswer (g.lane[Bass], s.bars);
+            jackin::loopify (g.lane[Bass], s.bars, bassSeed);
         }
         enforceMonophonic (g.lane[Bass]);
         avoidReaction (g.lane[Bass]);
