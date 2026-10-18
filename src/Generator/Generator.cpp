@@ -1158,6 +1158,13 @@ void densifyDeepDark (Lane& lane, int bars, std::uint32_t seed)
     }
     static const int slots[] = { 1, 2, 3, 5, 6, 7, 9, 10, 11, 13, 14, 15 };
     static const int degs[] = { 3, 7, 10, 0, 8, 5, 3, 10 };
+    // Dark stays busier than the sparse line (about 6 a bar on average), but the
+    // count moves on a 4-bar contour (sparse / build / full / release) or a 2-bar
+    // swing, 4-8 attacks, so the density is never one flat number.
+    static const int contours[5][4] = {
+        { 5, 6, 7, 6 }, { 4, 6, 8, 6 }, { 6, 5, 8, 5 }, { 5, 7, 6, 8 }, { 5, 7, 5, 7 },
+    };
+    const int* contour = contours[(seed >> 5) % 5u];
     const int last = std::min (bars, 8) - 1;
     for (int bar = 0; bar < bars && bar < 8; ++bar)
     {
@@ -1165,8 +1172,7 @@ void densifyDeepDark (Lane& lane, int bars, std::uint32_t seed)
         for (int s = 0; s < 16; ++s)
             if (used[bar][s])
                 ++have;
-        // Dark stays busier than the sparse line, and stops around 6-7 attacks.
-        int target = 6 + (int) (((seed >> (bar & 3)) + (std::uint32_t) bar) % 2u);
+        int target = contour[bar & 3];
         if (bar == last)
             target = std::min (target, 6);
         const int spin = (int) ((seed + (std::uint32_t) bar * 3u) % 12u);
