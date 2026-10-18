@@ -497,17 +497,17 @@ int main()
         missingParams.presets = &factory;
         missingParams.library = &missingLib;
         const auto kept = missingSampler.take (rolla::Bass, 41, 100, 4.f, factory, missingParams);
-        expect (kept.kind == 0 && std::fabs (kept.synthGain - 1.f) < 1.0e-4f,
-                "a missing factory file falls back to the synth");
-        expect (missingSampler.takeDrum (rolla::Kick, 100, factory, missingParams) > 0.5f,
-                "a missing kick falls back to the 909");
+        expect (kept.kind == 1 && std::fabs (kept.synthGain) < 1.0e-4f,
+                "a missing factory file stays silent when the pool is empty");
+        expect (missingSampler.takeDrum (rolla::Kick, 100, factory, missingParams) < 0.001f,
+                "a missing kick stays silent when the pool is empty");
         rolla::EngineParams noLib = missingParams;
         noLib.library = nullptr;
         const auto absentTake = missingSampler.take (rolla::Bass, 41, 100, 4.f, factory, noLib);
-        expect (absentTake.kind == 0 && std::fabs (absentTake.synthGain - 1.f) < 1.0e-4f,
-                "an absent library falls back to the synth");
-        expect (missingSampler.takeDrum (rolla::Kick, 100, factory, noLib) > 0.5f,
-                "an absent library falls back to the 909");
+        expect (absentTake.kind == 1 && std::fabs (absentTake.synthGain) < 1.0e-4f,
+                "an absent library stays silent");
+        expect (missingSampler.takeDrum (rolla::Kick, 100, factory, noLib) < 0.001f,
+                "an absent library does not play the 909");
 
         rolla::PresetBank swap;
         rolla::loadDefaultPresets (swap);
