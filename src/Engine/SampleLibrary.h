@@ -499,6 +499,9 @@ struct SampleAudio
     double rate = 48000.0;
     std::vector<float> left;
     std::vector<float> right;
+    // True when right is a copy of left (mono files are stored that way). Set at load;
+    // the sampler then runs one filter per voice instead of two.
+    bool mono = false;
     int sliceCount = 1;
     int slices[24] { 0 };
     // First audible frame (2 ms early). Vox phrases often open on silence.

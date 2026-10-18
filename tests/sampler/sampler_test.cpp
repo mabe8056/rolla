@@ -185,6 +185,96 @@ void writeWave (const juce::File& file, const std::vector<float>& samples)
     writer->writeFromAudioSampleBuffer (buf, 0, buf.getNumSamples());
 }
 
+// Sample-voice tone filter: L and R get the same ladder + HPF.
+void testStereoTone()
+{
+    constexpr float sr = 48000.f, fc = 150.f, res = 0.05f, hpf = 30.f;
+    constexpr int n = 9600;
+    const float twoPi = 2.f * 3.14159265f;
+    std::vector<float> x ((size_t) n), y ((size_t) n);
+    const int delay = (int) std::lround (0.0016 * sr);
+    for (int i = 0; i < n; ++i)
+    {
+        x[(size_t) i] = 0.5f * std::sin (twoPi * 55.f * (float) i / sr) + 0.2f * std::sin (twoPi * 3000.f * (float) i / sr);
+        const int j = i - delay;
+        y[(size_t) i] = (j >= 0 ? 0.5f * std::sin (twoPi * 55.f * (float) j / sr) : 0.f)
+                        + 0.15f * std::sin (twoPi * 5000.f * (float) i / sr);
+    }
+
+    // The old path, inline: one ladder + HPF on L, then R = L + (R - L) * 0.85.
+    auto oldPath = [&] (rolla::Ladder& lad, float& hp, float l, float r, float& outL, float& outR)
+    {
+        l = lad.process (l, fc, res, sr);
+        const float c = std::exp (-2.f * rolla::kPi * hpf / sr);
+        hp = c * hp + (1.f - c) * l;
+        l -= hp;
+        outL = l;
+        outR = l + (r - l) * 0.85f;
+    };
+
+    // Identical content in a stereo buffer: the output must stay centred.
+    {
+        rolla::Ladder lL, lR, ref;
+        float hL = 0.f, hR = 0.f, hRef = 0.f;
+        float worstLR = 0.f, worstRef = 0.f, oldWorst = 0.f;
+        for (int i = 0; i < n; ++i)
+        {
+            float l = x[(size_t) i], r = x[(size_t) i];
+            rolla::sampleVoiceTone (l, r, false, lL, lR, hL, hR, fc, res, hpf, sr);
+            float oL = 0.f, oR = 0.f;
+            oldPath (ref, hRef, x[(size_t) i], x[(size_t) i], oL, oR);
+            worstLR = std::max (worstLR, std::fabs (l - r));
+            worstRef = std::max (worstRef, std::fabs (l - oL));
+            oldWorst = std::max (oldWorst, std::fabs (oL - oR));
+        }
+        expect (worstLR < 1.0e-6f, "stereo tone: identical L/R content stays L == R");
+        expect (worstRef < 1.0e-6f, "stereo tone: identical L/R matches a single ladder run");
+        expect (oldWorst > 0.05f, "stereo tone: the old path left R unfiltered (sanity)");
+    }
+
+    // Mono file: one ladder, R copies L, L matches the old path.
+    {
+        rolla::Ladder lL, lR, ref;
+        float hL = 0.f, hR = 0.f, hRef = 0.f;
+        float worstLR = 0.f, worstRef = 0.f;
+        for (int i = 0; i < n; ++i)
+        {
+            float l = x[(size_t) i], r = x[(size_t) i];
+            rolla::sampleVoiceTone (l, r, true, lL, lR, hL, hR, fc, res, hpf, sr);
+            float oL = 0.f, oR = 0.f;
+            oldPath (ref, hRef, x[(size_t) i], x[(size_t) i], oL, oR);
+            worstLR = std::max (worstLR, std::fabs (l - r));
+            worstRef = std::max (worstRef, std::fabs (l - oL));
+        }
+        expect (worstLR == 0.f, "mono tone: R is a copy of L");
+        expect (worstRef < 1.0e-6f, "mono tone: L matches the old single-ladder path");
+        expect (lR.s[0] == 0.f && lR.s[3] == 0.f && hR == 0.f, "mono tone: the second ladder is skipped");
+    }
+
+    // Different L/R: both sides filtered alike, side narrowed by 0.85 after the filters.
+    {
+        rolla::Ladder lL, lR, refL, refR;
+        float hL = 0.f, hR = 0.f, hrL = 0.f, hrR = 0.f;
+        const float c = std::exp (-2.f * rolla::kPi * hpf / sr);
+        float worstMid = 0.f, worstSide = 0.f;
+        for (int i = 0; i < n; ++i)
+        {
+            float l = x[(size_t) i], r = y[(size_t) i];
+            rolla::sampleVoiceTone (l, r, false, lL, lR, hL, hR, fc, res, hpf, sr);
+            float fl = refL.process (x[(size_t) i], fc, res, sr);
+            hrL = c * hrL + (1.f - c) * fl;
+            fl -= hrL;
+            float fr = refR.process (y[(size_t) i], fc, res, sr);
+            hrR = c * hrR + (1.f - c) * fr;
+            fr -= hrR;
+            worstMid = std::max (worstMid, std::fabs ((l + r) - (fl + fr)));
+            worstSide = std::max (worstSide, std::fabs ((l - r) - 0.85f * (fl - fr)));
+        }
+        expect (worstMid < 1.0e-5f, "stereo tone: mid is the sum of identically filtered L and R");
+        expect (worstSide < 1.0e-5f, "stereo tone: side is the filtered side times 0.85");
+    }
+}
+
 void testPitchProbe()
 {
     using rolla::ChordQuality;
@@ -316,6 +406,7 @@ int main()
     juce::ScopedJuceInitialiser_GUI juce;
 
     testPitchProbe();
+    testStereoTone();
 
     static_assert (rolla::kUserSlotCount == 14, "14 user slots");
     expect (rolla::userSlotForPart (rolla::Bass) == rolla::SlotBass, "bass slot");
@@ -1186,6 +1277,8 @@ int main()
                 boosted = std::max (boosted, std::fabs (s));
         expect (boosted > 0.04f, "load-time gain lifts a quiet raw copy");
         expect (checksum (quietFile) == quietSum, "loudness normalisation does not write the wav");
+        if (const auto* audio = dual.tryGet ("VOX/quiet.wav"))
+            expect (audio->mono && audio->right == audio->left, "a mono file loads as mono (right copies left)");
         const auto cacheFile = rolla::loudnessCacheFor (dualRoot);
         expect (! dualRoot.getChildFile (".rolla-loudness.json").exists(), "nothing is written into the sample folder");
         expect (! cacheFile.isAChildOf (dualRoot), "the loudness cache lives outside the sample folder");

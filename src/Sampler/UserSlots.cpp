@@ -620,6 +620,7 @@ void UserSlots::loadSlot (int slot)
         audio->rate = prepared.rate;
         audio->left = std::move (prepared.left);
         audio->right = std::move (prepared.right);
+        audio->mono = audio->right.empty() || audio->right == audio->left;
         audio->sliceCount = 1;
         audio->slices[0] = 0;
         // A dropped vox file starts on its voice too (in memory; the file is not written).

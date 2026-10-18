@@ -548,14 +548,9 @@ void Sampler::readVoice (Voice& v, float& l, float& r) noexcept
     if (v.fEnv > 0.f)
         v.fEnv *= v.fCoef;
     const float fc = std::clamp (v.cut * std::pow (2.f, v.envOct * v.fEnv), 40.f, srF * 0.45f);
-    ls = v.ladder.process (ls, fc, v.res, srF);
-    if (v.hpfHz > 25.f)
-    {
-        const float c = std::exp (-2.f * kSincPi * v.hpfHz / srF);
-        v.hpState = c * v.hpState + (1.f - c) * ls;
-        ls -= v.hpState;
-    }
-    rs = ls + (rs - ls) * 0.85f;
+    // Mono files store right as a copy of left (SampleAudio::mono): one ladder, R = L.
+    const bool mono = v.audio->mono || v.audio->right.empty();
+    sampleVoiceTone (ls, rs, mono, v.ladder, v.ladderR, v.hpState, v.hpStateR, fc, v.res, v.hpfHz, srF);
 
     float edge = v.noteEdge;
     if (v.chopFade > 0 && v.chopEnd > v.chopStart)
@@ -730,7 +725,9 @@ bool Sampler::playUserSlot (int part, int drumVoice, int midiNote, int velocity,
     fresh.fCoef = expDecay (std::max (4.f, drumVoice >= 0 ? 30.f : amp.tau), srF);
     fresh.hpfHz = drumVoice >= 0 ? 30.f : amp.hpf;
     fresh.hpState = 0.f;
+    fresh.hpStateR = 0.f;
     fresh.ladder.reset();
+    fresh.ladderR.reset();
     if (drumVoice >= 0)
     {
         const float decay = 80.f * std::pow (2.f, (params.drumDecay[drumVoice] - 0.5f) * 2.f);
@@ -921,7 +918,9 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     fresh.fCoef = expDecay (std::max (4.f, amp.tau), srF);
     fresh.hpfHz = amp.hpf;
     fresh.hpState = 0.f;
+    fresh.hpStateR = 0.f;
     fresh.ladder.reset();
+    fresh.ladderR.reset();
     fresh.env.start (amp.a, amp.d, amp.s, amp.r, srF);
 
     double startFrame = fromPack ? 0.0 : std::clamp ((double) played.start, 0.0, 16.0) * audio->rate;
@@ -1144,7 +1143,10 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
     fresh.fEnv = 1.f;
     fresh.fCoef = expDecay (30.f, (float) sr);
     fresh.hpfHz = 30.f;
+    fresh.hpState = 0.f;
+    fresh.hpStateR = 0.f;
     fresh.ladder.reset();
+    fresh.ladderR.reset();
     const float decay = 80.f * std::pow (2.f, (params.drumDecay[voice] - 0.5f) * 2.f);
     fresh.env.start (0.5f, decay, 0.f, 12.f, (float) sr);
     fresh.pos = std::clamp ((double) spec.start, 0.0, 4.0) * audio->rate;

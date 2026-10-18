@@ -579,6 +579,7 @@ void SampleLibrary::loadOne (const std::string& relative)
             audio->right[(size_t) i] *= lin;
         }
     }
+    audio->mono = audio->right.empty() || audio->right == audio->left;
     findSlices (*audio);
     {
         // Lane from the first path component ("STAB/foo.wav"): stabs, hits, plucks

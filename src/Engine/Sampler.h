@@ -11,6 +11,42 @@ namespace rolla
 
 struct EngineParams;
 
+// Stereo width kept on sample voices, applied as side *= 0.85 after the filters.
+inline constexpr float kSampleSideWidth = 0.85f;
+
+// Per-voice tone stage: ladder low-pass, then the one-pole HPF (only above 25 Hz).
+// Both channels run the same filters with the same cutoff and resonance, so a stereo
+// file keeps its L/R phase. A mono file (right is a copy of left) is filtered once
+// and copied, so its left matches the old single-ladder path exactly.
+inline void sampleVoiceTone (float& l, float& r, bool mono,
+                             Ladder& ladderL, Ladder& ladderR, float& hpL, float& hpR,
+                             float fc, float res, float hpfHz, float sr) noexcept
+{
+    l = ladderL.process (l, fc, res, sr);
+    if (! mono)
+        r = ladderR.process (r, fc, res, sr);
+    if (hpfHz > 25.f)
+    {
+        const float c = std::exp (-2.f * kPi * hpfHz / sr);
+        hpL = c * hpL + (1.f - c) * l;
+        l -= hpL;
+        if (! mono)
+        {
+            hpR = c * hpR + (1.f - c) * r;
+            r -= hpR;
+        }
+    }
+    if (mono)
+    {
+        r = l;
+        return;
+    }
+    const float mid = 0.5f * (l + r);
+    const float side = 0.5f * (l - r) * kSampleSideWidth;
+    l = mid + side;
+    r = mid - side;
+}
+
 // Realtime sample voices. take() / takeDrum() run on the audio thread and only
 // read a published SampleAudio. Rendering uses a 16-tap windowed sinc.
 class Sampler
@@ -113,6 +149,9 @@ private:
         float hpfHz = 20.f;
         float hpState = 0.f;
         Ladder ladder;
+        // Right-channel filter state. Unused while the voice plays a mono file.
+        float hpStateR = 0.f;
+        Ladder ladderR;
         struct Env
         {
             int stage = 0;
