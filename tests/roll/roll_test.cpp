@@ -299,12 +299,12 @@ int pcOfNote (int semi)
     return pc;
 }
 
-// BOUNCY pulse mode is a steady four-attack grid. Bass notes are now held to
-// the next onset (A&R msg 423), so mean length no longer tells pulse from the
-// 5-note phrase; count bars (final bar aside) with exactly four onsets.
+// BOUNCY pulse mode is a steady held grid (Composer: 5-8 notes a bar). The
+// mode now ships on the groove (Groove::bassMode), so this only runs on pulse
+// rolls: at least 5 of the 7 body bars carry 5-8 onsets.
 bool popPulseGrid (const rolla::Lane& lane, int bars)
 {
-    int fours = 0;
+    int steady = 0;
     const int body = std::min (bars, 8) - 1;
     for (int b = 0; b < body; ++b)
     {
@@ -312,10 +312,10 @@ bool popPulseGrid (const rolla::Lane& lane, int bars)
         for (int i = 0; i < lane.count; ++i)
             if ((int) std::lround (lane.notes[i].start) / 16 == b)
                 ++n;
-        if (n == 4)
-            ++fours;
+        if (n >= 5 && n <= 8)
+            ++steady;
     }
-    return body > 0 && fours * 7 >= body * 5;
+    return body > 0 && steady * 7 >= body * 5;
 }
 
 void testEarReview()
@@ -430,8 +430,11 @@ void testEarReview()
                 }
                 if (moves > 0)
                     popOct += 100.0 * oct / moves;
-                if (popPulseGrid (lane, g.bars))
+                if (g.bassMode == rolla::BassModePulse)
+                {
                     ++pulseN;
+                    expect (popPulseGrid (lane, g.bars), "BOUNCY ear roll " + std::to_string (roll) + " pulse is a steady grid");
+                }
             }
             if (roll == 0)
             {
@@ -823,8 +826,11 @@ void testScorerV23()
                         same = false;
                 if (bestRest >= 4 && ! same)
                     ++turn;
-                if (popPulseGrid (bass, g.bars))
+                if (g.bassMode == rolla::BassModePulse)
+                {
                     ++pulse;
+                    expect (popPulseGrid (bass, g.bars), "BOUNCY roll " + std::to_string (roll) + " pulse is a steady grid");
+                }
             }
             if (style == rolla::Gaskin)
             {
@@ -899,7 +905,7 @@ void testScorerV23()
             expect (medLen >= 1.2f, "ROLLER bass mixes in 2-3/16 notes");
         if (style == rolla::Pop)
         {
-            expect (pulse >= 6 && pulse <= 14, "BOUNCY pulse mode is about half the rolls");
+            expect (pulse >= 3 && pulse <= 8, "BOUNCY pulse mode is about a quarter of the rolls");
             expect (turn >= 14, "BOUNCY bar 8 turns around");
         }
         if (style == rolla::Gaskin)
@@ -953,8 +959,21 @@ void testAr423Bass()
             sndMin = std::min (sndMin, snd);
             expect (rollOn > 0 && (double) rollKick <= 0.35 * rollOn + 1.0e-6,
                     std::string (names[style]) + " roll " + std::to_string (roll) + " bass on kick <= 35%");
-            expect (snd >= 0.72, std::string (names[style]) + " roll " + std::to_string (roll) + " bass sounding "
-                                 + std::to_string (snd) + " >= 0.72");
+            // Held bass: ROLLER / JACKIN >= 0.72, DEEP 0.72-0.88, BOUNCY pulse
+            // 0.85-0.975. BOUNCY bounce keeps short notes (0.29-0.50, no hold).
+            double sndLo = 0.72;
+            double sndHi = 1.0;
+            if (style == rolla::Long)
+                sndHi = 0.88;
+            if (style == rolla::Pop)
+            {
+                const bool pulseRoll = g.bassMode == rolla::BassModePulse;
+                sndLo = pulseRoll ? 0.85 : 0.29;
+                sndHi = pulseRoll ? 0.975 : 0.50;
+            }
+            expect (snd >= sndLo - 1.0e-6 && snd <= sndHi + 1.0e-6,
+                    std::string (names[style]) + " roll " + std::to_string (roll) + " bass sounding "
+                        + std::to_string (snd) + " in " + std::to_string (sndLo) + "-" + std::to_string (sndHi));
             expect (bassHoldTicks (bass) <= 3,
                     std::string (names[style]) + " roll " + std::to_string (roll) + " held bass does not overlap");
         }
@@ -965,6 +984,131 @@ void testAr423Bass()
                 std::string (names[style]) + " bass on-kick share within 10 points of the reference");
         expect (share <= 0.35, std::string (names[style]) + " bass on-kick share <= 35%");
     }
+}
+
+std::string fileBytes (const std::string& path)
+{
+    std::ifstream in (path, std::ios::binary);
+    return std::string ((std::istreambuf_iterator<char> (in)), {});
+}
+
+double medianOf (std::vector<double> v)
+{
+    if (v.empty())
+        return 0.0;
+    std::sort (v.begin(), v.end());
+    return v[v.size() / 2];
+}
+
+// Composer gate after A&R 423: BOUNCY is BOUNCE (75%) or PULSE (25%) from the
+// bass seed. BOUNCE: sounding 0.29-0.50, octave moves 10-30%, onsets-per-bar
+// sd >= 0.7. PULSE: sounding 0.85-0.975, 5-8 notes a bar. DEEP held bass:
+// median sounding >= 0.78, never over 0.88. The bass MIDI carries the mode.
+void testBouncyModes()
+{
+    const std::uint32_t base = 0xB0C7u;
+    int pulseN = 0;
+    int bounceN = 0;
+    std::vector<double> bounceOct;
+    std::vector<double> deepSnd;
+    for (int style : { (int) rolla::Pop, (int) rolla::Long })
+    {
+        for (int roll = 0; roll < 40; ++roll)
+        {
+            rolla::Settings s;
+            s.dialect = style;
+            s.bars = 8;
+            std::uint32_t seeds[rolla::NumParts] {};
+            for (int p = 0; p < rolla::NumParts; ++p)
+                seeds[p] = base + (std::uint32_t) roll * 0x9E3779B9u + (std::uint32_t) p * 17u
+                         + (std::uint32_t) style * 101u;
+            rolla::Groove g {};
+            rolla::generate (g, s, seeds, 0x7fu);
+            const auto& bass = g.lane[rolla::Bass];
+            const double loop = (double) (g.bars * 16);
+            double held = 0.0;
+            int bar[8] {};
+            for (int i = 0; i < bass.count; ++i)
+            {
+                held += bass.notes[i].length;
+                const int b = (int) std::lround (bass.notes[i].start) / 16;
+                if (b >= 0 && b < 8)
+                    ++bar[b];
+            }
+            const double snd = held / loop;
+            const std::string tag = std::string (style == rolla::Pop ? "BOUNCY" : "DEEP") + " seed " + std::to_string (roll);
+
+            if (roll < 4)
+            {
+                const auto dir = std::filesystem::path ("/tmp/rolla_bouncy_modes") / std::to_string (style) / std::to_string (roll);
+                std::filesystem::create_directories (dir);
+                std::vector<std::string> written;
+                std::string error;
+                expect (rolla::MidiExport::writeAll (dir.string(), g, s.key, 0.567f, 124.0, written, error), tag + " midi export");
+                for (const auto& path : written)
+                {
+                    const bool bassFile = path.size() >= 9 && path.rfind ("_bass.mid") == path.size() - 9;
+                    const bool allFile = path.size() >= 8 && path.rfind ("_all.mid") == path.size() - 8;
+                    const auto bytes = fileBytes (path);
+                    const bool hasMode = bytes.find ("mode:") != std::string::npos;
+                    if (style == rolla::Pop && (bassFile || allFile))
+                    {
+                        const char* want = g.bassMode == rolla::BassModePulse ? "mode:pulse" : "mode:bounce";
+                        expect (bytes.find (want) != std::string::npos, tag + " midi carries " + want + " in " + path);
+                    }
+                    else
+                        expect (! hasMode, tag + " midi has no mode marker in " + path);
+                }
+            }
+
+            if (style == rolla::Long)
+            {
+                deepSnd.push_back (snd);
+                expect (snd <= 0.88 + 1.0e-6, tag + " sounding " + std::to_string (snd) + " <= 0.88");
+                continue;
+            }
+            expect (g.bassMode == rolla::BassModeBounce || g.bassMode == rolla::BassModePulse, tag + " has a BOUNCY mode");
+            if (g.bassMode == rolla::BassModePulse)
+            {
+                ++pulseN;
+                const double npb = (double) bass.count / (double) g.bars;
+                expect (snd >= 0.85 - 1.0e-6 && snd <= 0.975 + 1.0e-6, tag + " pulse sounding " + std::to_string (snd) + " in 0.85-0.975");
+                expect (npb >= 5.0 && npb <= 8.0, tag + " pulse notes per bar " + std::to_string (npb) + " in 5-8");
+                expect (popPulseGrid (bass, g.bars), tag + " pulse is a steady grid");
+                continue;
+            }
+            ++bounceN;
+            expect (snd >= 0.29 - 1.0e-6 && snd <= 0.50 + 1.0e-6, tag + " bounce sounding " + std::to_string (snd) + " in 0.29-0.50");
+            double mean = 0.0;
+            for (int b = 0; b < 8; ++b)
+                mean += bar[b];
+            mean /= 8.0;
+            double var = 0.0;
+            for (int b = 0; b < 8; ++b)
+                var += (bar[b] - mean) * (bar[b] - mean);
+            const double sd = std::sqrt (var / 8.0);
+            expect (sd >= 0.7 - 1.0e-6, tag + " bounce density spread " + std::to_string (sd) + " >= 0.7");
+            int moves = 0;
+            int oct = 0;
+            for (int i = 1; i < bass.count; ++i)
+            {
+                const int d = std::abs ((int) bass.notes[i].chord[0] - (int) bass.notes[i - 1].chord[0]);
+                ++moves;
+                if (d == 12 || d == 24)
+                    ++oct;
+            }
+            if (moves > 0)
+                bounceOct.push_back (100.0 * oct / moves);
+        }
+    }
+    const double share = 100.0 * pulseN / 40.0;
+    const double octMed = medianOf (bounceOct);
+    const double deepMed = medianOf (deepSnd);
+    std::cout << "BOUNCY modes: pulse " << pulseN << "/40 (" << share << "%) bounce " << bounceN
+              << "/40 octave-move median " << octMed << "%; DEEP sounding median " << deepMed << "\n";
+    expect (share >= 15.0 && share <= 35.0, "BOUNCY pulse share lands in 15-35%");
+    expect (octMed >= 10.0 && octMed <= 30.0, "BOUNCY bounce octave moves land in 10-30%");
+    expect (deepMed >= 0.78, "DEEP held bass median sounding >= 0.78");
 }
 
 // A&R msg 423 #3: 16th swing defaults per style; the knob still moves freely.
@@ -1232,6 +1376,7 @@ int main()
     testEarReview();
     testScorerV23();
     testAr423Bass();
+    testBouncyModes();
     testAr423Swing();
     testHarmonyClashes();
     testLaneHygiene();

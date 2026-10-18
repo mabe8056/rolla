@@ -1077,8 +1077,11 @@ bool popIsPulse (float bounce, std::uint32_t seed) noexcept
 {
     if (bounce >= 0.80f || bounce <= 0.15f)
         return false;
-    // About half of mid-bounce rolls. The knob's extremes stay on the bounce grid.
-    return (((seed ? seed : 1u) * 0x27D4EB2Du) % 100u) < 50u;
+    // A quarter of mid-bounce rolls (Composer: BOUNCE 75%, PULSE 25%). The
+    // knob's extremes stay on the bounce grid. The seed's own position in
+    // [0, 2^32) is the draw: a golden-ratio seed walk gets an even 25% share.
+    const std::uint32_t s = seed ? seed : 1u;
+    return (std::uint32_t) (((std::uint64_t) s * 100u) >> 32) < 25u;
 }
 
 float rootShareOf (const Lane& lane) noexcept
@@ -1567,10 +1570,11 @@ void paintOctaveShare (Lane& lane, std::uint32_t seed)
     }
 }
 
-// Four off-kick slots, at least two 16ths apart, drawn from the seed.
-// The last bar stops by slot 9 so a 2.2-length note still leaves four silent 16ths.
-bool pickPulseSlots (int* out, std::uint32_t h, bool turn)
+// `want` (4-6) off-kick slots, two 16ths apart where the bag allows, drawn from
+// the seed. The last bar stops by slot 9 so its turn rest stays silent.
+bool pickPulseSlots (int* out, std::uint32_t h, bool turn, int want)
 {
+    want = clampi (want, 1, 6);
     const int poolFull[] = { 1, 2, 3, 5, 6, 7, 9, 10, 11, 13, 14, 15 };
     const int poolTurn[] = { 1, 2, 3, 5, 6, 7, 9 };
     const int* pool = turn ? poolTurn : poolFull;
@@ -1584,11 +1588,11 @@ bool pickPulseSlots (int* out, std::uint32_t h, bool turn)
         const int j = (int) (h % (std::uint32_t) (i + 1));
         std::swap (bag[i], bag[j]);
     }
-    int picked[4];
+    int picked[6];
     int n = 0;
-    for (int gap = 2; gap >= 1 && n < 4; --gap)
+    for (int gap = 2; gap >= 1 && n < want; --gap)
     {
-        for (int i = 0; i < nPool && n < 4; ++i)
+        for (int i = 0; i < nPool && n < want; ++i)
         {
             bool ok = true;
             for (int k = 0; k < n; ++k)
@@ -1604,20 +1608,20 @@ bool pickPulseSlots (int* out, std::uint32_t h, bool turn)
                 picked[n++] = bag[i];
         }
     }
-    if (n < 4)
+    if (n < want)
         return false;
-    std::sort (picked, picked + 4);
-    for (int k = 0; k < 4; ++k)
+    std::sort (picked, picked + want);
+    for (int k = 0; k < want; ++k)
         out[k] = picked[k];
     // The dotted-pulse sets are a soft ban when most bars land on them.
     auto nearBanned = [&] (std::initializer_list<int> banned)
     {
         int inter = 0;
         for (int s : banned)
-            for (int k = 0; k < 4; ++k)
+            for (int k = 0; k < want; ++k)
                 if (out[k] == s)
                     ++inter;
-        const int uni = 4 + (int) banned.size() - inter;
+        const int uni = want + (int) banned.size() - inter;
         return uni > 0 && inter * 4 >= uni * 3;
     };
     if (nearBanned ({ 0, 3, 6, 9, 12 }) || nearBanned ({ 0, 3, 6, 9, 12, 14 })
@@ -1626,33 +1630,45 @@ bool pickPulseSlots (int* out, std::uint32_t h, bool turn)
     return true;
 }
 
-// Pulse is a steady off-kick grid with notes long enough for the 1.8-3.2 band.
-// The grid comes from the seed, not a six-shape book, so a batch does not
-// reprint one onset set. The closing bar keeps a four-16th rest.
+// Pulse is a steady off-kick grid: six attacks a bar (five in the closing bar,
+// which keeps its four-16th rest), so the held line lands at 5-8 notes a bar
+// with lengths in the 1.8-3.2 band. The grid comes from the seed, not a
+// shape book, so a batch does not reprint one onset set. Neighbours never
+// repeat a pitch, so holdBassNotes can tie every note into the next one.
 void makePulse (Lane& lane, int bars, std::uint32_t seed)
 {
+    constexpr int kBody = 6;
+    constexpr int kTurn = 5;
     const std::uint32_t h = (seed ? seed : 1u) * 0x9E3779B1u;
-    int even[4] = { 1, 5, 9, 13 };
-    int odd[4] = { 2, 6, 10, 14 };
-    int turn[4] = { 1, 3, 6, 9 };
+    int even[kBody] = { 1, 3, 6, 9, 11, 14 };
+    int odd[kBody] = { 2, 5, 7, 10, 13, 15 };
+    int turn[kBody] = { 1, 3, 5, 7, 9, 0 };
     for (int t = 0; t < 8; ++t)
-        if (pickPulseSlots (even, h + (std::uint32_t) t * 17u, false))
+        if (pickPulseSlots (even, h + (std::uint32_t) t * 17u, false, kBody))
             break;
     for (int t = 0; t < 8; ++t)
-        if (pickPulseSlots (odd, h ^ (0xA5A5A5A5u + (std::uint32_t) t * 13u), false))
+        if (pickPulseSlots (odd, h ^ (0xA5A5A5A5u + (std::uint32_t) t * 13u), false, kBody))
             break;
     for (int t = 0; t < 8; ++t)
-        if (pickPulseSlots (turn, h ^ (0x3C6EF35Fu + (std::uint32_t) t * 9u), true))
+        if (pickPulseSlots (turn, h ^ (0x3C6EF35Fu + (std::uint32_t) t * 9u), true, kTurn))
             break;
     bool same = true;
-    for (int k = 0; k < 4; ++k)
+    for (int k = 0; k < kBody; ++k)
         if (even[k] != odd[k])
             same = false;
-    if (same)
-        for (int k = 0; k < 4; ++k)
-            odd[k] = turn[k];
+    for (int t = 1; t < 8 && same; ++t)
+    {
+        if (! pickPulseSlots (odd, h ^ (0x5BD1E995u + (std::uint32_t) t * 31u), false, kBody))
+            continue;
+        same = true;
+        for (int k = 0; k < kBody; ++k)
+            if (even[k] != odd[k])
+                same = false;
+    }
     Note out[kMaxNotes];
     int w = 0;
+    int prevPitch = 0;
+    bool havePrev = false;
     for (int bar = 0; bar < bars && bar < 8; ++bar)
     {
         int src[8];
@@ -1662,19 +1678,32 @@ void makePulse (Lane& lane, int bars, std::uint32_t seed)
                 src[n++] = i;
         const bool last = bar == std::min (bars, 8) - 1;
         const int* slots = last ? turn : (((bar & 1) != 0) ? odd : even);
-        for (int k = 0; k < 4 && w < kMaxNotes; ++k)
+        const int count = last ? kTurn : kBody;
+        for (int k = 0; k < count && w < kMaxNotes; ++k)
         {
             Note nte;
             if (n > 0)
+            {
                 nte = lane.notes[src[k % n]];
+                for (int j = 1; j < n && havePrev && pcOf (nte.chord[0]) == pcOf (prevPitch); ++j)
+                    nte = lane.notes[src[(k + j) % n]];
+            }
             nte.start = (float) (bar * 16 + slots[k]);
             nte.length = 2.2f;
             nte.nChord = 1;
             if (nte.chord[0] > 14)
                 nte.chord[0] = (std::int8_t) pcOf (nte.chord[0]);
+            // A bar of one pitch class answers itself an octave away.
+            if (havePrev && nte.chord[0] == prevPitch)
+                nte.chord[0] = (std::int8_t) (nte.chord[0] <= 7 ? nte.chord[0] + 12 : nte.chord[0] - 12);
+            prevPitch = nte.chord[0];
+            havePrev = true;
             out[w++] = nte;
         }
     }
+    // Two neighbouring grid slots one 16th apart must not overlap.
+    for (int i = 0; i + 1 < w; ++i)
+        out[i].length = std::min (out[i].length, std::max (0.5f, out[i + 1].start - out[i].start));
     lane.count = w;
     for (int i = 0; i < w; ++i)
         lane.notes[i] = out[i];
@@ -2393,7 +2422,8 @@ void openRollerCell (Lane& lane, std::uint32_t seed)
 // DARK at either end still retints the degrees. BOUNCE above 0.6 still
 // shoves even slots, which is what the knob audit compares. BUSY scales how
 // many of those attacks survive, around the shipped 0.40 phrase.
-void lockPhrase (Lane& lane, int dialect, std::uint32_t seed, int bars, float dark, float bounce, float busy)
+void lockPhrase (Lane& lane, int dialect, std::uint32_t seed, int bars, float dark, float bounce, float busy,
+                 bool pulse)
 {
     if (bars < 4 || lane.count <= 0)
         return;
@@ -2754,7 +2784,7 @@ void lockPhrase (Lane& lane, int dialect, std::uint32_t seed, int bars, float da
         }
     }
     softenFifths (lane, seed);
-    if (popIsPulse (bounce, seed))
+    if (pulse)
     {
         makePulse (lane, bars, seed);
         // The pulse grid replaces the phrase, so BUSY has to scale it again.
@@ -4795,12 +4825,62 @@ void placeBassOnKicks (Lane& lane, int dialect, int bars, std::uint32_t seed)
     }
 }
 
-// Holds every bass note up to the next onset (or the turn rest / loop end),
-// so the line sounds for most of the loop. Some notes leave a one-16th
-// breath, a repeated pitch always does (no tie into the next note), and the
-// breaths stop once the sounding fraction would fall under 0.78. Nothing
-// overlaps, nothing passes the loop end, and no note gets shorter.
-void holdBassNotes (Lane& lane, int dialect, int bars, std::uint32_t seed)
+float bassSoundingTotal (const Lane& lane) noexcept
+{
+    float total = 0.f;
+    for (int i = 0; i < lane.count; ++i)
+        total += std::max (0.f, lane.notes[i].length);
+    return total;
+}
+
+// Shortens the longest notes (never under minLen) until the bass sounds for
+// at most capFrac of the loop. Shorter notes never add a clash or an overlap.
+void capBassSounding (Lane& lane, int bars, float capFrac, float minLen)
+{
+    const float loopEnd = (float) (std::min (bars, kMaxBars) * 16);
+    if (lane.count <= 0 || loopEnd <= 0.f)
+        return;
+    const float cap = capFrac * loopEnd - 1.0e-3f;
+    float total = bassSoundingTotal (lane);
+    for (int guard = 0; guard < kMaxNotes * 8 && total > cap; ++guard)
+    {
+        int longest = -1;
+        for (int i = 0; i < lane.count; ++i)
+            if (lane.notes[i].length > minLen + 1.0e-4f
+                && (longest < 0 || lane.notes[i].length > lane.notes[longest].length))
+                longest = i;
+        if (longest < 0)
+            break;
+        const float cut = std::min ({ total - cap, lane.notes[longest].length - minLen, 0.5f });
+        lane.notes[longest].length -= cut;
+        total -= cut;
+    }
+}
+
+// Onsets per bar, population sd over the loop's bars (the scorer's npb_sd).
+float barDensitySpread (const Lane& lane, int bars) noexcept
+{
+    const int nb = clampi (bars, 1, kMaxBars);
+    int count[kMaxBars] {};
+    for (int i = 0; i < lane.count; ++i)
+    {
+        const int b = (int) std::lround (lane.notes[i].start) / 16;
+        if (b >= 0 && b < nb)
+            ++count[b];
+    }
+    double mean = 0.0;
+    for (int b = 0; b < nb; ++b)
+        mean += count[b];
+    mean /= nb;
+    double var = 0.0;
+    for (int b = 0; b < nb; ++b)
+        var += (count[b] - mean) * (count[b] - mean);
+    return (float) std::sqrt (var / nb);
+}
+
+// BOUNCE keeps short notes: the line sounds for lo-hi of the loop. Notes grow
+// toward 1.5 sixteenths (never into the next onset) or shrink toward 0.9.
+void fitBounceSounding (Lane& lane, int bars, float lo, float hi, std::uint32_t seed)
 {
     const int n = std::min (lane.count, kMaxNotes);
     const float loopEnd = (float) (std::min (bars, kMaxBars) * 16);
@@ -4808,6 +4888,189 @@ void holdBassNotes (Lane& lane, int dialect, int bars, std::uint32_t seed)
         return;
     sortByStart (lane);
     const float tailCut = bassTailCut (bars);
+    float total = bassSoundingTotal (lane);
+    if (total > hi * loopEnd)
+    {
+        capBassSounding (lane, bars, hi, 0.9f);
+        return;
+    }
+    int order[kMaxNotes];
+    std::uint32_t prio[kMaxNotes] {};
+    for (int i = 0; i < n; ++i)
+    {
+        order[i] = i;
+        prio[i] = postHash (seed ^ 0xB0C3u, (std::uint32_t) i);
+    }
+    std::sort (order, order + n, [&] (int a, int b) { return prio[a] < prio[b]; });
+    for (int k = 0; k < n && total < lo * loopEnd; ++k)
+    {
+        const int i = order[k];
+        Note& note = lane.notes[i];
+        float next = i + 1 < n ? lane.notes[i + 1].start : loopEnd;
+        if (note.start < tailCut)
+            next = std::min (next, tailCut);
+        const float room = std::min (next, loopEnd) - note.start - 1.0f / 120.f;
+        const float grow = std::min ({ 1.5f, room }) - note.length;
+        if (grow <= 0.f)
+            continue;
+        const float add = std::min (grow, lo * loopEnd - total);
+        note.length += add;
+        total += add;
+    }
+}
+
+// The BOUNCE density net: thin the body bar whose loss raises the per-bar
+// onset sd most, one note at a time, until it reaches minSd. Never the last
+// bar (turn / pickup), never a bar's first onset, never under 0.30 sounding.
+// Removing a note adds no clash, overlap or duplicate, so this is safe after
+// harmonizeRoll.
+void spreadBounceDensity (Lane& lane, int bars, float minSd, std::uint32_t seed)
+{
+    const int nb = std::min (bars, kMaxBars);
+    const float loopEnd = (float) (nb * 16);
+    if (nb < 4 || lane.count <= 0)
+        return;
+    for (int t = 0; t < 4 && barDensitySpread (lane, nb) < minSd; ++t)
+    {
+        sortByStart (lane);
+        int count[kMaxBars] {};
+        for (int i = 0; i < lane.count; ++i)
+        {
+            const int b = (int) std::lround (lane.notes[i].start) / 16;
+            if (b >= 0 && b < nb)
+                ++count[b];
+        }
+        int bestBar = -1;
+        double bestSd = -1.0;
+        for (int b = 0; b < nb - 1; ++b)
+        {
+            if (count[b] < 3)
+                continue;
+            count[b] -= 1;
+            double mean = 0.0;
+            for (int k = 0; k < nb; ++k)
+                mean += count[k];
+            mean /= nb;
+            double var = 0.0;
+            for (int k = 0; k < nb; ++k)
+                var += (count[k] - mean) * (count[k] - mean);
+            count[b] += 1;
+            const double sd = std::sqrt (var / nb);
+            if (sd > bestSd + 1.0e-9)
+            {
+                bestSd = sd;
+                bestBar = b;
+            }
+        }
+        if (bestBar < 0)
+            return;
+        int cand[16];
+        int nc = 0;
+        bool first = true;
+        for (int i = 0; i < lane.count && nc < 16; ++i)
+        {
+            if ((int) std::lround (lane.notes[i].start) / 16 != bestBar)
+                continue;
+            if (first)
+            {
+                first = false;
+                continue;
+            }
+            cand[nc++] = i;
+        }
+        if (nc <= 0)
+            return;
+        const int drop = cand[postHash (seed ^ 0xD3A5u, (std::uint32_t) t) % (std::uint32_t) nc];
+        if (bassSoundingTotal (lane) - lane.notes[drop].length < 0.30f * loopEnd)
+            return;
+        for (int i = drop; i + 1 < lane.count; ++i)
+            lane.notes[i] = lane.notes[i + 1];
+        --lane.count;
+    }
+}
+
+// DEEP held bass: grow notes toward the next onset (seed order) until the line
+// sounds for 0.80 of the loop, never past capFrac; a line already above it
+// is shortened. Repeated pitches keep a breath; nothing passes the turn rest.
+void holdDeepBass (Lane& lane, int bars, std::uint32_t seed, float capFrac)
+{
+    const int n = std::min (lane.count, kMaxNotes);
+    const float loopEnd = (float) (std::min (bars, kMaxBars) * 16);
+    if (n <= 0 || loopEnd <= 0.f)
+        return;
+    sortByStart (lane);
+    const float tailCut = bassTailCut (bars);
+    float full[kMaxNotes];
+    float total = 0.f;
+    for (int i = 0; i < n; ++i)
+    {
+        Note& note = lane.notes[i];
+        float next = i + 1 < n ? lane.notes[i + 1].start : loopEnd;
+        if (note.start < tailCut)
+            next = std::min (next, tailCut);
+        next = std::min (next, loopEnd);
+        const int slot = (int) std::lround (note.start) % 16;
+        if (slot >= 14 && pcOf (note.chord[0]) == 3)
+            next = std::min (next, (float) (((int) std::lround (note.start) / 16 + 1) * 16));
+        const float room = std::max (0.f, next - note.start);
+        float orig = std::min (note.length, std::max (0.25f, loopEnd - note.start));
+        if (room >= 0.25f)
+            orig = std::min (orig, room);
+        note.length = orig;
+        float f = room;
+        if (i + 1 < n && lane.notes[i + 1].start < tailCut && lane.notes[i + 1].chord[0] == note.chord[0])
+            f = room - (room >= 2.f ? 1.f : 0.5f);
+        full[i] = note.start >= tailCut ? orig : std::max (orig, f);
+        total += orig;
+    }
+    const float target = 0.80f * loopEnd;
+    const float cap = capFrac * loopEnd;
+    if (total > cap)
+    {
+        capBassSounding (lane, bars, capFrac, 1.0f);
+        return;
+    }
+    int order[kMaxNotes];
+    std::uint32_t prio[kMaxNotes] {};
+    for (int i = 0; i < n; ++i)
+    {
+        order[i] = i;
+        prio[i] = postHash (seed ^ 0x401Du, (std::uint32_t) i);
+    }
+    std::sort (order, order + n, [&] (int a, int b) { return prio[a] < prio[b]; });
+    for (int k = 0; k < n && total < target; ++k)
+    {
+        const int i = order[k];
+        const float add = std::min (full[i] - lane.notes[i].length, cap - total);
+        if (add <= 0.f)
+            continue;
+        lane.notes[i].length += add;
+        total += add;
+    }
+}
+
+// Holds every bass note up to the next onset (or the turn rest / loop end),
+// so the line sounds for most of the loop. Some notes leave a one-16th
+// breath, a repeated pitch always does (no tie into the next note), and the
+// breaths stop once the sounding fraction would fall under the floor (0.78;
+// BOUNCY pulse 0.88, which keeps it over 0.85 after the bar-8 pickup).
+// Nothing overlaps, nothing passes the loop end, and no note gets shorter.
+// DEEP stops at 0.80 (holdDeepBass). BOUNCE never comes here.
+void holdBassNotes (Lane& lane, int dialect, int bars, std::uint32_t seed)
+{
+    if (dialect == Long)
+    {
+        // 0.855 leaves room for a three-16th bar-8 pickup under the 0.88 cap.
+        holdDeepBass (lane, bars, seed, 0.855f);
+        return;
+    }
+    const int n = std::min (lane.count, kMaxNotes);
+    const float loopEnd = (float) (std::min (bars, kMaxBars) * 16);
+    if (n <= 0 || loopEnd <= 0.f)
+        return;
+    sortByStart (lane);
+    const float tailCut = bassTailCut (bars);
+    const bool pulse = dialect == Pop;
 
     float room[kMaxNotes];
     float len[kMaxNotes];
@@ -4845,14 +5108,16 @@ void holdBassNotes (Lane& lane, int dialect, int bars, std::uint32_t seed)
         if (samePitch)
         {
             forced[i] = true;
-            len[i] = std::max (orig, room[i] - (room[i] >= 2.f ? 1.f : 0.5f));
+            // Pulse re-strikes a repeat after a short gap so it stays held.
+            const float gap = pulse ? 0.25f : (room[i] >= 2.f ? 1.f : 0.5f);
+            len[i] = std::max (orig, room[i] - gap);
         }
     }
 
     float total = 0.f;
     for (int i = 0; i < n; ++i)
         total += len[i];
-    const float floorTotal = 0.78f * loopEnd;
+    const float floorTotal = (pulse ? 0.88f : 0.78f) * loopEnd;
 
     int cand[kMaxNotes] {};
     std::uint32_t prio[kMaxNotes] {};
@@ -4881,6 +5146,17 @@ void holdBassNotes (Lane& lane, int dialect, int bars, std::uint32_t seed)
 
     for (int i = 0; i < n; ++i)
         lane.notes[i].length = len[i];
+    // BOUNCY pulse tops out at 0.975 (0.95 here: the pickup can add a little).
+    if (pulse)
+        capBassSounding (lane, bars, 0.95f, 1.0f);
+}
+
+// 0 not BOUNCY, 1 bounce, 2 pulse: the bass seed's draw, as lockPhrase plays it.
+int bouncyModeOf (const Settings& s, std::uint32_t bassSeed) noexcept
+{
+    if (s.dialect != Pop)
+        return BassModeNone;
+    return popIsPulse (s.bounce, bassSeed ? bassSeed : 1u) ? BassModePulse : BassModeBounce;
 }
 
 } // namespace
@@ -5110,8 +5386,40 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
     g.penalty = nPool > 0 ? pool[chosen].penalty : 0.f;
     if (nPool > 0)
         std::snprintf (g.brokenRules, sizeof g.brokenRules, "%s", pool[chosen].tag);
+    // BOUNCY plays one of two modes per roll: bounce (75%) or pulse (25%).
+    const int popMode = bouncyModeOf (s, bassSeed);
     if (regen (Bass))
-        lockPhrase (g.lane[Bass], s.dialect, bassSeed, s.bars, s.dark, s.bounce, s.busy);
+        g.bassMode = popMode;
+    else if (s.dialect != Pop)
+        g.bassMode = BassModeNone;
+    if (regen (Bass))
+    {
+        // BOUNCE needs bar-to-bar density movement (onset sd >= 0.7). The phrase
+        // is redrawn from derived seeds, at most six draws; the best one ships.
+        const Lane drawn = g.lane[Bass];
+        Lane best = drawn;
+        float bestSd = -1.f;
+        const int phraseDraws = popMode == BassModeBounce ? 6 : 1;
+        for (int k = 0; k < phraseDraws; ++k)
+        {
+            g.lane[Bass] = drawn;
+            const std::uint32_t phraseSeed = k == 0 ? bassSeed : (postHash (bassSeed ^ 0xB0B5u, (std::uint32_t) k) | 1u);
+            lockPhrase (g.lane[Bass], s.dialect, phraseSeed, s.bars, s.dark, s.bounce, s.busy,
+                        popMode == BassModePulse);
+            if (phraseDraws == 1)
+                break;
+            const float sd = barDensitySpread (g.lane[Bass], s.bars);
+            if (sd > bestSd)
+            {
+                bestSd = sd;
+                best = g.lane[Bass];
+            }
+            if (sd >= 0.8f)
+                break;
+        }
+        if (phraseDraws > 1)
+            g.lane[Bass] = best;
+    }
     if (regen (Bass))
     {
         separateTwinRhythm (g.lane[Bass], s.dialect, bassSeed);
@@ -5132,11 +5440,15 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
         avoidReaction (g.lane[Bass]);
     }
     // A&R msg 423 #1 and #2: some bass on the kick, then hold the notes. Runs
-    // before the stab rewrite so stabs see the bass that ships.
+    // before the stab rewrite so stabs see the bass that ships. BOUNCE keeps
+    // its short notes (no hold); only BOUNCY pulse gets the held line.
     if (regen (Bass))
     {
         placeBassOnKicks (g.lane[Bass], s.dialect, s.bars, bassSeed);
-        holdBassNotes (g.lane[Bass], s.dialect, s.bars, bassSeed);
+        if (popMode == BassModeBounce)
+            fitBounceSounding (g.lane[Bass], s.bars, 0.33f, 0.46f, bassSeed);
+        else
+            holdBassNotes (g.lane[Bass], s.dialect, s.bars, bassSeed);
         enforceMonophonic (g.lane[Bass]);
     }
     // Stabs are rewritten on the bass that ships. A bass rest is only a light
@@ -5161,6 +5473,20 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
         dedupeNoteOns (g.lane[part]);
     enforceMonophonic (g.lane[Bass]);
     harmonizeRoll (g, s, bassSeed, partMask);
+    // The bar-8 pickup can move the last bar: re-check the bands. Both passes
+    // only shorten or drop notes, so no clash or overlap comes back.
+    if (regen (Bass))
+    {
+        if (popMode == BassModeBounce)
+        {
+            spreadBounceDensity (g.lane[Bass], s.bars, 0.7f, bassSeed);
+            capBassSounding (g.lane[Bass], s.bars, 0.49f, 0.9f);
+        }
+        else if (popMode == BassModePulse)
+            capBassSounding (g.lane[Bass], s.bars, 0.975f, 1.0f);
+        else if (s.dialect == Long)
+            capBassSounding (g.lane[Bass], s.bars, 0.88f, 1.0f);
+    }
     g.guardScore = shippedHard ? 0.f : 1.f;
     g.guardLevel = shippedHard ? 2 : 0;
     std::snprintf (g.guardRef, sizeof g.guardRef, "%s", shippedHard ? "HARD" : "ORIGINAL");

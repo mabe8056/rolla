@@ -93,6 +93,9 @@ struct Groove
     // Candidates drawn this call, and how many a hard rule threw out.
     int draws = 0;
     int hardDraws = 0;
+    // BOUNCY bass mode of the last bass roll: 0 not BOUNCY, 1 bounce, 2 pulse.
+    // MidiExport writes it into the bass track ("mode:bounce" / "mode:pulse").
+    int bassMode = 0;
     Lane lane[NumParts] {};
     DrumLane drums {};
 };
@@ -120,6 +123,25 @@ struct Settings
     // Optional global chaos. 0 leaves the hidden per-roll bump as the only extra.
     float chaos = 0.f;
 };
+
+enum BassMode : int
+{
+    BassModeNone = 0,
+    BassModeBounce,
+    BassModePulse
+};
+
+// Text written into the exported bass track for BOUNCY, nullptr otherwise.
+inline const char* bassModeText (const Groove& g) noexcept
+{
+    if (g.dialect != Pop)
+        return nullptr;
+    if (g.bassMode == BassModeBounce)
+        return "mode:bounce";
+    if (g.bassMode == BassModePulse)
+        return "mode:pulse";
+    return nullptr;
+}
 
 inline const char* partId (int p) noexcept
 {
