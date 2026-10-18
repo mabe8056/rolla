@@ -63,6 +63,7 @@ struct Fingerprint
     float decay40Ms = 0.f;
     float subRatio = 0.f;
     float rmsDb = -120.f;   // metadata
+    float tiltDbPerOct = 0.f; // metadata: power-density slope over octave bands 125 Hz - 8 kHz
     bool truncated = false; // still over -40 dB at the end of the 1.5 s window
     PitchInfo pitch;        // metadata
 
@@ -182,6 +183,7 @@ inline Fingerprint fingerprintOf (const float* mono, int frames, double rate = k
     std::vector<double> power ((size_t) nb);
     std::vector<std::vector<double>> ceps;
     std::vector<double> weights;
+    std::vector<double> sumPower ((size_t) nb, 0.0);
     double cSum = 0.0, rSum = 0.0, flatSum = 0.0, wSum = 0.0, subE = 0.0, allE = 0.0;
     const int kLo = std::max (1, (int) (30.0 / binHz)), kHi = std::min (nb - 1, (int) (16000.0 / binHz));
     for (int start = 0; start < len; start += step)
@@ -200,6 +202,8 @@ inline Fingerprint fingerprintOf (const float* mono, int frames, double rate = k
         }
         if (e < 1.0e-10)
             continue;
+        for (int k = 0; k < nb; ++k)
+            sumPower[(size_t) k] += power[(size_t) k];
         double c = 0.0, band = 0.0, logSum = 0.0;
         for (int k = kLo; k <= kHi; ++k)
         {
@@ -272,6 +276,33 @@ inline Fingerprint fingerprintOf (const float* mono, int frames, double rate = k
     fp.rolloffHz = (float) (rSum / wSum);
     fp.flatness = (float) (flatSum / wSum);
     fp.subRatio = allE > 0.0 ? (float) (subE / allE) : 0.f;
+    {
+        // Least-squares slope of power density (dB) over octave bands 125 Hz .. 8 kHz.
+        double sx = 0.0, sy = 0.0, sxx = 0.0, sxy = 0.0;
+        int nPts = 0;
+        for (int o = 0; o < 7; ++o)
+        {
+            const double centre = 125.0 * std::pow (2.0, o);
+            const double lo = centre / std::sqrt (2.0), hi = centre * std::sqrt (2.0);
+            double p = 0.0;
+            int bins = 0;
+            for (int k = std::max (1, (int) (lo / binHz)); k <= std::min (nb - 1, (int) (hi / binHz)); ++k)
+            {
+                p += sumPower[(size_t) k];
+                ++bins;
+            }
+            if (bins == 0 || p <= 1.0e-20)
+                continue;
+            const double y = 10.0 * std::log10 (p / bins);
+            sx += o;
+            sy += y;
+            sxx += (double) o * o;
+            sxy += o * y;
+            ++nPts;
+        }
+        const double den = nPts * sxx - sx * sx;
+        fp.tiltDbPerOct = nPts >= 3 && std::fabs (den) > 1.0e-9 ? (float) ((nPts * sxy - sx * sy) / den) : 0.f;
+    }
     fp.pitch = probePitch (x, nullptr, len, rate, pitchFloorHz);
     fp.valid = true;
     return fp;

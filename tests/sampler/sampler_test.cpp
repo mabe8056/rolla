@@ -1,5 +1,6 @@
 #include "Engine/Engine.h"
 #include "Engine/Sampler.h"
+#include "GenreBrain/GenreTargetsJson.h"
 #include "Sampler/Fingerprint.h"
 #include "Sampler/PitchProbe.h"
 #include "Tools/FingerprintTool.h"
@@ -502,6 +503,49 @@ void testFingerprintTool()
     base.deleteRecursively();
 }
 
+void testGenreTargets()
+{
+    using namespace rolla::genre;
+    const auto mock = GenreTargets::mock();
+    expect (! mock.fromData && mock.lane (Style::Deep, Lane::Stab).centroidHz.hi < mock.lane (Style::Bouncy, Lane::Stab).centroidHz.hi
+                && mock.lane (Style::Deep, Lane::Pad).decayMs.hi > mock.lane (Style::Bouncy, Lane::Pad).decayMs.hi,
+            "genre mock: DEEP is darker and longer than BOUNCY");
+    expect (std::string (laneName (Lane::HatC)) == "HAT_C" && laneFromName ("VOX") == Lane::Vox && styleFromId ("gaskin") == Style::Jackin,
+            "genre names round-trip");
+
+    SampleFeatures kick;
+    kick.lane = Lane::Kick;
+    kick.centroidHz = 150.f;
+    kick.tiltDbPerOct = -6.f;
+    kick.attackMs = 2.f;
+    kick.decay20Ms = 200.f;
+    kick.subRatio = 0.6f;
+    expect (mock.bandMiss (Style::Roller, kick) == 0.f, "genre mock: a typical kick sits inside the kick bands");
+    kick.centroidHz = 3000.f;
+    expect (mock.bandMiss (Style::Roller, kick) > 1.f, "genre mock: a bright 'kick' misses the bands");
+    expect (mock.timbreDistance (Style::Roller, kick) == 0.f, "genre mock: no timbre regions, distance 0 (bands decide)");
+
+    // Partial real data: one style, one lane, overrides what it has and keeps the rest.
+    const char* text = R"JSON({"version":1,"norm":{"mean":[0,0,0],"std":[1,1,1]},
+      "styles":{"long":{"groove":{"swing":[0.53,0.58]},
+        "STAB":{"clusters":[{"centroid":[0,0,null],"spread":[1,1,1],"weight":1}],"threshold":1.5,"count":40,
+                "bands":{"centroid_hz":[300,900]},"pitch":{"min_conf":0.6},"loudness_db":-9}}}})JSON";
+    const auto g = parseGenreTargets (juce::JSON::parse (text));
+    const auto& stab = g.lane (Style::Deep, Lane::Stab);
+    expect (g.fromData && stab.present && stab.count == 40 && stab.timbre.clusters.size() == 1
+                && std::isnan (stab.timbre.clusters[0].centroid[2]) && stab.centroidHz.hi == 900.f && stab.minPitchConf == 0.6f
+                && g.style (Style::Deep).groove.swing.lo == 0.53f,
+            "genre json: given fields override (null centroid = NaN)");
+    expect (stab.attackMs.set && stab.attackMs.hi == mock.lane (Style::Deep, Lane::Stab).attackMs.hi
+                && g.lane (Style::Roller, Lane::Kick).centroidHz.hi == mock.lane (Style::Roller, Lane::Kick).centroidHz.hi,
+            "genre json: missing fields and styles keep the neutral values");
+    SampleFeatures s;
+    s.lane = Lane::Stab;
+    s.vector = { 0.2f, -0.1f, 5.f };
+    expect (g.timbreDistance (Style::Deep, s) < 1.f, "genre json: timbre distance skips the null dimension");
+    expect (! loadGenreTargets (juce::File ("/nonexistent/genre_targets.json")).fromData, "genre json: no file means the mock");
+}
+
 } // namespace
 
 int main()
@@ -511,6 +555,7 @@ int main()
     testPitchProbe();
     testFingerprint();
     testFingerprintTool();
+    testGenreTargets();
 
     static_assert (rolla::kUserSlotCount == 14, "14 user slots");
     expect (rolla::userSlotForPart (rolla::Bass) == rolla::SlotBass, "bass slot");

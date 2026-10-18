@@ -442,6 +442,7 @@ inline juce::var toJson (const std::vector<Entry>& entries)
         f->setProperty ("truncated", e.fp.truncated);
         f->setProperty ("sub_ratio", e.fp.subRatio);
         f->setProperty ("rms_db", e.fp.rmsDb);
+        f->setProperty ("tilt_db_oct", e.fp.tiltDbPerOct);
         f->setProperty ("root_pitch", e.fp.pitch.rootPitch);
         f->setProperty ("root_conf", e.fp.pitch.conf);
         f->setProperty ("is_chord", e.fp.pitch.isChord);
@@ -495,6 +496,7 @@ inline Fingerprint fingerprintFromJson (const juce::var& f)
     fp.truncated = (bool) f["truncated"];
     fp.subRatio = (float) (double) f["sub_ratio"];
     fp.rmsDb = (float) (double) f["rms_db"];
+    fp.tiltDbPerOct = (float) (double) f["tilt_db_oct"];
     fp.valid = true;
     return fp;
 }
