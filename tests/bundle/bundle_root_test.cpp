@@ -574,10 +574,11 @@ Stereo makeHat()
     return x;
 }
 
-// Stab: a D minor triad (D4 F4 A4), 8 partials each, R detuned 4 cents, 1.2 s.
+// Stab: a D minor triad (D4 F4 A4), 8 partials each, R detuned 4 cents, 0.8 s.
+// Under 0.9 s: longer STAB files are chopped to a short slice on purpose (SampleChop).
 Stereo makeStab()
 {
-    const int n = (int) (1.2 * kRate);
+    const int n = (int) (0.8 * kRate);
     Stereo x { std::vector<float> ((size_t) n), std::vector<float> ((size_t) n) };
     const double roots[] = { 293.66, 349.23, 440.0 };
     const double detune = std::pow (2.0, 4.0 / 1200.0);

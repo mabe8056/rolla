@@ -75,6 +75,11 @@ private:
         double loopA = 0.0;
         double loopB = 0.0;
         double xfade = 0.0;
+        // In-memory slice of a longer file. chopEnd 0 plays the whole buffer.
+        // The published SampleAudio is never edited.
+        double chopStart = 0.0;
+        double chopEnd = 0.0;
+        int chopFade = 0;
         bool loop = false;
         // Phrase loops keep their pitch and follow the host tempo.
         bool tempoSync = false;

@@ -467,6 +467,7 @@ void Sampler::readVoice (Voice& v, float& l, float& r) noexcept
         return;
     }
 
+    const double readAt = v.pos;
     const double n = (double) v.audio->frames;
     auto filePos = [&] (double p) noexcept -> double
     {
@@ -541,6 +542,8 @@ void Sampler::readVoice (Voice& v, float& l, float& r) noexcept
     }
     else
         v.pos += v.ratio;
+    if (v.chopEnd > v.chopStart && v.pos >= v.chopEnd)
+        v.on = false;
     if (! v.loop && v.pos >= n - 1.0)
         v.on = false;
     if (v.releaseN > 0 && v.releaseLeft <= 0 && v.stopping)
@@ -570,6 +573,8 @@ void Sampler::readVoice (Voice& v, float& l, float& r) noexcept
         v.env.release();
 
     float edge = v.noteEdge;
+    if (v.chopFade > 0 && v.chopEnd > v.chopStart)
+        edge *= chopEdge ((int) readAt, (int) v.chopStart, (int) v.chopEnd, v.chopFade);
     if (v.attackN > 0 && v.attackLeft > 0)
     {
         const float t = 1.f - (float) v.attackLeft / (float) v.attackN;
@@ -794,8 +799,14 @@ bool Sampler::playUserSlot (int part, int drumVoice, int midiNote, int velocity,
     // or by the DECAY gate (drums). The 3 ms raised-cosine attack is armAttack.
     fresh.env.start (0.f, 5.f, 1.f, drumVoice >= 0 ? 12.f : amp.r, srF);
 
-    const double startFrame = std::min (std::clamp ((double) decision.startSec, 0.0, 60.0) * pod.audio->rate,
-                                         (double) pod.audio->frames - 1.0);
+    double startFrame = std::min (std::clamp ((double) decision.startSec, 0.0, 60.0) * pod.audio->rate,
+                                   (double) pod.audio->frames - 1.0);
+    // A dropped vox file left at start 0 opens on its voice, not its lead-in.
+    // A start the user set is kept.
+    if (part == Vox && drumVoice < 0 && decision.startSec <= 0.f && ! decision.reverse && pod.audio->voicedCount > 0)
+        startFrame = (double) voxStart (0, false, 0, pod.audio->voiced, pod.audio->voicedCount, pod.audio->voicedFloor,
+                                        pod.audio->left.data(), pod.audio->right.empty() ? nullptr : pod.audio->right.data(),
+                                        pod.audio->frames, pod.audio->rate);
     if (drumVoice >= 0)
         fresh.gateLeft = drumGate (params.drumDecay[drumVoice], *pod.audio, startFrame, fresh.ratio);
     fresh.pos = startFrame;
@@ -914,6 +925,26 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
         return result;
     }
 
+    // Slice in memory. A blocked chop is broadband: the note stays silent.
+    ChopPlan chop;
+    const bool phrase = choice.phraseLoop && choice.fileBpm > 0;
+    if (! fromPack && ! phrase && choice.file != nullptr && choice.file[0] != 0
+        && (part == Hits || part == Stab || part == Pad))
+    {
+        const bool hardName = sampleTextListed (choice.file, kHardBroadband, 6);
+        const bool padBed = part == Pad && sampleTextListed (choice.file, kSoftPadBed, 4);
+        const auto seed = (std::uint32_t) std::max (0, params.samplePick[part]);
+        chop = planSampleChop (part, audio->frames, audio->rate, params.bpm, seed,
+                               audio->slices, audio->sliceCount, audio->loudStart,
+                               audio->flatness, hardName, padBed);
+        if (chop.blocked && (part == Hits || part == Stab || padBed))
+        {
+            result.kind = 1;
+            result.synthGain = 0.f;
+            return result;
+        }
+    }
+
     Voice* slot = allocate (part);
     if (slot == nullptr)
         return result;
@@ -960,6 +991,11 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     // A vox chop that would start in the file's lead-in silence starts at the first word.
     if (part == Vox && startFrame < (double) audio->lead)
         startFrame = (double) audio->lead;
+    // VOX chops start on the voice, not on a lead-in or a breath (in memory).
+    if (part == Vox && ! fromPack && ! phrase && audio->voicedCount > 0)
+        startFrame = (double) voxStart ((int) startFrame, choice.slice, choice.sliceIndex, audio->voiced, audio->voicedCount,
+                                        audio->voicedFloor, audio->left.data(),
+                                        audio->right.empty() ? nullptr : audio->right.data(), audio->frames, audio->rate);
     fresh.pos = startFrame;
     fresh.loop = ownFile && played.loop.on && part != Hits && part != Vox;
     const auto region = makeLoopRegion (played.loop, audio->rate, audio->frames, startFrame);
@@ -983,6 +1019,27 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
         fresh.pos = part == Vox ? (double) audio->lead : 0.0;
         fresh.anchor = fresh.pos;
         fresh.spliceLeft = 0;
+    }
+    else if (! fromPack && ! played.reverse && chopPlanOn (chop))
+    {
+        fresh.pos = (double) chop.start;
+        if (chop.hold)
+        {
+            fresh.loop = true;
+            fresh.loopA = (double) chop.start;
+            fresh.loopB = (double) std::max (chop.start + 1, chop.end - 1);
+            fresh.xfade = (double) chop.fade;
+        }
+        else
+        {
+            fresh.loop = false;
+            fresh.loopA = 0.0;
+            fresh.loopB = 0.0;
+            fresh.xfade = 0.0;
+            fresh.chopStart = (double) chop.start;
+            fresh.chopEnd = (double) chop.end;
+            fresh.chopFade = chop.fade;
+        }
     }
 
     armAttack (fresh);
