@@ -111,7 +111,7 @@ bool readyFromIndex (const SampleLibrary* library, const SampleIndex* index, int
     if (voice < 0 && ! spec.filter.on)
         return false;
     const int queryVoice = voice >= 0 ? voice : spec.filter.voice;
-    const PoolFilter filter = poolFilterFor (spec, part, queryVoice, dialect);
+    const PoolFilter filter = poolFilterWithFiles (*index, spec, part, queryVoice, dialect);
     const int n = sampleIndexCount (*index, part, filter);
     if (n <= 0)
         return false;

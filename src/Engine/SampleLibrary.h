@@ -394,6 +394,30 @@ inline const SampleEntry* sampleIndexAt (const SampleIndex& index, int part, con
     return nullptr;
 }
 
+// The recipe's own filter when the user's library has files for it; otherwise
+// the same lane, widened one step at a time (any loop, then any category,
+// then any pack or root) until something matches. A factory recipe whose
+// category the library lacks (e.g. the vox "loops" recipe without tempo-locked
+// loops on disk) still plays a sample from its own lane instead of going
+// silent. There is no synth fallback either way. Sampler, preload and the
+// renderer all draw through this, so they agree on the file.
+inline PoolFilter poolFilterWithFiles (const SampleIndex& index, const SampleSpec& spec, int part, int voice,
+                                       int dialect) noexcept
+{
+    PoolFilter f = poolFilterFor (spec, part, voice, dialect);
+    if (sampleIndexCount (index, part, f) > 0)
+        return f;
+    f.loop = -1;
+    if (sampleIndexCount (index, part, f) > 0)
+        return f;
+    f.category[0] = 0;
+    if (sampleIndexCount (index, part, f) > 0)
+        return f;
+    f.pack[0] = 0;
+    f.rootPc = -1;
+    return f;
+}
+
 // One roll's draw from a lane pool. mute is silence: the lane does not
 // fall through to a synth, and it does not borrow another lane.
 struct LanePick
