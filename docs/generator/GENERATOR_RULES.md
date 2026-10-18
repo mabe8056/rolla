@@ -294,9 +294,26 @@ drums:
 ```yaml
 dialects:
   UK_MIN:  {bass_npb: [4.5, 7.5], len16_med: [1.4, 2.2], on_kick_max: 0.10, root: [0.35, 0.76], top2: [0.63, 0.98], oct_max: 0.10, sounding: [0.50, 0.85], match2_min: 0.60, match4_min: 0.77, stab_pb: [0.5, 3], stab_beat_max: 0.10, vox_pb: [0.25, 1.5], hat_swing: [50, 58]}
-  LONG:    {bass_npb: [6.5, 8.0], len16_med: [2.0, 2.4], on_kick_max: 0.30, root: [0.30, 0.45], top2: [0.75, 0.85], oct_max: 0.0, sounding: [0.75, 0.90], match2_min: 0.75, match4_min: 0.78, stab_pb: [2.5, 4.5], stab_beat_max: 0.15, vox_pb: [1.0, 2.0], hat_swing: [50, 53]}
+  LONG:    {bass_npb: [4.6, 6.7], len16_med: [2.0, 2.4], on_kick_max: 0.30, root: [0.30, 0.45], top2: [0.75, 0.85], oct_max: 0.0, sounding: [0.75, 0.82], match2_min: 0.75, match4_min: 0.78, stab_pb: [2.5, 4.5], stab_beat_max: 0.15, vox_pb: [1.0, 2.0], hat_swing: [50, 53]}
   POP:     {bass_npb: [4.5, 6.0], len16_med: [1.0, 1.25], on_kick_max: 0.05, root: [0.30, 0.42], top2: [0.94, 0.99], oct: [0.15, 0.30], sounding: [0.28, 0.40], match2_min: 0.50, match4_min: 0.75, stab_pb: [9, 11], stab_beat_max: 0.20, vox_pb: [0, 0.5], hat_swing: [49, 51]}
   GASKIN_90S: {bass_npb: [6.0, 8.0], len16_med: [1.9, 2.3], on_kick_max: 0.35, root: [0.28, 0.40], top2: [0.55, 0.70], oct_max: 0.05, sounding: [0.75, 0.85], match1_max: 0.20, match2_min: 0.85, stab_pb: [5.5, 6.5], stab_len16: [7, 15], stab_beat_max: 0.20, hat_swing: [62, 68], sidechain_db: [3.6, 8], b2_share_max: 0.30}
+```
+
+### 5.1 Generator targets after the A&R MIDI gate
+
+The A&R gate (seed 2026101852, 20 rolls a style) measured ROLLER / DEEP / BOUNCY bass at 2.9–3.75 onsets a bar, against 4.3–5.2 in the references (`data/genre/style_rules.json` `bass_onsets_per_bar`). It measured the held bass sounding 0.86–0.90 of the loop, against about 0.80. The generator (`fillBassDensity`, `holdBassNotes`, `writeStab` in `src/Generator/Generator.cpp`) now aims at the numbers below. `tests/roll/roll_test.cpp` `testArGateBass` checks them.
+
+```yaml
+generator_targets:
+  bass_onsets_per_bar:            # at BUSY 0.40; BUSY scales the target like applyBusyDensity (0.76x at 0, 1.36x at 1)
+    UK_MIN: 5.0                   # style_rules ROLLER target 5.0, band 3.62-7.44
+    LONG:   4.9                   # plus the back-half contour (~+0.4); style_rules DEEP target 5.21, band 3.53-6.69
+    POP:    5.0                   # bounce mode only; pulse keeps its 5-8 grid. style_rules BOUNCY target 5.0, band 3.56-6.03
+    GASKIN: unchanged             # style_rules JACKIN target 4.44
+  fill_rules: "same lift in every bar (keeps the bar-to-bar shape and the 2-bar repetition); never on a kick step, never in the bar-8 turn rest, no run of three 16ths; 'and' 16ths first, then e/a (BOUNCY: e/a first)"
+  deep_back_half: "bars 5-7 move against bars 1-3 on a seeded contour: +0..2 a bar on a sparse line, -0..2 on a line already 1+ over the target; bar 8 keeps its turn"
+  held_sounding: {UK_MIN: 0.80, LONG: 0.80, GASKIN: 0.80, pickup_rolls: 0.78, POP_pulse: [0.85, 0.975], POP_bounce: [0.29, 0.49]}   # 0.78 leaves room for the bar-8 pickup's three 16ths
+  deep_stab_in_gap: "one stab hit in three per bar moves to the nearest bass rest (style_rules DEEP stab_in_gap target 25%, max 44%); hits per bar stay under the STAB cap"
 ```
 
 ---

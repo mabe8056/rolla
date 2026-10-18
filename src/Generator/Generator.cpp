@@ -3044,15 +3044,21 @@ void writeStab (Lane& lane, const Lane& bass, const Settings& s, Rng& rng, float
             if (placedRest[i])
                 ++alreadyRest;
         // JACKIN wants a clear share of stabs in bass rests (the floor is 8%).
-        // ROLLER is clamped after the loop. Other styles keep the light 8% nudge,
-        // and only when the bar has none.
-        const int wantRest = s.dialect == Gaskin ? std::max (1, (placed * 2) / 6) : 0;
-        const bool lightNudge = s.dialect != Gaskin && s.dialect != UkMin && alreadyRest == 0;
+        // DEEP answers in the bass gaps (A&R MIDI gate: 14 of 20 rolls had no
+        // stab there; style_rules stab_in_gap target 25%, max 44%): one hit in
+        // three moves to the nearest free rest, never onto a kick step, and the
+        // per-bar hit count (the STAB cap) is unchanged. ROLLER is clamped
+        // after the loop. BOUNCY keeps the light 8% nudge, only when the bar
+        // has none.
+        const int wantRest = s.dialect == Gaskin ? std::max (1, (placed * 2) / 6)
+                           : s.dialect == Long  ? std::max (1, (placed + 1) / 3)
+                                                : 0;
+        const bool lightNudge = s.dialect == Pop && alreadyRest == 0;
         for (int i = 0; i < placed && i < 12; ++i)
         {
             if (placedRest[i])
                 continue;
-            if (s.dialect == Gaskin)
+            if (s.dialect == Gaskin || s.dialect == Long)
             {
                 if (alreadyRest >= wantRest)
                     break;
@@ -3066,12 +3072,20 @@ void writeStab (Lane& lane, const Lane& bass, const Settings& s, Rng& rng, float
             else
                 break;
             int dest = -1;
+            const int from = (int) std::lround (lane.notes[placedIdx[i]].start) % 16;
             for (int g = 0; g < nRest; ++g)
-                if (! taken[rest[g]])
+            {
+                if (taken[rest[g]])
+                    continue;
+                if (s.dialect != Long)
                 {
                     dest = rest[g];
                     break;
                 }
+                // DEEP: the rest closest to where the hit was (a 16th or two away).
+                if (dest < 0 || std::abs (rest[g] - from) < std::abs (dest - from))
+                    dest = rest[g];
+            }
             if (dest < 0)
                 continue;
             const float start = (float) (bar * 16 + dest);
@@ -4749,6 +4763,279 @@ float bassTailCut (int bars) noexcept
     return bars >= 4 ? (float) ((bars - 1) * 16 + 12) : (float) (bars * 16);
 }
 
+// A&R MIDI gate (seed 2026101852, 20 rolls a style): ROLLER / DEEP / BOUNCY bass
+// played 2.9-3.75 onsets a bar against the references' 4.3-5.2
+// (style_rules.json bass_onsets_per_bar targets: ROLLER 5.0, DEEP 5.21,
+// BOUNCY 5.0). Per-style target at the shipped BUSY (0.40). DEEP's front half
+// aims a little lower because its back-half contour adds about 0.4 a bar.
+// JACKIN (reference 4.44) and BOUNCY pulse (its own 5-8 grid) are left alone.
+float bassDensityTarget (int dialect) noexcept
+{
+    switch (dialect)
+    {
+        case UkMin: return 5.0f;
+        case Long:  return 4.9f;
+        case Pop:   return 5.0f;
+        default:    return 0.f;
+    }
+}
+
+bool bassRootAt (const Lane& lane, int abs) noexcept
+{
+    for (int i = 0; i < lane.count; ++i)
+        if ((int) std::lround (lane.notes[i].start) == abs && pcOf (lane.notes[i].chord[0]) == 0)
+            return true;
+    return false;
+}
+
+// A free 16th for a new bass attack in `bar`, or -1. Never a kick step, never
+// inside the last bar's turn rest, never a run of three 16th attacks. The
+// order depends only on the seed and the bar's parity, so bars that repeat
+// take the same fill and the 2-bar repetition holds (the "whole slots" rule
+// from the ROLLER style pass). "And" 16ths come first, then e / a (the
+// style_rules slot-class weights); BOUNCY's bounce prefers the e / a.
+int bassFillSlot (const bool* used, int bar, int nslots, float tailCut, int dialect, std::uint32_t seed)
+{
+    int order[12];
+    std::uint32_t prio[12];
+    int n = 0;
+    for (int s = 0; s < 16 && n < 12; ++s)
+    {
+        if (kickSlot (s))
+            continue;
+        const bool andSlot = (s & 3) == 2;
+        const std::uint32_t rank = dialect == Pop ? (andSlot ? 1u : 0u) : (andSlot ? 0u : 1u);
+        order[n] = s;
+        prio[n] = (rank << 28) | (postHash (seed ^ 0xF111u, (std::uint32_t) ((bar & 1) * 16 + s)) >> 4);
+        ++n;
+    }
+    for (int a = 1; a < n; ++a)
+        for (int b = a; b > 0 && prio[b] < prio[b - 1]; --b)
+        {
+            std::swap (prio[b], prio[b - 1]);
+            std::swap (order[b], order[b - 1]);
+        }
+    for (int k = 0; k < n; ++k)
+    {
+        const int abs = bar * 16 + order[k];
+        if (abs < 0 || abs >= nslots || used[abs] || (float) abs >= tailCut)
+            continue;
+        int left = 0;
+        for (int q = abs - 1; q >= 0 && used[q]; --q)
+            ++left;
+        int right = 0;
+        for (int q = abs + 1; q < nslots && used[q]; ++q)
+            ++right;
+        if (left + right + 1 > 2)
+            continue;
+        return abs;
+    }
+    return -1;
+}
+
+// How many attacks bassFillSlot can still place in `bar` (up to `want`).
+int bassFillRoom (const bool* used, int bar, int nslots, float tailCut, int dialect, std::uint32_t seed, int want)
+{
+    bool scratch[kMaxSteps] {};
+    for (int i = 0; i < nslots && i < kMaxSteps; ++i)
+        scratch[i] = used[i];
+    int got = 0;
+    while (got < want)
+    {
+        const int abs = bassFillSlot (scratch, bar, nslots, tailCut, dialect, seed);
+        if (abs < 0)
+            break;
+        scratch[abs] = true;
+        ++got;
+    }
+    return got;
+}
+
+// Pitch for a new attack (the lane is sorted). BOUNCY re-strikes the previous
+// note, an octave away about one time in seven so its octave share holds.
+// The other styles take a pitch class the bar already plays (then 5th, b3,
+// b7, root), never the neighbours' own pitch class, so the held line keeps
+// moving and no breath is forced. Never a b2, never the reaction figure.
+// harmonizeRoll still conforms the mode and the stab clashes afterwards.
+int bassFillPitch (const Lane& lane, int abs, int dialect, std::uint32_t seed)
+{
+    int prev = -1;
+    int next = -1;
+    for (int i = 0; i < lane.count; ++i)
+    {
+        const int st = (int) std::lround (lane.notes[i].start);
+        if (st < abs)
+            prev = i;
+        else if (st > abs && next < 0)
+            next = i;
+    }
+    const int prevSemi = prev >= 0 ? lane.notes[prev].chord[0] : (next >= 0 ? lane.notes[next].chord[0] : 0);
+    const int nextSemi = next >= 0 ? lane.notes[next].chord[0] : prevSemi;
+    const int bar = abs / 16;
+    const int slot = abs % 16;
+    const bool rootBlocked = (slot == 1 || slot == 3) && bassRootAt (lane, bar * 16 + (slot == 1 ? 3 : 1));
+    const std::uint32_t h = postHash (seed ^ 0xF177u, (std::uint32_t) ((bar & 1) * 16 + slot));
+    auto place = [&] (int pc)
+    {
+        int semi = retarget (prevSemi, pc);
+        if (semi < 0)
+            semi += 12;
+        return semi;
+    };
+
+    if (dialect == Pop)
+    {
+        int semi = prevSemi;
+        if (pcOf (semi) == 1)
+            semi = nextSemi;
+        if (pcOf (semi) == 1 || (pcOf (semi) == 0 && rootBlocked))
+            semi = place (7);
+        if (h % 100u < 15u)
+            semi = semi >= 12 ? semi - 12 : semi + 12;
+        return semi;
+    }
+
+    int cand[12];
+    int nc = 0;
+    auto addPc = [&] (int pc)
+    {
+        for (int k = 0; k < nc; ++k)
+            if (cand[k] == pc)
+                return;
+        if (nc < 12)
+            cand[nc++] = pc;
+    };
+    for (int i = 0; i < lane.count; ++i)
+        if ((int) std::lround (lane.notes[i].start) / 16 == bar)
+            addPc (pcOf (lane.notes[i].chord[0]));
+    const int fromBar = nc;
+    for (int pc : { 7, 3, 10, 0 })
+        addPc (pc);
+    const int pPc = pcOf (prevSemi);
+    const int nPc = pcOf (nextSemi);
+    auto ok = [&] (int pc) { return pc != 1 && pc != pPc && pc != nPc && ! (pc == 0 && rootBlocked); };
+    const int rot = fromBar > 0 ? (int) (h % (std::uint32_t) fromBar) : 0;
+    for (int t = 0; t < fromBar; ++t)
+        if (ok (cand[(rot + t) % fromBar]))
+            return place (cand[(rot + t) % fromBar]);
+    for (int k = fromBar; k < nc; ++k)
+        if (ok (cand[k]))
+            return place (cand[k]);
+    return place (pPc == 7 ? 3 : 7);
+}
+
+// Brings the bass to its style's onset density (bassDensityTarget, scaled by
+// BUSY the way applyBusyDensity scales the phrase, so the knob still moves it).
+// Every bar takes the same lift, which keeps the bar-to-bar shape (BOUNCE's
+// spread, the call / answer bars); BOUNCE only lifts by what every bar can take.
+// DEEP's back half then moves against the front half on a seeded contour
+// (after the DEEP dark contour idea): a sparse line builds into bars 5-7, a
+// line already busier than the target thins there. Bar 8 keeps its turn.
+// Runs before placeBassOnKicks and the holds, so both see the new attacks.
+void fillBassDensity (Lane& lane, int dialect, int bars, float busy, std::uint32_t seed)
+{
+    const float base = bassDensityTarget (dialect);
+    const int nb = std::min (bars, kMaxBars);
+    if (base <= 0.f || nb < 2 || lane.count <= 0)
+        return;
+    sortByStart (lane);
+    const int nslots = nb * 16;
+    const float tailCut = bassTailCut (nb);
+    const float target = base * busyFactor (busy) / busyFactor (0.40f);
+    bool used[kMaxSteps] {};
+    int total = 0;
+    for (int i = 0; i < lane.count; ++i)
+    {
+        const int st = (int) std::lround (lane.notes[i].start);
+        if (st < 0 || st >= nslots)
+            continue;
+        used[st] = true;
+        ++total;
+    }
+    const float mean = (float) total / (float) nb;
+    const int lift = std::max (0, (int) std::lround (target - mean));
+    int add[kMaxBars] {};
+    int thin[kMaxBars] {};
+    // BOUNCE needs its bar-to-bar spread (onset sd >= 0.7): the body bars take
+    // one lift they can all hold. The turn bar (usually the thin one) takes
+    // what fits; spreadBounceDensity still guards the spread after the pickup.
+    int even = lift;
+    if (dialect == Pop)
+        for (int b = 0; b + 1 < nb && even > 0; ++b)
+            even = std::min (even, bassFillRoom (used, b, nslots, tailCut, dialect, seed, lift));
+    for (int b = 0; b < nb; ++b)
+        add[b] = even;
+    if (dialect == Long && nb == 8)
+    {
+        static const int kContour[5][3] = { { 0, 1, 2 }, { 1, 0, 2 }, { 1, 2, 1 }, { 2, 1, 1 }, { 0, 2, 1 } };
+        const int* c = kContour[postHash (seed ^ 0xDEE5u, 5u) % 5u];
+        const bool busyLine = mean >= target + 1.f;
+        for (int j = 0; j < 3; ++j)
+        {
+            if (busyLine)
+                thin[4 + j] = c[j];
+            else
+                add[4 + j] += c[j];
+        }
+    }
+
+    const float tick = 1.f / 120.f;
+    for (int b = 0; b < nb; ++b)
+    {
+        for (int k = 0; k < add[b] && lane.count < kMaxNotes; ++k)
+        {
+            const int abs = bassFillSlot (used, b, nslots, tailCut, dialect, seed);
+            if (abs < 0)
+                break;
+            Note n;
+            n.start = (float) abs;
+            n.nChord = 1;
+            n.chord[0] = (std::int8_t) bassFillPitch (lane, abs, dialect, seed);
+            float next = (float) nslots;
+            int prev = -1;
+            for (int i = 0; i < lane.count; ++i)
+            {
+                if (lane.notes[i].start > n.start + 1.0e-3f)
+                    next = std::min (next, lane.notes[i].start);
+                else if (lane.notes[i].start < n.start - 1.0e-3f)
+                    prev = i;
+            }
+            if (n.start < tailCut)
+                next = std::min (next, tailCut);
+            n.length = std::max (0.5f, std::min (dialect == Pop ? 1.1f : 2.f, next - n.start - tick));
+            n.vel = 96;
+            n.flags = 0;
+            n.timbre = prev >= 0 ? lane.notes[prev].timbre : (std::uint8_t) 0;
+            if (prev >= 0 && lane.notes[prev].start + lane.notes[prev].length > n.start - tick)
+                lane.notes[prev].length = std::max (0.25f, n.start - lane.notes[prev].start - tick);
+            lane.notes[lane.count++] = n;
+            used[abs] = true;
+            sortByStart (lane);
+        }
+        for (int k = 0; k < thin[b]; ++k)
+        {
+            // The bar's latest attack goes, while the bar keeps more than three.
+            int inBar = 0;
+            int latest = -1;
+            for (int i = 0; i < lane.count; ++i)
+                if ((int) std::lround (lane.notes[i].start) / 16 == b)
+                {
+                    ++inBar;
+                    latest = i;
+                }
+            if (inBar <= 3 || latest < 0)
+                break;
+            const int st = (int) std::lround (lane.notes[latest].start);
+            if (st >= 0 && st < nslots)
+                used[st] = false;
+            for (int i = latest; i + 1 < lane.count; ++i)
+                lane.notes[i] = lane.notes[i + 1];
+            --lane.count;
+        }
+    }
+    sortByStart (lane);
+}
+
 // Moves bass attacks one 16th (then two) onto a free kick step in the same
 // bar until the on-kick share reaches the style target, never above 35%.
 // Only empty slots are used and a two-16th move needs the slot between free,
@@ -4997,9 +5284,10 @@ void spreadBounceDensity (Lane& lane, int bars, float minSd, std::uint32_t seed)
 }
 
 // DEEP held bass: grow notes toward the next onset (seed order) until the line
-// sounds for 0.80 of the loop, never past capFrac; a line already above it
-// is shortened. Repeated pitches keep a breath; nothing passes the turn rest.
-void holdDeepBass (Lane& lane, int bars, std::uint32_t seed, float capFrac)
+// sounds for ceilFrac of the loop and no more (A&R MIDI gate: about 0.80, it
+// was overshooting to 0.86-0.90); a line already above it is shortened.
+// Repeated pitches keep a breath; nothing passes the turn rest.
+void holdDeepBass (Lane& lane, int bars, std::uint32_t seed, float ceilFrac)
 {
     const int n = std::min (lane.count, kMaxNotes);
     const float loopEnd = (float) (std::min (bars, kMaxBars) * 16);
@@ -5030,11 +5318,10 @@ void holdDeepBass (Lane& lane, int bars, std::uint32_t seed, float capFrac)
         full[i] = note.start >= tailCut ? orig : std::max (orig, f);
         total += orig;
     }
-    const float target = 0.80f * loopEnd;
-    const float cap = capFrac * loopEnd;
-    if (total > cap)
+    const float target = ceilFrac * loopEnd;
+    if (total > target)
     {
-        capBassSounding (lane, bars, capFrac, 1.0f);
+        capBassSounding (lane, bars, ceilFrac, 1.0f);
         return;
     }
     int order[kMaxNotes];
@@ -5048,7 +5335,7 @@ void holdDeepBass (Lane& lane, int bars, std::uint32_t seed, float capFrac)
     for (int k = 0; k < n && total < target; ++k)
     {
         const int i = order[k];
-        const float add = std::min (full[i] - lane.notes[i].length, cap - total);
+        const float add = std::min (full[i] - lane.notes[i].length, target - total);
         if (add <= 0.f)
             continue;
         lane.notes[i].length += add;
@@ -5061,14 +5348,22 @@ void holdDeepBass (Lane& lane, int bars, std::uint32_t seed, float capFrac)
 // breath, a repeated pitch always does (no tie into the next note), and the
 // breaths stop once the sounding fraction would fall under the floor (0.78;
 // BOUNCY pulse 0.88, which keeps it over 0.85 after the bar-8 pickup).
-// Nothing overlaps, nothing passes the loop end, and no note gets shorter.
-// DEEP stops at 0.80 (holdDeepBass). BOUNCE never comes here.
+// Nothing overlaps and nothing passes the loop end. A&R MIDI gate: the held
+// line (ROLLER, JACKIN, DEEP) sounds for about 0.80 of the loop, where it
+// used to land at 0.86-0.90: more breaths first, then the longest notes give
+// time back. A roll that takes the bar-8 pickup stops at 0.78, since the
+// pickup adds up to three 16ths later. BOUNCY pulse keeps its own band and
+// BOUNCE never comes here.
+float bassHoldCeiling (std::uint32_t seed) noexcept
+{
+    return rollWantsPickup (seed) ? 0.78f : 0.80f;
+}
+
 void holdBassNotes (Lane& lane, int dialect, int bars, std::uint32_t seed)
 {
     if (dialect == Long)
     {
-        // 0.855 leaves room for a three-16th bar-8 pickup under the 0.88 cap.
-        holdDeepBass (lane, bars, seed, 0.855f);
+        holdDeepBass (lane, bars, seed, bassHoldCeiling (seed));
         return;
     }
     const int n = std::min (lane.count, kMaxNotes);
@@ -5150,12 +5445,29 @@ void holdBassNotes (Lane& lane, int dialect, int bars, std::uint32_t seed)
         total -= cost;
         len[i] = shorter;
     }
+    const float ceilFrac = bassHoldCeiling (seed);
+    if (! pulse)
+    {
+        // Past the floor's breaths: keep breathing (seed order) down to the ceiling.
+        for (int k = 0; k < nc && total > ceilFrac * loopEnd; ++k)
+        {
+            const int i = cand[k];
+            const float shorter = std::max (lane.notes[i].length, room[i] - 1.f);
+            const float cost = len[i] - shorter;
+            if (cost <= 0.f)
+                continue;
+            total -= cost;
+            len[i] = shorter;
+        }
+    }
 
     for (int i = 0; i < n; ++i)
         lane.notes[i].length = len[i];
     // BOUNCY pulse tops out at 0.975 (0.95 here: the pickup can add a little).
     if (pulse)
         capBassSounding (lane, bars, 0.95f, 1.0f);
+    else
+        capBassSounding (lane, bars, ceilFrac, 1.0f);
 }
 
 // 0 not BOUNCY, 1 bounce, 2 pulse: the bass seed's draw, as lockPhrase plays it.
@@ -5448,9 +5760,12 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
     }
     // A&R msg 423 #1 and #2: some bass on the kick, then hold the notes. Runs
     // before the stab rewrite so stabs see the bass that ships. BOUNCE keeps
-    // its short notes (no hold); only BOUNCY pulse gets the held line.
+    // its short notes (no hold); only BOUNCY pulse gets the held line. The
+    // A&R MIDI gate's density fill comes first (pulse keeps its own grid).
     if (regen (Bass))
     {
+        if (popMode != BassModePulse)
+            fillBassDensity (g.lane[Bass], s.dialect, s.bars, s.busy, bassSeed);
         placeBassOnKicks (g.lane[Bass], s.dialect, s.bars, bassSeed);
         if (popMode == BassModeBounce)
             fitBounceSounding (g.lane[Bass], s.bars, 0.33f, 0.46f, bassSeed);

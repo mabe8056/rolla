@@ -1416,6 +1416,104 @@ void testBar8Pickup()
     }
 }
 
+// A&R MIDI gate (seed 2026101852, 20 rolls a style), checked over 40 seeds a
+// style from that base:
+//  - mean bass onsets per bar inside the reference range (style_rules.json
+//    bass_onsets_per_bar: targets ROLLER 5.0, DEEP 5.21, BOUNCY 5.0; the
+//    floor sits under them, the ceiling is the style max);
+//  - mean sounding ratio <= 0.82 outside BOUNCY pulse (was 0.86-0.90);
+//  - DEEP's back half (bars 5-7) moves its density against the front half
+//    (bars 1-3) in most rolls (was flat in 17 of 20);
+//  - DEEP stabs land in the bass gaps (was none in 14 of 20), under the
+//    50% bonus line.
+void testArGateBass()
+{
+    const std::uint32_t base = 2026101852u;
+    const char* names[] = { "ROLLER", "DEEP", "BOUNCY", "JACKIN" };
+    const double npbLo[] = { 4.5, 4.6, 4.5, 0.0 };
+    const double npbHi[] = { 7.44, 6.69, 6.03, 99.0 };
+    const int rolls = 40;
+    for (int style = 0; style < 4; ++style)
+    {
+        double npbSum = 0.0;
+        double sndSum = 0.0;
+        int sndN = 0;
+        int backMoves = 0;
+        int stabHits = 0;
+        int stabGaps = 0;
+        int gapRolls = 0;
+        for (int roll = 0; roll < rolls; ++roll)
+        {
+            rolla::Settings s;
+            s.dialect = style;
+            s.bars = 8;
+            std::uint32_t seeds[rolla::NumParts] {};
+            for (int p = 0; p < rolla::NumParts; ++p)
+                seeds[p] = base + (std::uint32_t) roll * 0x9E3779B9u + (std::uint32_t) p * 17u
+                         + (std::uint32_t) style * 101u;
+            rolla::Groove g {};
+            rolla::generate (g, s, seeds, 0x7fu);
+            const auto& bass = g.lane[rolla::Bass];
+            const double loop = (double) (g.bars * 16);
+            npbSum += (double) bass.count / (double) g.bars;
+
+            double held = 0.0;
+            int bar[8] {};
+            for (int i = 0; i < bass.count; ++i)
+            {
+                held += bass.notes[i].length;
+                const int b = (int) std::lround (bass.notes[i].start) / 16;
+                if (b >= 0 && b < 8)
+                    ++bar[b];
+            }
+            if (g.bassMode != rolla::BassModePulse)
+            {
+                sndSum += held / loop;
+                ++sndN;
+            }
+
+            if (style == rolla::Long)
+            {
+                if (bar[4] != bar[0] || bar[5] != bar[1] || bar[6] != bar[2])
+                    ++backMoves;
+                const auto& stab = g.lane[rolla::Stab];
+                int rollHits = 0;
+                int rollGaps = 0;
+                for (int k = 0; k < stab.count; ++k)
+                {
+                    ++rollHits;
+                    if (! bassSoundsAt (bass, (int) std::lround (stab.notes[k].start)))
+                        ++rollGaps;
+                }
+                stabHits += rollHits;
+                stabGaps += rollGaps;
+                if (rollHits > 0 && rollGaps * 100 >= rollHits * 15)
+                    ++gapRolls;
+            }
+        }
+        const double npb = npbSum / rolls;
+        const double snd = sndN > 0 ? sndSum / sndN : 0.0;
+        std::cout << names[style] << " A&R gate: bass onsets/bar " << npb << " sounding (no pulse) " << snd;
+        if (style == rolla::Long)
+            std::cout << " back-half moves " << backMoves << "/" << rolls << " stab-in-gap "
+                      << (stabHits > 0 ? 100.0 * stabGaps / stabHits : 0.0) << "% rolls >= 15% " << gapRolls << "/" << rolls;
+        std::cout << "\n";
+        if (style != rolla::Gaskin)
+            expect (npb >= npbLo[style] && npb <= npbHi[style],
+                    std::string (names[style]) + " mean bass onsets per bar " + std::to_string (npb) + " in "
+                        + std::to_string (npbLo[style]) + "-" + std::to_string (npbHi[style]));
+        expect (sndN > 0 && snd <= 0.82 + 1.0e-6,
+                std::string (names[style]) + " mean sounding " + std::to_string (snd) + " <= 0.82 outside pulse");
+        if (style == rolla::Long)
+        {
+            const double gapPct = stabHits > 0 ? 100.0 * stabGaps / stabHits : 0.0;
+            expect (backMoves * 10 >= rolls * 8, "DEEP back half moves its density against the front half (>= 80% of rolls)");
+            expect (gapPct >= 20.0 && gapPct < 50.0, "DEEP stabs in bass gaps " + std::to_string (gapPct) + "% in 20-50%");
+            expect (gapRolls * 4 >= rolls * 3, "DEEP stabs answer in the bass gaps in >= 75% of rolls");
+        }
+    }
+}
+
 void testShuffleKeepsManualLock()
 {
     rolla::RollaProcessor proc;
@@ -1454,6 +1552,7 @@ int main()
     testHarmonyClashes();
     testLaneHygiene();
     testBar8Pickup();
+    testArGateBass();
     testRollSkipsMutedAndKept();
     testShuffleClearsAutoKeep();
     testShuffleKeepsManualLock();
