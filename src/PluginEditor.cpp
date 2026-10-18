@@ -221,7 +221,7 @@ struct Look : LookAndFeel_V4
             g.fillRect (area);
         }
         g.setColour (isActive ? col (kInk) : col (kInk3));
-        drawLabel (g, text, Theme::Role::preset, area.reduced (28, 0), Justification::centredLeft, true);
+        ::rolla::drawLabel (g, text, Theme::Role::preset, area.reduced (28, 0), Justification::centredLeft, true);
         if (isTicked)
         {
             g.setColour (col (kInk));
@@ -307,14 +307,14 @@ struct Look : LookAndFeel_V4
                 if (key.isEmpty())
                 {
                     g.setColour (col (kInk));
-                    drawLabel (g, value, Theme::Role::meta, row, Justification::centredLeft, true);
+                    ::rolla::drawLabel (g, value, Theme::Role::meta, row, Justification::centredLeft, true);
                     continue;
                 }
                 const float keyW = (text.startsWith ("INTENSITY") && i == 0) ? 96.f : 64.f;
                 g.setColour (col (kInk3));
-                drawLabel (g, key, Theme::Role::caption, row.removeFromLeft (keyW), Justification::centredLeft);
+                ::rolla::drawLabel (g, key, Theme::Role::caption, row.removeFromLeft (keyW), Justification::centredLeft);
                 g.setColour (col (kInk));
-                drawLabel (g, value, Theme::Role::meta, row.withTrimmedLeft (8.f), Justification::centredLeft, true);
+                ::rolla::drawLabel (g, value, Theme::Role::meta, row.withTrimmedLeft (8.f), Justification::centredLeft, true);
             }
             return;
         }
