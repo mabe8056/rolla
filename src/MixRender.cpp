@@ -255,9 +255,6 @@ int selfTest (const rolla::PresetBank& bank, const rolla::MixProgram& mix,
     const int dialect = rolla::UkMin;
     const auto groove = makeGroove (bank, dialect);
     auto fullP = makeParams (bank, mix, dialect, false, library, index);
-    // The null checks the strip's linearity. The master true-peak guard is
-    // nonlinear by design (rolla-tp-test covers it), so it is off for these takes.
-    fullP.tpGuard = false;
     const auto full = renderTake (groove, fullP, 4);
     const LaneId probe[] = { kLanes[8], kLanes[0], kLanes[1] }; // BASS, KICK, CLAP
     int rc = 0;
