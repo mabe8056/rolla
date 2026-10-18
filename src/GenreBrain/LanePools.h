@@ -48,7 +48,8 @@ inline Lane laneForPart (int part, int voice) noexcept
 
 // The pool sampleIndexAt walks (strict list, or the role-lane fallback when the
 // strict list is empty), as features relabelled to `lane`. One pass over the
-// index. Empty unless every file in the pool has features.
+// index. Files the feature index lacks come back `excluded`; a pool where none
+// has features is empty (the caller keeps today's draw).
 inline std::vector<SampleFeatures> featurePool (const SampleIndex& index, int part, const PoolFilter& filter,
                                                 const FeatureIndex& features, Lane lane)
 {
@@ -67,12 +68,22 @@ inline std::vector<SampleFeatures> featurePool (const SampleIndex& index, int pa
                                    : sampleEntryMatches (entry, part, filter);
         if (! keep)
             continue;
+        // A file the index lacks (e.g. digitally silent, skipped by the box) keeps its
+        // place, so ordinals line up, but is never drawn.
         const auto* f = features.find (std::string (entry.path));
         if (f == nullptr)
-            return {};
-        out.push_back (*f);
+        {
+            SampleFeatures missing;
+            missing.id = entry.path;
+            missing.excluded = true;
+            out.push_back (missing);
+        }
+        else
+            out.push_back (*f);
         out.back().lane = lane;
     }
+    if (std::all_of (out.begin(), out.end(), [] (const SampleFeatures& s) { return s.excluded; }))
+        out.clear();
     return out;
 }
 

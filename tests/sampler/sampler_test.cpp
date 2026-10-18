@@ -793,8 +793,14 @@ void testSoundSelector()
         }
         expect (mapped, "seam: the selector's pick is the index ordinal of the same file");
         addEntry ("BASS/new.wav", rolla::Bass);
-        expect (featurePool (idx, rolla::Bass, filter, features, Lane::Bass).empty(),
-                "seam: a pool with a file the index does not cover keeps today's draw");
+        at (pools, Lane::Bass) = featurePool (idx, rolla::Bass, filter, features, Lane::Bass);
+        const auto& withMissing = at (pools, Lane::Bass);
+        expect (withMissing.size() == 3 && withMissing[2].excluded && ! withMissing[0].excluded,
+                "seam: a file the index lacks keeps its place in the pool, excluded");
+        bool neverMissing = true;
+        for (std::uint64_t seed = 1; seed <= 200; ++seed)
+            neverMissing = neverMissing && drawKit (pools, Style::Roller, GenreTargets::mock(), seed, nullptr).pick[(size_t) Lane::Bass] != 2;
+        expect (neverMissing, "seam: an excluded file is never drawn");
     }
 }
 

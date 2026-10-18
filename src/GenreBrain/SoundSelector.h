@@ -208,7 +208,7 @@ inline Kit drawKit (const std::array<std::vector<SampleFeatures>, kLanes>& pools
         scores.assign ((size_t) n, 0.f);
         float best = std::numeric_limits<float>::max();
         for (int i = 0; i < n; ++i)
-            if (i != skip)
+            if (i != skip && ! pool[(size_t) i].excluded)
             {
                 scores[(size_t) i] = fitScore (targets, style, lane, pool[(size_t) i], opt);
                 best = std::min (best, scores[(size_t) i]);
@@ -219,7 +219,8 @@ inline Kit drawKit (const std::array<std::vector<SampleFeatures>, kLanes>& pools
         cands.clear();
         for (int i = 0; i < n; ++i)
         {
-            if (i == skip)
+            // Excluded files (missing from the index, silent) are not candidates.
+            if (i == skip || pool[(size_t) i].excluded)
                 continue;
             double w = std::exp (-(double) (scores[(size_t) i] - best) / temperature);
             if (anchor != nullptr)
