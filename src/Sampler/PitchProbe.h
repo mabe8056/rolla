@@ -226,9 +226,16 @@ inline PitchInfo probePitch (const float* left, const float* right, int frames, 
     if (left == nullptr || frames < 256 || rate < 8000.0)
         return info;
 
-    // After the attack: from the first audible frame + 30 ms, up to 1 s.
+    // After the attack: from the first audible frame + 30 ms, up to 1 s. Audible is
+    // relative to the file's peak (5%), so a quiet render or a soft file still counts.
+    float peak = 0.f;
+    for (int i = 0; i < frames; ++i)
+        peak = std::max ({ peak, std::fabs (left[i]), right != nullptr ? std::fabs (right[i]) : 0.f });
+    if (peak < 1.0e-5f)
+        return info;
+    const float audible = peak * 0.05f;
     int lead = 0;
-    while (lead < frames && std::fabs (left[lead]) < 0.01f && (right == nullptr || std::fabs (right[lead]) < 0.01f))
+    while (lead < frames && std::fabs (left[lead]) < audible && (right == nullptr || std::fabs (right[lead]) < audible))
         ++lead;
     if (lead >= frames)
         return info;

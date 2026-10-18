@@ -1038,38 +1038,46 @@ int main()
         params.presets = &bank;
         params.library = &lib;
 
+        float outPeak = 0.f;
         auto played = [&] (int part, int note, rolla::ChordAsk ask, bool& chordFile)
         {
             rolla::Sampler s;
             s.prepare (48000.0);
             chordFile = s.take (part, note, 110, 1.0e9f, bank, params, ask).chordFile;
             std::vector<float> out (36000);
+            outPeak = 0.f;
             for (auto& x : out)
             {
                 float laneL[rolla::NumParts] {};
                 float laneR[rolla::NumParts] {};
                 s.render (laneL, laneR, 0.f, 0.f, false);
                 x = laneL[part];
+                outPeak = std::max (outPeak, std::fabs (x));
             }
             return rolla::probePitch (out.data(), nullptr, (int) out.size(), 48000.0);
+        };
+        auto got = [&] (const rolla::PitchInfo& p)
+        {
+            return " (got root " + std::to_string (p.rootPitch) + ", conf " + std::to_string (p.conf) + ", chord "
+                 + std::to_string ((int) p.isChord) + ", output peak " + std::to_string (outPeak) + ")";
         };
 
         bool chord = false;
         const auto stab = played (rolla::Stab, 62, {}, chord);
         expect (stab.pitched() && rolla::pitchprobe::pcDistance (stab.rootPitch, 62.0) < 0.3,
-                "SAMPLE_OUT_OF_KEY: a C4 stab asked for D sounds D (got " + std::to_string (stab.rootPitch) + ")");
+                "SAMPLE_OUT_OF_KEY: a C4 stab asked for D sounds D" + got (stab));
         expect (! chord, "a single-note file is not a chord file");
 
         const auto vox = played (rolla::Vox, 64, {}, chord);
         expect (vox.pitched() && std::fabs (vox.rootPitch - 69.f) < 1.f,
-                "VOX_PITCH_SHIFTED: a vox chop keeps its voice, whatever the label (got " + std::to_string (vox.rootPitch) + ")");
+                "VOX_PITCH_SHIFTED: a vox chop keeps its voice, whatever the label" + got (vox));
 
         rolla::ChordAsk cMajor;
         cMajor.quality = rolla::ChordQuality::Major;
         const auto pad = played (rolla::Pad, 60, cMajor, chord);
         expect (chord, "CHORD_STACK: a recorded chord reports itself, so the engine plays it once per chord");
         expect (pad.isChord && rolla::pitchprobe::pcDistance (pad.rootPitch, 64.0) < 0.3 && pad.quality == rolla::ChordQuality::Minor,
-                "a C minor file on a C major chord plays from the third (E minor, got root " + std::to_string (pad.rootPitch) + ")");
+                "a C minor file on a C major chord plays from the third (E minor)" + got (pad));
         pitchRoot.deleteRecursively();
     }
 
