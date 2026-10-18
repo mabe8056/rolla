@@ -493,10 +493,16 @@ int selfTest (const rolla::PresetBank& bank, const rolla::MixProgram& mix,
         };
         if (chain.valid)
         {
-            // Pick an input level that lands about 4.5 dB under the target with lane level off.
-            const double probe = settle (false, 0.05f);
-            const float amp = 0.05f * (float) std::pow (10.0, (chain.stTargetLufs - 4.5 - probe) / 20.0);
-            const double before = settle (false, amp);
+            // Find an input level that lands 4.5 dB under the target with lane level off.
+            // The strip's compressor is not linear, so step toward it a few times.
+            const double goal = chain.stTargetLufs - 4.5;
+            float amp = 0.05f;
+            double before = settle (false, amp);
+            for (int step = 0; step < 6 && std::fabs (before - goal) > 0.25; ++step)
+            {
+                amp *= (float) std::pow (10.0, (goal - before) / 20.0);
+                before = settle (false, amp);
+            }
             const double after = settle (true, amp);
             std::cout << "lane level STAB: target " << chain.stTargetLufs << " LUFS, off " << before << ", on " << after << "\n";
             if (std::fabs (after - chain.stTargetLufs) > 1.0 || before > chain.stTargetLufs - 2.0)

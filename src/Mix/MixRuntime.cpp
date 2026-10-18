@@ -106,35 +106,32 @@ void MixRuntime::Biquad::setShelf (bool high, float freq, float q, float gainDb,
 
 void KWeight::prepare (double sampleRate) noexcept
 {
+    // libebur128's bilinear design: at 48 kHz it is the BS.1770 table exactly
+    // (shelf b 1.53512486 -2.69169619 1.19839281, a -1.69065929 0.73248077;
+    // RLB b 1 -2 1, a -1.99004745 0.99007225), and it holds at other rates.
     const double fs = sampleRate > 1000.0 ? sampleRate : 48000.0;
     constexpr double pi = 3.14159265358979323846;
     {
-        // Pre-filter: RBJ high shelf with alpha from Q.
-        const double G = 3.99984385397, Q = 0.7071752369554193, fc = 1681.9744509555319;
-        const double A = std::pow (10.0, G / 40.0);
-        const double w0 = 2.0 * pi * fc / fs;
-        const double cw = std::cos (w0);
-        const double alpha = std::sin (w0) / (2.0 * Q);
-        const double two = 2.0 * std::sqrt (A) * alpha;
-        const double a0 = (A + 1.0) - (A - 1.0) * cw + two;
-        sb0 = A * ((A + 1.0) + (A - 1.0) * cw + two) / a0;
-        sb1 = -2.0 * A * ((A - 1.0) + (A + 1.0) * cw) / a0;
-        sb2 = A * ((A + 1.0) + (A - 1.0) * cw - two) / a0;
-        sa1 = 2.0 * ((A - 1.0) - (A + 1.0) * cw) / a0;
-        sa2 = ((A + 1.0) - (A - 1.0) * cw - two) / a0;
+        const double f0 = 1681.974450955533, G = 3.999843853973347, Q = 0.7071752369554196;
+        const double K = std::tan (pi * f0 / fs);
+        const double Vh = std::pow (10.0, G / 20.0);
+        const double Vb = std::pow (Vh, 0.4996667741545416);
+        const double a0 = 1.0 + K / Q + K * K;
+        sb0 = (Vh + Vb * K / Q + K * K) / a0;
+        sb1 = 2.0 * (K * K - Vh) / a0;
+        sb2 = (Vh - Vb * K / Q + K * K) / a0;
+        sa1 = 2.0 * (K * K - 1.0) / a0;
+        sa2 = (1.0 - K / Q + K * K) / a0;
     }
     {
-        // RLB: RBJ high-pass.
-        const double Q = 0.5003270373253953, fc = 38.13547087613982;
-        const double w0 = 2.0 * pi * fc / fs;
-        const double cw = std::cos (w0);
-        const double alpha = std::sin (w0) / (2.0 * Q);
-        const double a0 = 1.0 + alpha;
-        hb0 = (1.0 + cw) * 0.5 / a0;
-        hb1 = -(1.0 + cw) / a0;
-        hb2 = hb0;
-        ha1 = -2.0 * cw / a0;
-        ha2 = (1.0 - alpha) / a0;
+        const double f0 = 38.13547087602444, Q = 0.5003270373238773;
+        const double K = std::tan (pi * f0 / fs);
+        const double a0 = 1.0 + K / Q + K * K;
+        hb0 = 1.0;
+        hb1 = -2.0;
+        hb2 = 1.0;
+        ha1 = 2.0 * (K * K - 1.0) / a0;
+        ha2 = (1.0 - K / Q + K * K) / a0;
     }
     reset();
 }

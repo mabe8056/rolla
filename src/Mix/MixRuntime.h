@@ -22,9 +22,9 @@ struct MixBlockInfo
 };
 
 // BS.1770-4 K-weighting for one channel: the pre-filter shelf (+3.9998 dB at
-// 1681.97 Hz, Q 0.70718) then the RLB high-pass (38.135 Hz, Q 0.50033), as
-// pyloudnorm designs them at any rate. A 997 Hz 0 dBFS sine reads -3.01 LUFS
-// in one channel and 0 LUFS in both.
+// 1681.97 Hz, Q 0.70718) then the RLB high-pass (38.135 Hz, Q 0.50033), in
+// libebur128's design (the BS.1770 48 kHz table exactly). A 997 Hz 0 dBFS sine
+// reads -3.01 LUFS in one channel and 0 LUFS in both.
 struct KWeight
 {
     void prepare (double sampleRate) noexcept;
