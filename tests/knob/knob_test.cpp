@@ -1,4 +1,5 @@
 #include "PluginProcessor.h"
+#include "../common/ScratchProfile.h"
 #include "UiTokens.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -837,6 +838,12 @@ void testStabDice()
 
 int main()
 {
+    // Never the real user profile: settings, caches and sample folders go to a scratch folder.
+    if (rolla::test::useScratchProfile ("knob").empty())
+    {
+        std::cerr << "could not set up a scratch profile\n";
+        return 1;
+    }
     juce::ScopedJuceInitialiser_GUI juce;
     testBindings();
     testBusyDensity();
