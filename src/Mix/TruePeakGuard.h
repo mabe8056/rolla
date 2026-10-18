@@ -21,13 +21,15 @@
 namespace rolla
 {
 
+// Settings mirror mix_profiles.json "tp_guard"; tests/mix/validate_profiles.py
+// checks the two agree.
 class TruePeakGuard
 {
 public:
     static constexpr float kDefaultCeilingDbtp = -6.f;
     // Internal target under the ceiling, covering what the 4x estimate misses
     // between its own sub-samples.
-    static constexpr float kMarginDb = 0.3f;
+    static constexpr float kMarginDb = 0.2f;
 
     void prepare (double sampleRate, float lookaheadMs = 1.5f, float releaseMs = 80.f);
     void reset() noexcept;
