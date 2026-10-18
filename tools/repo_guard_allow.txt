@@ -1,0 +1,6 @@
+# Exceptions for tools/check_repo_clean.py, one per line:
+#   <category> <glob>   # reason
+# Categories: audio midi secret dump reference large (or * for all).
+# Keep this short. Every line needs a reason a reviewer can check.
+
+large resources/SAMPLE_MANIFEST.json   # sample-library manifest (lane, file name, root key, loudness) used by the sample-coverage CI job and embedded as BinaryData; no audio, no reference-track data. Flagged on #13 for a decision.
