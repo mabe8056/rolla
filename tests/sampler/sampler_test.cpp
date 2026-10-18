@@ -435,6 +435,146 @@ void testKickRetriggerSampled (const rolla::PresetBank& bank)
     }
 }
 
+void writeStereo (const juce::File& file, const std::vector<float>& left, const std::vector<float>& right)
+{
+    file.getParentDirectory().createDirectory();
+    juce::WavAudioFormat wav;
+    auto fileStream = std::make_unique<juce::FileOutputStream> (file);
+    if (fileStream == nullptr || ! fileStream->openedOk())
+        return;
+    std::unique_ptr<juce::OutputStream> stream (fileStream.release());
+    const auto options = juce::AudioFormatWriterOptions().withSampleRate (48000.0)
+                                                          .withNumChannels (2)
+                                                          .withBitsPerSample (24);
+    auto writer = wav.createWriterFor (stream, options);
+    if (writer == nullptr)
+        return;
+    const int n = (int) std::min (left.size(), right.size());
+    juce::AudioBuffer<float> buf (2, n);
+    for (int i = 0; i < n; ++i)
+    {
+        buf.setSample (0, i, left[(size_t) i]);
+        buf.setSample (1, i, right[(size_t) i]);
+    }
+    writer->writeFromAudioSampleBuffer (buf, 0, n);
+}
+
+// Pack drum voices through Sampler::takeDrum (the bundled-pack path, not a dropped
+// WAV, not the synth). Stereo kick that starts on its peak with a 1.5 s tail on
+// every beat, open hat on the offbeat choked by the closed hat, and a stack of
+// perc hits every 16th so the 40-voice pool is full and voices are stolen on
+// every step (the kick included). 16 bars over an 8-bar loop, so one loop wrap.
+// No second-difference spike above 5% of the output peak anywhere.
+void testPackDrumsClickFree (const juce::File& rootDir)
+{
+    constexpr double sr = 48000.0;
+    const auto root = rootDir.getChildFile ("packclick");
+    auto tone = [] (double seconds, double hz, double amp, double tau, bool cosine, double rightScale)
+    {
+        std::vector<float> l ((size_t) (seconds * 48000.0)), r (l.size());
+        for (size_t n = 0; n < l.size(); ++n)
+        {
+            const double t = (double) n / 48000.0;
+            const double w = 2.0 * 3.14159265358979 * hz * t;
+            const double s = amp * std::exp (-t / tau) * (cosine ? std::cos (w) : std::sin (w));
+            l[n] = (float) s;
+            r[n] = (float) (s * rightScale);
+        }
+        return std::make_pair (l, r);
+    };
+    const auto kick = tone (1.5, 55.0, 1.0, 0.5, true, 0.9);
+    const auto hatC = tone (0.3, 2000.0, 0.05, 0.08, true, 1.0);
+    const auto hatO = tone (1.5, 3000.0, 0.05, 0.6, true, 1.0);
+    const auto perc = tone (2.0, 200.0, 0.05, 1.5, false, 1.0);
+    writeStereo (root.getChildFile ("DRUMS/KICK/k.wav"), kick.first, kick.second);
+    writeStereo (root.getChildFile ("DRUMS/HAT_C/c.wav"), hatC.first, hatC.second);
+    writeStereo (root.getChildFile ("DRUMS/HAT_O/o.wav"), hatO.first, hatO.second);
+    writeStereo (root.getChildFile ("DRUMS/PERC/p.wav"), perc.first, perc.second);
+
+    rolla::PresetBank bank;
+    bank.count[rolla::Drums] = 1;
+    bank.drums[0].sample.mode = rolla::SampleMode::Sample;
+    bank.drums[0].voicePool[rolla::Kick].push_back ("DRUMS/KICK/k.wav");
+    bank.drums[0].voicePool[rolla::HatC].push_back ("DRUMS/HAT_C/c.wav");
+    bank.drums[0].voicePool[rolla::HatO].push_back ("DRUMS/HAT_O/o.wav");
+    bank.drums[0].voicePool[rolla::Perc].push_back ("DRUMS/PERC/p.wav");
+    rolla::SampleLibrary lib;
+    lib.setRoot (root);
+    lib.watch (bank);
+    const bool loaded = waitUntil ([&]
+    {
+        return lib.ready ("DRUMS/KICK/k.wav") && lib.ready ("DRUMS/HAT_C/c.wav")
+            && lib.ready ("DRUMS/HAT_O/o.wav") && lib.ready ("DRUMS/PERC/p.wav");
+    });
+    expect (loaded, "pack click test: the pack files load");
+    if (! loaded)
+        return;
+
+    for (const double bpm : { 126.0, 130.0 })
+    {
+        const std::string tag = std::to_string ((int) bpm) + " BPM";
+        rolla::Sampler sampler;
+        sampler.prepare (sr);
+        rolla::EngineParams params;
+        params.presets = &bank;
+        params.library = &lib;
+        params.bpm = (float) bpm;
+        for (int i = 0; i < rolla::NumDrumVoices; ++i)
+            params.drumDecay[i] = 1.f; // long envelopes: tails overlap the next hit
+        constexpr float loop16 = 8.f * 16.f;
+        const double inc = bpm / 60.0 * 4.0 / sr;
+        const int total = (int) (16.0 * 4.0 * 60.0 / bpm * sr);
+        float worst = 0.f, peak = 0.f;
+        int worstAt = -1;
+        float pL1 = 0.f, pL2 = 0.f, pR1 = 0.f, pR2 = 0.f;
+        float prev = 0.f;
+        int lastStep = -1;
+        for (int n = 0; n < total; ++n)
+        {
+            const float pos = (float) std::fmod ((double) n * inc, (double) loop16);
+            const int step = (int) std::floor ((double) n * inc);
+            if (step != lastStep)
+            {
+                lastStep = step;
+                const int s = step % 4;
+                if (s == 0)
+                    sampler.takeDrum (rolla::Kick, 120, bank, params);
+                if (s == 2)
+                    sampler.takeDrum (rolla::HatO, 100, bank, params);
+                if (s == 1 || s == 3)
+                    sampler.takeDrum (rolla::HatC, 90, bank, params); // s == 3 chokes the open hat
+                for (int k = 0; k < 10; ++k)
+                    sampler.takeDrum (rolla::Perc, 100, bank, params);
+            }
+            float laneL[rolla::NumParts] {};
+            float laneR[rolla::NumParts] {};
+            sampler.render (laneL, laneR, prev, pos, true, loop16);
+            prev = pos;
+            const float l = laneL[rolla::Drums];
+            const float r = laneR[rolla::Drums];
+            if (n >= 2)
+            {
+                const float d2 = std::max (std::fabs (l - 2.f * pL1 + pL2), std::fabs (r - 2.f * pR1 + pR2));
+                if (d2 > worst)
+                {
+                    worst = d2;
+                    worstAt = n;
+                }
+            }
+            peak = std::max (peak, std::max (std::fabs (l), std::fabs (r)));
+            pL2 = pL1;
+            pL1 = l;
+            pR2 = pR1;
+            pR1 = r;
+        }
+        expect (peak > 0.01f, "pack click test: the drums play at " + tag);
+        const float rel = peak > 0.f ? worst / peak : 1.f;
+        expect (rel < 0.05f, "pack drums are click-free through steals, chokes and the loop wrap at " + tag
+                                 + " (max 2nd diff " + std::to_string (rel) + " of peak at sample "
+                                 + std::to_string (worstAt) + ")");
+    }
+}
+
 std::vector<float> kickHit (double seconds = 0.4)
 {
     std::vector<float> x ((size_t) (seconds * 48000.0));
@@ -995,6 +1135,7 @@ int main()
     rolla::loadDefaultPresets (bank);
     testKickRetriggerSynth();
     testKickRetriggerSampled (bank);
+    testPackDrumsClickFree (rootDir);
     rolla::Sampler sampler;
     sampler.prepare (48000.0);
     rolla::EngineParams params;

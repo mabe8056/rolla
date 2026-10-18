@@ -127,6 +127,11 @@ private:
 
     Voice* allocate (int part) noexcept;
     void park (const Voice& dying) noexcept;
+    // What a voice still puts out: env, release edge and gain. A voice born this
+    // sample (env still 0) is never the quietest: stealing it chopped the new kick.
+    static float audibleLevel (const Voice& v) noexcept;
+    // Closed hat chokes the open hat: a 5 ms raised-cosine release, never a hard cut.
+    void chokeDrum (int drumVoice) noexcept;
     void armAttack (Voice& voice) noexcept;
     float readSinc (const std::vector<float>& src, double index) const noexcept;
     void readVoice (Voice& v, float& l, float& r) noexcept;
@@ -141,7 +146,8 @@ private:
     int serial = 1;
     int sliceCursor[NumParts] {};
     Voice voices[40];
-    Voice tails[16];
+    // Stolen voices finish their release here. Evicting a tail is a cut, so keep plenty.
+    Voice tails[32];
 };
 
 const SampleSpec& sampleSpecFor (const PresetBank& bank, int part, int preset) noexcept;
