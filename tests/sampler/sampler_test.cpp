@@ -350,8 +350,18 @@ void testFingerprint()
     expect (h.valid && h.centroidHz > 4000.f && h.decay40Ms < 200.f && h.subRatio < 0.05f,
             "fingerprint: a hat is bright and short (centroid " + std::to_string (h.centroidHz) + ", decay40 " + std::to_string (h.decay40Ms) + ")");
     expect (s.valid && std::fabs (s.pitch.rootPitch - 60.f) < 0.3f, "fingerprint: a C4 stab keeps its pitch beside the vector");
-    expect ((int) k.vector().size() == rolla::kFingerprintDims && rolla::fingerprintName (rolla::kFingerprintDims - 1) == "rms_db",
-            "fingerprint: vector and names line up");
+    expect ((int) k.vector().size() == rolla::kFingerprintDims && rolla::fingerprintName (rolla::kFingerprintDims - 1) == "sub_ratio"
+                && rolla::fingerprintName (rolla::kDecay40Dim) == "log2_decay40_ms",
+            "fingerprint: vector and names line up (level and pitch stay out of the distance)");
+    expect (! k.truncated && ! std::isnan (k.vector()[(size_t) rolla::kDecay40Dim]), "fingerprint: a kick is not truncated");
+    {
+        std::vector<float> drone ((size_t) (48000 * 3));
+        for (size_t i = 0; i < drone.size(); ++i)
+            drone[i] = 0.4f * (float) std::sin (2.0 * 3.14159265358979 * 220.0 * (double) i / 48000.0);
+        const auto d = rolla::fingerprintOf (drone.data(), (int) drone.size());
+        expect (d.truncated && std::isnan (d.vector()[(size_t) rolla::kDecay40Dim]),
+                "fingerprint: a sound ringing past 1.5 s is truncated and its decay40 is skipped");
+    }
 
     // Target regions: two blobs give two clusters; a point in one is a hit, a far point is not.
     std::vector<std::vector<float>> xs;
@@ -366,10 +376,15 @@ void testFingerprint()
         const float c = i % 2 == 0 ? 0.f : 5.f;
         xs.push_back ({ c + jitter(), c + jitter(), c + jitter() });
     }
+    xs[3][2] = std::numeric_limits<float>::quiet_NaN(); // a truncated sound's missing dimension
     const auto t = rolla::fitTarget (xs, 3);
     expect (t.clusters.size() >= 2, "targets: two blobs give at least two clusters");
     expect (rolla::targetDistance ({ 0.1f, 0.f, -0.1f }, t) <= t.threshold, "targets: a point in a blob is a hit");
     expect (rolla::targetDistance ({ 20.f, -20.f, 20.f }, t) > t.threshold, "targets: a far point is a miss");
+    expect (rolla::targetDistance ({ 0.1f, 0.f, std::numeric_limits<float>::quiet_NaN() }, t) <= t.threshold,
+            "targets: a missing dimension is skipped, not counted as far");
+    std::vector<std::vector<float>> few (xs.begin(), xs.begin() + 12);
+    expect (rolla::fitTarget (few, 3).clusters.size() == 1, "targets: under 20 hits is one region");
 }
 
 int runTool (std::initializer_list<juce::String> words)
@@ -422,7 +437,8 @@ void testFingerprintTool()
             bass[(size_t) (b * 60000) + i] = note[960 + i] * (float) std::exp (-(double) i / 48000.0 / 0.3);
     writeWave (base.getChildFile ("stems/trackA/sep/drums.wav"), drums);
     writeWave (base.getChildFile ("stems/trackA/sep/bass.wav"), bass);
-    base.getChildFile ("styles.csv").replaceWithText ("track_id,style\ntrackA,ukmin\n");
+    // The box CSV's header: track,style,mode_or_role.
+    base.getChildFile ("styles.csv").replaceWithText ("track,style,mode_or_role\ntrackA,ukmin,support\n");
     const auto stemJson = base.getChildFile ("stems.json");
     expect (runTool ({ "stems", base.getChildFile ("stems").getFullPathName(), "--styles",
                        base.getChildFile ("styles.csv").getFullPathName(), "--out", stemJson.getFullPathName() }) == 0,
@@ -439,6 +455,27 @@ void testFingerprintTool()
     expect (sk >= 10 && sh >= 10 && sb >= 3,
             "fingerprint tool: stems slice into kicks, hats and bass (" + std::to_string (sk) + "/" + std::to_string (sh)
                 + "/" + std::to_string (sb) + ")");
+    const auto stemDoc = juce::JSON::parse (stemJson);
+    expect (fp::nonIdString (stemDoc).isEmpty(), "privacy: a stem fp.json holds only ids, labels and styles as strings");
+    auto* leaky = new juce::DynamicObject();
+    leaky->setProperty ("path", "Some Artist - Some Track/sep/drums.wav");
+    expect (fp::nonIdString (juce::var (leaky)) == "path", "privacy: a path string is caught");
+
+    const auto oneJson = base.getChildFile ("one.json");
+    expect (runTool ({ "scan-stems", base.getChildFile ("stems/trackA").getFullPathName(), "--track-id", "t01", "--style", "pop",
+                       "--min-conf", "0.55", "--out", oneJson.getFullPathName() }) == 0,
+            "fingerprint tool: scan-stems runs on one track");
+    const auto one = fp::entriesFromJson (juce::JSON::parse (oneJson));
+    bool idsOk = ! one.empty();
+    for (const auto& e : one)
+        idsOk = idsOk && e.track == "t01" && e.style == "pop";
+    expect (idsOk, "fingerprint tool: scan-stems keys slices by the given track id and style");
+    expect (one.size() <= sliced.size(), "fingerprint tool: --min-conf only drops slices");
+
+    base.getChildFile ("ids.csv").replaceWithText ("folder,track_id,style\ntrackA,t07,long\n");
+    const auto idMap = fp::readStyles (base.getChildFile ("ids.csv"));
+    expect (idMap.count ("trackA") == 1 && idMap.at ("trackA").id == "t07" && idMap.at ("trackA").style == "long",
+            "fingerprint tool: a folder,track_id,style CSV writes the id, not the folder");
 
     const auto targetsJson = base.getChildFile ("targets.json");
     expect (runTool ({ "targets", stemJson.getFullPathName(), "--out", targetsJson.getFullPathName() }) == 0,
@@ -448,6 +485,8 @@ void testFingerprintTool()
     expect (kickClusters != nullptr && ! kickClusters->isEmpty(), "fingerprint tool: targets hold ukmin KICK clusters");
     const auto* names = targets["features"].getArray();
     expect (names != nullptr && names->size() == rolla::kFingerprintDims, "fingerprint tool: targets list every feature");
+    expect (! (bool) targets["styles"]["ukmin"]["KICK"]["pooled"] && (bool) targets["styles"]["ukmin"]["BASS"]["pooled"],
+            "fingerprint tool: a lane with under 8 hits takes the pooled region");
     base.deleteRecursively();
 }
 

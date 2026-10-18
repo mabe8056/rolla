@@ -8,8 +8,10 @@
 // Analysis: 48 kHz mono, from the onset (first sample over 5% of the peak) to 1.5 s.
 // Vector (kFingerprintDims): 13 MFCC means, 13 MFCC spreads, then log2 centroid,
 // log2 85% rolloff, flatness, log2(1 + attack ms), log2(1 + decay to -20 / -40 dB ms),
-// energy share under 120 Hz, and RMS level (dB). Pitch is kept beside the vector,
-// not in it: key fit is a pairing rule, not a timbre distance.
+// and the energy share under 120 Hz. Level and pitch are metadata beside the
+// vector, not in it: loudness is evened at load, and key fit is a pairing rule.
+// A sound still ringing at the end of the window is `truncated`: its decay to
+// -40 dB is unknown, so that dimension is NaN and every distance skips it.
 
 #include "PitchProbe.h"
 
@@ -17,6 +19,7 @@
 #include <cmath>
 #include <cstdint>
 #include <initializer_list>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -24,7 +27,8 @@ namespace rolla
 {
 
 inline constexpr int kMfcc = 13;
-inline constexpr int kFingerprintDims = 2 * kMfcc + 8;
+inline constexpr int kFingerprintDims = 2 * kMfcc + 7;
+inline constexpr int kDecay40Dim = 2 * kMfcc + 5;
 inline constexpr double kFingerprintRate = 48000.0;
 
 // Vector order, as written to fp.json "f" and genre_targets.json "features".
@@ -38,7 +42,7 @@ inline const std::string& fingerprintName (int dim)
         for (int i = 0; i < kMfcc; ++i)
             out.push_back ("mfcc_std_" + std::to_string (i));
         for (const char* t : { "log2_centroid_hz", "log2_rolloff85_hz", "flatness", "log2_attack_ms",
-                               "log2_decay20_ms", "log2_decay40_ms", "sub_ratio", "rms_db" })
+                               "log2_decay20_ms", "log2_decay40_ms", "sub_ratio" })
             out.push_back (t);
         return out;
     }();
@@ -58,8 +62,9 @@ struct Fingerprint
     float decay20Ms = 0.f;
     float decay40Ms = 0.f;
     float subRatio = 0.f;
-    float rmsDb = -120.f;
-    PitchInfo pitch;
+    float rmsDb = -120.f;   // metadata
+    bool truncated = false; // still over -40 dB at the end of the 1.5 s window
+    PitchInfo pitch;        // metadata
 
     std::vector<float> vector() const
     {
@@ -75,9 +80,8 @@ struct Fingerprint
         t[2] = flatness;
         t[3] = std::log2 (1.f + attackMs);
         t[4] = std::log2 (1.f + decay20Ms);
-        t[5] = std::log2 (1.f + decay40Ms);
+        t[5] = truncated ? std::numeric_limits<float>::quiet_NaN() : std::log2 (1.f + decay40Ms);
         t[6] = subRatio;
-        t[7] = rmsDb;
         return v;
     }
 };
@@ -98,7 +102,9 @@ inline double hzOfMel (double mel) noexcept
 } // namespace fingerprint
 
 // mono at kFingerprintRate (callers resample). Invalid when silent or under 10 ms.
-inline Fingerprint fingerprintOf (const float* mono, int frames, double rate = kFingerprintRate)
+// pitchFloorHz: the lane's lowest root (kPitchFloorTonalHz for stab, pad, pluck, hits).
+inline Fingerprint fingerprintOf (const float* mono, int frames, double rate = kFingerprintRate,
+                                  double pitchFloorHz = kPitchFloorHz)
 {
     using namespace fingerprint;
     Fingerprint fp;
@@ -142,6 +148,7 @@ inline Fingerprint fingerprintOf (const float* mono, int frames, double rate = k
     };
     fp.decay20Ms = decayTo (-20.f);
     fp.decay40Ms = decayTo (-40.f);
+    fp.truncated = frames - onset > len && env.back() >= envPeak * 0.01f;
     {
         const int n = std::min (len, (int) (0.3 * rate));
         double sum = 0.0;
@@ -265,12 +272,14 @@ inline Fingerprint fingerprintOf (const float* mono, int frames, double rate = k
     fp.rolloffHz = (float) (rSum / wSum);
     fp.flatness = (float) (flatSum / wSum);
     fp.subRatio = allE > 0.0 ? (float) (subE / allE) : 0.f;
-    fp.pitch = probePitch (x, nullptr, len, rate);
+    fp.pitch = probePitch (x, nullptr, len, rate, pitchFloorHz);
     fp.valid = true;
     return fp;
 }
 
 // ---- Target regions ---------------------------------------------------------
+// NaN marks a dimension a sound does not have (decay40 when truncated): stats,
+// clustering and distances skip it.
 
 struct TargetCluster
 {
@@ -283,6 +292,9 @@ struct LaneTarget
 {
     std::vector<TargetCluster> clusters;
     float threshold = 2.5f;
+    // Too few hits of its own: the clusters come from every style's hits of this lane.
+    bool pooled = false;
+    int count = 0;
 };
 
 // Feature normalisation shared by targets and library samples.
@@ -297,7 +309,7 @@ struct FeatureNorm
         {
             const float m = i < mean.size() ? mean[i] : 0.f;
             const float s = i < std.size() && std[i] > 1.0e-6f ? std[i] : 1.f;
-            out[i] = (v[i] - m) / s;
+            out[i] = (v[i] - m) / s; // NaN stays NaN
         }
         return out;
     }
@@ -313,32 +325,41 @@ struct FeatureNorm
         for (size_t i = 0; i < d; ++i)
         {
             double s = 0.0, s2 = 0.0;
+            int c = 0;
             for (const auto& x : xs)
-            {
-                s += x[i];
-                s2 += (double) x[i] * x[i];
-            }
-            const double m = s / xs.size();
+                if (! std::isnan (x[i]))
+                {
+                    s += x[i];
+                    s2 += (double) x[i] * x[i];
+                    ++c;
+                }
+            if (c == 0)
+                continue;
+            const double m = s / c;
             n.mean[i] = (float) m;
-            n.std[i] = (float) std::max (1.0e-3, std::sqrt (std::max (0.0, s2 / xs.size() - m * m)));
+            n.std[i] = (float) std::max (1.0e-3, std::sqrt (std::max (0.0, s2 / c - m * m)));
         }
         return n;
     }
 };
 
-// sqrt(mean(((x - c) / spread)^2)).
+// sqrt(mean(((x - c) / spread)^2)) over the dimensions both sides have.
 inline float clusterDistance (const std::vector<float>& x, const TargetCluster& c) noexcept
 {
     if (c.centroid.empty() || x.size() != c.centroid.size())
         return 1.0e9f;
     double s = 0.0;
+    int used = 0;
     for (size_t i = 0; i < x.size(); ++i)
     {
+        if (std::isnan (x[i]) || std::isnan (c.centroid[i]))
+            continue;
         const double sp = i < c.spread.size() ? std::max (0.05f, c.spread[i]) : 1.0;
         const double d = (x[i] - c.centroid[i]) / sp;
         s += d * d;
+        ++used;
     }
-    return (float) std::sqrt (s / x.size());
+    return used > 0 ? (float) std::sqrt (s / used) : 1.0e9f;
 }
 
 inline float targetDistance (const std::vector<float>& x, const LaneTarget& t) noexcept
@@ -349,17 +370,19 @@ inline float targetDistance (const std::vector<float>& x, const LaneTarget& t) n
     return best;
 }
 
-// Seeded k-means++ on normalised vectors. k shrinks so every cluster can hold
-// about 8 points. Spread floors at 0.25 (a tight cluster still has a region),
-// threshold is the 90th percentile of the points' own distances, at least 1.
+// Seeded k-means++ on normalised vectors. Under 20 points it is one region; else
+// k shrinks so each cluster can hold about 8 points. Spread floors at 0.25 of the
+// global std (a tight cluster still has a region); the threshold is the 90th
+// percentile of the points' own distances, at least 1.
 inline LaneTarget fitTarget (const std::vector<std::vector<float>>& xs, int k, std::uint32_t seed = 0x5eedu)
 {
     LaneTarget t;
     const int n = (int) xs.size();
+    t.count = n;
     if (n == 0)
         return t;
     const size_t d = xs[0].size();
-    k = std::clamp (std::min (k, n / 8), 1, 8);
+    k = n < 20 ? 1 : std::clamp (std::min (k, n / 8), 1, 8);
     auto rnd = [&seed]
     {
         seed = seed * 1664525u + 1013904223u;
@@ -368,9 +391,14 @@ inline LaneTarget fitTarget (const std::vector<std::vector<float>>& xs, int k, s
     auto dist2 = [d] (const std::vector<float>& a, const std::vector<float>& b)
     {
         double s = 0.0;
+        int used = 0;
         for (size_t i = 0; i < d; ++i)
-            s += (double) (a[i] - b[i]) * (a[i] - b[i]);
-        return s;
+            if (! std::isnan (a[i]) && ! std::isnan (b[i]))
+            {
+                s += (double) (a[i] - b[i]) * (a[i] - b[i]);
+                ++used;
+            }
+        return used > 0 ? s * (double) d / used : 1.0e300;
     };
     std::vector<std::vector<float>> centres;
     centres.push_back (xs[(size_t) std::min (n - 1, (int) (rnd() * n))]);
@@ -383,8 +411,8 @@ inline LaneTarget fitTarget (const std::vector<std::vector<float>>& xs, int k, s
             double best = 1.0e300;
             for (const auto& c : centres)
                 best = std::min (best, dist2 (xs[(size_t) i], c));
-            dd[(size_t) i] = best;
-            total += best;
+            dd[(size_t) i] = std::min (best, 1.0e12);
+            total += dd[(size_t) i];
         }
         double r = rnd() * total;
         int pick = n - 1;
@@ -396,7 +424,22 @@ inline LaneTarget fitTarget (const std::vector<std::vector<float>>& xs, int k, s
             }
         centres.push_back (xs[(size_t) pick]);
     }
-    std::vector<int> of ((size_t) n, 0);
+    auto meanOf = [&] (const std::vector<int>& of, int c, std::vector<float>& centre)
+    {
+        for (size_t j = 0; j < d; ++j)
+        {
+            double s = 0.0;
+            int m = 0;
+            for (int i = 0; i < n; ++i)
+                if (of[(size_t) i] == c && ! std::isnan (xs[(size_t) i][j]))
+                {
+                    s += xs[(size_t) i][j];
+                    ++m;
+                }
+            centre[j] = m > 0 ? (float) (s / m) : std::numeric_limits<float>::quiet_NaN();
+        }
+    };
+    std::vector<int> of ((size_t) n, -1);
     for (int iter = 0; iter < 30; ++iter)
     {
         bool moved = false;
@@ -410,42 +453,32 @@ inline LaneTarget fitTarget (const std::vector<std::vector<float>>& xs, int k, s
             of[(size_t) i] = best;
         }
         for (int c = 0; c < k; ++c)
-        {
-            std::vector<double> s (d, 0.0);
-            int m = 0;
-            for (int i = 0; i < n; ++i)
-                if (of[(size_t) i] == c)
-                {
-                    for (size_t j = 0; j < d; ++j)
-                        s[j] += xs[(size_t) i][j];
-                    ++m;
-                }
-            if (m > 0)
-                for (size_t j = 0; j < d; ++j)
-                    centres[(size_t) c][j] = (float) (s[j] / m);
-        }
-        if (! moved && iter > 0)
+            if (std::count (of.begin(), of.end(), c) > 0)
+                meanOf (of, c, centres[(size_t) c]);
+        if (! moved)
             break;
     }
     for (int c = 0; c < k; ++c)
     {
+        const int m = (int) std::count (of.begin(), of.end(), c);
+        if (m == 0)
+            continue;
         TargetCluster tc;
         tc.centroid = centres[(size_t) c];
         tc.spread.assign (d, 1.f);
-        int m = 0;
-        std::vector<double> s2 (d, 0.0);
-        for (int i = 0; i < n; ++i)
-            if (of[(size_t) i] == c)
-            {
-                for (size_t j = 0; j < d; ++j)
-                    s2[j] += (double) (xs[(size_t) i][j] - tc.centroid[j]) * (xs[(size_t) i][j] - tc.centroid[j]);
-                ++m;
-            }
-        if (m == 0)
-            continue;
         if (m >= 3)
             for (size_t j = 0; j < d; ++j)
-                tc.spread[j] = (float) std::max (0.25, std::sqrt (s2[j] / m));
+            {
+                double s2 = 0.0;
+                int used = 0;
+                for (int i = 0; i < n; ++i)
+                    if (of[(size_t) i] == c && ! std::isnan (xs[(size_t) i][j]) && ! std::isnan (tc.centroid[j]))
+                    {
+                        s2 += (double) (xs[(size_t) i][j] - tc.centroid[j]) * (xs[(size_t) i][j] - tc.centroid[j]);
+                        ++used;
+                    }
+                tc.spread[j] = used >= 3 ? (float) std::max (0.25, std::sqrt (s2 / used)) : 1.f;
+            }
         tc.weight = (float) m / (float) n;
         t.clusters.push_back (tc);
     }
@@ -458,3 +491,4 @@ inline LaneTarget fitTarget (const std::vector<std::vector<float>>& xs, int k, s
 }
 
 } // namespace rolla
+
