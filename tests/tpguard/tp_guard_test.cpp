@@ -519,7 +519,7 @@ void partC()
                     ++peakFails;
                     char label[160];
                     std::snprintf (label, sizeof (label), "%s INTENSITY %d seed %d peaks at or under -6", rolla::dialectName (d), intensity, seed);
-                    check (false, label, fmt ("sample peak %.2f dBFS, %.2f dBTP%s", spDb, tp, take.finite ? "" : " (NaN/Inf)"));
+                    check (false, label, fmt ("sample peak %.2f dBFS, %.2f dBTP", spDb, tp) + (take.finite ? "" : " (NaN/Inf)"));
                 }
 
                 for (int lane : kStagedLanes)
