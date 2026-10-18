@@ -3,7 +3,9 @@
 #include "Generator/MidiFile.h"
 #include "Generator/Generator.h"
 #include "Generator/PhraseBank.h"
+#include "Generator/Presets.h"
 
+#include <BinaryData.h>
 #include <juce_events/juce_events.h>
 
 #include <algorithm>
@@ -14,6 +16,7 @@
 #include <functional>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 #include <vector>
@@ -296,6 +299,25 @@ int pcOfNote (int semi)
     return pc;
 }
 
+// BOUNCY pulse mode is a steady four-attack grid. Bass notes are now held to
+// the next onset (A&R msg 423), so mean length no longer tells pulse from the
+// 5-note phrase; count bars (final bar aside) with exactly four onsets.
+bool popPulseGrid (const rolla::Lane& lane, int bars)
+{
+    int fours = 0;
+    const int body = std::min (bars, 8) - 1;
+    for (int b = 0; b < body; ++b)
+    {
+        int n = 0;
+        for (int i = 0; i < lane.count; ++i)
+            if ((int) std::lround (lane.notes[i].start) / 16 == b)
+                ++n;
+        if (n == 4)
+            ++fours;
+    }
+    return body > 0 && fours * 7 >= body * 5;
+}
+
 void testEarReview()
 {
     const std::uint32_t base = 2517220185u;
@@ -408,10 +430,7 @@ void testEarReview()
                 }
                 if (moves > 0)
                     popOct += 100.0 * oct / moves;
-                double lens = 0;
-                for (int i = 0; i < lane.count; ++i)
-                    lens += lane.notes[i].length;
-                if (lane.count > 0 && lens / lane.count >= 1.8)
+                if (popPulseGrid (lane, g.bars))
                     ++pulseN;
             }
             if (roll == 0)
@@ -804,10 +823,7 @@ void testScorerV23()
                         same = false;
                 if (bestRest >= 4 && ! same)
                     ++turn;
-                double lens = 0;
-                for (int i = 0; i < bass.count; ++i)
-                    lens += bass.notes[i].length;
-                if (bass.count > 0 && lens / bass.count >= 1.8)
+                if (popPulseGrid (bass, g.bars))
                     ++pulse;
             }
             if (style == rolla::Gaskin)
@@ -889,6 +905,96 @@ void testScorerV23()
         if (style == rolla::Gaskin)
             expect (callOk >= 12, "JACKIN call and answer");
     }
+}
+
+// A&R msg 423 #1 and #2: bass on the kick near the reference medians (hard cap
+// 35%), and bass held for most of the loop. 4 styles x 20 seeds.
+void testAr423Bass()
+{
+    const std::uint32_t base = 423423u;
+    const char* names[] = { "ROLLER", "DEEP", "BOUNCY", "JACKIN" };
+    const double target[] = { 0.17, 0.07, 0.32, 0.19 };
+    for (int style = 0; style < 4; ++style)
+    {
+        int onsets = 0;
+        int onKick = 0;
+        double sndSum = 0.0;
+        double sndMin = 1.0;
+        for (int roll = 0; roll < 20; ++roll)
+        {
+            rolla::Settings s;
+            s.dialect = style;
+            s.bars = 8;
+            std::uint32_t seeds[rolla::NumParts] {};
+            for (int p = 0; p < rolla::NumParts; ++p)
+                seeds[p] = base + (std::uint32_t) roll * 0x9E3779B9u + (std::uint32_t) p * 17u
+                         + (std::uint32_t) style * 101u;
+            rolla::Groove g {};
+            rolla::generate (g, s, seeds, 0x7fu);
+            const auto& bass = g.lane[rolla::Bass];
+            const double loop = (double) (g.bars * 16);
+            int rollOn = 0;
+            int rollKick = 0;
+            double held = 0.0;
+            for (int i = 0; i < bass.count; ++i)
+            {
+                const int st = (int) std::lround (bass.notes[i].start);
+                ++rollOn;
+                if (st % 4 == 0)
+                    ++rollKick;
+                held += bass.notes[i].length;
+                expect (bass.notes[i].start + bass.notes[i].length <= (float) loop + 0.01f,
+                        std::string (names[style]) + " roll " + std::to_string (roll) + " bass stays inside the loop");
+            }
+            onsets += rollOn;
+            onKick += rollKick;
+            const double snd = loop > 0.0 ? held / loop : 0.0;
+            sndSum += snd;
+            sndMin = std::min (sndMin, snd);
+            expect (rollOn > 0 && (double) rollKick <= 0.35 * rollOn + 1.0e-6,
+                    std::string (names[style]) + " roll " + std::to_string (roll) + " bass on kick <= 35%");
+            expect (snd >= 0.72, std::string (names[style]) + " roll " + std::to_string (roll) + " bass sounding "
+                                 + std::to_string (snd) + " >= 0.72");
+            expect (bassHoldTicks (bass) <= 3,
+                    std::string (names[style]) + " roll " + std::to_string (roll) + " held bass does not overlap");
+        }
+        const double share = onsets > 0 ? (double) onKick / onsets : 0.0;
+        std::cout << names[style] << " A&R423 bass on kick " << (100.0 * share) << "% (target "
+                  << (100.0 * target[style]) << "%) sounding mean " << (sndSum / 20.0) << " min " << sndMin << "\n";
+        expect (std::abs (share - target[style]) <= 0.10,
+                std::string (names[style]) + " bass on-kick share within 10 points of the reference");
+        expect (share <= 0.35, std::string (names[style]) + " bass on-kick share <= 35%");
+    }
+}
+
+// A&R msg 423 #3: 16th swing defaults per style; the knob still moves freely.
+void testAr423Swing()
+{
+    const float want[] = { 0.52f, 0.54f, 0.567f, 0.565f };
+    auto defaults = std::make_unique<rolla::PresetBank>();
+    rolla::loadDefaultPresets (*defaults);
+    auto json = std::make_unique<rolla::PresetBank>();
+    expect (rolla::loadPresetsFromJson (*json, BinaryData::presets_json, BinaryData::presets_jsonSize),
+            "presets.json loads");
+    for (int d = 0; d < rolla::NumDialects; ++d)
+    {
+        expect (std::abs (defaults->dialect[d].swing - want[d]) < 1.0e-4f,
+                std::string (rolla::dialectName (d)) + " built-in swing default");
+        expect (std::abs (json->dialect[d].swing - want[d]) < 1.0e-4f,
+                std::string (rolla::dialectName (d)) + " presets.json swing default");
+    }
+
+    rolla::RollaProcessor proc;
+    proc.waitUntilReady();
+    auto swingNow = [&] { return proc.apvts.getRawParameterValue ("swing")->load(); };
+    for (int d : { (int) rolla::Long, (int) rolla::Pop, (int) rolla::Gaskin, (int) rolla::UkMin })
+    {
+        setDenorm (proc, "dialect", (float) d);
+        expect (pumpUntil ([&] { return std::abs (swingNow() - want[d]) < 0.0015f; }),
+                std::string (rolla::dialectName (d)) + " style sets the swing knob to its default");
+    }
+    setDenorm (proc, "swing", 0.555f);
+    expect (std::abs (swingNow() - 0.555f) < 0.0015f, "the swing knob still takes a user value");
 }
 
 // 4 styles x 50 seeds: no instant where the bass and a stab/pad tone are a
@@ -1125,6 +1231,8 @@ int main()
 
     testEarReview();
     testScorerV23();
+    testAr423Bass();
+    testAr423Swing();
     testHarmonyClashes();
     testLaneHygiene();
     testRollSkipsMutedAndKept();

@@ -82,15 +82,33 @@ bool reshapeTo (rolla::RollaProcessor& proc, const char* id, float value)
     return pumpUntil ([&] { return proc.copyGroove().generation != before; });
 }
 
+// How the fake host moves its playhead.
+struct HostSim
+{
+    double wrapBeats = 0.0;  // > 0: the reported ppq wraps every wrapBeats, like FL's pattern loop
+    bool loopPoints = false; // also report isLooping and loop points [0, wrapBeats)
+    int stopAt = -1;         // >= 0: stop here for a moment, then restart from ppq 0
+};
+
 struct Head : juce::AudioPlayHead
 {
     double ppq = 0.0;
+    bool playing = true;
+    HostSim sim;
     juce::Optional<juce::AudioPlayHead::PositionInfo> getPosition() const override
     {
         juce::AudioPlayHead::PositionInfo info;
         info.setBpm (kBpm);
-        info.setIsPlaying (true);
-        info.setPpqPosition (ppq);
+        info.setIsPlaying (playing);
+        info.setPpqPosition (sim.wrapBeats > 0.0 ? std::fmod (ppq, sim.wrapBeats) : ppq);
+        if (sim.wrapBeats > 0.0 && sim.loopPoints)
+        {
+            juce::AudioPlayHead::LoopPoints loop;
+            loop.ppqStart = 0.0;
+            loop.ppqEnd = sim.wrapBeats;
+            info.setIsLooping (true);
+            info.setLoopPoints (loop);
+        }
         return info;
     }
 };
@@ -103,9 +121,11 @@ struct NoteOn
 
 // Pattern MIDI the plugin sends while it plays one loop, in 480-PPQ ticks.
 // processBlock delays it by the plugin latency, so that is taken back out.
-std::vector<NoteOn> playedNotes (rolla::RollaProcessor& proc, int loopN)
+// With sim.stopAt the loop is counted from the restart.
+std::vector<NoteOn> playedNotes (rolla::RollaProcessor& proc, int loopN, const HostSim& sim = {})
 {
     Head head;
+    head.sim = sim;
     proc.setPlayHead (&head);
     proc.releaseResources();
     juce::AudioProcessor::BusesLayout layout;
@@ -116,15 +136,32 @@ std::vector<NoteOn> playedNotes (rolla::RollaProcessor& proc, int loopN)
     const int lat = proc.getLatencySamples();
     std::vector<NoteOn> out;
     juce::AudioBuffer<float> buffer (2, 256);
-    for (int done = 0; done < loopN + lat + 256;)
+    int origin = 0;
+    bool restarted = false;
+    for (int done = 0; done < origin + loopN + lat + 256;)
     {
         const int n = 256;
+        if (sim.stopAt >= 0 && ! restarted && done >= sim.stopAt)
+        {
+            restarted = true;
+            // Stop long enough to flush the delayed MIDI, then play from the top.
+            head.playing = false;
+            for (int stopped = 0; stopped < lat + 1024; stopped += n)
+            {
+                juce::MidiBuffer midi;
+                proc.processBlock (buffer, midi);
+            }
+            head.playing = true;
+            head.ppq = 0.0;
+            out.clear();
+            origin = done;
+        }
         juce::MidiBuffer midi;
         proc.processBlock (buffer, midi);
         for (const auto meta : midi)
         {
             const auto m = meta.getMessage();
-            const int at = done + meta.samplePosition - lat;
+            const int at = done - origin + meta.samplePosition - lat;
             if (! m.isNoteOn() || at < 0 || at >= loopN)
                 continue;
             const double tick = at * kBpm / 60.0 / kRate * 480.0;
@@ -264,6 +301,62 @@ Wav readWav (const juce::File& file)
 
 bool nameOk (const juce::File& f, const rolla::Groove& g, int part);
 
+// Absolute tick of the first track's end-of-track meta event, -1 if unreadable.
+long endOfTrackTick (const juce::File& file)
+{
+    juce::MemoryBlock block;
+    if (! file.loadFileAsData (block) || block.getSize() < 22)
+        return -1;
+    const auto* d = static_cast<const unsigned char*> (block.getData());
+    const size_t size = block.getSize();
+    size_t pos = 14;
+    if (d[pos] != 'M' || d[pos + 1] != 'T' || d[pos + 2] != 'r' || d[pos + 3] != 'k')
+        return -1;
+    const size_t len = ((size_t) d[pos + 4] << 24) | ((size_t) d[pos + 5] << 16) | ((size_t) d[pos + 6] << 8) | (size_t) d[pos + 7];
+    pos += 8;
+    const size_t end = std::min (size, pos + len);
+    long tick = 0;
+    int status = 0;
+    auto vlq = [&] () -> long
+    {
+        long v = 0;
+        for (int i = 0; i < 4 && pos < end; ++i)
+        {
+            const int b = d[pos++];
+            v = (v << 7) | (b & 0x7f);
+            if ((b & 0x80) == 0)
+                break;
+        }
+        return v;
+    };
+    while (pos < end)
+    {
+        tick += vlq();
+        if (pos >= end)
+            break;
+        if ((d[pos] & 0x80) != 0)
+            status = d[pos++];
+        if (status == 0xff)
+        {
+            if (pos >= end)
+                break;
+            const int type = d[pos++];
+            const long n = vlq();
+            if (type == 0x2f)
+                return tick;
+            pos += (size_t) n;
+            status = 0;
+        }
+        else if (status == 0xf0 || status == 0xf7)
+            pos += (size_t) vlq();
+        else if ((status & 0xf0) == 0xc0 || (status & 0xf0) == 0xd0)
+            pos += 1;
+        else
+            pos += 2;
+    }
+    return -1;
+}
+
 int lengthBars (rolla::RollaProcessor& proc)
 {
     return rolla::barsFromIndex ((int) proc.apvts.getRawParameterValue ("length")->load());
@@ -293,6 +386,62 @@ void compareMidi (rolla::RollaProcessor& proc, const std::string& tag, const rol
             tag + ": exported notes == played notes (" + std::to_string (fn.ons.size()) + " in file, "
                 + std::to_string (played.size()) + " played, " + std::to_string (onlyFile) + " only in file, "
                 + std::to_string (onlyPlayed) + " only played) " + example);
+}
+
+// Styles whose bars 5-8 differ from bars 1-4, so the host-loop checks below
+// would catch a phrase that restarts every 4 bars.
+int distinctHalves = 0;
+
+// FL Studio loops its pattern: the host plays on while its ppq wraps every 4
+// bars. ROLLA plays its own phrase through the wrap, so an 8-bar roll sends the
+// same notes as under a straight host, bars 5-8 included. A stop and restart
+// goes back to bar 1.
+void testHostLoop (rolla::RollaProcessor& proc, const std::string& tag, int bars)
+{
+    if (bars != 8)
+        return;
+    const int loopN = rolla::rollexport::loopSamples (8, kBpm, kRate);
+    const double half = 4.0 * 4.0 * 480.0;
+    auto lateCount = [&] (const std::vector<NoteOn>& v)
+    {
+        int c = 0;
+        for (const auto& x : v)
+            c += x.tick >= half - 4.0;
+        return c;
+    };
+    const auto straight = playedNotes (proc, loopN);
+    const int late = lateCount (straight);
+    {
+        std::vector<NoteOn> first, second;
+        for (auto x : straight)
+        {
+            if (x.tick >= half - 4.0)
+            {
+                x.tick -= half;
+                second.push_back (x);
+            }
+            else
+                first.push_back (x);
+        }
+        int a = 0, b = 0;
+        std::string unused;
+        matchNotes (first, second, a, b, unused);
+        distinctHalves += a + b > 0;
+    }
+    auto check = [&] (const HostSim& sim, const std::string& what)
+    {
+        const auto played = playedNotes (proc, loopN, sim);
+        int onlyStraight = 0, onlyPlayed = 0;
+        std::string example;
+        matchNotes (straight, played, onlyStraight, onlyPlayed, example);
+        expect (onlyStraight == 0 && onlyPlayed == 0 && late > 0 && lateCount (played) == late,
+                tag + ": " + what + " (" + std::to_string (lateCount (played)) + " of " + std::to_string (late)
+                    + " bar 5-8 notes, " + std::to_string (onlyStraight) + " missing, " + std::to_string (onlyPlayed)
+                    + " extra) " + example);
+    };
+    check ({ 16.0, false, -1 }, "8 bars play through a 4-bar host loop (no loop points)");
+    check ({ 16.0, true, -1 }, "8 bars play through a 4-bar host loop (loop points)");
+    check ({ 16.0, false, loopN * 13 / 16 }, "stop and restart in host loop 2 goes back to bar 1");
 }
 
 bool nameOk (const juce::File& f, const rolla::Groove& g, int part)
@@ -358,6 +507,7 @@ void testStyle (rolla::RollaProcessor& proc, int style, bool pack, const juce::F
 
     // Full multitrack MIDI vs what processBlock plays.
     compareMidi (proc, tag, g, bars);
+    testHostLoop (proc, tag, bars);
     const auto mids = proc.writeTempMidi();
     if (mids.isEmpty())
         return;
@@ -383,6 +533,50 @@ void testStyle (rolla::RollaProcessor& proc, int style, bool pack, const juce::F
                     + " vs " + std::to_string (inFull) + ") " + lf.getFileName().toStdString());
     }
 
+    // Every lane as its own MIDI file (Shift-drag): 7 files, one folder, each
+    // one track, named per lane, exactly one loop long, = that lane's track.
+    {
+        const auto laneFiles = proc.writeLaneMidiFiles();
+        expect (laneFiles.size() == rolla::NumParts, tag + ": one MIDI file per lane (" + std::to_string (laneFiles.size()) + ")");
+        for (int part = 0; part < laneFiles.size() && part < rolla::NumParts; ++part)
+        {
+            const juce::File lf (laneFiles[part]);
+            const std::string lane = rolla::partId (part);
+            const auto ln = readMidi (lf, loopTicks);
+            int inFull = 0;
+            const int ch = part == rolla::Drums ? 10 : part + 1;
+            for (const auto& n : fn.ons)
+                inFull += n.channel == ch;
+            expect (lf.getParentDirectory() == juce::File (laneFiles[0]).getParentDirectory(),
+                    tag + " " + lane + ": lane MIDI files share one drag folder");
+            expect (nameOk (lf, g, part) && ln.tracks == 1 && ln.tempos == 1 && (int) ln.ons.size() == inFull
+                        && ln.pastLoop == 0 && ln.badVel == 0,
+                    tag + " " + lane + " lane MIDI file: " + std::to_string (ln.ons.size()) + " notes vs "
+                        + std::to_string (inFull) + " in the full file, " + lf.getFileName().toStdString());
+            // The track ends on the loop end, so FL sizes the pattern to the loop.
+            const long end = endOfTrackTick (lf);
+            expect (end == loopTicks, tag + " " + lane + " lane MIDI file is exactly " + std::to_string (bars)
+                                          + " bars (end of track at " + std::to_string (end) + " ticks)");
+        }
+    }
+
+    // Every lane's WAV stem on its own (lane drag in audio mode).
+    for (int part = 0; part < rolla::NumParts; ++part)
+    {
+        const auto wav = proc.writeLaneAudio (part);
+        const std::string lane = rolla::partId (part);
+        if (wav.isEmpty())
+        {
+            expect (false, tag + " " + lane + ": lane WAV");
+            continue;
+        }
+        const juce::File wf (wav[0]);
+        const auto w = readWav (wf);
+        expect (nameOk (wf, g, part) && w.channels == 2 && w.rate == kRate && w.length == loopN,
+                tag + " " + lane + " lane WAV: " + std::to_string (w.length) + " vs " + std::to_string (loopN)
+                    + " samples, " + wf.getFileName().toStdString());
+    }
+
     // Folder exports.
     const auto dir = scratch.getChildFile (tag);
     dir.deleteRecursively();
@@ -394,12 +588,10 @@ void testStyle (rolla::RollaProcessor& proc, int style, bool pack, const juce::F
         mid += e.getFile().hasFileExtension ("mid");
         wav += e.getFile().hasFileExtension ("wav");
     }
-    int lanesWithNotes = 1; // drums
-    for (int p = 0; p < rolla::Drums; ++p)
-        lanesWithNotes += g.lane[p].count > 0;
-    expect (mid == lanesWithNotes + 1 && wav == rolla::NumParts + 1,
-            tag + ": folder export has " + std::to_string (mid) + " MIDI (want " + std::to_string (lanesWithNotes + 1)
-                + ") and " + std::to_string (wav) + " WAV (want 8: 7 stems + full mix)");
+    // Every lane gets a MIDI file and a stem, empty lanes included.
+    expect (mid == rolla::NumParts + 1 && wav == rolla::NumParts + 1,
+            tag + ": folder export has " + std::to_string (mid) + " MIDI (want 8: 7 lanes + full) and "
+                + std::to_string (wav) + " WAV (want 8: 7 stems + full mix)");
 }
 } // namespace
 
@@ -441,6 +633,8 @@ int main (int argc, char** argv)
 
         for (int style = 0; style < rolla::NumDialects; ++style)
             testStyle (proc, style, havePack, scratch);
+        expect (distinctHalves > 0, "host loop: " + std::to_string (distinctHalves)
+                                        + " style(s) with bars 5-8 unlike bars 1-4");
 
         // Every vox preset, right after its pick: each recipe has to find a file
         // in the library (the "loops" recipe has no tempo-locked loop in the tone

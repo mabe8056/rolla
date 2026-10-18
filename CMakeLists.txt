@@ -270,6 +270,28 @@ target_link_libraries(rolla-sampler-test
         juce::juce_recommended_warning_flags
 )
 
+# Job G2: the one timbre extractor, run on the library and (privately) on references.
+add_executable(rolla-fingerprint
+    tools/fingerprint/fingerprint_main.cpp
+)
+
+target_include_directories(rolla-fingerprint PRIVATE src)
+
+target_compile_definitions(rolla-fingerprint
+    PRIVATE
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_DISPLAY_SPLASH_SCREEN=0
+        JUCE_REPORT_APP_USAGE=0
+)
+
+target_link_libraries(rolla-fingerprint
+    PRIVATE
+        juce::juce_audio_formats
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags
+)
+
 # Master true-peak safety stage: guard DSP + every style x INTENSITY.
 add_executable(rolla-tp-test
     tests/tpguard/tp_guard_test.cpp
