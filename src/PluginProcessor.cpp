@@ -1396,7 +1396,7 @@ juce::File RollaProcessor::exportCache() const
 {
     juce::File dir = settings::cacheOverride();
     if (dir != juce::File())
-        dir = dir.getChildFile ("exports");
+        dir = dir.getChildFile ("ROLLA");
     else
     {
        #if JUCE_MAC
