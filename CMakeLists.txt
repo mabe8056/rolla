@@ -365,6 +365,49 @@ add_executable(rolla-arrange-test
 
 target_include_directories(rolla-arrange-test PRIVATE src)
 
+# Export end to end: MIDI == played notes, stems, names, folder export.
+add_executable(rolla-export-test
+    tests/export/export_test.cpp
+    src/PluginProcessor.cpp
+    src/PluginEditor.cpp
+    src/ui/Theme.cpp
+    src/Engine/Engine.cpp
+    src/Engine/Sampler.cpp
+    src/Engine/SampleLibrary.cpp
+    src/Sampler/SamplePrep.cpp
+    src/Sampler/UserSlots.cpp
+    src/Generator/Generator.cpp
+    src/Generator/PhraseBank.cpp
+    src/Generator/Presets.cpp
+    src/Generator/MidiFile.cpp
+    src/Drums/DrumMachine.cpp
+    src/Drums/DrumPattern.cpp
+    src/Mix/MixProgram.cpp
+    src/Mix/MixRuntime.cpp
+)
+
+target_include_directories(rolla-export-test PRIVATE src)
+
+target_compile_definitions(rolla-export-test
+    PRIVATE
+        # Lets the test pump the message loop on macOS (runDispatchLoopUntil).
+        JUCE_MODAL_LOOPS_PERMITTED=1
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_DISPLAY_SPLASH_SCREEN=0
+        JUCE_REPORT_APP_USAGE=0
+)
+
+target_link_libraries(rolla-export-test
+    PRIVATE
+        RollaData
+        juce::juce_audio_utils
+        juce::juce_dsp
+        juce::juce_audio_formats
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags
+)
+
 add_executable(rolla-knob-test
     tests/knob/knob_test.cpp
     src/PluginProcessor.cpp
