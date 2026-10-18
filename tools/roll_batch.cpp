@@ -392,7 +392,7 @@ std::string pickedFile (const rolla::SampleIndex* index, const rolla::SampleSpec
     if (index == nullptr)
         return {};
     const int queryVoice = voice >= 0 ? voice : spec.filter.voice;
-    const rolla::PoolFilter filter = rolla::poolFilterFor (spec, part, queryVoice, dialect);
+    const rolla::PoolFilter filter = rolla::poolFilterWithFiles (*index, spec, part, queryVoice, dialect);
     const int n = rolla::sampleIndexCount (*index, part, filter);
     if (n <= 0)
         return {};
