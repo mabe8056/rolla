@@ -7,6 +7,7 @@
 #include "Export/RollExport.h"
 #include "Engine/RollaSettings.h"
 #include "GenreBrain/GenreTargetsJson.h"
+#include "GenreBrain/KitMeshJson.h"
 #include "GenreBrain/LanePools.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -632,6 +633,7 @@ struct RollaProcessor::GenreBrainState
 {
     genre::GenreTargets targets;
     genre::FeatureIndex features;
+    genre::MeshRules mesh = genre::MeshRules::fromMixSpec();
     genre::Kit last;
 };
 
@@ -651,9 +653,14 @@ void RollaProcessor::applyGenreBrain (std::uint32_t mask, const Settings& s, con
         genreBrain = std::make_shared<GenreBrainState>();
         genreBrain->features = genre::loadSampleFeatures (dir.getChildFile ("sample_features.json"));
         genreBrain->targets = genre::loadGenreTargets (dir.getChildFile ("genre_targets.json"));
+        genreBrain->mesh = genre::loadMeshRules (dir.getChildFile ("mesh_rules.json"));
         if (genreBrain->features.size() > 0)
             juce::Logger::writeToLog ("ROLLA genre brain: " + juce::String ((int) genreBrain->features.size()) + " sample features, targets "
                                       + (genreBrain->targets.fromData ? "from data" : "neutral"));
+        else if (genreBrain->features.fromData)
+            // A file that parsed to nothing (wrong shape) must never fail silently.
+            juce::Logger::writeToLog ("ROLLA genre brain: ERROR sample_features.json loaded 0 entries (wrong format?); "
+                                      "sounds use the seed draw");
     }
     auto& genreState = *genreBrain;
     if (genreState.features.size() == 0)
@@ -683,7 +690,19 @@ void RollaProcessor::applyGenreBrain (std::uint32_t mask, const Settings& s, con
         return;
 
     const auto style = (genre::Style) std::clamp (s.dialect, 0, genre::kStyles - 1);
-    const genre::Kit kit = genre::drawKit (pools, style, genreState.targets, seed, &genreState.last);
+    // Meshing (KitMesh.h): a candidate that clashes with the lanes already drawn
+    // (kick/bass sub, bass/stab low mids, stab/pad crowding, key fit after retune)
+    // is re-drawn. The roll's key; natural minor until the scale picker lands.
+    genre::MeshContext ctx;
+    ctx.keyRootPc = ((s.key % 12) + 12) % 12;
+    ctx.scaleMask = genre::kScaleMinor;
+    ctx.degreeWeights = genreState.targets.lane (style, genre::Lane::Stab).pcWeights;
+    ctx.chordAsk = true;
+    ctx.rules = genreState.mesh;
+    genre::SelectorOptions opt;
+    opt.pairPenalty = genre::pairPenaltyHook (ctx);
+    opt.maxTries = 8;
+    const genre::Kit kit = genre::drawKit (pools, style, genreState.targets, seed, &genreState.last, opt);
     for (int part : { Bass, Stab, Hits, Pluck, Pad, Vox })
     {
         const genre::Lane lane = genre::laneForPart (part, -1);
