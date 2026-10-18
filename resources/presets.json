@@ -961,7 +961,7 @@
       "vox": "booth",
       "drums": "tight",
       "hitsMute": true,
-      "swing": 0.51
+      "swing": 0.54
     },
     "pop": {
       "bass": "click",
@@ -972,7 +972,7 @@
       "vox": "chop",
       "drums": "tight",
       "hitsMute": true,
-      "swing": 0.5
+      "swing": 0.567
     },
     "gaskin": {
       "bass": "round",
@@ -983,7 +983,7 @@
       "vox": "chop",
       "drums": "room",
       "hitsMute": false,
-      "swing": 0.5,
+      "swing": 0.565,
       "overrides": {
         "bass": {
           "whenPreset": "round",

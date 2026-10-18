@@ -17,6 +17,9 @@ namespace rolla
 namespace
 {
 
+// MIX_SPEC: kick and bass hold corr <120 Hz ≥ 0.99 on the master.
+constexpr float kSubMonoHz = 120.f;
+
 float coefFromMs (float ms, float sr) noexcept
 {
     return 1.f - std::exp (-1.f / std::max (1.f, ms * 0.001f * sr));
@@ -350,6 +353,8 @@ struct Engine::Impl
     juce::Reverb reverb;
     int reverbIdle = 1000000;
     DcBlock mainDc, mainDcR, drumDc;
+    // Master sub-mono crossover (mix path only).
+    Svf subL, subR;
     MixRuntime mixRt;
     TruePeakGuard tpGuard;
     bool primed = false;
@@ -428,6 +433,8 @@ struct Engine::Impl
         mainDc.reset();
         mainDcR.reset();
         drumDc.reset();
+        subL.reset();
+        subR.reset();
         mixRt.reset();
         tpGuard.reset();
         lastPos = -1.0;
@@ -1339,6 +1346,12 @@ void Engine::process (const Groove& groove,
                 const float accentAmt = params.drumsAccent;
                 const bool accent = groove.drums.accent[t] != 0;
                 const float acc = accent ? std::pow (10.f, accentAmt * 8.f / 20.f) : 1.f;
+                // Sample kits: the generator writes no step accents, so DRUMS ACCENT
+                // sets how hard the kick and clap land on the quarter grid.
+                // The 0.6 default is unity; 0 is -4.8 dB, 1 is +3.2 dB.
+                const float quarterAcc = params.sampleShaping && (t % 4) == 0
+                                             ? std::pow (10.f, (accentAmt - 0.6f) * 8.f / 20.f)
+                                             : 1.f;
                 const float tone = params.tone[Drums] - 0.5f;
                 const float punch = params.punch[Drums] - 0.5f;
                 auto tuneOf = [&] (int voice)
@@ -1441,6 +1454,7 @@ void Engine::process (const Groove& groove,
                     if (vel <= 0)
                         continue;
                     const float stepAcc = (voice == Kick || voice == Clap) ? acc : 1.f;
+                    const float sampleGain = accentOf (voice) * ((voice == Kick || voice == Clap) ? quarterAcc : 1.f);
                     // Mix path: muting drums must not drop the kick duck, or SOLO/MUTE/FULL
                     // bass envelopes stop nulling. The legacy path still skips it.
                     if (voice == Kick && params.duck && (params.mix != nullptr || ! params.mute[Drums]))
@@ -1490,12 +1504,12 @@ void Engine::process (const Groove& groove,
                         else if (circuitKit)
                             keep = slotKeep;
                         else
-                            keep = sampler.takeDrum (voice, vel, bank, play);
+                            keep = sampler.takeDrum (voice, vel, bank, play, sampleGain);
                     }
                     else if (circuitKit)
                         keep = 1.f;
                     else
-                        keep = sampler.takeDrum (voice, vel, bank, play);
+                        keep = sampler.takeDrum (voice, vel, bank, play, sampleGain);
 
                     if (keep > 0.001f)
                     {
@@ -2258,6 +2272,14 @@ void Engine::process (const Groove& groove,
             // Linear sum. The shared fastTanh was the mute leak: MUTE − (FULL − SOLO)
             // left a common 250 Hz–4 kHz residual from the cubic term of the sum.
             const float sg = E.mixRt.sumGain();
+            // Mono below 120 Hz on the master: the plate, the delay and the unstripped
+            // toms / slot kicks put side energy under the lanes' own mono-below.
+            // Linear, so MUTE − (FULL − SOLO) still nulls.
+            const float lowL = E.subL.lowpass (outL, kSubMonoHz, 0.70710678f, srF);
+            const float lowR = E.subR.lowpass (outR, kSubMonoHz, 0.70710678f, srF);
+            const float lowM = 0.5f * (lowL + lowR);
+            outL += lowM - lowL;
+            outR += lowM - lowR;
             outL = flush (E.mainDc.process (outL) * sg * og);
             outR = flush (E.mainDcR.process (outR) * sg * og);
         }

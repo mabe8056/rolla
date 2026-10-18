@@ -1,3 +1,4 @@
+#include "Drums/DrumMachine.h"
 #include "Engine/Engine.h"
 #include "Engine/SampleChop.h"
 #include "Engine/Sampler.h"
@@ -5,6 +6,7 @@
 #include "GenreBrain/LanePools.h"
 #include "GenreBrain/SampleFeaturesJson.h"
 #include "GenreBrain/SoundSelector.h"
+#include "GenreBrain/KitMeshJson.h"
 #include "Mix/TruePeakGuard.h"
 #include "Sampler/Fingerprint.h"
 #include "Sampler/PitchProbe.h"
@@ -826,6 +828,112 @@ void testSoundSelector()
     }
 }
 
+// Kit meshing rules (KitMesh.h) on mock features: no audio, no library.
+void testKitMesh()
+{
+    using namespace rolla::genre;
+    auto make = [] (Lane lane, float sub, float centroid, float root, float conf)
+    {
+        SampleFeatures s;
+        s.lane = lane;
+        s.subRatio = sub;
+        s.centroidHz = centroid;
+        s.attackMs = 5.f;
+        s.decay20Ms = 150.f;
+        s.pitch.rootPitch = root;
+        s.pitch.conf = conf;
+        s.pitch.chordPcs = (std::uint16_t) (root >= 0.f ? 1 : 0);
+        return s;
+    };
+    MeshContext ctx;
+    ctx.keyRootPc = 0; // C minor
+    const float at = ctx.rules.conflictAt;
+
+    // Kick vs bass. The bass is retuned to the line (the key root, C); the kick is not.
+    const auto bass = make (Lane::Bass, 0.8f, 90.f, 36.f, 0.9f);
+    const auto kickClash = make (Lane::Kick, 0.8f, 80.f, 35.f, 0.8f); // B1, a semitone under C
+    const auto r1 = pairPenalty (kickClash, bass, ctx);
+    expect (r1.penalty >= at && r1.reason == MeshReason::FundamentalClash,
+            "mesh: sub-heavy kick a semitone off a sub-heavy bass conflicts");
+    expect (pairPenalty (bass, kickClash, ctx).penalty == r1.penalty, "mesh: pair order does not matter");
+    const auto cleanBass = make (Lane::Bass, 0.6f, 90.f, 36.f, 0.9f);
+    const auto cleanKick = make (Lane::Kick, 0.6f, 80.f, 36.f, 0.8f); // tuned to the key root
+    expect (pairPenalty (cleanKick, cleanBass, ctx).penalty == 0.f, "mesh: a kick on the key root with a normal bass is clean");
+    auto longKick = cleanKick;
+    longKick.decay20Ms = 400.f; // still over -20 dB when the offbeat bass is up (238 ms at 126 BPM)
+    const auto r2 = pairPenalty (longKick, cleanBass, ctx);
+    expect (r2.penalty >= at && r2.reason == MeshReason::KickTailOverlap, "mesh: a long kick tail over the bass conflicts");
+    const auto proxyKick = make (Lane::Kick, 0.8f, 93.5f, -1.f, 0.f); // no tail pitch: f0 from the centroid (~62 Hz, B1)
+    const float proxy = pairPenalty (proxyKick, bass, ctx).penalty;
+    expect (proxy > 0.f && proxy < at, "mesh: a centroid-proxy fundamental clash counts, but not alone");
+
+    // Bass vs stab: low-mid masking and register.
+    const auto muddyStab = make (Lane::Stab, 0.35f, 250.f, 40.f, 0.8f);
+    const auto r3 = pairPenalty (bass, muddyStab, ctx);
+    expect (r3.penalty >= at && r3.reason == MeshReason::LowMidMasking, "mesh: a dark, sub-heavy low stab over the bass conflicts");
+    const auto stab = make (Lane::Stab, 0.05f, 900.f, 60.f, 0.85f);
+    expect (pairPenalty (bass, stab, ctx).penalty == 0.f, "mesh: a bright stab two octaves up is clean against the bass");
+
+    // Stab vs pad register spacing.
+    const auto padClose = make (Lane::Pad, 0.02f, 800.f, 62.f, 0.8f);
+    const auto r4 = pairPenalty (stab, padClose, ctx);
+    expect (r4.penalty >= at && r4.reason == MeshReason::RegisterCrowding, "mesh: stab and pad roots a tone apart conflict");
+    const auto padUnder = make (Lane::Pad, 0.02f, 500.f, 48.f, 0.8f);
+    expect (pairPenalty (stab, padUnder, ctx).penalty == 0.f, "mesh: a pad an octave under the stab is clean");
+
+    // Key: a confident major-triad file on one-finger lines in C minor sounds E natural.
+    auto majorStab = stab;
+    majorStab.pitch.isChord = true;
+    majorStab.pitch.quality = rolla::ChordQuality::Major;
+    majorStab.pitch.chordPcs = (std::uint16_t) ((1u << 0) | (1u << 4) | (1u << 7));
+    const auto k1 = keyPenalty (majorStab, ctx);
+    expect (k1.penalty >= at && k1.reason == MeshReason::OutOfKey, "mesh: a major chord file conflicts in minor");
+    auto inMajor = ctx;
+    inMajor.scaleMask = kScaleMajor;
+    expect (keyPenalty (majorStab, inMajor).penalty == 0.f, "mesh: the same chord file fits a major key");
+    auto asked = ctx;
+    asked.chordAsk = true; // written minor triads: the sampler plays it from the minor third (Eb G Bb)
+    expect (keyPenalty (majorStab, asked).penalty == 0.f, "mesh: chordFileOffset rescues a major file on asked minor triads");
+    expect (keyPenalty (stab, ctx).penalty == 0.f, "mesh: a confident single note always lands in key");
+    const auto vox = make (Lane::Vox, 0.0f, 1600.f, 61.f, 0.9f); // C#, not retuned
+    expect (keyPenalty (vox, ctx).penalty >= at, "mesh: an unretuned vox on a wrong pitch class conflicts");
+    const auto weakStab = make (Lane::Stab, 0.05f, 900.f, 61.f, 0.4f); // plays as recorded
+    const float weak = keyPenalty (weakStab, ctx).penalty;
+    expect (weak > 0.f && weak < at, "mesh: a low-confidence wrong pitch counts, scaled by its confidence");
+    auto noKey = ctx;
+    noKey.keyRootPc = -1;
+    expect (keyPenalty (majorStab, noKey).penalty == 0.f, "mesh: no key, no key rule");
+
+    // Top band.
+    const auto hat = make (Lane::HatC, 0.f, 8700.f, -1.f, 0.f);
+    const auto ride = make (Lane::Ride, 0.f, 8900.f, -1.f, 0.f);
+    const auto hatO = make (Lane::HatO, 0.f, 8800.f, -1.f, 0.f);
+    expect (pairPenalty (hat, ride, ctx).reason == MeshReason::TopBandClash && pairPenalty (hat, ride, ctx).penalty >= at,
+            "mesh: a ride on the closed hat's band conflicts");
+    expect (pairPenalty (hat, hatO, ctx).penalty == 0.f, "mesh: closed and open hat are a pair by design");
+
+    // Whole kit, and the selector hook.
+    const std::vector<SampleFeatures> kit { kickClash, bass, majorStab };
+    const auto conflicts = kitConflicts (kit, ctx);
+    expect (conflicts.size() == 2 && conflicts[0].a == 0 && conflicts[0].b == 1 && conflicts[1].a == 2 && conflicts[1].b == -1
+                && conflicts[1].reason == MeshReason::OutOfKey,
+            "mesh: kitConflicts lists the kick/bass clash and the out-of-key chord");
+    const auto hook = pairPenaltyHook (ctx);
+    expect (hook (cleanKick, majorStab) >= at && hook (cleanKick, stab) == 0.f, "mesh: the hook adds each member's key penalty");
+    expect (pairPenaltyHook (ctx, false) (cleanKick, majorStab) == 0.f, "mesh: the hook without key is pairs only");
+
+    // Config: a file overrides what it has and keeps the rest.
+    const auto rules = parseMeshRules (juce::JSON::parse (R"JSON({"crowding":{"full_clear_st":[1.0,1.5]},"conflict_at":1.5})JSON"));
+    expect (rules.crowdFullSt == 1.f && rules.crowdClearSt == 1.5f && rules.conflictAt == 1.5f
+                && rules.subHeavy == MeshRules::fromMixSpec().subHeavy,
+            "mesh json: given numbers override, missing keep the mix-spec defaults");
+    auto tuned = ctx;
+    tuned.rules = rules;
+    expect (pairPenalty (stab, padClose, tuned).penalty == 0.f, "mesh json: a tighter crowding tolerance clears a tone apart");
+    expect (loadMeshRules (juce::File ("/nonexistent/mesh_rules.json")).crowdClearSt == MeshRules::fromMixSpec().crowdClearSt,
+            "mesh json: no file means the defaults");
+}
+
 } // namespace
 
 int main()
@@ -837,6 +945,7 @@ int main()
     testFingerprintTool();
     testGenreTargets();
     testSoundSelector();
+    testKitMesh();
 
     static_assert (rolla::kUserSlotCount == 14, "14 user slots");
     expect (rolla::userSlotForPart (rolla::Bass) == rolla::SlotBass, "bass slot");
@@ -846,6 +955,23 @@ int main()
     expect (rolla::userSlotForDrum (rolla::Perc) == rolla::SlotPerc, "perc slot");
     expect (rolla::userSlotForDrum (rolla::TomLow) < 0, "toms stay on the dropped-wav path");
     expect (std::string (rolla::userSlotFolder (rolla::SlotPerc)) == "DRUMS/PERC", "perc folder");
+
+    // Kick key follow: every key gets a root / 4th / 5th inside 40-70 Hz,
+    // never an out-of-key 55 Hz fallback.
+    for (int key = 0; key < 12; ++key)
+    {
+        const float hz = rolla::DrumMachine::kickHzForKey (key);
+        const std::string tag = "kick key follow key " + std::to_string (key);
+        expect (hz >= 40.f && hz <= 70.f, tag + " in 40-70 Hz");
+        const int midi = (int) std::lround (69.0 + 12.0 * std::log2 ((double) hz / 440.0));
+        const int interval = ((midi % 12) - key + 12) % 12;
+        expect (interval == 0 || interval == 5 || interval == 7, tag + " is root/4th/5th");
+    }
+    expect (std::fabs (rolla::DrumMachine::kickHzForKey (10) - 55.f) > 0.5f, "kick key follow A# not 55 Hz");
+    expect (std::fabs (rolla::DrumMachine::kickHzForKey (11) - 55.f) > 0.5f, "kick key follow B not 55 Hz");
+    expect (std::fabs (rolla::DrumMachine::kickHzForKey (2) - 55.f) < 0.1f, "kick key follow D keeps A1");
+    expect (std::fabs (rolla::DrumMachine::kickHzForKey (10) - 58.27f) < 0.1f, "kick key follow A# -> A#1");
+    expect (std::fabs (rolla::DrumMachine::kickHzForKey (6) - 46.25f) < 0.1f, "kick key follow F# -> F#1");
 
     expect (rolla::midiFromFilename ("BASS/THMAG_Bass_One_Shot_4_Fm.wav") == 53, "Fm -> F3");
     expect (rolla::midiFromFilename ("STAB/thing_C#.wav") == 49, "C# -> C#3");
