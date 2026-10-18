@@ -4,6 +4,7 @@
 #include "Generator/Drive.h"
 #include "Generator/Intensity.h"
 #include "Generator/MidiFile.h"
+#include "Generator/OriginalityJson.h"
 #include "Export/RollExport.h"
 #include "Engine/RollaSettings.h"
 
@@ -423,11 +424,19 @@ void RollaProcessor::deferredStartup()
         }
         presetGen.fetch_add (1, std::memory_order_release);
 
+        // The owner's private hashed reference index, if there is one (Generator/OriginalityJson.h).
+        // Without it every roll still passes the built-in originality guard.
+        if (! startupStop.load())
+            orig::setIndex (orig::loadIndex (orig::defaultIndexFile()));
+
         if (! startupStop.load() && grooveEpoch.load (std::memory_order_relaxed) == 0)
         {
             const uint32_t seeds[NumParts] = { 0x0B17u, 0x51ABu, 0x19C3u, 0x77E1u, 0x0A11u, 0xBEEFu, 0x0909u };
             Groove initial {};
-            generate (initial, currentSettings(), seeds, 0x7fu);
+            // A refused first roll (originality floor) leaves `initial` empty: an
+            // empty phrase is published rather than anything that copies.
+            if (! generate (initial, currentSettings(), seeds, 0x7fu))
+                setRollNotice ("First roll refused: too close to a reference, press ROLL");
             publishInitial (initial);
         }
 
@@ -621,24 +630,38 @@ void RollaProcessor::regenerate (int onlyPart)
         {
             seeds[i] = freshSeed();
             mask |= 1u << (unsigned) i;
-            samplePick[i].store ((int) (seeds[i] % 10007u), std::memory_order_relaxed);
-            const int picked = sound != nullptr ? pickPresetForRoll (*sound, i, s.dialect, seeds[i]) : -1;
-            if (picked >= 0)
-            {
-                if (auto* param = apvts.getParameter (juce::String (partId (i)) + "Preset"))
-                {
-                    const float norm = param->convertTo0to1 ((float) picked);
-                    if (std::fabs (param->getValue() - norm) >= 1.0e-4f)
-                        param->setValueNotifyingHost (norm);
-                }
-            }
         }
     }
 
     if (mask == 0)
         return;
 
-    reshapeLanes (next, s, seeds, mask);
+    // The originality floor can refuse a roll (Generator.h). Then nothing
+    // changes: the previous roll, its presets and sample picks stay.
+    if (! reshapeLanes (next, s, seeds, mask))
+    {
+        setRollNotice (onlyPart >= 0 ? "Shuffle refused: too close to a reference, kept previous roll"
+                                     : "Roll refused: too close to a reference, kept previous roll");
+        return;
+    }
+    setRollNotice ({});
+
+    for (int i = 0; i < NumParts; ++i)
+    {
+        if ((mask & (1u << (unsigned) i)) == 0)
+            continue;
+        samplePick[i].store ((int) (seeds[i] % 10007u), std::memory_order_relaxed);
+        const int picked = sound != nullptr ? pickPresetForRoll (*sound, i, s.dialect, seeds[i]) : -1;
+        if (picked >= 0)
+        {
+            if (auto* param = apvts.getParameter (juce::String (partId (i)) + "Preset"))
+            {
+                const float norm = param->convertTo0to1 ((float) picked);
+                if (std::fabs (param->getValue() - norm) >= 1.0e-4f)
+                    param->setValueNotifyingHost (norm);
+            }
+        }
+    }
     storeSource (next);
     publishDerived();
 }
@@ -677,6 +700,26 @@ void RollaProcessor::requestReshape()
     });
 }
 
+void RollaProcessor::setRollNotice (const juce::String& text)
+{
+    {
+        std::lock_guard<std::mutex> lock (noticeMu);
+        if (notice.text == text)
+            return;
+        notice.text = text;
+        ++notice.serial;
+    }
+    // Logged in every build, not only debug: a refusal is a hard-rule event.
+    if (text.isNotEmpty())
+        juce::Logger::writeToLog ("ROLLA originality: " + text);
+}
+
+RollaProcessor::RollNotice RollaProcessor::rollNotice() const
+{
+    std::lock_guard<std::mutex> lock (noticeMu);
+    return notice;
+}
+
 void RollaProcessor::reshapeUnkept()
 {
     if (restoring.load (std::memory_order_acquire) || ! startupDone.load (std::memory_order_acquire))
@@ -703,7 +746,13 @@ void RollaProcessor::reshapeUnkept()
     if (mask == 0)
         return;
 
-    reshapeLanes (next, s, seeds, mask);
+    // A refused reshape (originality floor) keeps the previous roll.
+    if (! reshapeLanes (next, s, seeds, mask))
+    {
+        setRollNotice ("Change refused: too close to a reference, kept previous roll");
+        return;
+    }
+    setRollNotice ({});
     storeSource (next);
     publishDerived();
 }

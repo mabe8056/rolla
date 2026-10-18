@@ -38,7 +38,21 @@ struct Rng
 // density, stab-vs-bass placement, plans, contours, and rests are a penalty.
 // Six candidates are ranked by that penalty and one is sampled with a
 // temperature that rises with freedom. The caller seed is what lands on the lane.
-void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[NumParts], std::uint32_t partMask);
+// The finished roll then passes the originality floor (Originality.h): a lane
+// that matches a banned figure or the loaded reference index is redrawn from
+// its seed + k, up to 12 rolls; a composition that never clears is dropped and
+// composed again from a derived seed (3 compositions in all). A copy is never
+// returned: if nothing clears, generate() logs it to stderr, leaves g exactly
+// as passed in (the caller keeps its previous roll) and returns false.
+bool generate (Groove& g, const Settings& settings, const std::uint32_t seeds[NumParts], std::uint32_t partMask);
+
+// Originality floor budget: rolls per composition, compositions per generate().
+inline constexpr int kOrigAttempts = 12;
+inline constexpr int kOrigRounds = 3;
+
+// Seed a refused composition restarts from in round 1..kOrigRounds-1 (round 0
+// uses the caller seed). A fixed hash, so a refusal retry is deterministic.
+std::uint32_t originalityRecomposeSeed (std::uint32_t seed, int part, int round) noexcept;
 
 // The one mode a roll uses for bass, stab, pad, pluck and hits
 // (phrase::Dorian / Aeolian / Phrygian). JACKIN is always phrygian; DEEP

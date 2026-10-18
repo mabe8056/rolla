@@ -2,6 +2,8 @@
 #include "../common/ScratchProfile.h"
 #include "Generator/MidiFile.h"
 #include "Generator/Generator.h"
+#include "Generator/Originality.h"
+#include "Generator/OriginalityJson.h"
 #include "Generator/Intensity.h"
 #include "Generator/PhraseBank.h"
 #include "Generator/Presets.h"
@@ -12,6 +14,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -2194,6 +2197,332 @@ void testBatchJackinLoop()
     expect (stabMean >= 0.80, "JACKIN batch: stab bars repeat on the 2-bar grid (Jaccard " + std::to_string (stabMean) + ")");
 }
 
+// ---- originality floor (Generator/Originality.h) ----
+
+bool sameLane (const rolla::Lane& a, const rolla::Lane& b)
+{
+    if (a.count != b.count)
+        return false;
+    for (int i = 0; i < a.count; ++i)
+    {
+        const auto& x = a.notes[i];
+        const auto& y = b.notes[i];
+        if (x.start != y.start || x.length != y.length || x.nChord != y.nChord || x.vel != y.vel)
+            return false;
+        for (int c = 0; c < std::max (1, (int) x.nChord) && c < 4; ++c)
+            if (x.chord[c] != y.chord[c])
+                return false;
+    }
+    return true;
+}
+
+rolla::orig::Stream laneStream (const rolla::Groove& g, int part)
+{
+    return rolla::orig::streamFromNotes (rolla::orig::rawNotes (g.lane[part], rolla::orig::exportBase (part, g.dialect)));
+}
+
+void seedsForRoll (int style, int roll, std::uint32_t seeds[rolla::NumParts])
+{
+    for (int p = 0; p < rolla::NumParts; ++p)
+        seeds[p] = 2026101852u + (std::uint32_t) roll * 0x9E3779B9u + (std::uint32_t) p * 17u + (std::uint32_t) style * 101u;
+}
+
+// A synthetic fingerprint: an index built from a roll's own bass and stab, i.e.
+// a "reference" this roll copies. With it loaded, the same seeds must redraw
+// into a roll that clears it, deterministically, and keep the caller seeds.
+void testOriginalityResample()
+{
+    const char* names[] = { "ROLLER", "DEEP", "BOUNCY", "JACKIN" };
+    const std::uint32_t lanes = (1u << rolla::Drums) - 1u;
+    for (int style = 0; style < rolla::NumDialects; ++style)
+    {
+        const std::string tag = std::string ("originality ") + names[style] + ": ";
+        rolla::Settings s;
+        s.dialect = style;
+        s.bars = 8;
+        std::uint32_t seeds[rolla::NumParts];
+        seedsForRoll (style, 13, seeds);
+
+        rolla::orig::setIndex (nullptr);
+        rolla::Groove base {};
+        expect (rolla::generate (base, s, seeds, 0x7fu), tag + "the built-in guard clears without an index");
+
+        auto index = std::make_shared<rolla::orig::Index>();
+        index->addRef ("synthetic/bass", laneStream (base, rolla::Bass));
+        index->addRef ("synthetic/stab", laneStream (base, rolla::Stab));
+        index->finalize();
+        const auto before = rolla::orig::check (base, lanes, index.get());
+        expect (! before.pass, tag + "a roll matches an index built from itself");
+        expect (before.worst.severity >= 1.f && ! before.worst.builtin, tag + "the hit comes from the external index");
+
+        rolla::orig::setIndex (index);
+        rolla::Groove fresh {};
+        expect (rolla::generate (fresh, s, seeds, 0x7fu), tag + "the redraw clears, so generate() succeeds");
+        const auto after = rolla::orig::check (fresh, lanes, index.get());
+        expect (after.pass, tag + "the redrawn roll clears the synthetic reference");
+        expect (std::strstr (fresh.brokenRules, "|orig:") != nullptr, tag + "the tag records the redraws");
+        expect (! sameLane (fresh.lane[rolla::Bass], base.lane[rolla::Bass]) || ! sameLane (fresh.lane[rolla::Stab], base.lane[rolla::Stab]),
+                tag + "a redraw changes the matching lanes");
+        expect (fresh.lane[rolla::Bass].seed == seeds[rolla::Bass] && fresh.lane[rolla::Stab].seed == seeds[rolla::Stab],
+                tag + "the caller seeds still land on the lanes");
+        expect (fresh.generation == base.generation, tag + "one generate() call is one generation");
+
+        rolla::Groove again {};
+        rolla::generate (again, s, seeds, 0x7fu);
+        bool same = std::strcmp (again.brokenRules, fresh.brokenRules) == 0;
+        for (int p = 0; p < rolla::Drums; ++p)
+            same = same && sameLane (again.lane[p], fresh.lane[p]);
+        expect (same, tag + "same seeds + same index = same roll");
+
+        rolla::orig::setIndex (nullptr);
+        rolla::Groove plain {};
+        rolla::generate (plain, s, seeds, 0x7fu);
+        bool back = true;
+        for (int p = 0; p < rolla::Drums; ++p)
+            back = back && sameLane (plain.lane[p], base.lane[p]);
+        expect (back, tag + "without the index the seeds give the original roll again");
+
+        // The file format round-trips and holds no note data, only hashes.
+        juce::String error;
+        const auto parsed = rolla::orig::parseIndex (juce::JSON::parse (rolla::orig::toJson (*index)), &error);
+        expect (parsed != nullptr, tag + "index JSON parses back: " + error.toStdString());
+        if (parsed != nullptr)
+        {
+            expect (parsed->refs.size() == index->refs.size(), tag + "index JSON keeps every reference stream");
+            expect (! rolla::orig::check (base, lanes, parsed.get()).pass, tag + "the parsed index still catches the copy");
+        }
+    }
+    juce::String error;
+    expect (rolla::orig::parseIndex (juce::JSON::parse ("{\"schema\":\"rolla.orig_index/1\",\"extractor\":999,\"refs\":[]}"), &error) == nullptr,
+            "originality: an index from another extractor is refused");
+    expect (rolla::orig::loadIndex (juce::File ("/nonexistent/orig_index.json")) == nullptr, "originality: no file means no index");
+}
+
+bool sameGrooveLanes (const rolla::Groove& a, const rolla::Groove& b)
+{
+    for (int p = 0; p < rolla::Drums; ++p)
+        if (! sameLane (a.lane[p], b.lane[p]) || a.lane[p].seed != b.lane[p].seed)
+            return false;
+    return a.generation == b.generation && std::strcmp (a.brokenRules, b.brokenRules) == 0
+        && std::memcmp (a.drums.vel, b.drums.vel, sizeof a.drums.vel) == 0;
+}
+
+// The redraw loop always ends, and a roll that cannot clear is refused, never
+// returned. Bass-only redraws make every attempt predictable: composition r,
+// attempt k draws from (r == 0 ? bass seed : originalityRecomposeSeed) + k.
+// An index holding the bass of every one of those kOrigRounds x kOrigAttempts
+// draws leaves nothing clean, so generate() must return false with the groove
+// untouched. The expected outcome is computed independently of generate().
+void testOriginalityTerminates()
+{
+    const char* names[] = { "ROLLER", "DEEP", "BOUNCY", "JACKIN" };
+    const std::uint32_t bassOnly = 1u << rolla::Bass;
+    int refused = 0;
+    for (int style = 0; style < rolla::NumDialects; ++style)
+    {
+        const std::string tag = std::string ("originality exhaust ") + names[style] + ": ";
+        rolla::Settings s;
+        s.dialect = style;
+        s.bars = 8;
+        std::uint32_t seeds[rolla::NumParts];
+        seedsForRoll (style, 3, seeds);
+
+        rolla::orig::setIndex (nullptr);
+        rolla::Groove base {};
+        expect (rolla::generate (base, s, seeds, 0x7fu), tag + "the base roll clears");
+
+        const int total = rolla::kOrigRounds * rolla::kOrigAttempts;
+        std::vector<rolla::Groove> attempt ((size_t) total);
+        std::vector<bool> plainDraw ((size_t) total, false);
+        auto index = std::make_shared<rolla::orig::Index>();
+        for (int r = 0; r < rolla::kOrigRounds; ++r)
+            for (int k = 0; k < rolla::kOrigAttempts; ++k)
+            {
+                const int at = r * rolla::kOrigAttempts + k;
+                std::uint32_t sk[rolla::NumParts];
+                std::copy (seeds, seeds + rolla::NumParts, sk);
+                const std::uint32_t start = r == 0 ? seeds[rolla::Bass] : rolla::originalityRecomposeSeed (seeds[rolla::Bass], rolla::Bass, r);
+                sk[rolla::Bass] = start + (std::uint32_t) k;
+                attempt[(size_t) at] = base;
+                const bool ok = rolla::generate (attempt[(size_t) at], s, sk, bassOnly);
+                // Without the index, a draw that needed no redraw is exactly what attempt (r, k) makes.
+                plainDraw[(size_t) at] = ok && std::strstr (attempt[(size_t) at].brokenRules, "|orig:") == nullptr;
+                if (ok)
+                    index->addRef ("synthetic/" + std::to_string (at), laneStream (attempt[(size_t) at], rolla::Bass));
+            }
+        index->finalize();
+
+        // A draw the built-in guard redrew fails inside generate() too; a plain one clears only if it clears the index.
+        int expectClean = -1;
+        for (int at = 0; at < total && expectClean < 0; ++at)
+            if (plainDraw[(size_t) at] && rolla::orig::check (attempt[(size_t) at], bassOnly, index.get()).pass)
+                expectClean = at;
+
+        rolla::orig::setIndex (index);
+        rolla::Groove g = base;
+        const bool ok = rolla::generate (g, s, seeds, bassOnly);
+        if (expectClean < 0)
+        {
+            ++refused;
+            expect (! ok, tag + "nothing clean left: generate() refuses");
+            expect (sameGrooveLanes (g, base), tag + "a refused roll leaves the groove exactly as it was");
+        }
+        else
+        {
+            expect (ok, tag + "a clean attempt exists, so generate() succeeds");
+            expect (sameLane (g.lane[rolla::Bass], attempt[(size_t) expectClean].lane[rolla::Bass]),
+                    tag + "the first clean attempt ships");
+            expect (rolla::orig::check (g, bassOnly, index.get()).pass, tag + "what ships clears the index");
+        }
+
+        rolla::Groove again = base;
+        const bool okAgain = rolla::generate (again, s, seeds, bassOnly);
+        expect (okAgain == ok && sameGrooveLanes (again, g), tag + "the refusal path is deterministic too");
+        std::cout << names[style] << " originality exhaust: first clean draw " << expectClean
+                  << (ok ? " shipped " : " refused ") << g.brokenRules << "\n";
+    }
+    expect (refused > 0, "originality: at least one style exercised the refusal path");
+    rolla::orig::setIndex (nullptr);
+}
+
+void pumpFor (int ms)
+{
+    const auto start = juce::Time::getMillisecondCounter();
+    while ((int) (juce::Time::getMillisecondCounter() - start) < ms)
+        if (! juce::detail::dispatchNextMessageOnSystemQueue (true))
+            juce::Thread::sleep (1);
+}
+
+// No refused roll ever reaches output: generate() hands back the groove it was
+// given, and the plugin keeps playing (and exporting) the previous roll, its
+// seeds and presets. Driven by the in-memory refuse-all hook, so it needs no
+// private index; the built-in guard stays on throughout.
+void testOriginalityRefusalNeverShips()
+{
+    auto refuseAll = std::make_shared<rolla::orig::Index>();
+    refuseAll->refuseAll = true;
+
+    // Generator level, every style: false, groove untouched, every time.
+    for (int style = 0; style < rolla::NumDialects; ++style)
+    {
+        rolla::Settings s;
+        s.dialect = style;
+        std::uint32_t seeds[rolla::NumParts];
+        seedsForRoll (style, 7, seeds);
+        rolla::orig::setIndex (nullptr);
+        rolla::Groove prev {};
+        expect (rolla::generate (prev, s, seeds, 0x7fu), "refusal: the previous roll clears");
+        rolla::orig::setIndex (refuseAll);
+        std::uint32_t other[rolla::NumParts];
+        seedsForRoll (style, 8, other);
+        for (std::uint32_t mask : { 0x7fu, 1u << rolla::Bass, 1u << rolla::Stab })
+        {
+            rolla::Groove g = prev;
+            expect (! rolla::generate (g, s, other, mask), "refusal: generate() returns false");
+            expect (sameGrooveLanes (g, prev), "refusal: the refused roll never replaces the previous one");
+        }
+        rolla::Groove empty {};
+        rolla::Groove fromEmpty {};
+        expect (! rolla::generate (fromEmpty, s, other, 0x7fu) && sameGrooveLanes (fromEmpty, empty),
+                "refusal: from an empty groove nothing is written");
+    }
+    rolla::orig::setIndex (nullptr);
+
+    // Plugin level: ROLL and a lane shuffle under refusal keep the playing roll.
+    rolla::RollaProcessor proc;
+    proc.waitUntilReady();
+    const auto before = proc.copyGroove();
+    const auto noticeBefore = proc.rollNotice();
+    expect (noticeBefore.text.isEmpty(), "refusal: no notice before any refusal");
+    rolla::orig::setIndex (refuseAll);
+    proc.triggerRoll();
+    pumpUntil ([&] { return proc.rollNotice().serial != noticeBefore.serial; });
+    const auto afterRoll = proc.rollNotice();
+    expect (afterRoll.serial != noticeBefore.serial, "refusal: a refused ROLL changes the notice");
+    expect (afterRoll.text == "Roll refused: too close to a reference, kept previous roll",
+            "refusal: a refused ROLL exposes the status line, got '" + afterRoll.text.toStdString() + "'");
+    proc.triggerShuffle (rolla::Bass);
+    pumpUntil ([&] { return proc.rollNotice().text.startsWith ("Shuffle refused"); });
+    expect (proc.rollNotice().text.startsWith ("Shuffle refused") && proc.rollNotice().text.endsWith ("kept previous roll"),
+            "refusal: a refused shuffle exposes its own status line");
+    const auto during = proc.copyGroove();
+    bool kept = true;
+    for (int p = 0; p < rolla::NumParts; ++p)
+        kept = kept && seedOf (during, p) == seedOf (before, p);
+    for (int p = 0; p < rolla::Drums; ++p)
+        kept = kept && sameLane (during.lane[p], before.lane[p]);
+    expect (kept, "refusal: the plugin keeps the previous roll when generate() refuses");
+
+    rolla::orig::setIndex (nullptr);
+    const auto bassBefore = seedOf (proc.copyGroove(), rolla::Bass);
+    rollUntil (proc, rolla::Bass, bassBefore);
+    expect (seedOf (proc.copyGroove(), rolla::Bass) != bassBefore, "refusal: ROLL works again once rolls clear");
+    expect (proc.rollNotice().text.isEmpty(), "refusal: an accepted roll clears the status line");
+}
+
+// The built-in guard (no reference data): the banned figures fire on synthetic
+// lanes, and 4 styles x 20 gate-seed rolls all clear it without exhausting.
+void testOriginalityBuiltin()
+{
+    rolla::orig::setIndex (nullptr);
+    rolla::Groove dotted {};
+    dotted.dialect = rolla::Long;
+    dotted.bars = 8;
+    auto& lane = dotted.lane[rolla::Bass];
+    const int slots[] = { 0, 3, 6, 9, 12 };
+    for (int bar = 0; bar < 8; ++bar)
+        for (int k = 0; k < 5; ++k)
+        {
+            auto& n = lane.notes[lane.count++];
+            n.start = (float) (bar * 16 + slots[k]);
+            n.length = 2.f;
+            n.chord[0] = (std::int8_t) (slots[k] < 6 ? 7 : 5); // upper on 1 and 4, a whole step lower after
+            n.nChord = 1;
+            n.vel = 100;
+        }
+    const auto rep = rolla::orig::check (dotted, 1u << rolla::Bass, nullptr);
+    expect (! rep.pass && rep.worst.builtin && rep.worst.metric == rolla::orig::MetricSkelWin,
+            "originality: the dotted-pulse banned skeleton is caught without any index");
+
+    rolla::Groove reaction {};
+    reaction.dialect = rolla::UkMin;
+    reaction.bars = 8;
+    auto& r = reaction.lane[rolla::Bass];
+    for (int bar = 0; bar < 8; ++bar)
+        for (int slot : { 1, 3, 8 })
+        {
+            auto& n = r.notes[r.count++];
+            n.start = (float) (bar * 16 + slot);
+            n.length = 1.f;
+            n.chord[0] = (std::int8_t) (slot == 8 ? 7 : 0);
+            n.nChord = 1;
+            n.vel = 100;
+        }
+    expect (rolla::orig::bannedBassFigure (r, 8), "originality: root on 16ths 2 and 4 is the banned Reaction figure");
+    expect (! rolla::orig::check (reaction, 1u << rolla::Bass, nullptr).pass, "originality: the Reaction figure fails the check");
+
+    const char* names[] = { "ROLLER", "DEEP", "BOUNCY", "JACKIN" };
+    for (int style = 0; style < rolla::NumDialects; ++style)
+    {
+        int clean = 0, redrawn = 0;
+        for (int roll = 0; roll < 20; ++roll)
+        {
+            rolla::Settings s;
+            s.dialect = style;
+            s.bars = 8;
+            std::uint32_t seeds[rolla::NumParts];
+            seedsForRoll (style, roll, seeds);
+            rolla::Groove g {};
+            if (rolla::generate (g, s, seeds, 0x7fu) && rolla::orig::check (g, 0x3fu, nullptr).pass)
+                ++clean;
+            if (std::strstr (g.brokenRules, "|orig:") != nullptr)
+                ++redrawn;
+        }
+        std::cout << names[style] << " built-in originality: clean " << clean << "/20, redrawn " << redrawn << "\n";
+        expect (clean == 20, std::string (names[style]) + " every roll clears the built-in originality guard");
+    }
+}
+
 void testShuffleKeepsManualLock()
 {
     rolla::RollaProcessor proc;
@@ -2238,6 +2567,10 @@ int main()
     testLaneHygiene();
     testBar8Pickup();
     testArGateBass();
+    testOriginalityBuiltin();
+    testOriginalityResample();
+    testOriginalityTerminates();
+    testOriginalityRefusalNeverShips();
     testRollSkipsMutedAndKept();
     testShuffleClearsAutoKeep();
     testShuffleKeepsManualLock();
