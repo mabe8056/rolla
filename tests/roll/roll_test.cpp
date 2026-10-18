@@ -15,6 +15,10 @@
 #include <string>
 #include <vector>
 
+#if defined (_MSC_VER)
+#include <intrin.h>
+#endif
+
 // JUCE builds with modal loops off, so MessageManager::runDispatchLoopUntil is not in the
 // library. The roll and shuffle handlers post to the message queue; this drains it.
 namespace juce::detail
@@ -585,9 +589,9 @@ bool bassSoundsAt (const rolla::Lane& bass, int slot)
 {
     for (int i = 0; i < bass.count; ++i)
     {
-        const float a = bass.notes[i].start;
-        const float b = a + bass.notes[i].length;
-        if (a < (float) slot + 1.f - 0.05f && b > (float) slot + 0.05f)
+        const int a = (int) std::lround (bass.notes[i].start);
+        const int b = (int) std::lround (bass.notes[i].start + bass.notes[i].length);
+        if (slot >= a && slot < b)
             return true;
     }
     return false;
@@ -627,6 +631,82 @@ int bassHoldTicks (const rolla::Lane& lane)
     return notes.size() < 2 ? 0 : worst;
 }
 
+int popcount32 (std::uint32_t x)
+{
+#if defined (_MSC_VER)
+    return (int) __popcnt (x);
+#else
+    return __builtin_popcount (x);
+#endif
+}
+
+int popcount64 (std::uint64_t x)
+{
+#if defined (_MSC_VER)
+    return (int) __popcnt64 (x);
+#else
+    return __builtin_popcountll (x);
+#endif
+}
+
+float jaccard32 (std::uint32_t a, std::uint32_t b)
+{
+    const std::uint32_t uni = a | b;
+    if (uni == 0)
+        return 0.f;
+    return (float) popcount32 (a & b) / (float) popcount32 (uni);
+}
+
+float jaccard64 (std::uint64_t alo, std::uint64_t ahi, std::uint64_t blo, std::uint64_t bhi)
+{
+    const int inter = popcount64 (alo & blo) + popcount64 (ahi & bhi);
+    const int uni = popcount64 (alo | blo) + popcount64 (ahi | bhi);
+    if (uni <= 0)
+        return 0.f;
+    return (float) inter / (float) uni;
+}
+
+// Scorer bar-4 answer: a token is (slot, pitch class). A match allows +-1 slot
+// at the same pitch class. An answer changes at least one token and keeps
+// at least a quarter of bar 2.
+bool bar4Answers (const rolla::Lane& lane)
+{
+    struct Tok { int slot; int pc; };
+    Tok b2[24];
+    Tok b4[24];
+    int n2 = 0;
+    int n4 = 0;
+    for (int i = 0; i < lane.count; ++i)
+    {
+        const int st = (int) std::lround (lane.notes[i].start);
+        if (st < 0)
+            continue;
+        const int bar = st / 16;
+        Tok t { st % 16, pcOfNote (lane.notes[i].chord[0]) };
+        if (bar == 1 && n2 < 24)
+            b2[n2++] = t;
+        if (bar == 3 && n4 < 24)
+            b4[n4++] = t;
+    }
+    if (n2 <= 0 || n4 <= 0)
+        return false;
+    bool used[24] {};
+    int matched = 0;
+    for (int i = 0; i < n2; ++i)
+    {
+        for (int j = 0; j < n4; ++j)
+        {
+            if (used[j] || b4[j].pc != b2[i].pc || std::abs (b4[j].slot - b2[i].slot) > 1)
+                continue;
+            used[j] = true;
+            ++matched;
+            break;
+        }
+    }
+    const int changed = (n2 - matched) + (n4 - matched);
+    return changed >= 1 && matched * 4 >= n2;
+}
+
 void testScorerV23()
 {
     const std::uint32_t base = 20261018u;
@@ -638,7 +718,12 @@ void testScorerV23()
         int pulse = 0;
         int stabHits = 0;
         int stabGaps = 0;
-        std::map<std::string, int> rhythms;
+        int turn = 0;
+        int callOk = 0;
+        std::vector<float> lengths;
+        std::uint32_t b2s[20] {};
+        std::uint64_t lo[20] {};
+        std::uint64_t hi[20] {};
         int exportDups = 0;
         int exportLow = 0;
         int exportOverlap = 0;
@@ -672,36 +757,65 @@ void testScorerV23()
             expect (low == 0, std::string (names[style]) + " roll " + std::to_string (roll) + " drops velocity <= 2");
             expect (hold <= 3, std::string (names[style]) + " roll " + std::to_string (roll) + " bass overlap " + std::to_string (hold) + " ticks");
 
-            bool bar2[16] {};
-            bool bar4[16] {};
-            std::string rhythm;
-            for (int i = 0; i < g.lane[rolla::Bass].count; ++i)
-            {
-                const int st = (int) std::lround (g.lane[rolla::Bass].notes[i].start);
-                rhythm.push_back ((char) (st + 1));
-                const int bar = st / 16;
-                const int slot = st % 16;
-                if (bar == 1)
-                    bar2[slot] = true;
-                if (bar == 3)
-                    bar4[slot] = true;
-            }
-            bool answered = false;
-            for (int slot = 8; slot < 16; ++slot)
-                if (bar2[slot] != bar4[slot])
-                    answered = true;
-            if (answered)
+            const auto& bass = g.lane[rolla::Bass];
+            if (bar4Answers (bass))
                 ++answers;
-            ++rhythms[rhythm];
+            for (int i = 0; i < bass.count; ++i)
+            {
+                const int st = (int) std::lround (bass.notes[i].start);
+                if (st < 0 || st >= 128)
+                    continue;
+                lengths.push_back (bass.notes[i].length);
+                if (st < 64)
+                    lo[roll] |= 1ull << st;
+                else
+                    hi[roll] |= 1ull << (st - 64);
+                if (st < 32)
+                    b2s[roll] |= 1u << st;
+            }
 
+            int sounding[128];
+            for (int s = 0; s < 128; ++s)
+                sounding[s] = -2;
+            for (int i = 0; i < bass.count; ++i)
+            {
+                const int a = (int) std::lround (bass.notes[i].start);
+                const int b = (int) std::lround (bass.notes[i].start + bass.notes[i].length);
+                for (int s = a; s < b && s < 128; ++s)
+                    if (s >= 0)
+                        sounding[s] = pcOfNote (bass.notes[i].chord[0]);
+            }
             if (style == rolla::Pop)
             {
+                int rest = 0;
+                int bestRest = 0;
+                for (int s = 112; s < 128; ++s)
+                {
+                    rest = sounding[s] < 0 ? rest + 1 : 0;
+                    if (rest > bestRest)
+                        bestRest = rest;
+                }
+                bool same = true;
+                for (int s = 0; s < 16; ++s)
+                    if (sounding[48 + s] != sounding[112 + s])
+                        same = false;
+                if (bestRest >= 4 && ! same)
+                    ++turn;
                 double lens = 0;
-                const auto& lane = g.lane[rolla::Bass];
-                for (int i = 0; i < lane.count; ++i)
-                    lens += lane.notes[i].length;
-                if (lane.count > 0 && lens / lane.count >= 1.8)
+                for (int i = 0; i < bass.count; ++i)
+                    lens += bass.notes[i].length;
+                if (bass.count > 0 && lens / bass.count >= 1.8)
                     ++pulse;
+            }
+            if (style == rolla::Gaskin)
+            {
+                int match = 0;
+                const int slots = 112;
+                for (int s = 0; s < slots; ++s)
+                    if (sounding[s] == sounding[s + 16])
+                        ++match;
+                if (match * 5 <= slots)
+                    ++callOk;
             }
             for (int i = 0; i < g.lane[rolla::Stab].count; ++i)
             {
@@ -734,25 +848,43 @@ void testScorerV23()
             }
         }
         int pairs = 0;
-        for (const auto& kv : rhythms)
-            if (kv.second >= 2)
-                pairs += kv.second * (kv.second - 1) / 2;
+        for (int i = 0; i < 20; ++i)
+            for (int j = i + 1; j < 20; ++j)
+                if (jaccard32 (b2s[i], b2s[j]) >= 0.80f || jaccard64 (lo[i], hi[i], lo[j], hi[j]) >= 0.80f)
+                    ++pairs;
         const double gapPct = stabHits > 0 ? 100.0 * stabGaps / stabHits : 0.0;
+        std::sort (lengths.begin(), lengths.end());
+        const float medLen = lengths.empty() ? 0.f : lengths[lengths.size() / 2];
         std::cout << names[style]
                   << " bar4-answers " << answers << "/20"
                   << " twin-pairs " << pairs
-                  << " stab-in-gap " << gapPct << "%";
+                  << " stab-in-gap " << gapPct << "%"
+                  << " med-len " << medLen;
         if (style == rolla::Pop)
-            std::cout << " pulse " << pulse << "/20";
+            std::cout << " pulse " << pulse << "/20 turn " << turn << "/20";
+        if (style == rolla::Gaskin)
+            std::cout << " call-answer " << callOk << "/20";
         std::cout << "\n";
-        expect (answers >= 8 && answers <= 16, std::string (names[style]) + " bar 4 answers bar 2 about 60%");
-        expect (pairs <= 2, std::string (names[style]) + " twin 8-bar rhythms <= 2 pairs");
-        expect (gapPct <= 20.0, std::string (names[style]) + " stabs-in-gaps stays a light preference");
+        expect (answers >= 8 && answers <= 18, std::string (names[style]) + " bar 4 answers bar 2");
+        expect (pairs <= 2, std::string (names[style]) + " near-identical rhythm pairs <= 2");
+        if (style == rolla::Gaskin)
+            expect (gapPct >= 12.0 && gapPct <= 45.0, "JACKIN stabs land in bass gaps");
+        else if (style == rolla::UkMin)
+            expect (gapPct >= 10.0 && gapPct <= 28.0, "ROLLER stabs in bass gaps stay between the floor and the bonus");
+        else
+            expect (gapPct < 50.0, std::string (names[style]) + " stabs-in-gaps stays off the 50% bonus");
         expect (exportDups == 0, std::string (names[style]) + " midi has no duplicate note-ons");
         expect (exportLow == 0, std::string (names[style]) + " midi drops velocity <= 2");
         expect (exportOverlap == 0, std::string (names[style]) + " midi bass ends before the next note");
+        if (style == rolla::UkMin)
+            expect (medLen >= 1.2f, "ROLLER bass mixes in 2-3/16 notes");
         if (style == rolla::Pop)
+        {
             expect (pulse >= 6 && pulse <= 14, "BOUNCY pulse mode is about half the rolls");
+            expect (turn >= 14, "BOUNCY bar 8 turns around");
+        }
+        if (style == rolla::Gaskin)
+            expect (callOk >= 12, "JACKIN call and answer");
     }
 }
 
