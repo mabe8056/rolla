@@ -1,9 +1,16 @@
 name: build
 
+# Draft PRs get light checks: sample coverage, the Linux test binaries and the
+# quick unit tests. macOS, Windows, the long Linux renders, the sample-pack
+# shards and the mix renders run only on non-draft PRs (including the
+# ready_for_review run), pushes to main and manual dispatch.
+# github.event.pull_request is empty outside pull_request events, so
+# `!github.event.pull_request.draft` is true there.
 on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
 concurrency:
@@ -30,6 +37,7 @@ jobs:
 
   macos:
     name: macOS universal VST3 + AU
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: macos-14
     timeout-minutes: 90
     steps:
@@ -154,6 +162,7 @@ jobs:
 
   windows:
     name: Windows x64 VST3
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: windows-2022
     timeout-minutes: 90
     steps:
@@ -194,11 +203,19 @@ jobs:
     env:
       # Compiler cache: JUCE is rebuilt for every test target, so most objects
       # repeat within a run and across runs.
+      # No CCACHE_BASEDIR: it makes ccache pass relative source paths to the
+      # compiler, which turns __FILE__ into "../tests/..." and breaks
+      # tests/sampler/sampler_test.cpp, which finds resources/presets.json
+      # from __FILE__. The workspace path is the same on every run, so it
+      # gains nothing here. Only time_macros sloppiness (JUCE's compile date
+      # string may go stale); include_file_mtime/ctime is dropped so headers
+      # generated during the build (BinaryData.h, JuceHeader.h) are never
+      # trusted from a direct-mode manifest.
       CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_COMPRESS: "true"
-      CCACHE_MAXSIZE: 1500M
-      CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime
+      CCACHE_MAXSIZE: 500M
+      CCACHE_SLOPPINESS: time_macros
+      LIGHT: ${{ github.event.pull_request.draft == true }}
     steps:
       - uses: actions/checkout@v4
 
@@ -211,25 +228,37 @@ jobs:
             libxrandr-dev libxcursor-dev libxcomposite-dev libxext-dev \
             libglu1-mesa-dev libgtk-3-dev xvfb python3-pip python3-venv ccache
 
+      # v2 keys: the v1 caches hold objects built with CCACHE_BASEDIR.
+      # Prefixes must not be prefixes of each other (ccache-linux- used to
+      # match ccache-linux-pack-).
       - name: Restore compiler cache
         id: ccache
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/.ccache
-          key: ccache-linux-${{ hashFiles('CMakeLists.txt', 'src/**', 'tests/**/*.cpp', 'tests/**/*.h', 'tools/**/*.cpp', 'tools/**/*.h', 'resources/**') }}
+          key: ccache-v2-full-${{ hashFiles('CMakeLists.txt', 'src/**', 'tests/**/*.cpp', 'tests/**/*.h', 'tools/**/*.cpp', 'tools/**/*.h', 'resources/**') }}
           restore-keys: |
-            ccache-linux-
+            ccache-v2-full-
 
       - name: Configure and build
         run: |
+          set -euo pipefail
           mkdir -p "$CCACHE_DIR"
           ccache -z
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-          cmake --build build --target ROLLA_VST3 rolla-render rolla-rolls rolla-sampler-test rolla-sample-check rolla-roll-test rolla-knob-test rolla-phrase-test rolla-arrange-test rolla-tp-test rolla-export-test
+          TESTS="rolla-sampler-test rolla-sample-check rolla-roll-test rolla-knob-test rolla-phrase-test rolla-arrange-test rolla-tp-test rolla-export-test"
+          if [ "$LIGHT" = "true" ]; then
+            echo "Draft PR: building test binaries only"
+            cmake --build build --target $TESTS
+          else
+            cmake --build build --target ROLLA_VST3 rolla-render rolla-rolls $TESTS
+          fi
           ccache -s
 
+      # Drafts build a partial object set; only full runs save, so the cache
+      # under a given key always covers every target.
       - name: Save compiler cache
-        if: always() && steps.ccache.outputs.cache-hit != 'true'
+        if: always() && !github.event.pull_request.draft && steps.ccache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}/.ccache
@@ -242,12 +271,14 @@ jobs:
           ./build/rolla-sample-check
 
       - name: Renderer smoke
+        if: ${{ !github.event.pull_request.draft }}
         run: |
           set -euo pipefail
           python3 -m pip install --user --break-system-packages numpy scipy soundfile pyloudnorm
           python3 tests/roll/renderer_smoke.py --rolls ./build/rolla-rolls
 
       - name: Export end to end
+        if: ${{ !github.event.pull_request.draft }}
         run: |
           set -euo pipefail
           python3 -c "import sys; sys.path.insert(0, 'tests/roll'); import renderer_smoke as r; r.build_pack('/tmp/rolla-tone-pack')"
@@ -264,7 +295,9 @@ jobs:
           ./build/rolla-phrase-test
           ./build/rolla-arrange-test
 
+      # About 6 minutes on main; built on drafts, run on full CI only.
       - name: True-peak guard tests
+        if: ${{ !github.event.pull_request.draft }}
         run: |
           set -euo pipefail
           ./build/rolla-tp-test
@@ -275,6 +308,7 @@ jobs:
           ./build/rolla-knob-test
 
       - name: Offline renders
+        if: ${{ !github.event.pull_request.draft }}
         run: |
           set -euo pipefail
           # rolla-render's 0.10 cpu gate is a quiet-machine realtime budget.
@@ -305,6 +339,7 @@ jobs:
           test -n "$(find "$GITHUB_WORKSPACE/renders" -name '*.wav' -print -quit)"
 
       - name: pluginval strictness 5
+        if: ${{ !github.event.pull_request.draft }}
         run: |
           set -euo pipefail
           curl -fsSL -o /tmp/pluginval.zip \
@@ -318,6 +353,7 @@ jobs:
           xvfb-run -a "$BIN" --strictness-level 5 --timeout-ms 900000 --validate-in-process --verbose "$VST3"
 
       - name: Upload renders
+        if: ${{ !github.event.pull_request.draft }}
         uses: actions/upload-artifact@v4
         with:
           name: ROLLA-linux-renders
@@ -325,6 +361,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload headless roll renderer
+        if: ${{ !github.event.pull_request.draft }}
         uses: actions/upload-artifact@v4
         with:
           name: rolla-rolls-linux
@@ -333,6 +370,7 @@ jobs:
           if-no-files-found: error
 
       - name: MIDI score, audio checks skipped without samples
+        if: ${{ !github.event.pull_request.draft }}
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -347,6 +385,7 @@ jobs:
   # 90-minute timeout. Builds only rolla-rolls and runs in parallel.
   linux-pack:
     name: Linux sample pack checks (${{ matrix.part }})
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     # The same checks as one sample_pack_check.py run with
@@ -364,13 +403,11 @@ jobs:
           - part: stab
             args: --part stab --stab-sweep --jobs 4
     env:
-      # Compiler cache: JUCE is rebuilt for every test target, so most objects
-      # repeat within a run and across runs.
+      # Same ccache settings as the Linux job (see the comment there).
       CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_COMPRESS: "true"
-      CCACHE_MAXSIZE: 1500M
-      CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime
+      CCACHE_MAXSIZE: 500M
+      CCACHE_SLOPPINESS: time_macros
     steps:
       - uses: actions/checkout@v4
 
@@ -388,9 +425,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/.ccache
-          key: ccache-linux-pack-${{ hashFiles('CMakeLists.txt', 'src/**', 'tests/**/*.cpp', 'tests/**/*.h', 'tools/**/*.cpp', 'tools/**/*.h', 'resources/**') }}
+          key: ccache-v2-pack-${{ hashFiles('CMakeLists.txt', 'src/**', 'tests/**/*.cpp', 'tests/**/*.h', 'tools/**/*.cpp', 'tools/**/*.h', 'resources/**') }}
           restore-keys: |
-            ccache-linux-pack-
+            ccache-v2-pack-
 
       - name: Configure and build
         run: |
@@ -415,16 +452,15 @@ jobs:
 
   mix:
     name: Mix strip renders
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
-      # Compiler cache: JUCE is rebuilt for every test target, so most objects
-      # repeat within a run and across runs.
+      # Same ccache settings as the Linux job (see the comment there).
       CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_COMPRESS: "true"
-      CCACHE_MAXSIZE: 1500M
-      CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime
+      CCACHE_MAXSIZE: 500M
+      CCACHE_SLOPPINESS: time_macros
     steps:
       - uses: actions/checkout@v4
 
@@ -442,9 +478,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/.ccache
-          key: ccache-mix-${{ hashFiles('CMakeLists.txt', 'src/**', 'tests/**/*.cpp', 'tests/**/*.h', 'tools/**/*.cpp', 'tools/**/*.h', 'resources/**') }}
+          key: ccache-v2-mix-${{ hashFiles('CMakeLists.txt', 'src/**', 'tests/**/*.cpp', 'tests/**/*.h', 'tools/**/*.cpp', 'tools/**/*.h', 'resources/**') }}
           restore-keys: |
-            ccache-mix-
+            ccache-v2-mix-
 
       - name: Configure and build mix harness
         run: |
