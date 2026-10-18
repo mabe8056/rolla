@@ -296,9 +296,10 @@ void testSoundControls()
     proc.waitUntilReady();
     Head head;
     proc.setPlayHead (&head);
-    // Default intensity leaves pluck out. The lane knobs are tested with every lane in.
-    setDenorm (proc, "intensity", 100.f);
-    expect (pumpUntil ([&] { return proc.copyGroove().lane[rolla::Pluck].count > 0; }), "intensity 100 brings pluck in");
+    // Pluck is a DEEP lane. ROLLER stays empty; DEEP brings it in with the arrangement.
+    expect (proc.copyGroove().lane[rolla::Pluck].count == 0, "roller leaves pluck out");
+    expect (reshapeTo (proc, "dialect", (float) rolla::Long), "deep for pluck");
+    expect (pumpUntil ([&] { return proc.copyGroove().lane[rolla::Pluck].count > 0; }), "deep brings pluck in");
 
     // Factory presets play the sample pack and do not fall back to the synth.
     // A runner without ~/Music/ROLLA/Samples stays silent, same as the loudness gate.
@@ -363,6 +364,49 @@ void testSoundControls()
     }
 
     proc.setPlayHead (nullptr);
+}
+
+float notesPerBar (const rolla::Groove& g)
+{
+    return g.bars > 0 ? (float) g.lane[rolla::Bass].count / (float) g.bars : 0.f;
+}
+
+void testBusyDensity()
+{
+    rolla::RollaProcessor proc;
+    proc.waitUntilReady();
+    const char* names[] = { "ROLLER", "DEEP", "BOUNCY", "JACKIN" };
+    for (int style = 0; style < rolla::NumDialects; ++style)
+    {
+        if ((int) rawOf (proc, "dialect") != style)
+            expect (reshapeTo (proc, "dialect", (float) style), std::string (names[style]) + " dialect");
+        auto stabPerBar = [] (const rolla::Groove& g)
+        {
+            return g.bars > 0 ? (float) g.lane[rolla::Stab].count / (float) g.bars : 0.f;
+        };
+        expect (reshapeTo (proc, "busy", 0.f), std::string (names[style]) + " BUSY min");
+        const auto atLo = proc.copyGroove();
+        const float lo = notesPerBar (atLo);
+        const float stabLo = stabPerBar (atLo);
+        expect (reshapeTo (proc, "busy", 0.5f), std::string (names[style]) + " BUSY mid");
+        const auto atMid = proc.copyGroove();
+        const float mid = notesPerBar (atMid);
+        const float stabMid = stabPerBar (atMid);
+        expect (reshapeTo (proc, "busy", 1.f), std::string (names[style]) + " BUSY max");
+        const auto atHi = proc.copyGroove();
+        const float hi = notesPerBar (atHi);
+        const float stabHi = stabPerBar (atHi);
+        std::cout << names[style] << " BUSY bass/bar " << lo << " -> " << mid << " -> " << hi
+                  << "  stabs/bar " << stabLo << " -> " << stabMid << " -> " << stabHi << "\n";
+        const std::string detail = std::string (names[style]) + " BUSY bass/bar "
+                                    + std::to_string (lo) + " -> " + std::to_string (mid) + " -> " + std::to_string (hi);
+        expect (lo <= mid + 0.02f && mid <= hi + 0.02f, detail + " monotonic");
+        expect (lo > 0.5f && hi + 1.0e-3f >= lo * 1.30f, detail + " rises at least 30%");
+        const std::string stabDetail = std::string (names[style]) + " BUSY stabs/bar "
+                                        + std::to_string (stabLo) + " -> " + std::to_string (stabMid) + " -> " + std::to_string (stabHi);
+        expect (stabLo <= stabMid + 0.02f && stabMid <= stabHi + 0.02f && stabHi > stabLo + 0.2f,
+                stabDetail + " monotonic");
+    }
 }
 
 void testGeneratorControls()
@@ -795,6 +839,7 @@ int main()
 {
     juce::ScopedJuceInitialiser_GUI juce;
     testBindings();
+    testBusyDensity();
     testGeneratorControls();
     testState();
     testExport();

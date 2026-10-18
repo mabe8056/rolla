@@ -84,6 +84,9 @@ inline IntensityPlan planIntensity (int dialect, int intensity, float stabKnob) 
     for (int i = 0; i < 6; ++i)
     {
         const int part = kOrder[plan.dialect][i];
+        // Pluck is a DEEP / BOUNCY lane. ROLLER and JACKIN do not bring it in.
+        if (part == Pluck && (plan.dialect == UkMin || plan.dialect == Gaskin))
+            continue;
         plan.comesInAt[part] = kEnter[i];
         plan.inLane[part] = plan.value >= kEnter[i];
     }
@@ -115,7 +118,7 @@ inline IntensityPlan planIntensity (int dialect, int intensity, float stabKnob) 
     for (int i = 0; i < 6; ++i)
     {
         const int part = kOrder[plan.dialect][i];
-        if (plan.inLane[part])
+        if (plan.inLane[part] || plan.comesInAt[part] < 0)
             continue;
         std::snprintf (plan.nextIn + nNext, sizeof (plan.nextIn) - (size_t) nNext,
                        nNext == 0 ? "%s at %d%%" : " · %s at %d%%",
