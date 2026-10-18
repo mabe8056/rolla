@@ -116,6 +116,15 @@ def main():
     code, res = run(root)
     check(code == 0 and res["names_checked"] == 0, "no names file: name check is off")
 
+    # Audio fixtures: allowlisted under tests/fixtures, but never over 64 KB.
+    allow_audio = "audio tests/fixtures/*.wav  # tiny decoder fixture\n"
+    small = b"RIFF" + b"\x00" * 1000
+    big = b"RIFF" + b"\x00" * (65 * 1024)
+    code, res = run(make_repo(dict(CLEAN, **{"tests/fixtures/click.wav": small, "tools/repo_guard_allow.txt": allow_audio})))
+    check(code == 0, "audio: allowlisted fixture under 64 KB passes")
+    code, res = run(make_repo(dict(CLEAN, **{"tests/fixtures/loop.wav": big, "tools/repo_guard_allow.txt": allow_audio})))
+    check(code == 1 and flagged(res, "audio", "64 KB"), "audio: allowlisted fixture over 64 KB fails")
+
     # Allowlist.
     root = make_repo(dict(CLEAN, **{"tests/fixtures/two_bars.mid": b"MThd", "tools/repo_guard_allow.txt": "midi tests/fixtures/*.mid  # parser fixture\n"}))
     code, res = run(root)

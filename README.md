@@ -75,13 +75,26 @@ The editor is the locked D-simple dark layout. Seven lane rows (colour, pattern 
 
 ## Samples
 
-Presets stay on the synth until a preset's `sample.mode` is `SAMPLE` or `LAYER` and the file is actually on disk. A missing file keeps the synth and draws a small warning triangle on that lane. Audio is never embedded and never committed.
+The plugin plays samples only. No preset, saved state or missing file brings back a synth, an arp or a test tone: a lane with nothing loaded is silent, and a red banner reads `Samples not loaded: <path> (<n> files)`. The logo menu shows the active folder and its file count. Audio is never committed.
 
-Default folder (overridable from the ROLLA logo menu, stored as `samplesRoot` in `ROLLA.settings`):
+Where ROLLA looks, in order:
 
-- macOS: `~/Music/ROLLA/Samples/`
-- Windows: `%USERPROFILE%\Music\ROLLA\Samples\`
-- Linux: `~/Music/ROLLA/Samples/`
+1. The pack built into the plugin: `ROLLA.vst3/Contents/Resources/Samples` (or `ROLLA.component/…`). Nothing is ever written there.
+2. The folder saved as `samplesRoot` in `ROLLA.settings` (logo menu **Samples folder…**), if it exists, holds audio and is not under a temp folder.
+3. `~/Music/ROLLA/Samples/` (Windows `%USERPROFILE%\Music\ROLLA\Samples\`).
+
+Building a pack into the plugin (the pack stays outside the repo):
+
+```
+cmake -B build -DROLLA_SAMPLE_PACK_DIR=/path/to/pack     # copied into the bundles after every build
+tools/inject_pack.sh build/ROLLA_artefacts/Release/VST3/ROLLA.vst3 /path/to/pack   # or into one built bundle
+```
+
+On macOS both re-sign the bundle ad hoc. `Samples/.rolla-pack.json` records the file count and the manifest hash. A `SAMPLE_MANIFEST_v2.json` at the pack root replaces the embedded manifest.
+
+Tests never touch a real profile: `tests/common/ScratchProfile.h` points `ROLLA_SETTINGS_DIR`, `ROLLA_CACHE_DIR`, `ROLLA_DEFAULT_ROOT` and `ROLLA_BUNDLE_ROOT` at a temp folder (on macOS `$HOME` alone does not move JUCE's files). The last two are ignored by plugin builds.
+
+Folder layout:
 
 ```
 BASS/  STAB/  HITS/  PLUCK/  PAD/  VOX/
@@ -89,7 +102,7 @@ DRUMS/KICK  DRUMS/CLAP  DRUMS/SNARE  DRUMS/RIM
 DRUMS/CH    DRUMS/OH    DRUMS/RIDE   DRUMS/PERC
 ```
 
-`CH` is the closed hat, `OH` the open hat, `PERC` is storage for one-shots you reference from `pool` or `file`. Paths in `presets.json` are relative to that root and use forward slashes, for example `BASS/pluck_d1.wav`. Pitch names are scientific, C4 = 60, so D1 = 26. `start` and `loop` times are seconds. `loop.end` of 0 means the end of the file. `layerMix` is 0 (synth) to 1 (sample). `pool` is what SHUFFLE / ROLL rotates. `zones` is an optional multisample map. `slice: true` (meant for vox) starts each note on the next detected transient. Drum kits use `voices.kick` and the other eight voice keys. Loading happens on a background thread. The audio thread only reads a published buffer and resamples with a 16-tap windowed sinc. See `resources/presets.json` for the block on every preset (factory blocks are `SYNTH`, so the synth sound does not change until you point a preset at a file).
+`CH` is the closed hat, `OH` the open hat, `PERC` is storage for one-shots you reference from `pool` or `file`. Paths in `presets.json` are relative to that root and use forward slashes, for example `BASS/pluck_d1.wav`. Pitch names are scientific, C4 = 60, so D1 = 26. `start` and `loop` times are seconds. `loop.end` of 0 means the end of the file. `layerMix` is 0 (synth) to 1 (sample). `pool` is what SHUFFLE / ROLL rotates. `zones` is an optional multisample map. `slice: true` (meant for vox) starts each note on the next detected transient. Drum kits use `voices.kick` and the other eight voice keys. Loading happens on a background thread. The audio thread only reads a published buffer and resamples with a 16-tap windowed sinc. See `resources/presets.json` for the block on every preset. `SYNTH`, and the synth half of `LAYER`, only sound in the headless tools and tests; the plugin plays the sample.
 
 ## Parameter IDs
 
