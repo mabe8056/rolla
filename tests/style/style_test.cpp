@@ -21,8 +21,8 @@
 // Gates: ROLLER / JACKIN batches for seeds 1 and 2 hash to the frozen values
 // (their MIDI is unchanged by the DEEP / BOUNCY pass). DEEP: answers change the
 // density in >= 90% of rolls, 20-50% of stab onsets in bass gaps, pickups in
-// 5-85% of rolls (optional, not every roll). BOUNCY: bass sounds >= 60% of the loop by duration
-// (about half the rolls legato pulse, the rest bounce),
+// 5-85% of rolls (optional, not every roll). BOUNCY: 6-14 of 20 rolls are the
+// legato pulse (bass sounds >= 85% of the loop by duration), the rest bounce (>= 45%),
 // 5-7 notes a bar, nothing outside natural minor, answers change density in
 // >= 90% of rolls, octave moves 15-26% at the default BOUNCE, <= 8.5% at
 // BOUNCE 0 and rising with BOUNCE.
@@ -159,6 +159,9 @@ struct Measures
     // ROLLER review measures (rolls out of 20).
     int gridLocked = 0, noTurn = 0, b2Clash = 0;
     double onBeat = 0;
+    // BOUNCY modes, read from the output the way roll_test does (mean note length >= 1.8 is pulse).
+    int pulseRolls = 0;
+    double pulseTime = 0, bounceTime = 0;
 };
 
 struct Skel
@@ -200,6 +203,13 @@ Measures measure (int style, std::uint32_t base, const Settings& s)
         for (int i = 0; i < bass.count; ++i)
             dur += bass.notes[i].length;
         m.timeShare += dur / steps;
+        if (bass.count > 0 && dur / bass.count >= 1.8)
+        {
+            ++m.pulseRolls;
+            m.pulseTime += dur / steps;
+        }
+        else
+            m.bounceTime += dur / steps;
         m.npb += (double) bass.count / g.bars;
         std::vector<int> perBar ((size_t) g.bars, 0);
         Skel sk;
@@ -302,6 +312,8 @@ Measures measure (int style, std::uint32_t base, const Settings& s)
                 ++m.pskel;
     m.sound /= m.rolls;
     m.timeShare /= m.rolls;
+    m.pulseTime = m.pulseRolls > 0 ? m.pulseTime / m.pulseRolls : 0.0;
+    m.bounceTime = m.rolls > m.pulseRolls ? m.bounceTime / (m.rolls - m.pulseRolls) : 0.0;
     m.npb /= m.rolls;
     m.outmode /= m.rolls;
     m.dens /= m.rolls;
@@ -427,11 +439,13 @@ int main (int argc, char** argv)
 
         const auto p = measure (Pop, base, defaults (Pop));
         print ("pop", base, p);
-        std::snprintf (what, sizeof what, "BOUNCY seed %u: sounds %.2f, %.1f notes/bar, out of mode %.3f, answers %.2f, octaves %.3f",
-                       base, p.timeShare, p.npb, p.outmode, p.dens, p.oct);
-        // About half the rolls are the legato pulse (~0.9 sounding), the rest bounce (~0.5).
-        check (p.timeShare >= 0.6 && p.npb >= 5.0 && p.npb <= 7.0 && p.outmode == 0.0 && p.dens >= 0.9
-                   && p.oct >= 0.15 && p.oct <= 0.26,
+        std::snprintf (what, sizeof what, "BOUNCY seed %u: pulse %d/%d sounding %.2f, bounce %.2f, %.1f notes/bar, out of mode %.3f, answers %.2f, octaves %.3f",
+                       base, p.pulseRolls, p.rolls, p.pulseTime, p.bounceTime, p.npb, p.outmode, p.dens, p.oct);
+        // Per mode: pulse rolls stay legato (>= 0.85 of the loop sounding), bounce
+        // rolls >= 0.45, and the split stays about half (6-14 of 20 pulse).
+        check (p.pulseTime >= 0.85 && p.bounceTime >= 0.45
+                   && p.pulseRolls >= 6 && p.pulseRolls <= 14 && p.npb >= 5.0 && p.npb <= 7.0 && p.outmode == 0.0
+                   && p.dens >= 0.9 && p.oct >= 0.15 && p.oct <= 0.26,
                what);
 
         Settings lo = defaults (Pop), hi = defaults (Pop);
