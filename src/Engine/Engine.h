@@ -54,6 +54,9 @@ struct EngineParams
     // -1: E21 mask from the active lanes. 0..63: frozen mask (FULL / MUTE / SOLO share one trim).
     int sumMask = -1;
     bool bypassSumTrim = false;
+    // Master true-peak safety stage, ceiling -6 dBTP (src/Mix/TruePeakGuard.h).
+    // Off keeps the same latency and passes the sum through unchanged.
+    bool tpGuard = true;
 };
 
 struct Transport
@@ -83,6 +86,10 @@ public:
     // Message thread. Copies and resamples into a free buffer, then publishes.
     void loadDrumSample (int voice, const float* mono, int numSamples, double sourceRate);
     void clearDrumSample (int voice);
+    // Fixed output delay of the true-peak stage at the prepared rate (on or off).
+    int latencySamples() const noexcept;
+    // Audio thread or a test harness: largest true-peak gain reduction since the last call, dB.
+    float takeTpGuardGrDb() noexcept;
     bool hasDrumSample (int voice) const noexcept;
 
     // Per-voice sample hook (src/Drums/DrumSampleSlot.h). Null keeps the

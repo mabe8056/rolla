@@ -232,6 +232,42 @@ target_link_libraries(rolla-sampler-test
         juce::juce_recommended_warning_flags
 )
 
+# Master true-peak safety stage: guard DSP + every style x INTENSITY.
+add_executable(rolla-tp-test
+    tests/tpguard/tp_guard_test.cpp
+    src/Engine/Engine.cpp
+    src/Engine/Sampler.cpp
+    src/Engine/SampleLibrary.cpp
+    src/Sampler/SamplePrep.cpp
+    src/Sampler/UserSlots.cpp
+    src/Generator/Generator.cpp
+    src/Generator/Presets.cpp
+    src/Drums/DrumMachine.cpp
+    src/Drums/DrumPattern.cpp
+    src/Mix/MixProgram.cpp
+    src/Mix/MixRuntime.cpp
+)
+
+target_include_directories(rolla-tp-test PRIVATE src)
+
+target_compile_definitions(rolla-tp-test
+    PRIVATE
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_DISPLAY_SPLASH_SCREEN=0
+        JUCE_REPORT_APP_USAGE=0
+)
+
+target_link_libraries(rolla-tp-test
+    PRIVATE
+        RollaData
+        juce::juce_audio_utils
+        juce::juce_dsp
+        juce::juce_audio_formats
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags
+)
+
 add_executable(rolla-roll-test
     tests/roll/roll_test.cpp
     src/PluginProcessor.cpp

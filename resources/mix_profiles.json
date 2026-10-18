@@ -3787,5 +3787,17 @@
   "tp_capped": "files at the -6 dBTP cap stay as-is, no per-file limiter; LUFS may be below -24; not a fail (Q16)",
   "tp_cap_dbtp": -6.0,
   "tp_tol_db": 0.05
+ },
+ "tp_guard": {
+  "stage": "MAIN, after the E21 trim; safety only, not the E21 sum limiter",
+  "counts_as_sum_limiter": false,
+  "oversample": 4,
+  "detector_taps_per_phase": 24,
+  "lookahead_ms": 1.5,
+  "release_ms": 80.0,
+  "ceiling_dbtp": -6.0,
+  "margin_db": 0.2,
+  "max_gr_db_factory": 1.0,
+  "sidecar_key": "tp_guard_gr_db_max"
  }
 }
