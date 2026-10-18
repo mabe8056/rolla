@@ -159,21 +159,21 @@ inline const StyleCopy& styleCopy (int d) noexcept
           "Pad\tair\n"
           "Plays\tbass, stab, pluck, pad, vox, drums" },
         { kStyleLabels[Long],
-          "Groove\tswing 51%\n"
+          "Groove\tswing 54%\n"
           "Notes\t2-8 sixteenths\n"
           "Bass\tround\n"
           "Stab\tswell\n"
           "Pad\twide\n"
           "Plays\tbass, stab, pluck, pad, vox, drums" },
         { kStyleLabels[Pop],
-          "Groove\tswing 50%\n"
+          "Groove\tswing 56.7%\n"
           "Notes\t1-1.25 sixteenths\n"
           "Bass\tclick\n"
           "Stab\tclick\n"
           "Pad\tair\n"
           "Plays\tbass, stab, pluck, pad, vox, drums" },
         { kStyleLabels[Gaskin],
-          "Groove\tstraight, swing 50%\n"
+          "Groove\tswing 56.5%\n"
           "Notes\t2 sixteenths\n"
           "Bass\tround\n"
           "Stab\tswell\n"
