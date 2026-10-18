@@ -367,7 +367,11 @@ void testStyle (rolla::RollaProcessor& proc, int style, bool pack, const juce::F
                     + std::to_string (w.length) + " vs " + std::to_string (loopN) + " samples)");
         expect (nameOk (f, g, i), tag + " " + lane + " stem name " + f.getFileName().toStdString());
         const bool hasNotes = i == rolla::Drums || g.lane[i].count > 0;
-        if (pack && hasNotes && w.peak < 1.0e-4f)
+        // A lane the user (or the style default) muted never sounds, stems included.
+        const bool muted = proc.apvts.getRawParameterValue ((lane + "Mute").c_str())->load() >= 0.5f;
+        if (pack && muted)
+            expect (w.peak < 1.0e-4f, tag + " " + lane + ": muted lane stem is silent");
+        if (pack && hasNotes && ! muted && w.peak < 1.0e-4f)
         {
             ++silent;
             silentNames += lane + " ";
