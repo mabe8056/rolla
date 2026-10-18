@@ -1,3 +1,4 @@
+#include "Drums/DrumMachine.h"
 #include "Engine/Engine.h"
 #include "Engine/SampleChop.h"
 #include "Engine/Sampler.h"
@@ -309,6 +310,127 @@ void testPitchProbe()
     expect (rolla::chordFileOffset (ChordQuality::Neutral, ChordQuality::Major) == 0, "neutral fits either");
 }
 
+// Four-on-the-floor kick retrigger clicks. Long tails, so every kick lands on
+// the previous one still ringing.
+void testKickRetriggerSynth()
+{
+    constexpr double sr = 48000.0;
+    for (const double bpm : { 126.0, 130.0 })
+    {
+        rolla::DrumMachine dm;
+        dm.prepare ((float) sr);
+        const double spb = 60.0 / bpm * sr;
+        constexpr int kicks = 16 * 4;
+        const int total = (int) (kicks * spb) + (int) (0.5 * sr);
+        std::vector<float> x ((size_t) total, 0.f);
+        std::vector<int> onsets;
+        for (int k = 0; k < kicks; ++k)
+            onsets.push_back ((int) std::lround (k * spb));
+        size_t next = 0;
+        for (int n = 0; n < total; ++n)
+        {
+            if (next < onsets.size() && onsets[next] == n)
+            {
+                rolla::DrumHit hit;
+                hit.voice = rolla::Kick;
+                hit.velocity = 100;
+                hit.decayScale = 3.f; // long tail: still ringing on the next beat
+                hit.patchDecay = 1.f;
+                hit.key = 2;
+                dm.trigger (hit);
+                ++next;
+            }
+            float l = 0.f, r = 0.f;
+            dm.process (l, r);
+            x[(size_t) n] = l;
+        }
+        int clicks = 0;
+        float worst = 0.f;
+        float minTail = 1.0e9f;
+        for (size_t k = 1; k < onsets.size(); ++k)
+        {
+            const int n0 = onsets[k];
+            double acc = 0.0;
+            for (int n = n0 - 48; n < n0; ++n)
+                acc += (double) x[(size_t) n] * x[(size_t) n];
+            const float rmsPre = (float) std::sqrt (acc / 48.0);
+            minTail = std::min (minTail, rmsPre);
+            // Second difference at the onset: a step or a slope break stands out
+            // against the tail's 1 ms RMS. A clean onset is a few 1e-4 at most.
+            const float limit = 0.25f * rmsPre + 6.0e-4f;
+            for (int m = n0; m <= n0 + 2; ++m)
+            {
+                const float d2 = std::fabs (x[(size_t) m] - 2.f * x[(size_t) (m - 1)] + x[(size_t) (m - 2)]);
+                if (d2 > limit)
+                {
+                    ++clicks;
+                    worst = std::max (worst, d2 / limit);
+                    break;
+                }
+            }
+        }
+        expect (minTail > 1.0e-4f, "synth kick test: the tail overlaps the next kick at " + std::to_string ((int) bpm) + " BPM");
+        expect (clicks == 0, "synth kick retrigger is click-free at " + std::to_string ((int) bpm) + " BPM (" + std::to_string (clicks)
+                                 + " clicks, worst " + std::to_string (worst) + "x limit)");
+    }
+}
+
+// The same through the engine with a dropped kick WAV: 1.2 s of 55 Hz that
+// starts on its peak, so each retrigger overlaps the last and the file's first
+// sample is a full-scale step unless the voice fades in. 16 bars cross a loop wrap.
+void testKickRetriggerSampled (const rolla::PresetBank& bank)
+{
+    constexpr double sr = 48000.0;
+    std::vector<float> kickWav ((size_t) (1.2 * sr));
+    for (size_t n = 0; n < kickWav.size(); ++n)
+    {
+        const double t = (double) n / sr;
+        kickWav[n] = (float) (0.8 * std::exp (-t / 0.5) * std::cos (2.0 * 3.14159265358979 * 55.0 * t));
+    }
+    for (const double bpm : { 126.0, 130.0 })
+    {
+        rolla::Engine eng;
+        eng.prepare (sr, 128);
+        eng.loadDrumSample (rolla::Kick, kickWav.data(), (int) kickWav.size(), sr);
+        rolla::Groove groove;
+        groove.bars = 8;
+        for (int t = 0; t < 8 * 16; t += 4)
+            groove.drums.vel[rolla::Kick][t] = 110;
+        rolla::EngineParams params;
+        params.presets = &bank;
+        params.bars = 8;
+        for (int i = 0; i < rolla::NumDrumVoices; ++i)
+            params.drumDecay[i] = 0.5f;
+        rolla::Transport play;
+        play.playing = true;
+        play.bpm = bpm;
+        play.sampleRate = sr;
+        const int total = (int) (16.0 * 4.0 * 60.0 / bpm * sr);
+        float worst = 0.f;
+        float peak = 0.f;
+        float p1 = 0.f, p2 = 0.f;
+        for (int done = 0; done < total; done += 128)
+        {
+            float left[128] {}, right[128] {};
+            juce::MidiBuffer midi;
+            eng.process (groove, params, play, left, right, nullptr, nullptr, 128, midi, false);
+            for (float s : left)
+            {
+                worst = std::max (worst, std::fabs (s - 2.f * p1 + p2));
+                peak = std::max (peak, std::fabs (s));
+                p2 = p1;
+                p1 = s;
+            }
+            play.ppqStart += 128.0 * bpm / 60.0 / sr;
+        }
+        expect (peak > 0.05f, "sampled kick test: the kick plays at " + std::to_string ((int) bpm) + " BPM");
+        // A 55 Hz body has a second difference near 1e-4; a hard start or a
+        // hard cut of the old hit is a large fraction of the peak.
+        expect (worst < 0.05f, "sampled kick retrigger is click-free at " + std::to_string ((int) bpm) + " BPM (max 2nd diff "
+                                   + std::to_string (worst) + ", peak " + std::to_string (peak) + ")");
+    }
+}
+
 } // namespace
 
 int main()
@@ -484,6 +606,8 @@ int main()
 
     rolla::PresetBank bank;
     rolla::loadDefaultPresets (bank);
+    testKickRetriggerSynth();
+    testKickRetriggerSampled (bank);
     rolla::Sampler sampler;
     sampler.prepare (48000.0);
     rolla::EngineParams params;

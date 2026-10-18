@@ -363,10 +363,13 @@ struct DrumMachine::Core
         return std::clamp (hit.decayScale * hit.patchDecay * punch, 0.08f, 6.f);
     }
 
+    // Retrigger restarts the voice, so the old waveform stops here. Hold its
+    // last output and let it decay (~8 ms) under the new hit. This must happen
+    // on every retrigger: the old 0.015 gate skipped quiet tails, and a long
+    // kick tail under 0.015 stepped straight to zero on the next kick.
     void armRing (float& last, float& ring) const noexcept
     {
-        if (std::fabs (last) > 0.015f)
-            ring = last;
+        ring = last;
     }
 
     void triggerKick (const DrumHit& hit) noexcept
@@ -563,7 +566,10 @@ struct DrumMachine::Core
             else
                 kick.pitch *= kick.pitchC;
             kick.fade = std::min (1.f, kick.fade + kick.fadeInc);
-            raw = (body * kick.fade + kick.click.tick (sr)) * kick.gain;
+            // Raised cosine, 1.1 ms. The strike leaves the body at its peak, so
+            // a linear ramp still opened on a visible first-sample step.
+            const float fadeG = kick.fade >= 1.f ? 1.f : 0.5f * (1.f - std::cos (kPi * kick.fade));
+            raw = (body * fadeG + kick.click.tick (sr)) * kick.gain;
             if (! kick.env.on && kick.click.env < 1.0e-5f)
                 kick.on = false;
         }

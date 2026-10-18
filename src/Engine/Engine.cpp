@@ -369,8 +369,10 @@ struct Engine::Impl
         int len = 0;
         float gain = 0.f;
         float ring = 0.f, last = 0.f;
+        int atk = 0, atkN = 0; // short fade-in from pos 0
     };
     Play play[NumDrumVoices];
+    int wrapIn = 0, wrapN = 0; // master fade-in after a loop wrap
 
     struct PendingOff
     {
@@ -430,6 +432,7 @@ struct Engine::Impl
         reverbIdle = 1000000;
         fxHeld = false;
         bass.ring = bass.last = live.ring = live.last = 0.f;
+        wrapIn = 0;
         mainDc.reset();
         mainDcR.reset();
         drumDc.reset();
@@ -776,7 +779,16 @@ void Engine::process (const Groove& groove,
     {
         const double prev = pos;
         if (transport.playing)
+        {
             pos = wrapLoop (pos + d16, loop16);
+            // Loop wrap or relocate: the loop end faded the output to silence,
+            // but kick tails are still sounding. Reopen on a 1 ms raised cosine.
+            if (pos < prev && ! (justStarted && i == 0))
+            {
+                E.wrapN = std::max (8, (int) (0.001 * sr));
+                E.wrapIn = E.wrapN;
+            }
+        }
         else
         {
             // Stop is silence. Killing voices is not enough: an attack that
@@ -1386,12 +1398,18 @@ void Engine::process (const Groove& groove,
                         return false;
                     s.reader.store (b, std::memory_order_release);
                     auto& pl = E.play[voice];
-                    if (pl.on)
-                        pl.ring = pl.last;
+                    // The old hit's last output (its ring included) decays under
+                    // the new one, so a retrigger never steps. When the voice is
+                    // already off, last is the decaying ring itself.
+                    pl.ring = pl.last;
                     pl.on = true;
                     pl.buf = b;
                     pl.pos = 0;
                     pl.len = len;
+                    // A dropped WAV often starts on a non-zero sample (trimmed to the
+                    // transient). 0.6 ms raised cosine: no step, transient kept.
+                    pl.atkN = std::max (8, (int) (0.0006f * srF));
+                    pl.atk = 0;
                     pl.gain = stepGain * (vel / 127.f) * dbToGain (dp.trimDb) * levelOf (voice) * accentOf (voice);
                     return true;
                 };
@@ -2069,6 +2087,12 @@ void Engine::process (const Groove& groove,
                 const float t = left / (float) fadeN;
                 g = 0.5f * (1.f - std::cos (kPi * t));
             }
+            if (pl.atk < pl.atkN)
+            {
+                ++pl.atk;
+                const float t = pl.atk / (float) (pl.atkN + 1);
+                g *= 0.5f * (1.f - std::cos (kPi * t));
+            }
             float s = slot.buf[pl.buf][(size_t) pl.pos++] * pl.gain * g + pl.ring;
             pl.ring = flush (pl.ring * ringC);
             pl.last = s;
@@ -2296,6 +2320,16 @@ void Engine::process (const Groove& groove,
                 drumLft *= g;
                 drumRgt *= g;
             }
+        }
+        if (E.wrapIn > 0)
+        {
+            const float t = (float) (E.wrapN - E.wrapIn + 1) / (float) (E.wrapN + 1);
+            const float g = 0.5f * (1.f - std::cos (kPi * t));
+            outL *= g;
+            outR *= g;
+            drumLft *= g;
+            drumRgt *= g;
+            --E.wrapIn;
         }
         mainL[i] = outL;
         if (mainR != nullptr)
