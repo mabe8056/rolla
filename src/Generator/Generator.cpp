@@ -1,6 +1,5 @@
 #include "Generator.h"
 #include "PhraseBank.h"
-#include "Arrangement.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1067,152 +1066,6 @@ void lockFromBook (Lane& lane, int dialect, std::uint32_t seed, int bars, float 
 // do not share a bass skeleton after a transposition or a two-16th nudge.
 // DARK at either end still retints the degrees. BOUNCE above 0.6 still
 // shoves even slots, which is what the knob audit compares.
-// BOUNCY bass, from the measured In The Zone drop. The riff itself is not
-// stored. What is stored is the tendency: a sparse dotted-8th grid off the
-// kick, three or four pitches (root, fifth, fourth, flat seven), and a
-// whole-step slide on bar 4 and bar 8. Each bar of the 4-bar cycle picks a
-// different grid so two rolls do not share a skeleton; the grids stay off
-// the kick and a step apart from each other.
-void writeBounceBass (Lane& lane, std::uint32_t seed, int bars, float dark, float bounce)
-{
-    static const int kGrid[15][4] = {
-        { 1, 2, 11, 14 }, { 1, 3, 9, 14 }, { 1, 6, 9, 11 }, { 1, 7, 10, 11 }, { 1, 7, 13, 14 },
-        { 2, 3, 10, 13 }, { 2, 5, 9, 11 }, { 2, 5, 13, 15 }, { 2, 6, 9, 15 }, { 3, 6, 13, 15 },
-        { 5, 6, 11, 14 }, { 5, 7, 10, 14 }, { 6, 7, 10, 13 }, { 9, 10, 11, 14 }, { 10, 13, 14, 15 },
-    };
-    constexpr int nGrid = 15;
-    static const int kPal[4] = { 0, 5, 7, 10 };
-
-    const std::uint32_t h = seed * 0x9E3779B9u;
-    const bool doSlide = (h & 7u) != 0;
-    int pedal = kPal[(h >> 8) & 3u];
-    if (pedal == 10)
-        pedal = kPal[(h >> 16) % 3u];
-    int pool[3];
-    int nPool = 0;
-    for (int p : kPal)
-        if (p != pedal)
-            pool[nPool++] = p;
-    int color[4];
-    for (int i = 0; i < 3; ++i)
-        color[i] = pool[((h >> (10 + i)) + (std::uint32_t) i) % (std::uint32_t) nPool];
-    for (int i = 1; i < 3; ++i)
-        if (color[i] == color[i - 1])
-        {
-            int at = 0;
-            for (int k = 0; k < nPool; ++k)
-                if (pool[k] == color[i])
-                    at = k;
-            color[i] = pool[(at + 1) % nPool];
-        }
-    int at = 0;
-    for (int k = 0; k < nPool; ++k)
-        if (pool[k] == color[2])
-            at = k;
-    color[3] = pool[(at + 1) % nPool];
-
-    int shape[4];
-    std::uint32_t x = h;
-    for (int i = 0; i < 4; ++i)
-    {
-        x = x * 0x6D2B79F5u + 0x9E3779B9u;
-        shape[i] = (int) (x % (std::uint32_t) nGrid);
-    }
-
-    const std::uint32_t kept = lane.seed ? lane.seed : (seed ? seed : 1u);
-    lane.count = 0;
-    lane.seed = kept;
-
-    const int nBars = std::min (bars, 8);
-    for (int bar = 0; bar < nBars; ++bar)
-    {
-        const int src = bar & 3;
-        int slots[4];
-        int nSlots = 0;
-        for (int i = 0; i < 4; ++i)
-        {
-            int s = kGrid[shape[src]][i];
-            if (bar == 7 && s < 8)
-                continue;
-            if (bounce > 0.6f && (s & 1) == 0 && s < 15 && ! kickSlot (s + 1))
-                ++s;
-            if (s < 0 || s > 15 || kickSlot (s))
-                continue;
-            if (nSlots > 0 && slots[nSlots - 1] == s)
-                continue;
-            slots[nSlots++] = s;
-        }
-        if (nSlots < 2)
-        {
-            slots[0] = 1;
-            slots[1] = 6;
-            slots[2] = 10;
-            slots[3] = 14;
-            nSlots = 4;
-        }
-        const int origin = lane.count;
-        for (int i = 0; i < nSlots; ++i)
-        {
-            const int nxt = (i + 1 < nSlots) ? slots[i + 1] : 16;
-            float len = 1.1f;
-            if (len > (float) (nxt - slots[i]))
-                len = std::max (0.5f, (float) (nxt - slots[i]));
-            const bool back = slots[i] >= 8;
-            int semi = back ? color[src] : pedal;
-            if (dark <= 0.2f)
-                semi = back ? 7 : 0;
-            else if (dark >= 0.8f)
-                semi = back ? 10 : 0;
-            if (! scalePc (Pop, semi))
-                semi = snapScale (Pop, semi);
-            Ev e;
-            e.start = (float) (bar * 16 + slots[i]);
-            e.len = len;
-            e.nChord = 1;
-            e.chord[0] = (std::int8_t) semi;
-            e.vel = (i & 1) ? 80 : 112;
-            pushEv (lane, e, bars);
-        }
-        if (doSlide && (bar == 3 || bar == 7) && lane.count - origin >= 2)
-        {
-            const int approach = lane.count - 2;
-            const int target = lane.count - 1;
-            const int arrive = pedal != 0 ? 0 : 7;
-            int from = (arrive - 2 + 12) % 12;
-            if (from != 0 && from != 5 && from != 7 && from != 10)
-                from = arrive == 0 ? 10 : 5;
-            lane.notes[approach].chord[0] = (std::int8_t) from;
-            lane.notes[target].chord[0] = (std::int8_t) arrive;
-            const float gap = lane.notes[target].start - lane.notes[approach].start;
-            if (gap >= 1.f && gap <= 4.f)
-                lane.notes[approach].length = gap;
-        }
-    }
-
-    for (int b = 0; b < nBars; ++b)
-    {
-        int rootIdx[8];
-        int n = 0;
-        int roots = 0;
-        for (int i = 0; i < lane.count && n < 8; ++i)
-        {
-            if ((int) std::floor (lane.notes[i].start / 16.f) != b)
-                continue;
-            rootIdx[n++] = i;
-            if (((lane.notes[i].chord[0] % 12) + 12) % 12 == 0)
-                ++roots;
-        }
-        for (int k = n - 1; k >= 0 && n > 0 && roots * 100 > n * 64; --k)
-        {
-            Note& note = lane.notes[rootIdx[k]];
-            if ((((note.chord[0] % 12) + 12) % 12) != 0)
-                continue;
-            note.chord[0] = 7;
-            --roots;
-        }
-    }
-}
-
 void lockPhrase (Lane& lane, int dialect, std::uint32_t seed, int bars, float dark, float bounce)
 {
     if (bars < 4 || lane.count <= 0)
@@ -1220,11 +1073,6 @@ void lockPhrase (Lane& lane, int dialect, std::uint32_t seed, int bars, float da
     if (dialect == Long || dialect == Gaskin)
     {
         lockFromBook (lane, dialect, seed, bars, dark, bounce);
-        return;
-    }
-    if (dialect == Pop)
-    {
-        writeBounceBass (lane, seed, bars, dark, bounce);
         return;
     }
 
@@ -1595,28 +1443,11 @@ void writeStab (Lane& lane, const Lane& bass, const Settings& s, Rng& rng, float
     else if (s.styleIntensity >= 0.75f)
         per = std::min (12, per + 2);
     const int voicings[][3] = { { 3, 10, 15 }, { 7, 10, 19 }, { 3, 7, 14 }, { 10, 14, 17 } };
-    // Drop chops follow a 4-bar open-sus cycle. The major 7th stays out.
-    arrange::HarmonyLoop bounceChords {};
-    const bool bounceHarmony = s.dialect == Pop;
-    if (bounceHarmony)
-    {
-        arrange::HarmonyOptions o;
-        o.thirdChance = 0.f;
-        bounceChords = arrange::makeThreePlusOne (lane.seed ? lane.seed : 1u, arrange::Aeolian, o);
-    }
     int overlaps = 0;
     int total = 0;
     for (int bar = 0; bar < s.bars && bar < 8; ++bar)
     {
-        int sus[3] = { 0, 2, 7 };
         const int* voi = voicings[(bar / 2) & 3];
-        if (bounceHarmony)
-        {
-            const arrange::Chord& c = bounceChords.bar[std::min (bar, 7) % 4];
-            for (int i = 0; i < 3; ++i)
-                sus[i] = c.n > i ? c.notes[i] : c.notes[0];
-            voi = sus;
-        }
         int placed = 0;
         for (int pass = 0; pass < 16 && placed < per; ++pass)
         {
@@ -1739,9 +1570,7 @@ void writePluck (Lane& lane, const Settings& s, Rng& rng)
         per = 1;
     else if (s.styleIntensity >= 0.75f)
         per = std::min (8, per + 2);
-    const int popDeg[] = { 0, 7, 10, 5, 0 };
-    const int otherDeg[] = { 0, 3, 7, 10, 2 };
-    const int* degs = s.dialect == Pop ? popDeg : otherDeg;
+    const int degs[] = { 0, 3, 7, 10, 2 };
     for (int bar = 0; bar < s.bars && bar < 8; ++bar)
     {
         int placed = 0;
@@ -1754,7 +1583,7 @@ void writePluck (Lane& lane, const Settings& s, Rng& rng)
             if (e.len > 1.5f)
                 e.len = 1.5f;
             e.nChord = 1;
-            e.chord[0] = (std::int8_t) (s.dialect == Pop ? degs[bar % 4] : degs[(bar + placed) % 5]);
+            e.chord[0] = (std::int8_t) degs[(bar + placed) % 5];
             e.vel = 84;
             if (pushEv (lane, e, s.bars))
                 ++placed;
@@ -1782,23 +1611,6 @@ void writePad (Lane& lane, const Settings& s, Rng& rng)
     clearLane (lane, lane.seed);
     if (s.styleIntensity <= 0.25f)
         return;
-    // Breakdown bed: one sus2 pedal, not a moving major-7th pad.
-    if (s.dialect == Pop)
-    {
-        arrange::HarmonyOptions o;
-        o.thirdChance = 0.f;
-        const arrange::HarmonyLoop h = arrange::makeThreePlusOne (lane.seed ? lane.seed : 1u, arrange::Aeolian, o);
-        const arrange::Chord& c = h.bar[0];
-        Ev e;
-        e.start = 1.f;
-        e.len = (float) (std::min (s.bars, 8) * 16 - 2);
-        e.nChord = (std::uint8_t) std::min (3, std::max (1, c.n));
-        e.vel = 70;
-        for (int i = 0; i < e.nChord; ++i)
-            e.chord[i] = c.notes[i];
-        pushEv (lane, e, s.bars);
-        return;
-    }
     const int bars[6] = { 0, 1, 2, 3, 4, 5 };
     const int b0 = bars[(int) (rng.next() * 4) % 4];
     int b1 = b0 + 3 + (int) (rng.next() * 2);
