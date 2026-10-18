@@ -271,6 +271,14 @@ target_link_libraries(rolla-roll-test
         juce::juce_recommended_warning_flags
 )
 
+# DEEP / JACKIN phrase grammar checks. No JUCE.
+add_executable(rolla-phrase-test
+    tests/phrase/phrase_test.cpp
+    src/Generator/PhraseBank.cpp
+)
+
+target_include_directories(rolla-phrase-test PRIVATE src)
+
 add_executable(rolla-mix-render
     src/MixRender.cpp
     src/Engine/Engine.cpp
@@ -303,6 +311,14 @@ target_link_libraries(rolla-mix-render
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags
 )
+
+# Bar-8 turnaround and 7+1 harmony helpers. No JUCE.
+add_executable(rolla-arrange-test
+    tests/arrange/arrange_test.cpp
+    src/Generator/Arrangement.cpp
+)
+
+target_include_directories(rolla-arrange-test PRIVATE src)
 
 add_executable(rolla-knob-test
     tests/knob/knob_test.cpp
