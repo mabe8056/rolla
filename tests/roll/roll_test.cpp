@@ -1343,6 +1343,77 @@ void testLaneHygiene()
     expect (rate >= 0.20 && rate <= 0.40, "about 20-40% of rolls have a bar-8 pickup");
 }
 
+// Composer 409/466: a pickup roll has 1-3 bass notes on sixteenths 13-16 of the
+// last bar (0-based 12-15), and the last of them approaches bar 1's first bass
+// pitch by step (1-2 semitones) or by a fifth (5 or 7). 4 styles x 50 seeds.
+void testBar8Pickup()
+{
+    const std::uint32_t base = 913u;
+    const char* names[] = { "ROLLER", "DEEP", "BOUNCY", "JACKIN" };
+    for (int style = 0; style < 4; ++style)
+    {
+        int pickupRolls = 0;
+        int countOk = 0;
+        int approachOk = 0;
+        for (int roll = 0; roll < 50; ++roll)
+        {
+            rolla::Settings s;
+            s.dialect = style;
+            s.bars = 8;
+            std::uint32_t seeds[rolla::NumParts] {};
+            for (int p = 0; p < rolla::NumParts; ++p)
+                seeds[p] = base + (std::uint32_t) roll * 0x9E3779B9u + (std::uint32_t) p * 17u
+                         + (std::uint32_t) style * 101u;
+            if (! rolla::rollWantsPickup (seeds[rolla::Bass]))
+                continue;
+            rolla::Groove g {};
+            rolla::generate (g, s, seeds, 0x7fu);
+            ++pickupRolls;
+
+            const auto& bass = g.lane[rolla::Bass];
+            const int origin = (g.bars - 1) * 16;
+            int inWindow = 0;
+            int lastStart = -1;
+            int lastPitch = -1;
+            int firstStart = 1 << 30;
+            int firstPitch = -1;
+            for (int i = 0; i < bass.count; ++i)
+            {
+                const int st = (int) std::lround (bass.notes[i].start);
+                const int pitch = bass.notes[i].chord[0];
+                if (st >= origin + 12 && st < origin + 16)
+                {
+                    ++inWindow;
+                    if (st > lastStart)
+                    {
+                        lastStart = st;
+                        lastPitch = pitch;
+                    }
+                }
+                if (st < firstStart)
+                {
+                    firstStart = st;
+                    firstPitch = pitch;
+                }
+            }
+            if (inWindow >= 1 && inWindow <= 3)
+                ++countOk;
+            if (lastPitch >= 0 && firstPitch >= 0)
+            {
+                const int iv = ((firstPitch - lastPitch) % 12 + 12) % 12;
+                if (iv == 1 || iv == 2 || iv == 10 || iv == 11 || iv == 5 || iv == 7)
+                    ++approachOk;
+            }
+        }
+        std::cout << names[style] << " bar-8 pickup: rolls " << pickupRolls << " count 1-3 " << countOk
+                  << " step/fifth approach " << approachOk << "\n";
+        expect (pickupRolls > 0, std::string (names[style]) + " some rolls want a pickup");
+        expect (countOk == pickupRolls, std::string (names[style]) + " every pickup is 1-3 notes on sixteenths 13-16 of the last bar");
+        expect (approachOk * 10 >= pickupRolls * 9,
+                std::string (names[style]) + " pickups approach bar 1's bass by step or a fifth (>= 90%)");
+    }
+}
+
 void testShuffleKeepsManualLock()
 {
     rolla::RollaProcessor proc;
@@ -1380,6 +1451,7 @@ int main()
     testAr423Swing();
     testHarmonyClashes();
     testLaneHygiene();
+    testBar8Pickup();
     testRollSkipsMutedAndKept();
     testShuffleClearsAutoKeep();
     testShuffleKeepsManualLock();
