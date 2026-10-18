@@ -126,10 +126,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout (const PresetBa
         add (std::make_unique<AudioParameterFloat> (
             ParameterID { id + "Level", 1 }, label + " Level",
             NormalisableRange<float> (-24.f, 6.f, 0.01f), 0.f));
-        add (std::make_unique<AudioParameterBool> (
-            ParameterID { id + "Shuffle", 1 }, label + " Shuffle", false,
-            AudioParameterBoolAttributes().withAutomatable (false)));
+        // A trigger, like ROLL: automating it re-rolls that lane on the host's beat.
+        add (std::make_unique<AudioParameterBool> (ParameterID { id + "Shuffle", 1 }, label + " Shuffle", false));
     }
+
+    // Appended last so saved sessions and host automation keep their parameter indices.
+    for (int part = 0; part < NumParts; ++part)
+        add (std::make_unique<AudioParameterBool> (ParameterID { String (partId (part)) + "Solo", 1 },
+                                                   String (partName (part)) + " Solo", false));
 
     // KEY / SCALE picker (#13). Appended so older sessions and index-based hosts
     // keep every existing slot. "key" stays the root (C..B, saved sessions load
@@ -292,7 +296,7 @@ RollaProcessor::RollaProcessor()
 {
     apvts.addParameterListener ("roll", this);
     apvts.addParameterListener ("dialect", this);
-    for (const char* id : { "dark", "busy", "bounce", "stab", "styleIntensity", "scale" })
+    for (const char* id : { "dark", "busy", "bounce", "stab", "styleIntensity", "fill", "hitsInStab", "scale" })
         apvts.addParameterListener (id, this);
     apvts.addParameterListener ("intensity", this);
     for (int i = 0; i < NumParts; ++i)
@@ -319,7 +323,7 @@ RollaProcessor::~RollaProcessor()
 
     apvts.removeParameterListener ("roll", this);
     apvts.removeParameterListener ("dialect", this);
-    for (const char* id : { "dark", "busy", "bounce", "stab", "styleIntensity", "scale" })
+    for (const char* id : { "dark", "busy", "bounce", "stab", "styleIntensity", "fill", "hitsInStab", "scale" })
         apvts.removeParameterListener (id, this);
     apvts.removeParameterListener ("intensity", this);
     for (int i = 0; i < NumParts; ++i)
@@ -856,7 +860,8 @@ void RollaProcessor::parameterChanged (const juce::String& parameterID, float ne
     // A scale change reshapes the unkept lanes on their own seeds, like a knob,
     // so they land in the new scale without a re-roll.
     if (parameterID == "dark" || parameterID == "busy" || parameterID == "bounce" || parameterID == "stab"
-        || parameterID == "styleIntensity" || parameterID == "scale")
+        || parameterID == "styleIntensity" || parameterID == "fill" || parameterID == "hitsInStab"
+        || parameterID == "scale")
     {
         requestReshape();
         return;
@@ -900,6 +905,23 @@ void RollaProcessor::triggerRoll()
     }
 }
 
+void RollaProcessor::setExclusiveSolo (int part)
+{
+    if (part < 0 || part >= NumParts)
+        return;
+    for (int i = 0; i < NumParts; ++i)
+    {
+        auto* p = apvts.getParameter (juce::String (partId (i)) + "Solo");
+        const float target = i == part ? 1.f : 0.f;
+        // Only touch lanes that change, so the host records no empty gestures.
+        if (p == nullptr || (p->getValue() >= 0.5f) == (target >= 0.5f))
+            continue;
+        p->beginChangeGesture();
+        p->setValueNotifyingHost (target);
+        p->endChangeGesture();
+    }
+}
+
 void RollaProcessor::triggerShuffle (int part)
 {
     if (part < 0 || part >= NumParts)
@@ -926,6 +948,7 @@ Settings RollaProcessor::currentSettings() const
     s.scale = (int) raw (apvts, "scale");
     s.bars = barsFromIndex ((int) raw (apvts, "length"));
     s.fill = raw (apvts, "fill") >= 0.5f;
+    s.hitsInStab = raw (apvts, "hitsInStab") >= 0.5f;
     return s;
 }
 
@@ -1060,6 +1083,8 @@ void RollaProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     preparedRate = sampleRate > 1000.0 ? sampleRate : 48000.0;
     engine.prepare (preparedRate, samplesPerBlock);
     setLatencySamples (engine.latencySamples());
+    phraseOffset = 0.0;
+    hostRolling = false;
     midiLate.clear();
     midiNow.clear();
     midiNext.clear();
@@ -1110,6 +1135,7 @@ EngineParams RollaProcessor::readParams (std::shared_ptr<const PresetBank>& hold
     params.scale = (int) raw (apvts, "scale");
     params.library = &library;
     params.userSlots = slots.published();
+    params.sampleShaping = true;
     for (int i = 0; i < NumParts; ++i)
     {
         const auto id = juce::String (partId (i));
@@ -1121,6 +1147,13 @@ EngineParams RollaProcessor::readParams (std::shared_ptr<const PresetBank>& hold
         params.samplePick[i] = samplePick[i].load (std::memory_order_relaxed);
         params.retuneMute[i] = retuneMuted[i].load (std::memory_order_relaxed);
     }
+    // Solo is folded in here, after the mute read, so playback, the drums bus, the full
+    // bounce and the stems all hear it. regenerate() reads the raw Mute parameter, so
+    // ROLL still treats a lane that is only silenced by someone else's solo as unmuted.
+    bool solo[NumParts] {};
+    for (int i = 0; i < NumParts; ++i)
+        solo[i] = raw (apvts, (juce::String (partId (i)) + "Solo").toRawUTF8()) >= 0.5f;
+    foldSolo (params.mute, solo);
     for (int v = 0; v < NumDrumVoices; ++v)
     {
         const auto id = juce::String (v);
@@ -1132,6 +1165,31 @@ EngineParams RollaProcessor::readParams (std::shared_ptr<const PresetBank>& hold
     }
     return params;
 }
+
+namespace
+{
+// A backward host jump while playing is a host loop wrap (not a seek) when it
+// lands on the loop start from the loop end. Without loop points (FL's pattern
+// loop) it has to land on a bar line, back by a whole number of bars.
+bool isHostLoopWrap (const juce::AudioPlayHead::PositionInfo& pos, double expect, double now, double slack)
+{
+    const double back = expect - now;
+    if (back <= slack)
+        return false;
+    if (pos.getIsLooping())
+        if (const auto loop = pos.getLoopPoints())
+            if (loop->ppqEnd - loop->ppqStart > slack)
+                return std::abs (now - loop->ppqStart) <= slack && std::abs (expect - loop->ppqEnd) <= slack;
+    double barBeats = 4.0;
+    if (const auto sig = pos.getTimeSignature())
+        if (sig->numerator > 0 && sig->denominator > 0)
+            barBeats = sig->numerator * 4.0 / sig->denominator;
+    const double bars = std::round (back / barBeats);
+    const double intoBar = wrapLoop (now, barBeats);
+    return bars >= 1.0 && std::abs (back - bars * barBeats) <= slack
+           && (intoBar <= slack || barBeats - intoBar <= slack);
+}
+} // namespace
 
 void RollaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
@@ -1146,17 +1204,39 @@ void RollaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     float bpm = 130.f;
     bool hostPlaying = false;
     double hostPpq = 0.0;
+    juce::Optional<juce::AudioPlayHead::PositionInfo> pos;
     if (auto* head = getPlayHead())
+        pos = head->getPosition();
+    if (pos)
     {
-        if (auto pos = head->getPosition())
-        {
-            if (auto b = pos->getBpm())
-                bpm = (float) std::clamp (*b, 20.0, 400.0);
-            hostPlaying = pos->getIsPlaying();
-            if (auto ppq = pos->getPpqPosition())
-                hostPpq = *ppq;
-        }
+        if (auto b = pos->getBpm())
+            bpm = (float) std::clamp (*b, 20.0, 400.0);
+        hostPlaying = pos->getIsPlaying();
+        if (auto ppq = pos->getPpqPosition())
+            hostPpq = *ppq;
     }
+
+    // Free-run phrase: follow the host, but play through its loop wraps. Any
+    // other jump (a seek) or a fresh start goes back to following the host.
+    if (hostPlaying)
+    {
+        const double blockBeats = (double) n * (double) bpm / (60.0 * preparedRate);
+        if (! hostRolling)
+            phraseOffset = 0.0;
+        else
+        {
+            const double slack = std::max (blockBeats, hostLastBeats) + 1.0e-3;
+            const double drift = hostPpq - hostExpectPpq;
+            // Lengths are 2, 4 or 8 bars, so the offset can wrap at 8 bars.
+            if (std::abs (drift) > slack)
+                phraseOffset = drift < 0.0 && isHostLoopWrap (*pos, hostExpectPpq, hostPpq, slack)
+                                   ? wrapLoop (phraseOffset - drift, (double) kMaxBars * 4.0)
+                                   : 0.0;
+        }
+        hostExpectPpq = hostPpq + blockBeats;
+        hostLastBeats = blockBeats;
+    }
+    hostRolling = hostPlaying;
 
     const bool previewOn = preview.load (std::memory_order_relaxed);
     Transport transport;
@@ -1165,7 +1245,7 @@ void RollaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     if (hostPlaying)
     {
         transport.playing = true;
-        transport.ppqStart = hostPpq;
+        transport.ppqStart = hostPpq + phraseOffset;
     }
     else if (previewOn)
     {
@@ -1643,10 +1723,10 @@ juce::String RollaProcessor::exportMidiTo (const juce::File& dir)
     const float swing = raw (apvts, "swing");
     const double bpm = (double) hostBpmOf (*this);
     std::string error;
+    // Every lane gets its file, an empty one too (a loop-long track with the
+    // tempo), so a folder export always has the same 7 lanes + full to drop into FL.
     for (int p = 0; p < NumParts; ++p)
     {
-        if (p != Drums && local.lane[p].count <= 0)
-            continue;
         const auto file = dir.getChildFile (rollexport::baseName (local, key, bpm, p) + ".mid");
         if (! MidiExport::writePart (file.getFullPathName().toStdString(), local, p, key, swing, bpm, error))
             return juce::String (error);
@@ -1821,6 +1901,27 @@ juce::StringArray RollaProcessor::writeTempMidi()
         return files;
     pruneExportCache (file);
     files.add (file.getFullPathName());
+    return files;
+}
+
+juce::StringArray RollaProcessor::writeLaneMidiFiles()
+{
+    juce::StringArray files;
+    waitUntilReady();
+    const Groove local = exportGroove();
+    const int key = (int) raw (apvts, "key");
+    const float swing = raw (apvts, "swing");
+    const double bpm = (double) hostBpmOf (*this);
+    const auto dir = newExportFolder();
+    std::string error;
+    for (int part = 0; part < NumParts; ++part)
+    {
+        const auto file = dir.getChildFile (rollexport::baseName (local, key, bpm, part) + ".mid");
+        if (! MidiExport::writePart (file.getFullPathName().toStdString(), local, part, key, swing, bpm, error))
+            return {};
+        files.add (file.getFullPathName());
+    }
+    pruneExportCache (dir);
     return files;
 }
 

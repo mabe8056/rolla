@@ -110,7 +110,10 @@ struct Settings
     int dialect = UkMin;
     int key = 2;
     int bars = 8;
+    // A drum fill on the last beat of the phrase (snare / tom run into the downbeat).
     bool fill = false;
+    // HITS land on the stab's onsets (its answer slots) instead of avoiding them.
+    bool hitsInStab = false;
     // 0 hugs the soft bands, 0.35 is the normal lane, 0.6 is wild.
     // BUSY and BOUNCE extremes raise the effective value. Soft rules never reject.
     float freedom = 0.35f;
@@ -162,21 +165,21 @@ inline const StyleCopy& styleCopy (int d) noexcept
           "Pad\tair\n"
           "Plays\tbass, stab, pluck, pad, vox, drums" },
         { kStyleLabels[Long],
-          "Groove\tswing 51%\n"
+          "Groove\tswing 54%\n"
           "Notes\t2-8 sixteenths\n"
           "Bass\tround\n"
           "Stab\tswell\n"
           "Pad\twide\n"
           "Plays\tbass, stab, pluck, pad, vox, drums" },
         { kStyleLabels[Pop],
-          "Groove\tswing 50%\n"
+          "Groove\tswing 56.7%\n"
           "Notes\t1-1.25 sixteenths\n"
           "Bass\tclick\n"
           "Stab\tclick\n"
           "Pad\tair\n"
           "Plays\tbass, stab, pluck, pad, vox, drums" },
         { kStyleLabels[Gaskin],
-          "Groove\tstraight, swing 50%\n"
+          "Groove\tswing 56.5%\n"
           "Notes\t2 sixteenths\n"
           "Bass\tround\n"
           "Stab\tswell\n"

@@ -28,6 +28,31 @@ float expDecay (float ms, float sr) noexcept
     return std::exp (-1.f / std::max (1.f, ms * 0.001f * sr));
 }
 
+// TONE on sample playback: the voice filter cutoff, two octaves either way of
+// the preset's own (0.5 leaves it alone).
+float toneCutScale (const EngineParams& params, int part) noexcept
+{
+    if (! params.sampleShaping || part < 0 || part >= NumParts)
+        return 1.f;
+    return std::pow (2.f, (std::clamp (params.tone[part], 0.f, 1.f) - 0.5f) * 4.f);
+}
+
+// PUNCH on sample playback: low is a slower attack and a longer decay (round,
+// lazy), high a faster attack and a shorter decay (snappy). 0.5 leaves it alone.
+float punchAttackScale (const EngineParams& params, int part) noexcept
+{
+    if (! params.sampleShaping || part < 0 || part >= NumParts)
+        return 1.f;
+    return std::pow (2.f, -(std::clamp (params.punch[part], 0.f, 1.f) - 0.5f) * 3.f);
+}
+
+float punchDecayScale (const EngineParams& params, int part) noexcept
+{
+    if (! params.sampleShaping || part < 0 || part >= NumParts)
+        return 1.f;
+    return std::pow (2.f, -(std::clamp (params.punch[part], 0.f, 1.f) - 0.5f) * 1.5f);
+}
+
 int presetOf (const EngineParams& params, int part) noexcept
 {
     if (part < 0 || part >= NumParts)
@@ -720,10 +745,10 @@ bool Sampler::playUserSlot (int part, int drumVoice, int midiNote, int velocity,
     fresh.stopping = false;
     float trim = amp.trim * std::clamp (velocity / 127.f, 0.05f, 1.f);
     if (drumVoice >= 0)
-        trim *= ampDb (params.drumLevelDb[drumVoice]);
+        trim *= ampDb (params.drumLevelDb[drumVoice]) * drumGain;
     fresh.gain = trim * decision.sampleMix * ampDb (decision.gainDb);
     fresh.pan = (part == Stab || part == Pad) ? 0.15f : 0.f;
-    fresh.cut = amp.cut;
+    fresh.cut = amp.cut * toneCutScale (params, voicePart);
     fresh.res = amp.res;
     fresh.envOct = drumVoice >= 0 ? 0.f : amp.envOct;
     fresh.fEnv = 1.f;
@@ -733,11 +758,13 @@ bool Sampler::playUserSlot (int part, int drumVoice, int midiNote, int velocity,
     fresh.ladder.reset();
     if (drumVoice >= 0)
     {
-        const float decay = 80.f * std::pow (2.f, (params.drumDecay[drumVoice] - 0.5f) * 2.f);
+        const float decay = 80.f * std::pow (2.f, (params.drumDecay[drumVoice] - 0.5f) * 2.f)
+                          * punchDecayScale (params, Drums);
         fresh.env.start (0.5f, decay, 0.f, 12.f, srF);
     }
     else
-        fresh.env.start (amp.a, amp.d, amp.s, amp.r, srF);
+        fresh.env.start (amp.a * punchAttackScale (params, part), amp.d * punchDecayScale (params, part),
+                         amp.s, amp.r, srF);
 
     double startFrame = std::min (std::clamp ((double) decision.startSec, 0.0, 60.0) * pod.audio->rate,
                                    (double) pod.audio->frames - 1.0);
@@ -923,7 +950,7 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     if (layered)
         fresh.gain *= std::clamp (played.layerMix, 0.f, 1.f);
     fresh.pan = (part == Stab || part == Pad) ? 0.15f : 0.f;
-    fresh.cut = amp.cut;
+    fresh.cut = amp.cut * toneCutScale (params, part);
     fresh.res = amp.res;
     fresh.envOct = amp.envOct;
     fresh.fEnv = 1.f;
@@ -931,7 +958,8 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     fresh.hpfHz = amp.hpf;
     fresh.hpState = 0.f;
     fresh.ladder.reset();
-    fresh.env.start (amp.a, amp.d, amp.s, amp.r, srF);
+    fresh.env.start (amp.a * punchAttackScale (params, part), amp.d * punchDecayScale (params, part),
+                     amp.s, amp.r, srF);
 
     double startFrame = fromPack ? 0.0 : std::clamp ((double) played.start, 0.0, 16.0) * audio->rate;
     if (choice.slice && audio->sliceCount > 1)
@@ -1010,13 +1038,19 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     return result;
 }
 
-float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const EngineParams& params) noexcept
+float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const EngineParams& params,
+                         float gainScale) noexcept
 {
     if (voice < 0 || voice >= NumDrumVoices || velocity <= 0)
         return 1.f;
+    if (! params.sampleShaping || ! (gainScale > 0.f))
+        gainScale = 1.f;
     Take taken;
     float keep = 1.f;
-    if (playUserSlot (Drums, voice, 60, velocity, 1.0e9f, bank, params, taken, keep))
+    drumGain = gainScale;
+    const bool slotOwned = playUserSlot (Drums, voice, 60, velocity, 1.0e9f, bank, params, taken, keep);
+    drumGain = 1.f;
+    if (slotOwned)
         return keep;
     const int preset = presetOf (params, Drums);
     const auto& spec = sampleSpecFor (bank, Drums, preset);
@@ -1144,17 +1178,17 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
     fresh.end16 = 1.0e9f;
     fresh.fade = 0.f;
     fresh.fadeInc = 1.f / std::max (8.f, 0.002f * (float) sr);
-    fresh.gain = amp.trim * std::clamp (velocity / 127.f, 0.05f, 1.f) * ampDb (params.drumLevelDb[voice]);
+    fresh.gain = amp.trim * std::clamp (velocity / 127.f, 0.05f, 1.f) * ampDb (params.drumLevelDb[voice]) * gainScale;
     if (spec.mode == SampleMode::Layer)
         fresh.gain *= std::clamp (spec.layerMix, 0.f, 1.f);
-    fresh.cut = amp.cut;
+    fresh.cut = amp.cut * toneCutScale (params, Drums);
     fresh.res = amp.res;
     fresh.envOct = 0.f;
     fresh.fEnv = 1.f;
     fresh.fCoef = expDecay (30.f, (float) sr);
     fresh.hpfHz = 30.f;
     fresh.ladder.reset();
-    const float decay = 80.f * std::pow (2.f, (params.drumDecay[voice] - 0.5f) * 2.f);
+    const float decay = 80.f * std::pow (2.f, (params.drumDecay[voice] - 0.5f) * 2.f) * punchDecayScale (params, Drums);
     fresh.env.start (0.5f, decay, 0.f, 12.f, (float) sr);
     fresh.pos = std::clamp ((double) spec.start, 0.0, 4.0) * audio->rate;
     fresh.loop = spec.loop.on;

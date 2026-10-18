@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rolla/genre_targets.schema.json",
+  "title": "ROLLA genre targets v1",
+  "description": "Per-style, per-lane targets for the genre brain (src/GenreBrain/GenreTargets.h). Written by `rolla-fingerprint targets` plus the box's band/pitch/groove stats. Private: shipped in the bundle at Contents/Resources/Genre/ or via ROLLA_GENRE_DATA_DIR, never committed. Numbers and ids only: no names, paths or note data. Every field is optional; a missing field keeps the neutral (mock) value.",
+  "type": "object",
+  "required": ["version", "styles"],
+  "properties": {
+    "version": { "const": 1 },
+    "extractor": { "type": "string", "pattern": "^rolla-fingerprint/" },
+    "features": {
+      "description": "Fingerprint vector dimension names, in order (Fingerprint.h fingerprintName).",
+      "type": "array", "items": { "type": "string" }
+    },
+    "norm": {
+      "type": "object",
+      "properties": {
+        "mean": { "$ref": "#/$defs/vector" },
+        "std": { "$ref": "#/$defs/vector" }
+      }
+    },
+    "styles": {
+      "type": "object",
+      "propertyNames": { "enum": ["ukmin", "long", "pop", "gaskin"] },
+      "additionalProperties": { "$ref": "#/$defs/style" }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "vector": {
+      "description": "Numbers; null marks a dimension a sound does not have (decay40 when truncated).",
+      "type": "array", "items": { "type": ["number", "null"] }
+    },
+    "band": {
+      "description": "[lo, hi]",
+      "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2
+    },
+    "style": {
+      "type": "object",
+      "properties": {
+        "groove": {
+          "type": "object",
+          "properties": {
+            "swing": { "$ref": "#/$defs/band", "description": "16th swing ratio, 0.50 straight" },
+            "ghost_prob": { "type": "number", "minimum": 0, "maximum": 1 },
+            "hat_density": { "type": "number", "minimum": 0, "maximum": 1, "description": "hat hits per bar / 16" },
+            "perc_density": { "type": "number", "minimum": 0, "maximum": 1 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "propertyNames": {
+        "enum": ["groove", "KICK", "CLAP", "SNARE", "HAT_C", "HAT_O", "PERC", "RIDE", "BASS", "STAB", "PLUCK", "PAD", "FX", "HITS", "VOX"]
+      },
+      "additionalProperties": { "$ref": "#/$defs/lane" }
+    },
+    "lane": {
+      "type": "object",
+      "properties": {
+        "present": { "type": "boolean", "description": "the style uses this lane" },
+        "clusters": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["centroid"],
+            "properties": {
+              "centroid": { "$ref": "#/$defs/vector" },
+              "spread": { "$ref": "#/$defs/vector" },
+              "weight": { "type": "number" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "threshold": { "type": "number", "description": "hit distance (diagonal-normalised RMS)" },
+        "count": { "type": "integer", "minimum": 0 },
+        "pooled": { "type": "boolean" },
+        "bands": {
+          "type": "object",
+          "properties": {
+            "centroid_hz": { "$ref": "#/$defs/band" },
+            "tilt_db_oct": { "$ref": "#/$defs/band" },
+            "attack_ms": { "$ref": "#/$defs/band" },
+            "decay_ms": { "$ref": "#/$defs/band", "description": "decay to -20 dB" },
+            "sub_ratio": { "$ref": "#/$defs/band" }
+          },
+          "additionalProperties": false
+        },
+        "pitch": {
+          "type": "object",
+          "properties": {
+            "min_conf": { "type": "number", "minimum": 0, "maximum": 1 },
+            "pc_weights": {
+              "description": "pitch-class weights relative to the key root (index 0 = root)",
+              "type": "array", "items": { "type": "number" }, "minItems": 12, "maxItems": 12
+            }
+          },
+          "additionalProperties": false
+        },
+        "loudness_db": { "type": "number", "description": "lane slot relative to the kick" }
+      },
+      "additionalProperties": false
+    }
+  }
+}
