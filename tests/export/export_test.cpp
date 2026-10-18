@@ -450,9 +450,16 @@ int main (int argc, char** argv)
     const SettingsGuard settingsGuard;
     std::cout << "settings file for this run: " << settingsGuard.file.getFullPathName() << "\n";
     juce::File pack;
+    // TEMPORARY (claude/vox-export-race): 20 rounds of fresh rolls per style as the
+    // proof for #33. CI can't pass --rounds without a workflow edit. Back to 1 before merge.
+    int rounds = 20;
     for (int i = 1; i < argc; ++i)
+    {
         if (juce::String (argv[i]) == "--samples" && i + 1 < argc)
             pack = juce::File::getCurrentWorkingDirectory().getChildFile (argv[++i]);
+        else if (juce::String (argv[i]) == "--rounds" && i + 1 < argc)
+            rounds = std::max (1, juce::String (argv[++i]).getIntValue());
+    }
 
     const auto scratch = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("rolla-export-test");
     scratch.deleteRecursively();
@@ -471,8 +478,15 @@ int main (int argc, char** argv)
         else
             std::cout << "no --samples: stem audio content not checked (factory sounds are samples only)\n";
 
-        for (int style = 0; style < rolla::NumDialects; ++style)
-            testStyle (proc, style, havePack, scratch);
+        for (int round = 0; round < rounds; ++round)
+        {
+            const int before = fails;
+            for (int style = 0; style < rolla::NumDialects; ++style)
+                testStyle (proc, style, havePack, scratch);
+            if (rounds > 1)
+                std::cout << "ROUND " << (round + 1) << "/" << rounds << ": "
+                          << (fails == before ? "PASS" : std::to_string (fails - before) + " failure(s)") << "\n";
+        }
 
         // Every vox preset, right after its pick: each recipe has to find a file
         // in the library (the "loops" recipe has no tempo-locked loop in the tone
