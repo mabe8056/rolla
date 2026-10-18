@@ -69,6 +69,12 @@ jobs:
           echo "$VST3" > /tmp/rolla_vst3_path
           echo "$AU" > /tmp/rolla_au_path
 
+      - name: inject_pack.sh on the built bundles (copies; the originals stay as built)
+        run: |
+          set -euo pipefail
+          tests/bundle/inject_pack_check.sh "$(cat /tmp/rolla_vst3_path)"
+          tests/bundle/inject_pack_check.sh "$(cat /tmp/rolla_au_path)"
+
       - name: pluginval strictness 5
         run: |
           set -euo pipefail
@@ -206,7 +212,7 @@ jobs:
       - name: Configure and build
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --target ROLLA_VST3 rolla-render rolla-rolls rolla-sampler-test rolla-sample-check rolla-roll-test rolla-knob-test rolla-phrase-test rolla-arrange-test rolla-tp-test rolla-export-test
+          cmake --build build --target ROLLA_VST3 rolla-render rolla-rolls rolla-sampler-test rolla-sample-check rolla-roll-test rolla-knob-test rolla-phrase-test rolla-arrange-test rolla-tp-test rolla-export-test rolla-bundle-test
 
       - name: Sampler tests
         run: |
@@ -232,6 +238,19 @@ jobs:
           set -euo pipefail
           python3 -c "import sys; sys.path.insert(0, 'tests/roll'); import renderer_smoke as r; r.build_pack('/tmp/rolla-tone-pack')"
           ./build/rolla-export-test --samples /tmp/rolla-tone-pack
+
+      - name: Bundled samples (bundle root, one bar per lane, fidelity, silence, settings)
+        run: |
+          set -euo pipefail
+          # Scratch profile only; writes its own tone pack into a temp bundle.
+          ./build/rolla-bundle-test
+
+      - name: inject_pack.sh on the built VST3
+        run: |
+          set -euo pipefail
+          VST3=$(find build -path '*ROLLA.vst3' -type d -print -quit)
+          test -n "$VST3"
+          tests/bundle/inject_pack_check.sh "$VST3"
 
       - name: Roll tests
         run: |
