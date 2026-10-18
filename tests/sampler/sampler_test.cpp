@@ -1,5 +1,7 @@
 #include "Engine/Engine.h"
+#include "Engine/SampleChop.h"
 #include "Engine/Sampler.h"
+#include "Mix/TruePeakGuard.h"
 #include "Sampler/Fingerprint.h"
 #include "Sampler/PitchProbe.h"
 #include "Tools/FingerprintTool.h"
@@ -11,13 +13,16 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_events/juce_events.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <random>
 #include <iostream>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -1149,6 +1154,35 @@ int main()
         chop.lane = rolla::Vox;
         std::snprintf (chop.category, sizeof chop.category, "chop");
         expect (rolla::sampleIndexCount (*snap, rolla::Vox, chop) == 1, "chop filter");
+        // A recipe whose category the library lacks still draws from its own lane:
+        // the vox "loops" recipe (tempo-locked phrase loops) with none on disk.
+        {
+            rolla::SampleSpec loops;
+            loops.mode = rolla::SampleMode::Sample;
+            loops.filter.on = true;
+            loops.filter.lane = rolla::Vox;
+            loops.filter.loop = 1;
+            std::snprintf (loops.filter.category, sizeof loops.filter.category, "phrase");
+            const auto exact = rolla::poolFilterFor (loops, rolla::Vox, -1, rolla::Pop);
+            const auto widened = rolla::poolFilterWithFiles (*snap, loops, rolla::Vox, -1, rolla::Pop);
+            const int widenedCount = rolla::sampleIndexCount (*snap, rolla::Vox, widened);
+            bool allVox = widenedCount > 0;
+            for (int i = 0; i < widenedCount; ++i)
+                if (const auto* e = rolla::sampleIndexAt (*snap, rolla::Vox, widened, i))
+                    allVox = allVox && juce::String (e->path).startsWith ("VOX/");
+            expect (rolla::sampleIndexCount (*snap, rolla::Vox, exact) == 0 && widenedCount > 0 && allVox,
+                    "a vox recipe with no matching files on disk widens within VOX instead of going silent ("
+                        + std::to_string (widenedCount) + " files)");
+            rolla::PoolFilter chopOnly;
+            chopOnly.on = true;
+            chopOnly.lane = rolla::Vox;
+            std::snprintf (chopOnly.category, sizeof chopOnly.category, "chop");
+            rolla::SampleSpec chops;
+            chops.filter = chopOnly;
+            const auto same = rolla::poolFilterWithFiles (*snap, chops, rolla::Vox, -1, rolla::Pop);
+            expect (std::string (same.category) == "chop" && rolla::sampleIndexCount (*snap, rolla::Vox, same) == 1,
+                    "a recipe that has files keeps its exact filter");
+        }
         rolla::PoolFilter atmosphere;
         atmosphere.on = true;
         atmosphere.lane = rolla::Pad;
@@ -1848,6 +1882,373 @@ int main()
                     "a retriggered kick (cutting the last one) clicks no more than a fresh kick" + detail);
             expect (hi <= lo * 1.5f + 1.0e-3f, "all 8 retriggered kicks are alike: no alternating-voice clicks" + detail);
         }
+    }
+
+    {
+        std::vector<float> pureSine (4096);
+        std::vector<float> harmonic (8192);
+        std::vector<float> noise (8192);
+        std::uint32_t rng = 1u;
+        for (int i = 0; i < 8192; ++i)
+        {
+            const float t = (float) i / 48000.f;
+            if (i < 4096)
+                pureSine[(size_t) i] = std::sin (2.f * 3.14159265f * 440.f * t);
+            float body = 0.62f * std::cos (2.f * 3.14159265f * 293.7f * t);
+            const float wide = 0.14f * std::cos (2.f * 3.14159265f * 293.7f * 1.07f * t);
+            const float harms[] = { 0.22f, 0.16f, 0.1f, 0.06f };
+            for (int k = 0; k < 4; ++k)
+                body += harms[k] * std::cos (2.f * 3.14159265f * 293.7f * (float) (k + 2) * t);
+            harmonic[(size_t) i] = body + wide;
+            rng = rng * 1664525u + 1013904223u;
+            noise[(size_t) i] = ((rng >> 8) / 16777216.f) * 2.f - 1.f;
+        }
+        const float sineFlat = rolla::spectralFlatness (pureSine.data(), (int) pureSine.size());
+        const float harmFlat = rolla::spectralFlatness (harmonic.data(), (int) harmonic.size());
+        const float noiseFlat = rolla::spectralFlatness (noise.data(), (int) noise.size());
+        expect (sineFlat >= 0.f && sineFlat < 0.15f, "a sine is tonal (" + std::to_string (sineFlat) + ")");
+        expect (harmFlat >= 0.f && harmFlat < rolla::kTonalFlatness,
+                "a harmonic tone stays under the chop cutoff (" + std::to_string (harmFlat) + ")");
+        expect (noiseFlat > 0.55f, "noise is broadband (" + std::to_string (noiseFlat) + ")");
+
+        auto addFlat = [] (rolla::SampleIndex& index, const char* path, float flatness)
+        {
+            rolla::SampleEntry entry;
+            std::snprintf (entry.path, sizeof entry.path, "%s", path);
+            entry.lane = rolla::Pad;
+            entry.onDisk = true;
+            entry.flatness = flatness;
+            index.entries.push_back (entry);
+        };
+        rolla::PoolFilter padFilter;
+        padFilter.on = true;
+        padFilter.lane = rolla::Pad;
+        padFilter.dialect = rolla::UkMin;
+        rolla::SampleIndex unmeasured;
+        addFlat (unmeasured, "PAD/Warm_Texture_Fm.wav", -1.f);
+        expect (rolla::sampleIndexCount (unmeasured, rolla::Pad, padFilter) == 0,
+                "an unmeasured texture stays out");
+        rolla::SampleIndex tonalBed;
+        addFlat (tonalBed, "PAD/Warm_Texture_Fm.wav", 0.1f);
+        expect (rolla::sampleIndexCount (tonalBed, rolla::Pad, padFilter) == 1,
+                "a measured tonal texture can be a pad");
+        rolla::SampleIndex noisyBed;
+        addFlat (noisyBed, "PAD/Warm_Texture_Fm.wav", 0.9f);
+        expect (rolla::sampleIndexCount (noisyBed, rolla::Pad, padFilter) == 0,
+                "a measured broadband texture stays out");
+        rolla::SampleIndex vinylBed;
+        addFlat (vinylBed, "PAD/Vinyl_Texture_Fm.wav", 0.05f);
+        expect (rolla::sampleIndexCount (vinylBed, rolla::Pad, padFilter) == 0,
+                "vinyl stays out even when the read looks tonal");
+        rolla::SampleIndex fxDrone;
+        addFlat (fxDrone, "PAD/MTN_FX_Drone.wav", 0.05f);
+        expect (rolla::sampleIndexCount (fxDrone, rolla::Pad, padFilter) == 0,
+                "an fx drone stays out even when the read looks tonal");
+
+        constexpr int rate = 48000;
+        const int chopFrames = (int) (rate * (rolla::kChopMinSeconds + 1.5));
+        std::vector<float> src ((size_t) chopFrames);
+        for (int i = 0; i < chopFrames; ++i)
+            src[(size_t) i] = 0.9f * std::cos (2.f * 3.14159265f * 440.f * (float) i / (float) rate);
+        const std::vector<float> untouched = src;
+        const int onset = rate / 2;
+        const int onsets[] = { onset };
+        const auto plan = rolla::planSampleChop (rolla::Hits, chopFrames, (double) rate, 130.f, 0u,
+                                                  onsets, 1, 0, harmFlat, false, false);
+        expect (rolla::chopPlanOn (plan), "a long tonal hit is sliced");
+        expect (plan.start == onset, "the slice starts on the hashed onset");
+        const int quarter = (int) ((double) rate * 60.0 / 130.0);
+        expect (plan.end > plan.start && plan.end - plan.start <= quarter + 8, "the slice is at most a quarter note");
+        expect (plan.fade >= 8 && plan.fade <= (int) (0.006 * rate), "the edge fade is a few milliseconds");
+        expect (std::fabs (src[(size_t) plan.start]) > 0.5f, "the onset sample itself is not a zero crossing");
+        std::vector<float> sliced ((size_t) chopFrames, 0.f);
+        for (int i = plan.start; i < plan.end; ++i)
+            sliced[(size_t) i] = src[(size_t) i] * rolla::chopEdge (i, plan.start, plan.end, plan.fade);
+        expect (src == untouched, "slicing does not write the source buffer");
+        expect (std::fabs (sliced[(size_t) plan.start]) < 1.0e-5f, "the slice fades in from silence");
+        expect (std::fabs (sliced[(size_t) (plan.end - 1)]) < 1.0e-5f, "the slice fades out to silence");
+        const float rawStep = std::fabs (src[(size_t) plan.start]);
+        float edgeStep = 0.f;
+        for (int i = plan.start; i < plan.start + plan.fade; ++i)
+            edgeStep = std::max (edgeStep, std::fabs (sliced[(size_t) i] - sliced[(size_t) (i - 1)]));
+        for (int i = plan.end - plan.fade; i < plan.end; ++i)
+            edgeStep = std::max (edgeStep, std::fabs (sliced[(size_t) i] - sliced[(size_t) (i - 1)]));
+        expect (edgeStep < rawStep * 0.25f, "neither slice edge is a step");
+        const int body = plan.start + (plan.end - plan.start) / 2;
+        expect (std::fabs (sliced[(size_t) body]) > std::pow (10.f, -6.f / 20.f),
+                "the middle of the slice is hotter than -6 dBTP");
+
+        const auto shortPlan = rolla::planSampleChop (rolla::Hits, rate / 2, (double) rate, 130.f, 0u,
+                                                       onsets, 1, 0, 0.05f, false, false);
+        expect (! rolla::chopPlanOn (shortPlan) && ! shortPlan.blocked, "a short one-shot stays whole");
+        const auto blocked = rolla::planSampleChop (rolla::Hits, chopFrames, (double) rate, 130.f, 1u,
+                                                     onsets, 1, 0, noiseFlat, false, false);
+        expect (blocked.blocked, "broadband audio is not a hit chop");
+        const auto named = rolla::planSampleChop (rolla::Stab, chopFrames, (double) rate, 130.f, 2u,
+                                                   onsets, 1, 0, 0.05f, true, false);
+        expect (named.blocked, "a noise name is not chopped");
+        const auto held = rolla::planSampleChop (rolla::Pad, chopFrames, (double) rate, 130.f, 3u,
+                                                  nullptr, 0, onset, 0.1f, false, true);
+        expect (held.hold && rolla::chopPlanOn (held), "a tonal pad bed holds its loud region");
+
+        rolla::TruePeakGuard guard;
+        guard.prepare ((double) rate);
+        const float ceiling = std::pow (10.f, -6.f / 20.f);
+        std::vector<float> left = sliced;
+        std::vector<float> right = sliced;
+        const int flush = guard.latencySamples() + 64;
+        left.resize (left.size() + (size_t) flush, 0.f);
+        right.resize (right.size() + (size_t) flush, 0.f);
+        float guarded = 0.f;
+        for (int i = 0; i < (int) left.size();)
+        {
+            const int n = std::min (256, (int) left.size() - i);
+            guard.process (left.data() + i, right.data() + i, nullptr, nullptr, n);
+            for (int k = 0; k < n; ++k)
+                guarded = std::max (guarded, std::max (std::fabs (left[(size_t) (i + k)]),
+                                                       std::fabs (right[(size_t) (i + k)])));
+            i += n;
+        }
+        expect (guard.takeMaxGrDb() > 0.1f, "the -6 dBTP guard engages on the hot slice");
+        expect (guarded <= ceiling + 1.0e-3f, "the guarded slice stays under -6 dBTP");
+
+        const auto chopRoot = rootDir.getChildFile ("chop");
+        const auto hitFile = chopRoot.getChildFile ("HITS/Chord_Stab_C4.wav");
+        const auto tonalPad = chopRoot.getChildFile ("PAD/Warm_Texture_C4.wav");
+        const auto noisyPad = chopRoot.getChildFile ("PAD/Room_Texture_C4.wav");
+        const auto vinylPad = chopRoot.getChildFile ("PAD/Vinyl_Texture_C4.wav");
+        const double longSeconds = rolla::kChopMinSeconds + 1.5;
+        writeTone (tonalPad, 0.6, 0.4f, 220.f, false);
+        writeTone (vinylPad, 0.6, 0.4f, 220.f, false);
+        {
+            const int n = (int) std::lround (0.6 * 48000.0);
+            std::vector<float> hiss ((size_t) n);
+            std::uint32_t s = 99u;
+            for (float& x : hiss)
+            {
+                s = s * 1664525u + 1013904223u;
+                x = (((s >> 8) & 0xffff) / 32768.f) - 1.f;
+            }
+            tonalPad.getParentDirectory().createDirectory();
+            juce::WavAudioFormat wav;
+            auto stream = std::make_unique<juce::FileOutputStream> (noisyPad);
+            std::unique_ptr<juce::OutputStream> owned (stream.release());
+            const auto options = juce::AudioFormatWriterOptions().withSampleRate (48000.0)
+                                                                  .withNumChannels (1)
+                                                                  .withBitsPerSample (16);
+            auto writer = wav.createWriterFor (owned, options);
+            expect (writer != nullptr, "noise texture writes");
+            if (writer != nullptr)
+            {
+                juce::AudioBuffer<float> buf (1, n);
+                for (int i = 0; i < n; ++i)
+                    buf.setSample (0, i, hiss[(size_t) i]);
+                writer->writeFromAudioSampleBuffer (buf, 0, n);
+            }
+        }
+        {
+            const int n = (int) std::lround (longSeconds * 48000.0);
+            juce::WavAudioFormat wav;
+            hitFile.getParentDirectory().createDirectory();
+            auto stream = std::make_unique<juce::FileOutputStream> (hitFile);
+            std::unique_ptr<juce::OutputStream> owned (stream.release());
+            const auto options = juce::AudioFormatWriterOptions().withSampleRate (48000.0)
+                                                                  .withNumChannels (1)
+                                                                  .withBitsPerSample (16);
+            auto writer = wav.createWriterFor (owned, options);
+            expect (writer != nullptr, "hit slice writes");
+            if (writer != nullptr)
+            {
+                juce::AudioBuffer<float> buf (1, n);
+                for (int i = 0; i < n; ++i)
+                    buf.setSample (0, i, 0.9f * std::cos (2.f * 3.14159265f * 440.f * (float) i / 48000.f));
+                writer->writeFromAudioSampleBuffer (buf, 0, n);
+            }
+        }
+        juce::MemoryBlock before;
+        hitFile.loadFileAsData (before);
+        rolla::SampleLibrary chopLib;
+        chopLib.setRoot (chopRoot);
+        chopLib.startIndex ("{\"files\":[]}", 12);
+        expect (waitUntil ([&] { return chopLib.indexedFound() >= 4; }), "chop index publishes");
+        const auto chopSnap = chopLib.index();
+        expect (chopSnap != nullptr && (int) chopSnap->entries.size() >= 4, "chop index has the four files");
+        if (chopSnap != nullptr)
+        {
+            rolla::PoolFilter pads;
+            pads.on = true;
+            pads.lane = rolla::Pad;
+            pads.dialect = rolla::UkMin;
+            const auto padNames = [&] ()
+            {
+                std::vector<std::string> names;
+                const int n = rolla::sampleIndexCount (*chopSnap, rolla::Pad, pads);
+                for (int i = 0; i < n; ++i)
+                    if (const auto* entry = rolla::sampleIndexAt (*chopSnap, rolla::Pad, pads, i))
+                        names.emplace_back (entry->path);
+                return names;
+            }();
+            auto listed = [] (const std::vector<std::string>& names, const char* path)
+            {
+                for (const auto& name : names)
+                    if (name == path)
+                        return true;
+                return false;
+            };
+            expect (listed (padNames, "PAD/Warm_Texture_C4.wav"), "index keeps a tonal texture");
+            expect (! listed (padNames, "PAD/Room_Texture_C4.wav"), "index drops a broadband texture");
+            expect (! listed (padNames, "PAD/Vinyl_Texture_C4.wav"), "index drops vinyl even if tonal");
+        }
+
+        rolla::PresetBank chopBank;
+        chopBank.count[rolla::Hits] = 1;
+        chopBank.hits[0].sample.mode = rolla::SampleMode::Sample;
+        chopBank.hits[0].sample.filter.on = true;
+        chopBank.hits[0].sample.filter.lane = rolla::Hits;
+        chopBank.hits[0].decayMs = 5000.f;
+        rolla::Sampler chopSampler;
+        chopSampler.prepare (48000.0);
+        rolla::EngineParams chopParams;
+        chopParams.presets = &chopBank;
+        chopParams.library = &chopLib;
+        chopParams.sampleIndex = chopSnap.get();
+        chopParams.dialect = rolla::Gaskin;
+        chopParams.bpm = 130.f;
+        chopParams.samplePick[rolla::Hits] = 0;
+        chopSampler.take (rolla::Hits, 60, 110, 1.0e9f, chopBank, chopParams);
+        expect (waitUntil ([&] { return chopLib.ready ("HITS/Chord_Stab_C4.wav"); }), "sliced hit loads");
+        const auto played = chopSampler.take (rolla::Hits, 60, 110, 1.0e9f, chopBank, chopParams);
+        expect (played.kind == 1 && std::fabs (played.synthGain) < 1.0e-6f, "the sliced hit replaces the synth");
+        std::vector<float> rendered (12000);
+        float prev16 = 0.f;
+        float pos16 = 0.01f;
+        for (int i = 0; i < (int) rendered.size(); ++i)
+        {
+            float laneL[rolla::NumParts] {};
+            float laneR[rolla::NumParts] {};
+            chopSampler.render (laneL, laneR, prev16, pos16, true, 0.f);
+            rendered[(size_t) i] = laneL[rolla::Hits];
+            prev16 = pos16;
+            pos16 += 0.0001f;
+        }
+        float slicePeak = 0.f;
+        float jump = 0.f;
+        float tailPeak = 0.f;
+        for (int i = 0; i < (int) rendered.size(); ++i)
+        {
+            slicePeak = std::max (slicePeak, std::fabs (rendered[(size_t) i]));
+            if (i > 0)
+                jump = std::max (jump, std::fabs (rendered[(size_t) i] - rendered[(size_t) (i - 1)]));
+            if (i >= 9000)
+                tailPeak = std::max (tailPeak, std::fabs (rendered[(size_t) i]));
+        }
+        expect (std::fabs (rendered[0]) < 1.0e-4f, "playback starts at silence");
+        expect (slicePeak > 0.001f, "the sliced hit is audible");
+        expect (jump < slicePeak * 0.5f, "playback has no click at either end of the slice");
+        expect (tailPeak < slicePeak * 0.05f, "the voice stops when the slice ends");
+        juce::MemoryBlock after;
+        hitFile.loadFileAsData (after);
+        expect (before.getSize() == after.getSize()
+                    && std::memcmp (before.getData(), after.getData(), before.getSize()) == 0,
+                "the source wav is unchanged");
+    }
+
+    // ---------------------------------------------------------------- vox starts on the voice
+    {
+        constexpr int rate = 48000;
+        // 0.5 s near-silence, 0.4 s voice, 0.6 s near-silence, 0.4 s voice, 0.3 s near-silence.
+        std::vector<float> vox;
+        std::mt19937 noise (5);
+        std::uniform_real_distribution<float> u (-1.f, 1.f);
+        auto quiet = [&] (double sec) { for (int i = 0; i < (int) (sec * rate); ++i) vox.push_back (0.001f * u (noise)); };
+        auto voice = [&] (double sec, float hz)
+        {
+            for (int i = 0; i < (int) (sec * rate); ++i)
+                vox.push_back (0.5f * std::sin (2.f * 3.14159265f * hz * (float) i / (float) rate));
+        };
+        quiet (0.5);
+        const int v1 = (int) vox.size();
+        voice (0.4, 330.f);
+        quiet (0.6);
+        const int v2 = (int) vox.size();
+        voice (0.4, 392.f);
+        quiet (0.3);
+        const int frames = (int) vox.size();
+        const int cand[] = { 0, (int) (0.45 * rate), (int) (0.95 * rate), v2, frames - 100 };
+        int voiced[24];
+        float floorRms = 0.f;
+        const int loud = rolla::loudestRegionStart (vox.data(), frames, rate);
+        const int n = rolla::voicedOnsets (vox.data(), nullptr, frames, rate, cand, 5, loud, voiced, 24, floorRms);
+        const int near = (int) (0.04 * rate);
+        bool onVoice = n >= 2;
+        bool hitV1 = false, hitV2 = false;
+        for (int i = 0; i < n; ++i)
+        {
+            const bool inV1 = voiced[i] >= v1 - near && voiced[i] < v1 + (int) (0.4 * rate);
+            const bool inV2 = voiced[i] >= v2 - near && voiced[i] < v2 + (int) (0.4 * rate);
+            onVoice = onVoice && (inV1 || inV2);
+            hitV1 = hitV1 || std::abs (voiced[i] - v1) <= near;
+            hitV2 = hitV2 || std::abs (voiced[i] - v2) <= near;
+        }
+        expect (onVoice && hitV1 && hitV2, "vox starts sit on the voice, not on the lead-in, the gap or the tail ("
+                                               + std::to_string (n) + " starts)");
+        const int fromZero = rolla::voxStart (0, false, 0, voiced, n, floorRms, vox.data(), nullptr, frames, rate);
+        expect (std::abs (fromZero - v1) <= near, "an unsliced vox note that opens on silence moves to the voice");
+        const int inVoice = v1 + rate / 10;
+        expect (rolla::voxStart (inVoice, false, 0, voiced, n, floorRms, vox.data(), nullptr, frames, rate) == inVoice,
+                "a vox note that already starts on the voice stays put");
+        bool rotates = true;
+        for (int k = 0; k < 2 * n; ++k)
+            rotates = rotates && rolla::voxStart (0, true, k, voiced, n, floorRms, vox.data(), nullptr, frames, rate) == voiced[k % n];
+        expect (rotates, "sliced vox rotates through the voiced starts only");
+
+        // End to end: a dropped vox file with a half-second lead-in sounds at once.
+        const auto voxFile = rootDir.getChildFile ("VOX/lead_in.wav");
+        voxFile.getParentDirectory().createDirectory();
+        {
+            juce::WavAudioFormat wav;
+            auto fileStream = std::make_unique<juce::FileOutputStream> (voxFile);
+            std::unique_ptr<juce::OutputStream> stream (fileStream.release());
+            auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (rate).withNumChannels (1).withBitsPerSample (16));
+            juce::AudioBuffer<float> buf (1, frames);
+            for (int i = 0; i < frames; ++i)
+                buf.setSample (0, i, vox[(size_t) i]);
+            if (writer != nullptr)
+                writer->writeFromAudioSampleBuffer (buf, 0, frames);
+        }
+        const auto voxSum = checksum (voxFile);
+        rolla::UserSlots voxSlots;
+        voxSlots.setRoot (rootDir);
+        juce::String voxError;
+        expect (voxSlots.assign (rolla::SlotVox, voxFile, voxError), "assign vox: " + voxError.toStdString());
+        expect (waitUntil ([&] { return voxSlots.status (rolla::SlotVox) == 2; }), "vox slot loads");
+        rolla::PresetBank voxBank;
+        rolla::loadDefaultPresets (voxBank);
+        rolla::Sampler voxSampler;
+        voxSampler.prepare ((double) rate);
+        rolla::EngineParams voxParams;
+        voxParams.presets = &voxBank;
+        voxParams.userSlots = voxSlots.published();
+        for (int i = 0; i < rolla::NumDrumVoices; ++i)
+            voxParams.drumDecay[i] = 0.5f;
+        const auto voxTaken = voxSampler.take (rolla::Vox, 64, 110, 1.0e9f, voxBank, voxParams);
+        std::vector<float> heard ((size_t) rate);
+        float voxPeak = 0.f;
+        for (int i = 0; i < rate; ++i)
+        {
+            float laneL[rolla::NumParts] {};
+            float laneR[rolla::NumParts] {};
+            voxSampler.render (laneL, laneR, 0.f, 0.f, false);
+            heard[(size_t) i] = laneL[rolla::Vox];
+            voxPeak = std::max (voxPeak, std::fabs (laneL[rolla::Vox]));
+        }
+        int first = -1;
+        for (int i = 0; i < rate && first < 0 && voxPeak > 1.0e-4f; ++i)
+            if (std::fabs (heard[(size_t) i]) > 0.1f * voxPeak)
+                first = i;
+        expect (voxTaken.kind != 0 && first >= 0 && first < (int) (0.05 * rate),
+                "a vox chop with a lead-in sounds within 50 ms (first sound at sample " + std::to_string (first) + ")");
+        expect (checksum (voxFile) == voxSum, "the vox source file is unchanged");
     }
 
     outside.deleteFile();

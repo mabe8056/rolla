@@ -268,7 +268,7 @@ void collectPlayFiles (const PresetBank& bank, const SampleIndex& index, const i
         if (voice < 0 && ! spec.filter.on)
             return;
         const int queryVoice = voice >= 0 ? voice : spec.filter.voice;
-        const PoolFilter filter = poolFilterFor (spec, part, queryVoice, dialect);
+        const PoolFilter filter = poolFilterWithFiles (index, spec, part, queryVoice, dialect);
         const int n = sampleIndexCount (index, part, filter);
         if (n <= 0)
             return;
@@ -591,6 +591,11 @@ void SampleLibrary::loadOne (const std::string& relative)
                                    tonalLane ? kPitchFloorTonalHz : kPitchFloorHz);
     }
     audio->namedRoot = midiFromFilename (relative.c_str());
+    audio->flatness = spectralFlatness (audio->left.data(), audio->frames);
+    audio->loudStart = loudestRegionStart (audio->left.data(), audio->frames, audio->rate);
+    audio->voicedCount = voicedOnsets (audio->left.data(), audio->right.empty() ? nullptr : audio->right.data(),
+                                       audio->frames, audio->rate, audio->slices, audio->sliceCount, audio->loudStart,
+                                       audio->voiced, 24, audio->voicedFloor);
 
     {
         std::lock_guard<std::mutex> lock (slotMu);
@@ -948,6 +953,7 @@ SampleEntry entryFromCache (const juce::var& item)
     entry.altVoice = (int) item.getProperty ("altVoice", -1);
     entry.fileBpm = (int) item.getProperty ("fileBpm", 0);
     entry.phraseLoop = (bool) item.getProperty ("phraseLoop", false);
+    entry.flatness = (float) (double) item.getProperty ("flatness", -1.0);
     return entry;
 }
 
@@ -968,7 +974,44 @@ juce::var entryToVar (const SampleEntry& entry)
     obj->setProperty ("altVoice", entry.altVoice);
     obj->setProperty ("fileBpm", entry.fileBpm);
     obj->setProperty ("phraseLoop", entry.phraseLoop);
+    obj->setProperty ("flatness", entry.flatness);
     return juce::var (obj);
+}
+
+// A short read used only to classify a soft PAD name. The wav on disk is not written.
+float readFlatness (const juce::File& file, juce::AudioFormatManager& formats)
+{
+    if (! file.existsAsFile())
+        return -1.f;
+    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
+    if (reader == nullptr || reader->sampleRate < 1000.0 || reader->lengthInSamples < 256)
+        return -1.f;
+    const auto total = reader->lengthInSamples;
+    const int win = (int) std::min<juce::int64> (total, (juce::int64) std::llround (reader->sampleRate * 0.5));
+    if (win < 256)
+        return -1.f;
+    juce::int64 origins[3] = { 0, 0, 0 };
+    int windows = 1;
+    if (total > (juce::int64) win * 2)
+    {
+        origins[windows++] = std::max<juce::int64> (0, (total - win) / 2);
+        origins[windows++] = std::max<juce::int64> (0, total - win);
+    }
+    float best = 1.f;
+    bool any = false;
+    for (int w = 0; w < windows; ++w)
+    {
+        juce::AudioBuffer<float> buf (1, win);
+        if (! reader->read (&buf, 0, win, origins[w], true, true))
+            continue;
+        const float measured = spectralFlatness (buf.getReadPointer (0), win);
+        if (measured < 0.f)
+            continue;
+        any = true;
+        if (measured < best)
+            best = measured;
+    }
+    return any ? best : -1.f;
 }
 
 } // namespace
@@ -1005,7 +1048,7 @@ void SampleLibrary::buildIndex()
     }
 
     std::uint64_t signature = 14695981039346656037ull;
-    signature = fnv1a (signature, "rolla-index-v3");
+    signature = fnv1a (signature, "rolla-index-v4");
     for (const auto& path : disk)
         signature = fnv1a (signature, path);
     signature = fnv1a (signature, manifestText);
@@ -1104,6 +1147,8 @@ void SampleLibrary::buildIndex()
 
     auto snap = std::make_shared<SampleIndex>();
     snap->entries.reserve (disk.size() + meta.size());
+    juce::AudioFormatManager flatnessFormats;
+    flatnessFormats.registerBasicFormats();
     std::map<std::string, bool> seen;
     for (const auto& path : disk)
     {
@@ -1174,6 +1219,11 @@ void SampleLibrary::buildIndex()
             const auto mid = folderBetween (path);
             if (! mid.empty())
                 copyField (entry.category, 32, juce::String (mid).toLowerCase());
+        }
+        if (sampleOnlySoftPad (entry.path, entry.category))
+        {
+            const auto file = folder.getChildFile (juce::String (entry.path).replaceCharacter ('\\', '/'));
+            entry.flatness = readFlatness (file, flatnessFormats);
         }
         snap->entries.push_back (entry);
         ++snap->found;

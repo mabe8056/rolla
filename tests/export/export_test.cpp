@@ -442,6 +442,29 @@ int main (int argc, char** argv)
         for (int style = 0; style < rolla::NumDialects; ++style)
             testStyle (proc, style, havePack, scratch);
 
+        // Every vox preset, right after its pick: each recipe has to find a file
+        // in the library (the "loops" recipe has no tempo-locked loop in the tone
+        // pack and used to leave the lane silent, a different style each CI run).
+        if (havePack)
+        {
+            auto* voxPreset = proc.apvts.getParameter ("voxPreset");
+            const int n = voxPreset != nullptr ? (int) voxPreset->getNormalisableRange().end + 1 : 0;
+            for (int i = 0; i < n; ++i)
+            {
+                setDenorm (proc, "voxPreset", (float) i);
+                pumpUntil ([&] { return (int) proc.apvts.getRawParameterValue ("voxPreset")->load() == i; }, 2000);
+                if (proc.copyGroove().lane[rolla::Vox].count <= 0)
+                {
+                    std::cout << "vox preset " << i << ": no vox notes in this groove, skipped\n";
+                    continue;
+                }
+                const auto lane = proc.writeLaneAudio (rolla::Vox);
+                const auto w = lane.isEmpty() ? Wav {} : readWav (juce::File (lane[0]));
+                expect (w.peak > 1.0e-4f, "vox preset " + std::to_string (i) + " sounds right after it is picked (peak "
+                                              + std::to_string (w.peak) + ")");
+            }
+        }
+
         // LENGTH 2 bars without a re-roll: the engine loops the first 2 bars of
         // the 8-bar groove, and the export has to follow it.
         setDenorm (proc, "length", 0.f);
