@@ -1275,6 +1275,138 @@ int main()
     }
 
     {
+        // Issue #68: a solo VOX lane played a 278 ms vocal shot ~41 dB under its
+        // source with corr 0.29 (synth trim, 140 ms decay to silence, 4-pole at
+        // 4.6 kHz and a 200 Hz HPF on the sample). At unity knobs the lane must sit
+        // within 6 dB of the loaded buffer and keep its shape.
+        const auto voxRoot = rootDir.getChildFile ("voxlevel");
+        voxRoot.deleteRecursively();
+        constexpr double rate = 48000.0;
+        const int shotN = (int) (0.278 * rate);
+        std::vector<float> shot ((size_t) shotN, 0.f);
+        {
+            // "Yeah": a 170 -> 210 Hz voice through three formants, swelling to a
+            // peak near 90 ms and still at a third of it at the end.
+            double phase = 0.0;
+            for (int i = 0; i < shotN; ++i)
+            {
+                const double t = i / rate;
+                const double f0 = 170.0 + 40.0 * t / 0.278;
+                phase += 2.0 * 3.14159265358979 * f0 / rate;
+                const double rise = std::min (1.0, t / 0.015);
+                const double swell = t < 0.09 ? 0.4 + 0.6 * t / 0.09 : 1.0 - 0.65 * (t - 0.09) / 0.188;
+                double y = 0.0;
+                for (int h = 1; h <= 24; ++h)
+                {
+                    const double fh = f0 * h;
+                    auto bump = [fh] (double fc, double bw, double g) { return g / (1.0 + std::pow ((fh - fc) / bw, 2.0)); };
+                    const double w = 0.25 / h + bump (650.0, 150.0, 1.0) + bump (1150.0, 200.0, 0.6) + bump (2600.0, 300.0, 0.35);
+                    y += w * std::sin ((double) h * phase);
+                }
+                shot[(size_t) i] = (float) std::clamp (0.12 * rise * swell * y, -0.95, 0.95);
+            }
+        }
+        writeWave (voxRoot.getChildFile ("VOX/yeah_shot.wav"), shot);
+
+        rolla::PresetBank bank;
+        rolla::loadDefaultPresets (bank);
+        bank.count[rolla::Vox] = 1;
+        auto& spec = bank.vox[0].sample;
+        spec.mode = rolla::SampleMode::Sample;
+        spec.filter.on = false;
+        spec.start = 0.f;
+        spec.slice = false;
+        spec.reverse = false;
+        spec.loop.on = false;
+        spec.poolCount = 0;
+        spec.zoneCount = 0;
+        std::snprintf (spec.file, sizeof spec.file, "%s", "VOX/yeah_shot.wav");
+
+        rolla::SampleLibrary lib;
+        lib.setRoot (voxRoot);
+        lib.watch (bank);
+        expect (waitUntil ([&] { return lib.ready ("VOX/yeah_shot.wav"); }), "vox level: test shot loads");
+        const rolla::SampleAudio* src = lib.tryGet ("VOX/yeah_shot.wav");
+
+        rolla::EngineParams params;
+        params.presets = &bank;
+        params.library = &lib;
+        params.sampleShaping = true;
+        for (int i = 0; i < rolla::NumParts; ++i)
+        {
+            params.tone[i] = 0.5f;
+            params.punch[i] = 0.5f;
+        }
+
+        rolla::Sampler s;
+        s.prepare (rate);
+        const auto taken = s.take (rolla::Vox, 64, 127, 1.0e9f, bank, params);
+        const int outN = (int) (0.4 * rate);
+        std::vector<float> out ((size_t) outN, 0.f);
+        for (int i = 0; i < outN; ++i)
+        {
+            float laneL[rolla::NumParts] {};
+            float laneR[rolla::NumParts] {};
+            s.render (laneL, laneR, 0.f, 0.f, false);
+            out[(size_t) i] = laneL[rolla::Vox];
+        }
+
+        if (src != nullptr && src->frames > 64)
+        {
+            const int frames = src->frames;
+            const auto& x = src->left;
+            // The voice may open a little into the buffer (lead / voiced start):
+            // align on the best lag, then compare the first note sample for sample.
+            int bestLag = 0;
+            double bestCorr = -2.0;
+            const int win = std::min (outN, (int) (0.25 * rate));
+            for (int lag = 0; lag <= std::min (frames / 4, (int) (0.03 * rate)); ++lag)
+            {
+                double xy = 0.0, xx = 0.0, yy = 0.0;
+                for (int i = 0; i < win && lag + i < frames; ++i)
+                {
+                    const double a = x[(size_t) (lag + i)];
+                    const double b = out[(size_t) i];
+                    xy += a * b;
+                    xx += a * a;
+                    yy += b * b;
+                }
+                const double c = (xx > 0.0 && yy > 0.0) ? xy / std::sqrt (xx * yy) : 0.0;
+                if (c > bestCorr)
+                {
+                    bestCorr = c;
+                    bestLag = lag;
+                }
+            }
+            double srcSum = 0.0, outSum = 0.0;
+            float srcPeak = 0.f, outPeak = 0.f;
+            int n = 0;
+            for (int i = 0; bestLag + i < frames && i < outN; ++i, ++n)
+            {
+                const float a = x[(size_t) (bestLag + i)];
+                const float b = out[(size_t) i];
+                srcSum += (double) a * a;
+                outSum += (double) b * b;
+                srcPeak = std::max (srcPeak, std::fabs (a));
+                outPeak = std::max (outPeak, std::fabs (b));
+            }
+            const double srcRms = std::sqrt (srcSum / std::max (1, n));
+            const double outRms = std::sqrt (outSum / std::max (1, n));
+            const double rmsDb = 20.0 * std::log10 ((outRms + 1.0e-12) / (srcRms + 1.0e-12));
+            const double peakDb = 20.0 * std::log10 ((outPeak + 1.0e-12) / (srcPeak + 1.0e-12));
+            const std::string got = " (rms " + std::to_string (rmsDb) + " dB, peak " + std::to_string (peakDb)
+                                  + " dB, corr " + std::to_string (bestCorr) + " at lag " + std::to_string (bestLag) + ")";
+            expect (taken.kind == 1, "vox level: the shot plays as a sample" + got);
+            expect (std::fabs (rmsDb) <= 6.0 && std::fabs (peakDb) <= 6.0,
+                    "VOX_LEVEL: a solo vox shot at unity knobs sits within 6 dB of its source" + got);
+            expect (bestCorr > 0.8, "VOX_SHAPE: a solo vox shot keeps its waveform over the first note" + got);
+        }
+        else
+            expect (false, "vox level: test shot has no audio");
+        voxRoot.deleteRecursively();
+    }
+
+    {
         const auto scanRoot = rootDir.getChildFile ("scan");
         scanRoot.deleteRecursively();
         writeTone (scanRoot.getChildFile ("BASS/a_low.wav"), 0.2, 0.85f, 110.f, false);
