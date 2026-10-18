@@ -20,8 +20,9 @@
 //
 // Gates: ROLLER / JACKIN batches for seeds 1 and 2 hash to the frozen values
 // (their MIDI is unchanged by the DEEP / BOUNCY pass). DEEP: answers change the
-// density in >= 90% of rolls, >= 60% of stab onsets in bass gaps, pickups in
-// 5-85% of rolls (optional, not every roll). BOUNCY: bass sounds >= 82% of the loop by duration,
+// density in >= 90% of rolls, 20-50% of stab onsets in bass gaps, pickups in
+// 5-85% of rolls (optional, not every roll). BOUNCY: bass sounds >= 60% of the loop by duration
+// (about half the rolls legato pulse, the rest bounce),
 // 5-7 notes a bar, nothing outside natural minor, answers change density in
 // >= 90% of rolls, octave moves 15-26% at the default BOUNCE, <= 8.5% at
 // BOUNCE 0 and rising with BOUNCE.
@@ -479,13 +480,15 @@ int main (int argc, char** argv)
         print ("long", base, d);
         std::snprintf (what, sizeof what, "DEEP seed %u: answers change density %.2f, stabs in gaps %.2f, pickups %.2f",
                        base, d.dens, d.gap, d.pickup);
-        check (d.dens >= 0.9 && d.gap >= 0.6 && d.pickup >= 0.05 && d.pickup <= 0.85, what);
+        // Stabs answer in bass gaps, but under half of them (roll_test's 50% bonus line).
+        check (d.dens >= 0.9 && d.gap >= 0.2 && d.gap < 0.5 && d.pickup >= 0.05 && d.pickup <= 0.85, what);
 
         const auto p = measure (Pop, base, defaults (Pop));
         print ("pop", base, p);
         std::snprintf (what, sizeof what, "BOUNCY seed %u: sounds %.2f, %.1f notes/bar, out of mode %.3f, answers %.2f, octaves %.3f",
                        base, p.timeShare, p.npb, p.outmode, p.dens, p.oct);
-        check (p.timeShare >= 0.82 && p.npb >= 5.0 && p.npb <= 7.0 && p.outmode == 0.0 && p.dens >= 0.9
+        // About half the rolls are the legato pulse (~0.9 sounding), the rest bounce (~0.5).
+        check (p.timeShare >= 0.6 && p.npb >= 5.0 && p.npb <= 7.0 && p.outmode == 0.0 && p.dens >= 0.9
                    && p.oct >= 0.15 && p.oct <= 0.26,
                what);
 
