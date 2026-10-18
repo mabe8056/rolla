@@ -191,6 +191,14 @@ jobs:
     name: Linux VST3 + renders
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    env:
+      # Compiler cache: JUCE is rebuilt for every test target, so most objects
+      # repeat within a run and across runs.
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPRESS: "true"
+      CCACHE_MAXSIZE: 1500M
+      CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime
     steps:
       - uses: actions/checkout@v4
 
@@ -201,12 +209,31 @@ jobs:
             build-essential cmake ninja-build pkg-config \
             libasound2-dev libfreetype6-dev libx11-dev libxinerama-dev \
             libxrandr-dev libxcursor-dev libxcomposite-dev libxext-dev \
-            libglu1-mesa-dev libgtk-3-dev xvfb python3-pip python3-venv
+            libglu1-mesa-dev libgtk-3-dev xvfb python3-pip python3-venv ccache
+
+      - name: Restore compiler cache
+        id: ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-linux-${{ hashFiles('CMakeLists.txt', 'src/**', 'tests/**/*.cpp', 'tests/**/*.h', 'tools/**/*.cpp', 'tools/**/*.h', 'resources/**') }}
+          restore-keys: |
+            ccache-linux-
 
       - name: Configure and build
         run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          mkdir -p "$CCACHE_DIR"
+          ccache -z
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           cmake --build build --target ROLLA_VST3 rolla-render rolla-rolls rolla-sampler-test rolla-sample-check rolla-roll-test rolla-knob-test rolla-phrase-test rolla-arrange-test rolla-tp-test rolla-export-test
+          ccache -s
+
+      - name: Save compiler cache
+        if: always() && steps.ccache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ${{ steps.ccache.outputs.cache-primary-key }}
 
       - name: Sampler tests
         run: |
@@ -319,9 +346,31 @@ jobs:
   # Split out of the Linux job: it was ~43 of its ~87 minutes, against a
   # 90-minute timeout. Builds only rolla-rolls and runs in parallel.
   linux-pack:
-    name: Linux sample pack checks
+    name: Linux sample pack checks (${{ matrix.part }})
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    # The same checks as one sample_pack_check.py run with
+    # --seeds 1,2 --count 20 --full-count 6 --stab-sweep, spread over runners.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: full
+            args: --part full --seeds 1 --full-count 6 --jobs 4
+          - part: kick-1
+            args: --part kick --seeds 1 --count 20 --jobs 4
+          - part: kick-2
+            args: --part kick --seeds 2 --count 20 --jobs 4
+          - part: stab
+            args: --part stab --stab-sweep --jobs 4
+    env:
+      # Compiler cache: JUCE is rebuilt for every test target, so most objects
+      # repeat within a run and across runs.
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPRESS: "true"
+      CCACHE_MAXSIZE: 1500M
+      CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime
     steps:
       - uses: actions/checkout@v4
 
@@ -332,24 +381,50 @@ jobs:
             build-essential cmake ninja-build pkg-config \
             libasound2-dev libfreetype6-dev libx11-dev libxinerama-dev \
             libxrandr-dev libxcursor-dev libxcomposite-dev libxext-dev \
-            libglu1-mesa-dev libgtk-3-dev xvfb python3-pip python3-venv
+            libglu1-mesa-dev libgtk-3-dev xvfb python3-pip python3-venv ccache
+
+      - name: Restore compiler cache
+        id: ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-linux-pack-${{ hashFiles('CMakeLists.txt', 'src/**', 'tests/**/*.cpp', 'tests/**/*.h', 'tools/**/*.cpp', 'tools/**/*.h', 'resources/**') }}
+          restore-keys: |
+            ccache-linux-pack-
 
       - name: Configure and build
         run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          mkdir -p "$CCACHE_DIR"
+          ccache -z
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           cmake --build build --target rolla-rolls
+          ccache -s
+
+      - name: Save compiler cache
+        if: always() && steps.ccache.outputs.cache-hit != 'true' && matrix.part == 'full'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ${{ steps.ccache.outputs.cache-primary-key }}
 
       - name: Sample pack render checks (bar-1 kick, silent lanes, mutes, STAB)
         run: |
           set -euo pipefail
           # Generated pack (no sample audio in git), bigger than the old load table.
-          python3 tests/roll/sample_pack_check.py --rolls ./build/rolla-rolls \
-            --seeds 1,2 --count 20 --full-count 6 --jobs 4 --stab-sweep
+          python3 tests/roll/sample_pack_check.py --rolls ./build/rolla-rolls ${{ matrix.args }}
 
   mix:
     name: Mix strip renders
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    env:
+      # Compiler cache: JUCE is rebuilt for every test target, so most objects
+      # repeat within a run and across runs.
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPRESS: "true"
+      CCACHE_MAXSIZE: 1500M
+      CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime
     steps:
       - uses: actions/checkout@v4
 
@@ -360,12 +435,31 @@ jobs:
             build-essential cmake ninja-build pkg-config \
             libasound2-dev libfreetype6-dev libx11-dev libxinerama-dev \
             libxrandr-dev libxcursor-dev libxcomposite-dev libxext-dev \
-            libglu1-mesa-dev libgtk-3-dev python3-pip python3-venv
+            libglu1-mesa-dev libgtk-3-dev python3-pip python3-venv ccache
+
+      - name: Restore compiler cache
+        id: ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-mix-${{ hashFiles('CMakeLists.txt', 'src/**', 'tests/**/*.cpp', 'tests/**/*.h', 'tools/**/*.cpp', 'tools/**/*.h', 'resources/**') }}
+          restore-keys: |
+            ccache-mix-
 
       - name: Configure and build mix harness
         run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++
+          mkdir -p "$CCACHE_DIR"
+          ccache -z
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++ -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           cmake --build build --target rolla-mix-render
+          ccache -s
+
+      - name: Save compiler cache
+        if: always() && steps.ccache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ${{ steps.ccache.outputs.cache-primary-key }}
 
       - name: Validate profiles
         run: python3 tests/mix/validate_profiles.py
