@@ -53,6 +53,7 @@ struct Knobs
     float levelDb[rolla::NumParts] {};
     int intensity = 75;
     bool stems = false;
+    bool styleFolders = false; // --folder-names styles
 
     Knobs()
     {
@@ -348,15 +349,26 @@ void writeStats (const std::filesystem::path& path,
            "Swing is 52% UK MIN, 51% LONG, 50% POP and GASKIN 90s. WAV files are gitignored.\n";
 }
 
+// Old ids (ukmin|long|pop|gaskin), the style names (roller|deep|bouncy|jackin),
+// or 0-3, in any case.
 int styleId (const std::string& name)
 {
-    const std::string s = name;
+    std::string s = name;
+    std::transform (s.begin(), s.end(), s.begin(), [] (unsigned char c) { return (char) std::tolower (c); });
     if (s == "ukmin" || s == "roller" || s == "0") return rolla::UkMin;
     if (s == "long" || s == "deep" || s == "1") return rolla::Long;
     if (s == "pop" || s == "bouncy" || s == "2") return rolla::Pop;
     if (s == "gaskin" || s == "jackin" || s == "3") return rolla::Gaskin;
     if (s == "all") return -2;
     return -1;
+}
+
+// Output folder per style: the old ids by default (scripts depend on them),
+// or the style names with --folder-names styles.
+std::string folderOf (int style, bool styleNames)
+{
+    static const char* names[] = { "roller", "deep", "bouncy", "jackin" };
+    return styleNames ? names[std::clamp (style, 0, rolla::NumDialects - 1)] : rolla::dialectId (style);
 }
 
 std::string jsonEscape (const std::string& text)
@@ -517,7 +529,7 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
         {
             std::ostringstream name;
             name << "roll_" << std::setw (2) << std::setfill ('0') << roll;
-            const auto dir = std::filesystem::path (outDir) / rolla::dialectId (style) / name.str();
+            const auto dir = std::filesystem::path (outDir) / folderOf (style, knobs.styleFolders) / name.str();
             std::filesystem::create_directories (dir);
             std::uint32_t seeds[rolla::NumParts];
             for (int p = 0; p < rolla::NumParts; ++p)
@@ -627,7 +639,9 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
 
 const char* usageText()
 {
-    return "rolla-rolls --samples DIR --style ukmin|long|pop|gaskin|all --count N --seed S [--out DIR] [--stems]\n"
+    return "rolla-rolls --samples DIR --style roller|deep|bouncy|jackin|ukmin|long|pop|gaskin|all --count N --seed S\n"
+           "            [--out DIR] [--stems] [--folder-names ids|styles]   (style is case-insensitive;\n"
+           "            folders default to the ids ukmin/long/pop/gaskin, 'styles' names them roller/deep/bouncy/jackin)\n"
            "            [--knob DARK=0.55] [--knob BUSY=0.40] [--knob BOUNCE=0.45] [--knob STAB=0.55]\n"
            "            [--knob TONE=0.5] [--knob PUNCH=0.5] [--knob LEVEL=0] [--knob INTENSITY=75]\n"
            "            [--knob BASS.TONE=0.5] [--knob BASS.PUNCH=0.5] [--knob BASS.LEVEL=0]\n";
@@ -664,6 +678,17 @@ int main (int argc, char** argv)
         else if (take ("--count")) { count = std::max (1, std::atoi (value)); batch = true; }
         else if (take ("--seed")) { seed = (std::uint32_t) std::strtoul (value, nullptr, 0); batch = true; }
         else if (take ("--out")) { out = value; batch = true; }
+        else if (take ("--folder-names"))
+        {
+            const std::string v = value;
+            if (v != "ids" && v != "styles")
+            {
+                std::cerr << "bad --folder-names " << v << " (ids|styles)\n" << usageText();
+                return 2;
+            }
+            knobs.styleFolders = v == "styles";
+            batch = true;
+        }
         else if (take ("--knob"))
         {
             if (! parseKnob (value, knobs))
