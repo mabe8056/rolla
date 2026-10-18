@@ -92,6 +92,9 @@ public:
     float takeTpGuardGrDb() noexcept;
     bool hasDrumSample (int voice) const noexcept;
 
+    // Library-relative file the last note on a lane (or drum voice) started. Tests and status only.
+    std::string lastPickedFile (int part, int drumVoice = -1) const { return sampler.lastPickedFile (part, drumVoice); }
+
     // Per-voice sample hook (src/Drums/DrumSampleSlot.h). Null keeps the
     // preset sampler. A dropped WAV still wins over this slot.
     void setDrumSampleSlot (DrumSampleSlot* slot) noexcept;

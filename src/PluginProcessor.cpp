@@ -5,6 +5,7 @@
 #include "Generator/Intensity.h"
 #include "Generator/MidiFile.h"
 #include "Export/RollExport.h"
+#include "Engine/RollaSettings.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
 
@@ -428,21 +429,16 @@ void RollaProcessor::deferredStartup()
 
         if (! startupStop.load() && ! rootChosen.load())
         {
-            juce::PropertiesFile::Options options;
-            options.applicationName = "ROLLA";
-            options.filenameSuffix = "settings";
-            options.osxLibrarySubFolder = "Application Support";
-            options.folderName = "ROLLA";
-            options.storageFormat = juce::PropertiesFile::storeAsXML;
-            juce::PropertiesFile props (options);
-            const auto saved = props.getValue ("samplesRoot");
-            const auto samples = saved.isNotEmpty() ? juce::File (saved) : SampleLibrary::defaultRoot();
+            // Bundle first; a saved root only if it is real audio outside a temp
+            // folder; then ~/Music/ROLLA/Samples (SampleLibrary::resolveSampleRoot).
+            const auto props = settings::open();
+            const auto samples = SampleLibrary::resolveSampleRoot (props->getValue ("samplesRoot"));
             std::lock_guard<std::mutex> lock (rootSetupMu);
             if (! rootChosen.load())
             {
                 library.setRoot (samples);
                 library.startIndex (BinaryData::SAMPLE_MANIFEST_json, BinaryData::SAMPLE_MANIFEST_jsonSize);
-                slots.setRoot (samples);
+                slots.setRoot (SampleLibrary::userSlotRootFor (samples));
                 refreshSampleInventory();
             }
         }
@@ -1088,17 +1084,14 @@ void RollaProcessor::setSamplesRoot (const juce::File& folder)
     std::lock_guard<std::mutex> lock (rootSetupMu);
     library.setRoot (folder);
     library.startIndex (BinaryData::SAMPLE_MANIFEST_json, BinaryData::SAMPLE_MANIFEST_jsonSize);
-    slots.setRoot (folder);
+    slots.setRoot (SampleLibrary::userSlotRootFor (folder));
     refreshSampleInventory();
-    juce::PropertiesFile::Options options;
-    options.applicationName = "ROLLA";
-    options.filenameSuffix = "settings";
-    options.osxLibrarySubFolder = "Application Support";
-    options.folderName = "ROLLA";
-    options.storageFormat = juce::PropertiesFile::storeAsXML;
-    juce::PropertiesFile props (options);
-    props.setValue ("samplesRoot", folder.getFullPathName());
-    props.saveIfNeeded();
+    // A temp folder (a test's tone pack) plays for this session but is never saved.
+    if (settings::isTempLocation (folder))
+        return;
+    const auto props = settings::open();
+    props->setValue ("samplesRoot", folder.getFullPathName());
+    props->saveIfNeeded();
 }
 
 juce::File RollaProcessor::samplesRoot() const
@@ -1122,6 +1115,19 @@ juce::String RollaProcessor::sampleInventoryText() const
     if (found < 0 || missing < 0)
         return "samples …";
     return juce::String (found) + " found / " + juce::String (missing) + " missing";
+}
+
+RollaProcessor::SamplesStatus RollaProcessor::samplesStatus() const
+{
+    SamplesStatus st;
+    st.root = samplesRoot();
+    st.found = samplesFound();
+    const auto bundle = SampleLibrary::bundledRoot();
+    st.bundled = st.root.getFullPathName().isNotEmpty() && st.root == bundle;
+    if (st.found == 0 || ! st.bundled)
+        st.message = "Samples not loaded: " + st.root.getFullPathName()
+                   + " (" + juce::String (juce::jmax (0, st.found)) + " files)";
+    return st;
 }
 
 void RollaProcessor::setEditorSize (int width, int height) noexcept
@@ -1388,17 +1394,22 @@ juce::String RollaProcessor::exportMidiToDocuments()
 
 juce::File RollaProcessor::exportCache() const
 {
-    juce::File dir;
-   #if JUCE_MAC
-    dir = juce::File::getSpecialLocation (juce::File::userHomeDirectory)
-              .getChildFile ("Library").getChildFile ("Caches").getChildFile ("ROLLA");
-   #elif JUCE_WINDOWS
-    dir = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
-              .getChildFile ("ROLLA").getChildFile ("Cache");
-   #else
-    dir = juce::File::getSpecialLocation (juce::File::userHomeDirectory)
-              .getChildFile (".cache").getChildFile ("ROLLA");
-   #endif
+    juce::File dir = settings::cacheOverride();
+    if (dir != juce::File())
+        dir = dir.getChildFile ("exports");
+    else
+    {
+       #if JUCE_MAC
+        dir = juce::File::getSpecialLocation (juce::File::userHomeDirectory)
+                  .getChildFile ("Library").getChildFile ("Caches").getChildFile ("ROLLA");
+       #elif JUCE_WINDOWS
+        dir = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+                  .getChildFile ("ROLLA").getChildFile ("Cache");
+       #else
+        dir = juce::File::getSpecialLocation (juce::File::userHomeDirectory)
+                  .getChildFile (".cache").getChildFile ("ROLLA");
+       #endif
+    }
     dir.createDirectory();
     return dir;
 }

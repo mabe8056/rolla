@@ -134,6 +134,21 @@ public:
     }
     juce::String sampleInventoryText() const;
 
+    // Where samples come from and whether that is the pack built into the plugin.
+    // message is empty when the bundled pack is active and indexed with files;
+    // otherwise "Samples not loaded: <path> (<n> files)" for the UI banner.
+    struct SamplesStatus
+    {
+        juce::File root;
+        int found = -1;
+        bool bundled = false;
+        juce::String message;
+    };
+    SamplesStatus samplesStatus() const;
+
+    // Library-relative file the last note on a lane (or drum voice) played. Tests only.
+    std::string lastPickedFile (int part, int drumVoice = -1) const { return engine.lastPickedFile (part, drumVoice); }
+
     // 14 session slots (6 lanes + 8 drum voices). Paths persist; audio does not.
     bool loadUserSlot (int slot, const juce::File& file, juce::String& error);
     void clearUserSlot (int slot);

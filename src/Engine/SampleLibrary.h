@@ -421,6 +421,8 @@ inline LanePick pickLaneSample (const SampleIndex& index, int part, const PoolFi
 // Immutable audio published to the realtime thread. Never freed while the library is alive.
 struct SampleAudio
 {
+    // Library-relative path ("BASS/foo.wav"), for status and tests. Set at load.
+    std::string path;
     int frames = 0;
     double rate = 48000.0;
     std::vector<float> left;
@@ -443,6 +445,20 @@ public:
     SampleLibrary& operator= (const SampleLibrary&) = delete;
 
     static juce::File defaultRoot();
+    // The samples shipped inside the plugin bundle: <bundle>/Contents/Resources/Samples
+    // (VST3, AU component and standalone app; the binary sits two levels below
+    // Contents). Non-plugin builds (tests, tools) may point it elsewhere with
+    // ROLLA_BUNDLE_ROOT; the plugin ignores that variable.
+    static juce::File bundledRoot();
+    // Where the library reads from: the bundle when it holds audio; else a saved
+    // root that exists, holds audio and is not a temp folder; else defaultRoot().
+    static juce::File resolveSampleRoot (const juce::String& savedRoot);
+    // True for the pack inside the plugin bundle (or a folder in it). Nothing is ever
+    // written there: no lane folders, no caches, no user-slot copies.
+    static bool isBundledRoot (const juce::File& root);
+    // Where user-slot imports are copied: the sample root, or ~/Music/ROLLA/Samples
+    // when the sample root is the read-only bundled pack.
+    static juce::File userSlotRootFor (const juce::File& sampleRoot);
     void setRoot (const juce::File& root);
     juce::File root() const;
 
