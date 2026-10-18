@@ -42,6 +42,10 @@ private:
     std::unique_ptr<juce::PropertiesFile> editorSettings;
     std::unique_ptr<Content> content;
     std::unique_ptr<juce::TooltipWindow> tooltip;
+    // Red strip across the top while the built-in sample pack is not the active source.
+    std::unique_ptr<juce::Label> samplesBanner;
+    int samplesBannerTick = 0;
+    void refreshSamplesBanner();
     std::atomic<bool> rollPulse { false };
     std::uint32_t appliedProjectSerial = 0;
     bool sizeDirty = false;

@@ -17,6 +17,9 @@ namespace rolla
 namespace
 {
 
+// MIX_SPEC: kick and bass hold corr <120 Hz ≥ 0.99 on the master.
+constexpr float kSubMonoHz = 120.f;
+
 float coefFromMs (float ms, float sr) noexcept
 {
     return 1.f - std::exp (-1.f / std::max (1.f, ms * 0.001f * sr));
@@ -350,6 +353,8 @@ struct Engine::Impl
     juce::Reverb reverb;
     int reverbIdle = 1000000;
     DcBlock mainDc, mainDcR, drumDc;
+    // Master sub-mono crossover (mix path only).
+    Svf subL, subR;
     MixRuntime mixRt;
     TruePeakGuard tpGuard;
     bool primed = false;
@@ -428,6 +433,8 @@ struct Engine::Impl
         mainDc.reset();
         mainDcR.reset();
         drumDc.reset();
+        subL.reset();
+        subR.reset();
         mixRt.reset();
         tpGuard.reset();
         lastPos = -1.0;
@@ -819,13 +826,22 @@ void Engine::process (const Groove& groove,
             else if (incoming[e].ch == 2 && incoming[e].on)
             {
                 const int nIv = (sp.chordOn && sp.chordN > 1) ? std::min (4, sp.chordN) : 1;
+                const ChordAsk ask = nIv > 1 ? chordAskOf (sp.chordIv, nIv) : ChordAsk {};
+                bool chordSounding = false;
                 for (int c = 0; c < nIv; ++c)
                 {
                     const int note = std::clamp (incoming[e].note + (nIv == 1 ? 0 : sp.chordIv[c]), 0, 127);
-                    const auto taken = sampler.take (Stab, note, incoming[e].vel, 1.0e9f, bank, play);
+                    const auto onMsg = juce::MidiMessage::noteOn (Stab + 1, note, (juce::uint8) std::clamp (incoming[e].vel, 1, 127));
+                    if (chordSounding)
+                    {
+                        midi.addEvent (onMsg, i);
+                        continue;
+                    }
+                    const auto taken = sampler.take (Stab, note, incoming[e].vel, 1.0e9f, bank, play, c == 0 ? ask : ChordAsk {});
                     if (taken.kind == 1)
                     {
-                        midi.addEvent (juce::MidiMessage::noteOn (Stab + 1, note, (juce::uint8) std::clamp (incoming[e].vel, 1, 127)), i);
+                        midi.addEvent (onMsg, i);
+                        chordSounding = c == 0 && taken.chordFile;
                         continue;
                     }
                     PolyV* slot = nullptr;
@@ -1074,13 +1090,23 @@ void Engine::process (const Groove& groove,
                             iv[c] = std::clamp (root + sp.chordIv[c], -48, 48);
                     }
                     const Extras& ex = part == Stab ? sp.ex : (part == Pluck ? pp.ex : padP.ex);
+                    const ChordAsk ask = chordAskOf (iv, std::min (count, 4));
+                    // A recorded chord sounds every tone from its root: the other
+                    // notes go to MIDI only, never stacked through the sampler.
+                    bool chordSounding = false;
                     for (int c = 0; c < count; ++c)
                     {
                         const int note = std::clamp (base + iv[c], 0, 127);
-                        const auto taken = sampler.take (part, note, n.vel, en, bank, play);
+                        if (chordSounding)
+                        {
+                            emitHeld (part, note, n.vel, st, en);
+                            continue;
+                        }
+                        const auto taken = sampler.take (part, note, n.vel, en, bank, play, c == 0 ? ask : ChordAsk {});
                         if (taken.kind == 1)
                         {
                             emitHeld (part, note, n.vel, st, en);
+                            chordSounding = c == 0 && taken.chordFile;
                             continue;
                         }
                         PolyV* slot = nullptr;
@@ -1445,7 +1471,12 @@ void Engine::process (const Groove& groove,
                     // Sample kits play the file, then the rest of the DRUMS pack.
                     // If that slot is missing or the library is absent, takeDrum
                     // returns the 909 gain so the hit is not silence.
+                    // Plugin builds have no circuit kit: the 909 never plays.
+#if ROLLA_PLUGIN_BUILD
+                    const bool circuitKit = false;
+#else
                     const bool circuitKit = dp.sample.mode == SampleMode::Synth;
+#endif
                     float keep = 0.f;
                     if (startSample (voice, vel, stepAcc))
                         keep = 0.f;
@@ -2234,6 +2265,14 @@ void Engine::process (const Groove& groove,
             // Linear sum. The shared fastTanh was the mute leak: MUTE − (FULL − SOLO)
             // left a common 250 Hz–4 kHz residual from the cubic term of the sum.
             const float sg = E.mixRt.sumGain();
+            // Mono below 120 Hz on the master: the plate, the delay and the unstripped
+            // toms / slot kicks put side energy under the lanes' own mono-below.
+            // Linear, so MUTE − (FULL − SOLO) still nulls.
+            const float lowL = E.subL.lowpass (outL, kSubMonoHz, 0.70710678f, srF);
+            const float lowR = E.subR.lowpass (outR, kSubMonoHz, 0.70710678f, srF);
+            const float lowM = 0.5f * (lowL + lowR);
+            outL += lowM - lowL;
+            outR += lowM - lowR;
             outL = flush (E.mainDc.process (outL) * sg * og);
             outR = flush (E.mainDcR.process (outR) * sg * og);
         }

@@ -1,4 +1,5 @@
 #include "PluginProcessor.h"
+#include "../common/ScratchProfile.h"
 #include "Generator/MidiFile.h"
 
 #include <juce_events/juce_events.h>
@@ -910,6 +911,12 @@ void testShuffleKeepsManualLock()
 
 int main()
 {
+    // Never the real user profile: settings, caches and sample folders go to a scratch folder.
+    if (rolla::test::useScratchProfile ("roll").empty())
+    {
+        std::cerr << "could not set up a scratch profile\n";
+        return 1;
+    }
     juce::ScopedJuceInitialiser_GUI juce;
 
     testEarReview();

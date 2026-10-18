@@ -1,5 +1,8 @@
 #include "Engine/Engine.h"
+#include "Engine/SampleChop.h"
 #include "Engine/Sampler.h"
+#include "Mix/TruePeakGuard.h"
+#include "Sampler/PitchProbe.h"
 #include "Sampler/PlayDecision.h"
 #include "Sampler/SamplePrep.h"
 #include "Sampler/UserSlots.h"
@@ -8,13 +11,16 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_events/juce_events.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <random>
 #include <iostream>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -144,11 +150,172 @@ rolla::SlotQuery slotQuery (int mode, bool ready, bool missing, bool loading)
     return slot;
 }
 
+// Sawtooth-like notes (harmonics at 1/h), summed, 1 s at 48 kHz after 20 ms of silence.
+std::vector<float> sawNotes (std::initializer_list<double> midis)
+{
+    const int lead = 960, n = 48000;
+    std::vector<float> out ((size_t) (lead + n), 0.f);
+    for (double m : midis)
+    {
+        const double f = 440.0 * std::pow (2.0, (m - 69.0) / 12.0);
+        for (int h = 1; h <= 10 && f * h < 20000.0; ++h)
+            for (int i = 0; i < n; ++i)
+                out[(size_t) (lead + i)] += (float) (0.15 / h * std::sin (2.0 * 3.14159265358979 * f * h * i / 48000.0));
+    }
+    return out;
+}
+
+void writeWave (const juce::File& file, const std::vector<float>& samples)
+{
+    file.getParentDirectory().createDirectory();
+    juce::WavAudioFormat wav;
+    auto fileStream = std::make_unique<juce::FileOutputStream> (file);
+    if (fileStream == nullptr || ! fileStream->openedOk())
+        return;
+    std::unique_ptr<juce::OutputStream> stream (fileStream.release());
+    const auto options = juce::AudioFormatWriterOptions().withSampleRate (48000.0)
+                                                          .withNumChannels (1)
+                                                          .withBitsPerSample (24);
+    auto writer = wav.createWriterFor (stream, options);
+    if (writer == nullptr)
+        return;
+    juce::AudioBuffer<float> buf (1, (int) samples.size());
+    for (int i = 0; i < (int) samples.size(); ++i)
+        buf.setSample (0, i, samples[(size_t) i]);
+    writer->writeFromAudioSampleBuffer (buf, 0, buf.getNumSamples());
+}
+
+void testPitchProbe()
+{
+    using rolla::ChordQuality;
+    {
+        const auto a3 = sawNotes ({ 57.0 });
+        const auto p = rolla::probePitch (a3.data(), nullptr, (int) a3.size(), 48000.0);
+        expect (p.pitched() && ! p.isChord && std::fabs (p.rootPitch - 57.f) < 0.2f && p.conf >= rolla::kPitchConfMin,
+                "probe: a saw at A3 is one note at 57 (got " + std::to_string (p.rootPitch) + ", conf " + std::to_string (p.conf) + ")");
+    }
+    {
+        const auto sharp = sawNotes ({ 60.3 });
+        const auto p = rolla::probePitch (sharp.data(), nullptr, (int) sharp.size(), 48000.0);
+        expect (std::fabs (p.rootPitch - 60.3f) < 0.1f, "probe: 30 cents sharp is measured (got " + std::to_string (p.rootPitch) + ")");
+    }
+    {
+        const auto d1 = sawNotes ({ 26.0 });
+        const auto p = rolla::probePitch (d1.data(), nullptr, (int) d1.size(), 48000.0);
+        expect (p.pitched() && ! p.isChord && std::fabs (p.rootPitch - 26.f) < 0.3f,
+                "probe: a D1 bass is one note at 26 (got " + std::to_string (p.rootPitch) + ")");
+    }
+    {
+        const auto cm = sawNotes ({ 60.0, 63.0, 67.0 });
+        const auto p = rolla::probePitch (cm.data(), nullptr, (int) cm.size(), 48000.0);
+        expect (p.isChord && p.quality == ChordQuality::Minor && ((int) std::lround (p.rootPitch) % 12) == 0,
+                "probe: C-Eb-G is a C minor chord (root " + std::to_string (p.rootPitch) + ")");
+    }
+    {
+        const auto inv = sawNotes ({ 63.0, 67.0, 72.0 });
+        const auto p = rolla::probePitch (inv.data(), nullptr, (int) inv.size(), 48000.0);
+        expect (p.isChord && p.quality == ChordQuality::Minor && ((int) std::lround (p.rootPitch) % 12) == 0,
+                "probe: Eb-G-C (first inversion) is still C minor (root " + std::to_string (p.rootPitch) + ")");
+    }
+    {
+        const auto fmaj = sawNotes ({ 53.0, 57.0, 60.0 });
+        const auto p = rolla::probePitch (fmaj.data(), nullptr, (int) fmaj.size(), 48000.0);
+        expect (p.isChord && p.quality == ChordQuality::Major && ((int) std::lround (p.rootPitch) % 12) == 5,
+                "probe: F-A-C is an F major chord");
+    }
+    {
+        const auto power = sawNotes ({ 48.0, 55.0 });
+        const auto p = rolla::probePitch (power.data(), nullptr, (int) power.size(), 48000.0);
+        expect (p.isChord && p.quality == ChordQuality::Neutral && ((int) std::lround (p.rootPitch) % 12) == 0,
+                "probe: C-G is a neutral (fifth) chord on C");
+    }
+    {
+        // A 120 ms stab (5 ms attack, exponential decay) must measure with enough
+        // confidence to be retuned, at 48k and 44.1k.
+        for (const double rate : { 48000.0, 44100.0 })
+            for (const double m : { 48.0, 57.0, 63.0, 70.0 })
+            {
+                const int lead = (int) (0.01 * rate), n = (int) (0.12 * rate);
+                std::vector<float> stab ((size_t) (lead + n), 0.f);
+                const double f = 440.0 * std::pow (2.0, (m - 69.0) / 12.0);
+                for (int i = 0; i < n; ++i)
+                {
+                    const double t = (double) i / rate;
+                    const double env = std::min (1.0, t / 0.005) * std::exp (-t / 0.05);
+                    double x = 0.0;
+                    for (int h = 1; h <= 10 && f * h < 18000.0; ++h)
+                        x += 0.3 / h * std::sin (2.0 * 3.14159265358979 * f * h * t);
+                    stab[(size_t) (lead + i)] = (float) (env * x);
+                }
+                const auto p = rolla::probePitch (stab.data(), nullptr, (int) stab.size(), rate, rolla::kPitchFloorTonalHz);
+                expect (p.pitched() && ! p.isChord && std::fabs (p.rootPitch - (float) m) < 0.3f && p.conf >= rolla::kPitchConfMin,
+                        "probe: a 120 ms stab at " + std::to_string ((int) m) + " (" + std::to_string ((int) rate)
+                            + " Hz) is retunable (got " + std::to_string (p.rootPitch) + ", conf " + std::to_string (p.conf) + ")");
+            }
+    }
+    {
+        // Sub rumble at 40 Hz under a C4 stab: the tonal-lane floor keeps C4 the root.
+        auto c4 = sawNotes ({ 60.0 });
+        for (size_t i = 960; i < c4.size(); ++i)
+            c4[i] += (float) (0.25 * std::sin (2.0 * 3.14159265358979 * 40.0 * (double) (i - 960) / 48000.0));
+        const auto p = rolla::probePitch (c4.data(), nullptr, (int) c4.size(), 48000.0, rolla::kPitchFloorTonalHz);
+        expect (p.pitched() && ((int) std::lround (p.rootPitch) % 12) == 0 && p.rootPitch > 50.f,
+                "probe: 40 Hz rumble under a C4 stab is not the root (got " + std::to_string (p.rootPitch) + ")");
+    }
+    {
+        std::vector<float> noise (48000);
+        std::uint32_t s = 12345u;
+        for (auto& x : noise)
+        {
+            s = s * 1664525u + 1013904223u;
+            x = 0.3f * ((float) (s >> 8) / 8388608.f - 1.f);
+        }
+        const auto p = rolla::probePitch (noise.data(), nullptr, (int) noise.size(), 48000.0);
+        expect (! p.pitched(), "probe: white noise is unpitched");
+    }
+
+    rolla::PitchInfo c4;
+    c4.rootPitch = 60.f;
+    c4.conf = 0.9f;
+    rolla::ShiftRule lane;
+    expect (std::fabs (rolla::tonalShift (c4, -1, 62.0, lane) - 2.0) < 1.0e-9, "shift: C4 file plays D4 at +2");
+    expect (std::fabs (rolla::tonalShift (c4, -1, 74.0, lane) - 2.0) < 1.0e-9, "shift: +14 folds to +2 (7 st cap)");
+    expect (std::fabs (rolla::tonalShift (c4, -1, 52.0, lane) - 4.0) < 1.0e-9, "shift: -8 folds to +4");
+    rolla::ShiftRule bass;
+    bass.cap = 12.0;
+    rolla::PitchInfo d1 = c4;
+    d1.rootPitch = 26.f;
+    expect (std::fabs (rolla::tonalShift (d1, -1, 38.0, bass) - 12.0) < 1.0e-9, "shift: bass keeps a full octave up");
+    rolla::ShiftRule vox;
+    vox.retune = false;
+    expect (rolla::tonalShift (c4, -1, 66.0, vox) == 0.0, "shift: vox is never retuned");
+    rolla::PitchInfo weak = c4;
+    weak.conf = 0.3f;
+    expect (rolla::tonalShift (weak, 67, 62.0, lane) == 0.0, "shift: a weak measurement the label contradicts is not retuned");
+    expect (std::fabs (rolla::tonalShift (weak, 49, 62.0, lane) - 1.0) < 1.0e-9,
+            "shift: a weak measurement the label agrees with uses the label's note (C#) in the measured octave");
+    expect (rolla::tonalShift (rolla::PitchInfo {}, 60, 62.0, lane) == 0.0, "shift: unpitched files play as recorded");
+
+    const int maj[] = { 0, 4, 7 }, mnr[] = { 0, 3, 7 }, fifth[] = { 0, 7 }, inv[] = { 4, 7, 12 };
+    expect (rolla::chordAskOf (maj, 3).quality == ChordQuality::Major, "intervals 0-4-7 are major");
+    expect (rolla::chordAskOf (mnr, 3).quality == ChordQuality::Minor, "intervals 0-3-7 are minor");
+    expect (rolla::chordAskOf (fifth, 2).quality == ChordQuality::Neutral, "intervals 0-7 are neutral");
+    const auto first = rolla::chordAskOf (inv, 3);
+    expect (first.quality == ChordQuality::Major && first.rootDelta == 8,
+            "E-G-C (first inversion) asks for C major, root 8 st above the E");
+    expect (rolla::chordFileOffset (ChordQuality::Minor, ChordQuality::Major) == 4, "minor file on a major chord plays from the third");
+    expect (rolla::chordFileOffset (ChordQuality::Major, ChordQuality::Minor) == 3, "major file on a minor chord plays from the minor third");
+    expect (rolla::chordFileOffset (ChordQuality::Minor, ChordQuality::Minor) == 0, "matching quality stays put");
+    expect (rolla::chordFileOffset (ChordQuality::Neutral, ChordQuality::Major) == 0, "neutral fits either");
+}
+
 } // namespace
 
 int main()
 {
     juce::ScopedJuceInitialiser_GUI juce;
+
+    testPitchProbe();
 
     static_assert (rolla::kUserSlotCount == 14, "14 user slots");
     expect (rolla::userSlotForPart (rolla::Bass) == rolla::SlotBass, "bass slot");
@@ -639,6 +806,84 @@ int main()
             lanePack = std::max (lanePack, std::fabs (laneL[rolla::Bass]));
         }
         expect (lanePack > 0.01f, "the drum-pack substitute is audible on the lane");
+    }
+
+    {
+        // Neutral CI versions of the A&R pitch checks: play library files through
+        // the sampler and measure what comes out.
+        const auto pitchRoot = rootDir.getChildFile ("pitch");
+        pitchRoot.deleteRecursively();
+        writeWave (pitchRoot.getChildFile ("STAB/saw_C4.wav"), sawNotes ({ 60.0 }));
+        // A factory-style wrong label: the voice is A4, the filename says B0.
+        writeWave (pitchRoot.getChildFile ("VOX/chops/yeah_B0.wav"), sawNotes ({ 69.0 }));
+        writeWave (pitchRoot.getChildFile ("PAD/chord_Cmin.wav"), sawNotes ({ 60.0, 63.0, 67.0 }));
+
+        rolla::PresetBank bank;
+        rolla::loadDefaultPresets (bank);
+        auto useFile = [] (rolla::SampleSpec& spec, const char* file)
+        {
+            spec.mode = rolla::SampleMode::Sample;
+            spec.filter.on = false;
+            std::snprintf (spec.file, sizeof spec.file, "%s", file);
+        };
+        bank.count[rolla::Stab] = 1;
+        useFile (bank.stab[0].sample, "STAB/saw_C4.wav");
+        bank.count[rolla::Vox] = 1;
+        useFile (bank.vox[0].sample, "VOX/chops/yeah_B0.wav");
+        bank.count[rolla::Pad] = 1;
+        useFile (bank.pad[0].sample, "PAD/chord_Cmin.wav");
+
+        rolla::SampleLibrary lib;
+        lib.setRoot (pitchRoot);
+        lib.watch (bank);
+        expect (waitUntil ([&] { return lib.ready ("STAB/saw_C4.wav") && lib.ready ("VOX/chops/yeah_B0.wav")
+                                        && lib.ready ("PAD/chord_Cmin.wav"); }),
+                "pitch-check files load");
+        rolla::EngineParams params;
+        params.presets = &bank;
+        params.library = &lib;
+
+        float outPeak = 0.f;
+        auto played = [&] (int part, int note, rolla::ChordAsk ask, bool& chordFile)
+        {
+            rolla::Sampler s;
+            s.prepare (48000.0);
+            chordFile = s.take (part, note, 110, 1.0e9f, bank, params, ask).chordFile;
+            std::vector<float> out (36000);
+            outPeak = 0.f;
+            for (auto& x : out)
+            {
+                float laneL[rolla::NumParts] {};
+                float laneR[rolla::NumParts] {};
+                s.render (laneL, laneR, 0.f, 0.f, false);
+                x = laneL[part];
+                outPeak = std::max (outPeak, std::fabs (x));
+            }
+            return rolla::probePitch (out.data(), nullptr, (int) out.size(), 48000.0);
+        };
+        auto got = [&] (const rolla::PitchInfo& p)
+        {
+            return " (got root " + std::to_string (p.rootPitch) + ", conf " + std::to_string (p.conf) + ", chord "
+                 + std::to_string ((int) p.isChord) + ", output peak " + std::to_string (outPeak) + ")";
+        };
+
+        bool chord = false;
+        const auto stab = played (rolla::Stab, 62, {}, chord);
+        expect (stab.pitched() && rolla::pitchprobe::pcDistance (stab.rootPitch, 62.0) < 0.3,
+                "SAMPLE_OUT_OF_KEY: a C4 stab asked for D sounds D" + got (stab));
+        expect (! chord, "a single-note file is not a chord file");
+
+        const auto vox = played (rolla::Vox, 64, {}, chord);
+        expect (vox.pitched() && std::fabs (vox.rootPitch - 69.f) < 1.f,
+                "VOX_PITCH_SHIFTED: a vox chop keeps its voice, whatever the label" + got (vox));
+
+        rolla::ChordAsk cMajor;
+        cMajor.quality = rolla::ChordQuality::Major;
+        const auto pad = played (rolla::Pad, 60, cMajor, chord);
+        expect (chord, "CHORD_STACK: a recorded chord reports itself, so the engine plays it once per chord");
+        expect (pad.isChord && rolla::pitchprobe::pcDistance (pad.rootPitch, 64.0) < 0.3 && pad.quality == rolla::ChordQuality::Minor,
+                "a C minor file on a C major chord plays from the third (E minor)" + got (pad));
+        pitchRoot.deleteRecursively();
     }
 
     {
@@ -1437,6 +1682,373 @@ int main()
                     "a retriggered kick (cutting the last one) clicks no more than a fresh kick" + detail);
             expect (hi <= lo * 1.5f + 1.0e-3f, "all 8 retriggered kicks are alike: no alternating-voice clicks" + detail);
         }
+    }
+
+    {
+        std::vector<float> pureSine (4096);
+        std::vector<float> harmonic (8192);
+        std::vector<float> noise (8192);
+        std::uint32_t rng = 1u;
+        for (int i = 0; i < 8192; ++i)
+        {
+            const float t = (float) i / 48000.f;
+            if (i < 4096)
+                pureSine[(size_t) i] = std::sin (2.f * 3.14159265f * 440.f * t);
+            float body = 0.62f * std::cos (2.f * 3.14159265f * 293.7f * t);
+            const float wide = 0.14f * std::cos (2.f * 3.14159265f * 293.7f * 1.07f * t);
+            const float harms[] = { 0.22f, 0.16f, 0.1f, 0.06f };
+            for (int k = 0; k < 4; ++k)
+                body += harms[k] * std::cos (2.f * 3.14159265f * 293.7f * (float) (k + 2) * t);
+            harmonic[(size_t) i] = body + wide;
+            rng = rng * 1664525u + 1013904223u;
+            noise[(size_t) i] = ((rng >> 8) / 16777216.f) * 2.f - 1.f;
+        }
+        const float sineFlat = rolla::spectralFlatness (pureSine.data(), (int) pureSine.size());
+        const float harmFlat = rolla::spectralFlatness (harmonic.data(), (int) harmonic.size());
+        const float noiseFlat = rolla::spectralFlatness (noise.data(), (int) noise.size());
+        expect (sineFlat >= 0.f && sineFlat < 0.15f, "a sine is tonal (" + std::to_string (sineFlat) + ")");
+        expect (harmFlat >= 0.f && harmFlat < rolla::kTonalFlatness,
+                "a harmonic tone stays under the chop cutoff (" + std::to_string (harmFlat) + ")");
+        expect (noiseFlat > 0.55f, "noise is broadband (" + std::to_string (noiseFlat) + ")");
+
+        auto addFlat = [] (rolla::SampleIndex& index, const char* path, float flatness)
+        {
+            rolla::SampleEntry entry;
+            std::snprintf (entry.path, sizeof entry.path, "%s", path);
+            entry.lane = rolla::Pad;
+            entry.onDisk = true;
+            entry.flatness = flatness;
+            index.entries.push_back (entry);
+        };
+        rolla::PoolFilter padFilter;
+        padFilter.on = true;
+        padFilter.lane = rolla::Pad;
+        padFilter.dialect = rolla::UkMin;
+        rolla::SampleIndex unmeasured;
+        addFlat (unmeasured, "PAD/Warm_Texture_Fm.wav", -1.f);
+        expect (rolla::sampleIndexCount (unmeasured, rolla::Pad, padFilter) == 0,
+                "an unmeasured texture stays out");
+        rolla::SampleIndex tonalBed;
+        addFlat (tonalBed, "PAD/Warm_Texture_Fm.wav", 0.1f);
+        expect (rolla::sampleIndexCount (tonalBed, rolla::Pad, padFilter) == 1,
+                "a measured tonal texture can be a pad");
+        rolla::SampleIndex noisyBed;
+        addFlat (noisyBed, "PAD/Warm_Texture_Fm.wav", 0.9f);
+        expect (rolla::sampleIndexCount (noisyBed, rolla::Pad, padFilter) == 0,
+                "a measured broadband texture stays out");
+        rolla::SampleIndex vinylBed;
+        addFlat (vinylBed, "PAD/Vinyl_Texture_Fm.wav", 0.05f);
+        expect (rolla::sampleIndexCount (vinylBed, rolla::Pad, padFilter) == 0,
+                "vinyl stays out even when the read looks tonal");
+        rolla::SampleIndex fxDrone;
+        addFlat (fxDrone, "PAD/MTN_FX_Drone.wav", 0.05f);
+        expect (rolla::sampleIndexCount (fxDrone, rolla::Pad, padFilter) == 0,
+                "an fx drone stays out even when the read looks tonal");
+
+        constexpr int rate = 48000;
+        const int chopFrames = (int) (rate * (rolla::kChopMinSeconds + 1.5));
+        std::vector<float> src ((size_t) chopFrames);
+        for (int i = 0; i < chopFrames; ++i)
+            src[(size_t) i] = 0.9f * std::cos (2.f * 3.14159265f * 440.f * (float) i / (float) rate);
+        const std::vector<float> untouched = src;
+        const int onset = rate / 2;
+        const int onsets[] = { onset };
+        const auto plan = rolla::planSampleChop (rolla::Hits, chopFrames, (double) rate, 130.f, 0u,
+                                                  onsets, 1, 0, harmFlat, false, false);
+        expect (rolla::chopPlanOn (plan), "a long tonal hit is sliced");
+        expect (plan.start == onset, "the slice starts on the hashed onset");
+        const int quarter = (int) ((double) rate * 60.0 / 130.0);
+        expect (plan.end > plan.start && plan.end - plan.start <= quarter + 8, "the slice is at most a quarter note");
+        expect (plan.fade >= 8 && plan.fade <= (int) (0.006 * rate), "the edge fade is a few milliseconds");
+        expect (std::fabs (src[(size_t) plan.start]) > 0.5f, "the onset sample itself is not a zero crossing");
+        std::vector<float> sliced ((size_t) chopFrames, 0.f);
+        for (int i = plan.start; i < plan.end; ++i)
+            sliced[(size_t) i] = src[(size_t) i] * rolla::chopEdge (i, plan.start, plan.end, plan.fade);
+        expect (src == untouched, "slicing does not write the source buffer");
+        expect (std::fabs (sliced[(size_t) plan.start]) < 1.0e-5f, "the slice fades in from silence");
+        expect (std::fabs (sliced[(size_t) (plan.end - 1)]) < 1.0e-5f, "the slice fades out to silence");
+        const float rawStep = std::fabs (src[(size_t) plan.start]);
+        float edgeStep = 0.f;
+        for (int i = plan.start; i < plan.start + plan.fade; ++i)
+            edgeStep = std::max (edgeStep, std::fabs (sliced[(size_t) i] - sliced[(size_t) (i - 1)]));
+        for (int i = plan.end - plan.fade; i < plan.end; ++i)
+            edgeStep = std::max (edgeStep, std::fabs (sliced[(size_t) i] - sliced[(size_t) (i - 1)]));
+        expect (edgeStep < rawStep * 0.25f, "neither slice edge is a step");
+        const int body = plan.start + (plan.end - plan.start) / 2;
+        expect (std::fabs (sliced[(size_t) body]) > std::pow (10.f, -6.f / 20.f),
+                "the middle of the slice is hotter than -6 dBTP");
+
+        const auto shortPlan = rolla::planSampleChop (rolla::Hits, rate / 2, (double) rate, 130.f, 0u,
+                                                       onsets, 1, 0, 0.05f, false, false);
+        expect (! rolla::chopPlanOn (shortPlan) && ! shortPlan.blocked, "a short one-shot stays whole");
+        const auto blocked = rolla::planSampleChop (rolla::Hits, chopFrames, (double) rate, 130.f, 1u,
+                                                     onsets, 1, 0, noiseFlat, false, false);
+        expect (blocked.blocked, "broadband audio is not a hit chop");
+        const auto named = rolla::planSampleChop (rolla::Stab, chopFrames, (double) rate, 130.f, 2u,
+                                                   onsets, 1, 0, 0.05f, true, false);
+        expect (named.blocked, "a noise name is not chopped");
+        const auto held = rolla::planSampleChop (rolla::Pad, chopFrames, (double) rate, 130.f, 3u,
+                                                  nullptr, 0, onset, 0.1f, false, true);
+        expect (held.hold && rolla::chopPlanOn (held), "a tonal pad bed holds its loud region");
+
+        rolla::TruePeakGuard guard;
+        guard.prepare ((double) rate);
+        const float ceiling = std::pow (10.f, -6.f / 20.f);
+        std::vector<float> left = sliced;
+        std::vector<float> right = sliced;
+        const int flush = guard.latencySamples() + 64;
+        left.resize (left.size() + (size_t) flush, 0.f);
+        right.resize (right.size() + (size_t) flush, 0.f);
+        float guarded = 0.f;
+        for (int i = 0; i < (int) left.size();)
+        {
+            const int n = std::min (256, (int) left.size() - i);
+            guard.process (left.data() + i, right.data() + i, nullptr, nullptr, n);
+            for (int k = 0; k < n; ++k)
+                guarded = std::max (guarded, std::max (std::fabs (left[(size_t) (i + k)]),
+                                                       std::fabs (right[(size_t) (i + k)])));
+            i += n;
+        }
+        expect (guard.takeMaxGrDb() > 0.1f, "the -6 dBTP guard engages on the hot slice");
+        expect (guarded <= ceiling + 1.0e-3f, "the guarded slice stays under -6 dBTP");
+
+        const auto chopRoot = rootDir.getChildFile ("chop");
+        const auto hitFile = chopRoot.getChildFile ("HITS/Chord_Stab_C4.wav");
+        const auto tonalPad = chopRoot.getChildFile ("PAD/Warm_Texture_C4.wav");
+        const auto noisyPad = chopRoot.getChildFile ("PAD/Room_Texture_C4.wav");
+        const auto vinylPad = chopRoot.getChildFile ("PAD/Vinyl_Texture_C4.wav");
+        const double longSeconds = rolla::kChopMinSeconds + 1.5;
+        writeTone (tonalPad, 0.6, 0.4f, 220.f, false);
+        writeTone (vinylPad, 0.6, 0.4f, 220.f, false);
+        {
+            const int n = (int) std::lround (0.6 * 48000.0);
+            std::vector<float> hiss ((size_t) n);
+            std::uint32_t s = 99u;
+            for (float& x : hiss)
+            {
+                s = s * 1664525u + 1013904223u;
+                x = (((s >> 8) & 0xffff) / 32768.f) - 1.f;
+            }
+            tonalPad.getParentDirectory().createDirectory();
+            juce::WavAudioFormat wav;
+            auto stream = std::make_unique<juce::FileOutputStream> (noisyPad);
+            std::unique_ptr<juce::OutputStream> owned (stream.release());
+            const auto options = juce::AudioFormatWriterOptions().withSampleRate (48000.0)
+                                                                  .withNumChannels (1)
+                                                                  .withBitsPerSample (16);
+            auto writer = wav.createWriterFor (owned, options);
+            expect (writer != nullptr, "noise texture writes");
+            if (writer != nullptr)
+            {
+                juce::AudioBuffer<float> buf (1, n);
+                for (int i = 0; i < n; ++i)
+                    buf.setSample (0, i, hiss[(size_t) i]);
+                writer->writeFromAudioSampleBuffer (buf, 0, n);
+            }
+        }
+        {
+            const int n = (int) std::lround (longSeconds * 48000.0);
+            juce::WavAudioFormat wav;
+            hitFile.getParentDirectory().createDirectory();
+            auto stream = std::make_unique<juce::FileOutputStream> (hitFile);
+            std::unique_ptr<juce::OutputStream> owned (stream.release());
+            const auto options = juce::AudioFormatWriterOptions().withSampleRate (48000.0)
+                                                                  .withNumChannels (1)
+                                                                  .withBitsPerSample (16);
+            auto writer = wav.createWriterFor (owned, options);
+            expect (writer != nullptr, "hit slice writes");
+            if (writer != nullptr)
+            {
+                juce::AudioBuffer<float> buf (1, n);
+                for (int i = 0; i < n; ++i)
+                    buf.setSample (0, i, 0.9f * std::cos (2.f * 3.14159265f * 440.f * (float) i / 48000.f));
+                writer->writeFromAudioSampleBuffer (buf, 0, n);
+            }
+        }
+        juce::MemoryBlock before;
+        hitFile.loadFileAsData (before);
+        rolla::SampleLibrary chopLib;
+        chopLib.setRoot (chopRoot);
+        chopLib.startIndex ("{\"files\":[]}", 12);
+        expect (waitUntil ([&] { return chopLib.indexedFound() >= 4; }), "chop index publishes");
+        const auto chopSnap = chopLib.index();
+        expect (chopSnap != nullptr && (int) chopSnap->entries.size() >= 4, "chop index has the four files");
+        if (chopSnap != nullptr)
+        {
+            rolla::PoolFilter pads;
+            pads.on = true;
+            pads.lane = rolla::Pad;
+            pads.dialect = rolla::UkMin;
+            const auto padNames = [&] ()
+            {
+                std::vector<std::string> names;
+                const int n = rolla::sampleIndexCount (*chopSnap, rolla::Pad, pads);
+                for (int i = 0; i < n; ++i)
+                    if (const auto* entry = rolla::sampleIndexAt (*chopSnap, rolla::Pad, pads, i))
+                        names.emplace_back (entry->path);
+                return names;
+            }();
+            auto listed = [] (const std::vector<std::string>& names, const char* path)
+            {
+                for (const auto& name : names)
+                    if (name == path)
+                        return true;
+                return false;
+            };
+            expect (listed (padNames, "PAD/Warm_Texture_C4.wav"), "index keeps a tonal texture");
+            expect (! listed (padNames, "PAD/Room_Texture_C4.wav"), "index drops a broadband texture");
+            expect (! listed (padNames, "PAD/Vinyl_Texture_C4.wav"), "index drops vinyl even if tonal");
+        }
+
+        rolla::PresetBank chopBank;
+        chopBank.count[rolla::Hits] = 1;
+        chopBank.hits[0].sample.mode = rolla::SampleMode::Sample;
+        chopBank.hits[0].sample.filter.on = true;
+        chopBank.hits[0].sample.filter.lane = rolla::Hits;
+        chopBank.hits[0].decayMs = 5000.f;
+        rolla::Sampler chopSampler;
+        chopSampler.prepare (48000.0);
+        rolla::EngineParams chopParams;
+        chopParams.presets = &chopBank;
+        chopParams.library = &chopLib;
+        chopParams.sampleIndex = chopSnap.get();
+        chopParams.dialect = rolla::Gaskin;
+        chopParams.bpm = 130.f;
+        chopParams.samplePick[rolla::Hits] = 0;
+        chopSampler.take (rolla::Hits, 60, 110, 1.0e9f, chopBank, chopParams);
+        expect (waitUntil ([&] { return chopLib.ready ("HITS/Chord_Stab_C4.wav"); }), "sliced hit loads");
+        const auto played = chopSampler.take (rolla::Hits, 60, 110, 1.0e9f, chopBank, chopParams);
+        expect (played.kind == 1 && std::fabs (played.synthGain) < 1.0e-6f, "the sliced hit replaces the synth");
+        std::vector<float> rendered (12000);
+        float prev16 = 0.f;
+        float pos16 = 0.01f;
+        for (int i = 0; i < (int) rendered.size(); ++i)
+        {
+            float laneL[rolla::NumParts] {};
+            float laneR[rolla::NumParts] {};
+            chopSampler.render (laneL, laneR, prev16, pos16, true, 0.f);
+            rendered[(size_t) i] = laneL[rolla::Hits];
+            prev16 = pos16;
+            pos16 += 0.0001f;
+        }
+        float slicePeak = 0.f;
+        float jump = 0.f;
+        float tailPeak = 0.f;
+        for (int i = 0; i < (int) rendered.size(); ++i)
+        {
+            slicePeak = std::max (slicePeak, std::fabs (rendered[(size_t) i]));
+            if (i > 0)
+                jump = std::max (jump, std::fabs (rendered[(size_t) i] - rendered[(size_t) (i - 1)]));
+            if (i >= 9000)
+                tailPeak = std::max (tailPeak, std::fabs (rendered[(size_t) i]));
+        }
+        expect (std::fabs (rendered[0]) < 1.0e-4f, "playback starts at silence");
+        expect (slicePeak > 0.001f, "the sliced hit is audible");
+        expect (jump < slicePeak * 0.5f, "playback has no click at either end of the slice");
+        expect (tailPeak < slicePeak * 0.05f, "the voice stops when the slice ends");
+        juce::MemoryBlock after;
+        hitFile.loadFileAsData (after);
+        expect (before.getSize() == after.getSize()
+                    && std::memcmp (before.getData(), after.getData(), before.getSize()) == 0,
+                "the source wav is unchanged");
+    }
+
+    // ---------------------------------------------------------------- vox starts on the voice
+    {
+        constexpr int rate = 48000;
+        // 0.5 s near-silence, 0.4 s voice, 0.6 s near-silence, 0.4 s voice, 0.3 s near-silence.
+        std::vector<float> vox;
+        std::mt19937 noise (5);
+        std::uniform_real_distribution<float> u (-1.f, 1.f);
+        auto quiet = [&] (double sec) { for (int i = 0; i < (int) (sec * rate); ++i) vox.push_back (0.001f * u (noise)); };
+        auto voice = [&] (double sec, float hz)
+        {
+            for (int i = 0; i < (int) (sec * rate); ++i)
+                vox.push_back (0.5f * std::sin (2.f * 3.14159265f * hz * (float) i / (float) rate));
+        };
+        quiet (0.5);
+        const int v1 = (int) vox.size();
+        voice (0.4, 330.f);
+        quiet (0.6);
+        const int v2 = (int) vox.size();
+        voice (0.4, 392.f);
+        quiet (0.3);
+        const int frames = (int) vox.size();
+        const int cand[] = { 0, (int) (0.45 * rate), (int) (0.95 * rate), v2, frames - 100 };
+        int voiced[24];
+        float floorRms = 0.f;
+        const int loud = rolla::loudestRegionStart (vox.data(), frames, rate);
+        const int n = rolla::voicedOnsets (vox.data(), nullptr, frames, rate, cand, 5, loud, voiced, 24, floorRms);
+        const int near = (int) (0.04 * rate);
+        bool onVoice = n >= 2;
+        bool hitV1 = false, hitV2 = false;
+        for (int i = 0; i < n; ++i)
+        {
+            const bool inV1 = voiced[i] >= v1 - near && voiced[i] < v1 + (int) (0.4 * rate);
+            const bool inV2 = voiced[i] >= v2 - near && voiced[i] < v2 + (int) (0.4 * rate);
+            onVoice = onVoice && (inV1 || inV2);
+            hitV1 = hitV1 || std::abs (voiced[i] - v1) <= near;
+            hitV2 = hitV2 || std::abs (voiced[i] - v2) <= near;
+        }
+        expect (onVoice && hitV1 && hitV2, "vox starts sit on the voice, not on the lead-in, the gap or the tail ("
+                                               + std::to_string (n) + " starts)");
+        const int fromZero = rolla::voxStart (0, false, 0, voiced, n, floorRms, vox.data(), nullptr, frames, rate);
+        expect (std::abs (fromZero - v1) <= near, "an unsliced vox note that opens on silence moves to the voice");
+        const int inVoice = v1 + rate / 10;
+        expect (rolla::voxStart (inVoice, false, 0, voiced, n, floorRms, vox.data(), nullptr, frames, rate) == inVoice,
+                "a vox note that already starts on the voice stays put");
+        bool rotates = true;
+        for (int k = 0; k < 2 * n; ++k)
+            rotates = rotates && rolla::voxStart (0, true, k, voiced, n, floorRms, vox.data(), nullptr, frames, rate) == voiced[k % n];
+        expect (rotates, "sliced vox rotates through the voiced starts only");
+
+        // End to end: a dropped vox file with a half-second lead-in sounds at once.
+        const auto voxFile = rootDir.getChildFile ("VOX/lead_in.wav");
+        voxFile.getParentDirectory().createDirectory();
+        {
+            juce::WavAudioFormat wav;
+            auto fileStream = std::make_unique<juce::FileOutputStream> (voxFile);
+            std::unique_ptr<juce::OutputStream> stream (fileStream.release());
+            auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (rate).withNumChannels (1).withBitsPerSample (16));
+            juce::AudioBuffer<float> buf (1, frames);
+            for (int i = 0; i < frames; ++i)
+                buf.setSample (0, i, vox[(size_t) i]);
+            if (writer != nullptr)
+                writer->writeFromAudioSampleBuffer (buf, 0, frames);
+        }
+        const auto voxSum = checksum (voxFile);
+        rolla::UserSlots voxSlots;
+        voxSlots.setRoot (rootDir);
+        juce::String voxError;
+        expect (voxSlots.assign (rolla::SlotVox, voxFile, voxError), "assign vox: " + voxError.toStdString());
+        expect (waitUntil ([&] { return voxSlots.status (rolla::SlotVox) == 2; }), "vox slot loads");
+        rolla::PresetBank voxBank;
+        rolla::loadDefaultPresets (voxBank);
+        rolla::Sampler voxSampler;
+        voxSampler.prepare ((double) rate);
+        rolla::EngineParams voxParams;
+        voxParams.presets = &voxBank;
+        voxParams.userSlots = voxSlots.published();
+        for (int i = 0; i < rolla::NumDrumVoices; ++i)
+            voxParams.drumDecay[i] = 0.5f;
+        const auto voxTaken = voxSampler.take (rolla::Vox, 64, 110, 1.0e9f, voxBank, voxParams);
+        std::vector<float> heard ((size_t) rate);
+        float voxPeak = 0.f;
+        for (int i = 0; i < rate; ++i)
+        {
+            float laneL[rolla::NumParts] {};
+            float laneR[rolla::NumParts] {};
+            voxSampler.render (laneL, laneR, 0.f, 0.f, false);
+            heard[(size_t) i] = laneL[rolla::Vox];
+            voxPeak = std::max (voxPeak, std::fabs (laneL[rolla::Vox]));
+        }
+        int first = -1;
+        for (int i = 0; i < rate && first < 0 && voxPeak > 1.0e-4f; ++i)
+            if (std::fabs (heard[(size_t) i]) > 0.1f * voxPeak)
+                first = i;
+        expect (voxTaken.kind != 0 && first >= 0 && first < (int) (0.05 * rate),
+                "a vox chop with a lead-in sounds within 50 ms (first sound at sample " + std::to_string (first) + ")");
+        expect (checksum (voxFile) == voxSum, "the vox source file is unchanged");
     }
 
     outside.deleteFile();
