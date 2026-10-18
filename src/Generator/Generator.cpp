@@ -1,5 +1,6 @@
 #include "Generator.h"
 #include "DeepBouncy.h"
+#include "RollerPass.h"
 #include "PhraseBank.h"
 
 #include <algorithm>
@@ -4240,6 +4241,12 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
             deepbouncy::deepArc (g.lane[Bass], s.bars, bassSeed, s.busy);
         else if (s.dialect == Pop)
             deepbouncy::relegato (g.lane[Bass], s.bars);
+        else if (s.dialect == UkMin)
+        {
+            roller::anchorBeats (g.lane[Bass], s.bars, bassSeed);
+            roller::turnBar8 (g.lane[Bass], s.bars, bassSeed);
+            roller::spreadPositions (g.lane[Bass], s.bars, bassSeed);
+        }
         else if (s.dialect == Gaskin)
         {
             contrastCallAnswer (g.lane[Bass], s.bars);
@@ -4275,6 +4282,8 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
                 deepbouncy::steerOctaves (g.lane[Bass], s.bounce, bassSeed);
         }
     }
+    if (s.dialect == UkMin && (regen (Bass) || regen (Stab)))
+        roller::matchStabColour (g.lane[Bass], g.lane[Stab]);
     for (int part = 0; part < Drums; ++part)
         dedupeNoteOns (g.lane[part]);
     enforceMonophonic (g.lane[Bass]);

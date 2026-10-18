@@ -14,7 +14,7 @@
 //   pskel      pitch-skeleton near-duplicate pairs among 20 rolls (first 2 bars, slot + pc, >= 0.70)
 //   gap        share of stab onsets that land where the bass is silent
 //   pickup     share of rolls with a bass or stab onset in the last two 16ths of the loop
-// --golden prints the ROLLER / JACKIN hashes for seeds 1 and 2.
+// --golden prints every style's batch hashes for seeds 1 and 2.
 // --write DIR [--seeds a,b,...] writes 20 rolls per style and seed as MIDI
 // (bass / stab / drums at the top of each roll folder) for tools/score_rolls.py.
 //
@@ -140,6 +140,11 @@ bool bassAt (const Lane& bass, float slot)
     return false;
 }
 
+int pcOfSemi (int semi)
+{
+    return ((semi % 12) + 12) % 12;
+}
+
 bool inMinor (int semi)
 {
     static const bool ok[12] = { 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0 };
@@ -150,6 +155,9 @@ struct Measures
 {
     double sound = 0, timeShare = 0, npb = 0, oct = 0, outmode = 0, dens = 0, gap = 0, pickup = 0;
     int pskel = 0, rolls = 0, stabOn = 0, stabGap = 0;
+    // ROLLER review measures (rolls out of 20).
+    int gridLocked = 0, noTurn = 0, b2Clash = 0;
+    double onBeat = 0;
 };
 
 struct Skel
@@ -222,6 +230,63 @@ Measures measure (int style, std::uint32_t base, const Settings& s)
             if (! bassAt (bass, stab.notes[i].start))
                 ++m.stabGap;
         }
+        {
+            // GRID_LOCKED: fewer than 3 of the 4 in-beat positions carry >= 10% of onsets.
+            int pos[4] {};
+            int on = 0;
+            for (int i = 0; i < bass.count; ++i)
+            {
+                const int t = (int) std::lround (bass.notes[i].start);
+                ++pos[t & 3];
+                on += (t & 3) == 0 ? 1 : 0;
+            }
+            int used = 0;
+            for (int k = 0; k < 4; ++k)
+                used += pos[k] >= 0.10 * bass.count ? 1 : 0;
+            m.gridLocked += used < 3 ? 1 : 0;
+            m.onBeat += bass.count > 0 ? (double) on / bass.count : 0.0;
+            // Bar-8 turnaround: a rest of >= 4/16 in bar 8, and bar 8 differs from bar 4.
+            if (g.bars >= 8)
+            {
+                int run = 0, best = 0;
+                for (int t = 112; t < 128; ++t)
+                {
+                    run = bassAt (bass, (float) t) ? 0 : run + 1;
+                    best = std::max (best, run);
+                }
+                bool same = true;
+                for (int t = 0; t < 16; ++t)
+                {
+                    int pa = -99, pb = -99;
+                    for (int i = 0; i < bass.count; ++i)
+                    {
+                        if ((int) std::lround (bass.notes[i].start) == 48 + t)
+                            pa = bass.notes[i].chord[0];
+                        if ((int) std::lround (bass.notes[i].start) == 112 + t)
+                            pb = bass.notes[i].chord[0];
+                    }
+                    same = same && pa == pb;
+                }
+                m.noTurn += (best < 4 || same) ? 1 : 0;
+            }
+            // b2 under a natural 2 (9th) in a sounding stab.
+            bool clash = false;
+            for (int i = 0; i < bass.count && ! clash; ++i)
+            {
+                if (pcOfSemi (bass.notes[i].chord[0]) != 1)
+                    continue;
+                const float a = bass.notes[i].start, b = a + bass.notes[i].length;
+                for (int k = 0; k < g.lane[Stab].count && ! clash; ++k)
+                {
+                    const Note& st = g.lane[Stab].notes[k];
+                    if (st.start >= b || st.start + st.length <= a)
+                        continue;
+                    for (int c = 0; c < st.nChord && c < 4; ++c)
+                        clash = clash || pcOfSemi (st.chord[c]) == 2;
+                }
+            }
+            m.b2Clash += clash ? 1 : 0;
+        }
         bool pick = false;
         for (const Lane* l : { &bass, &stab })
             for (int i = 0; i < l->count; ++i)
@@ -240,9 +305,16 @@ Measures measure (int style, std::uint32_t base, const Settings& s)
     m.outmode /= m.rolls;
     m.dens /= m.rolls;
     m.pickup /= m.rolls;
+    m.onBeat /= m.rolls;
     m.oct = moves > 0 ? octMoves / moves : 0.0;
     m.gap = m.stabOn > 0 ? (double) m.stabGap / m.stabOn : 0.0;
     return m;
+}
+
+void printRoller (const char* label, std::uint32_t base, const Measures& m)
+{
+    std::printf ("%-8s seed %-10u gridLocked %2d/20  noTurn %2d/20  b2clash %2d/20  onBeat %.2f  notes/bar %.1f  oct %.3f\n",
+                 label, base, m.gridLocked, m.noTurn, m.b2Clash, m.onBeat, m.npb, m.oct);
 }
 
 void print (const char* label, std::uint32_t base, const Measures& m)
@@ -309,7 +381,7 @@ int main (int argc, char** argv)
 
     if (golden)
     {
-        for (int style : { (int) UkMin, (int) Gaskin })
+        for (int style : { (int) UkMin, (int) Long, (int) Pop, (int) Gaskin })
             for (std::uint32_t base : { 1u, 2u })
                 std::printf ("%s seed %u: 0x%016llxull\n", dialectId (style), base, (unsigned long long) batchHash (style, base));
         return 0;
@@ -324,9 +396,13 @@ int main (int argc, char** argv)
         std::printf (" %u", b);
     std::printf ("\n");
 
-    // ROLLER and JACKIN: frozen.
+    // Every style frozen at its last intended change.
+    // A style's hashes change only in the PR that means to change that style
+    // (regenerate with --golden). ROLLER changed in claude/roller-phrasing.
     const struct { int style; std::uint32_t base; std::uint64_t hash; } frozen[] = {
-        { UkMin, 1u, 0x1fc14b3f453088c6ull }, { UkMin, 2u, 0xc7f67c37fdb525d8ull },
+        { UkMin, 1u, 0x7c9dcbee6dddc8eaull }, { UkMin, 2u, 0x47a4548b99fd9987ull },
+        { Long, 1u, 0x25acd182b0de5395ull }, { Long, 2u, 0x57a23354bae60f43ull },
+        { Pop, 1u, 0x02bbaae811a3e146ull }, { Pop, 2u, 0xbad1804a344c769eull },
         { Gaskin, 1u, 0x44c5f013a639f9aaull }, { Gaskin, 2u, 0x50bf5d0de012c522ull },
     };
     for (const auto& f : frozen)
@@ -363,9 +439,19 @@ int main (int argc, char** argv)
                        p.oct, b.oct);
         check (a.oct <= 0.085 && b.oct > p.oct && b.oct <= 0.26, what);
     }
+    // ROLLER review: not grid-locked, beat anchors, a real bar-8 turn, no b2 under a natural-2 stab.
+    for (auto base : bases)
+    {
+        const auto m = measure (UkMin, base, defaults (UkMin));
+        printRoller ("ukmin", base, m);
+        std::snprintf (what, sizeof what, "ROLLER seed %u: grid-locked %d/20, no turn %d/20, b2 clashes %d/20, on-beat %.2f",
+                       base, m.gridLocked, m.noTurn, m.b2Clash, m.onBeat);
+        check (m.gridLocked <= 2 && m.noTurn == 0 && m.b2Clash == 0 && m.onBeat >= 0.10 && m.onBeat <= 0.30, what);
+    }
+
     // BUSY: bass notes per bar rise (monotonic, >= 30%), as the knob test asks of
     // every style; DARK changes BOUNCY's pitches.
-    for (int style : { (int) Long, (int) Pop })
+    for (int style : { (int) Long, (int) Pop, (int) UkMin })
     {
         int bad = 0, total = 0;
         std::string firstBad;
@@ -420,7 +506,11 @@ int main (int argc, char** argv)
     if (report)
         for (int style : { (int) UkMin, (int) Gaskin })
             for (auto base : bases)
-                print (dialectId (style), base, measure (style, base, defaults (style)));
+            {
+                const auto rm = measure (style, base, defaults (style));
+                print (dialectId (style), base, rm);
+                printRoller (dialectId (style), base, rm);
+            }
     std::printf ("%s: %d failure(s)\n", failures == 0 ? "OK" : "FAILED", failures);
     return failures == 0 ? 0 : 1;
 }
