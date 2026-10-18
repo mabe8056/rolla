@@ -1198,6 +1198,10 @@ void densifyDeepDark (Lane& lane, int bars, std::uint32_t seed)
             n.start = (float) (bar * 16 + slot);
             n.length = 1.6f;
             n.chord[0] = (std::int8_t) degs[(seed + (std::uint32_t) have + (std::uint32_t) bar) % 8u];
+            // The sub stays held and dark: a contour's extra attacks past the old
+            // 6 a bar sit an octave up, in the upper layer, not as busier sub hits.
+            if (have >= 6)
+                n.chord[0] = (std::int8_t) (n.chord[0] + 12);
             n.nChord = 1;
             n.vel = 104;
             for (int i = 0; i < lane.count; ++i)

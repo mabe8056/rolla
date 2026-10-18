@@ -17,6 +17,7 @@
 
 #include "PluginProcessor.h"
 #include "Export/RollExport.h"
+#include "Generator/MidiFile.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_events/juce_events.h>
@@ -411,6 +412,32 @@ void testStyle (rolla::RollaProcessor& proc, int style, bool pack, const juce::F
         expect (nameOk (lf, g, part) && ln.tracks == 1 && (int) ln.ons.size() == inFull,
                 tag + ": " + rolla::partId (part) + " lane MIDI matches its track (" + std::to_string (ln.ons.size())
                     + " vs " + std::to_string (inFull) + ") " + lf.getFileName().toStdString());
+    }
+
+    // rolla-rolls writes the raw groove through MidiExport, without the plugin
+    // export's octave correction. Both must hold the bass where it plays, so a
+    // style whose file octave drifts from its preset octave (BOUNCY did) fails here.
+    {
+        const auto lane = proc.writeLaneMidi (rolla::Bass);
+        const auto raw = scratch.getChildFile (tag + "_rolls_bass.mid");
+        std::string error;
+        const bool wrote = rolla::MidiExport::writePart (raw.getFullPathName().toStdString(),
+                                                         rolla::rollexport::atLength (proc.copyGroove(), bars), rolla::Bass,
+                                                         (int) proc.apvts.getRawParameterValue ("key")->load(),
+                                                         proc.apvts.getRawParameterValue ("swing")->load(), kBpm, error);
+        std::vector<int> plugin, rolls;
+        if (! lane.isEmpty())
+            for (const auto& n : readMidi (juce::File (lane[0]), loopTicks).ons)
+                plugin.push_back (n.note);
+        if (wrote)
+            for (const auto& n : readMidi (raw, loopTicks).ons)
+                rolls.push_back (n.note);
+        std::sort (plugin.begin(), plugin.end());
+        std::sort (rolls.begin(), rolls.end());
+        expect (wrote && ! plugin.empty() && plugin == rolls,
+                tag + ": plugin bass MIDI and rolla-rolls bass MIDI hold the same pitches (lowest "
+                    + (plugin.empty() ? std::string ("-") : std::to_string (plugin.front())) + " vs "
+                    + (rolls.empty() ? std::string ("-") : std::to_string (rolls.front())) + ")");
     }
 
     // Folder exports.
