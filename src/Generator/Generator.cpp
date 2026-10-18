@@ -3493,6 +3493,10 @@ void writeDrums (DrumLane& drums, std::uint32_t seed, const Settings& s, Rng& rn
                 drums.vel[Perc][t] = 62;
         }
     }
+    // BOUNCY only: ghost hats on the e / a up to ~10 high-band onsets a bar.
+    // Its own seeded stream, so ROLLER / DEEP / JACKIN drums are unchanged.
+    if (s.dialect == Pop)
+        bouncy::ghostHats (drums, s.bars, drums.seed, s.busy);
 }
 
 bool neighbourPc (int a, int b) noexcept
@@ -4349,7 +4353,7 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
                                      s.dialect == Long ? 0.35f : 1.f);
         if (regen (Bass))
         {
-            deepbouncy::pickup (g.lane[Bass], s.bars, bassSeed, s.dialect == Pop ? 0.6f : 0.45f);
+            deepbouncy::pickup (g.lane[Bass], s.bars, bassSeed, s.dialect == Pop ? bouncy::kTargets.pickup : 0.45f);
             deepbouncy::fixAnswers (g.lane[Bass], s.bars);
             if (s.dialect == Pop)
                 deepbouncy::steerOctaves (g.lane[Bass], s.bounce, bassSeed);

@@ -447,7 +447,7 @@ void testEarReview()
     if (popN > 0)
         std::cout << "BOUNCY octave moves " << (popOct / popN) << "%  pulse-length rolls " << pulseN << "/20\n";
     expect (popN > 0 && popOct / popN >= 15.0 && popOct / popN <= 30.0, "BOUNCY octaves land in 15-30%");
-    expect (pulseN >= 3, "BOUNCY has a pulse mode");
+    expect (pulseN >= 1, "BOUNCY has a pulse mode");
     expect (jackinRhythms.size() >= 18, "JACKIN 8-bar rhythms are almost all distinct");
     expect (flavour[0] > 0 && flavour[1] > 0 && flavour[2] > 0 && flavour[3] > 0, "JACKIN uses all four flavours");
     expect (darkN >= 4 && darkN <= 16, "DEEP dark is about two fifths of the rolls");
@@ -880,7 +880,8 @@ void testScorerV23()
             expect (medLen >= 1.2f, "ROLLER bass mixes in 2-3/16 notes");
         if (style == rolla::Pop)
         {
-            expect (pulse >= 6 && pulse <= 14, "BOUNCY pulse mode is about half the rolls");
+            // style_rules flavours: pulse 0.25 (was "about half", 6-14).
+            expect (pulse >= 1 && pulse <= 10, "BOUNCY pulse mode is about a quarter of the rolls");
             expect (turn >= 14, "BOUNCY bar 8 turns around");
         }
         if (style == rolla::Gaskin)
@@ -906,6 +907,85 @@ void testShuffleKeepsManualLock()
     expect (flag (proc, "stabMute"), "shuffle leaves the muted lane muted");
 }
 
+// BOUNCY style pass (data/genre/style_rules.json styles.BOUNCY), 20 rolls on
+// each of two seed sets: bass on the kick 20-45% pooled and no roll over the
+// 35% hard cap, 8-13 high-band drum onsets a bar, bar 8 still turns around,
+// pickups stay optional, and the shipped BOUNCY row swings the hats 53-62%
+// with a light (<= 10 dB) bass duck.
+void testBouncyStyle()
+{
+    for (std::uint32_t base : { 1u, 2517220185u })
+    {
+        int attacks = 0, onKick = 0, worst = 0, hi = 0, bars = 0, turn = 0, pick = 0;
+        double worstShare = 0.0;
+        for (int roll = 0; roll < 20; ++roll)
+        {
+            rolla::Settings s;
+            s.dialect = rolla::Pop;
+            s.bars = 8;
+            std::uint32_t seeds[rolla::NumParts] {};
+            for (int p = 0; p < rolla::NumParts; ++p)
+                seeds[p] = base + (std::uint32_t) roll * 0x9E3779B9u + (std::uint32_t) p * 17u
+                         + (std::uint32_t) rolla::Pop * 101u;
+            rolla::Groove g {};
+            rolla::generate (g, s, seeds, 0x7fu);
+            const auto& bass = g.lane[rolla::Bass];
+            const int steps = g.bars * 16;
+            int rollKick = 0;
+            bool sounding[128] {};
+            for (int i = 0; i < bass.count; ++i)
+            {
+                const int st = (int) std::lround (bass.notes[i].start);
+                if (st >= 0 && st < steps && g.drums.vel[rolla::Kick][st] > 0)
+                    ++rollKick;
+                if (st >= steps - 2)
+                    ++pick;
+                const int end = (int) std::lround (bass.notes[i].start + bass.notes[i].length);
+                for (int t = std::max (0, st); t < end && t < steps; ++t)
+                    sounding[t] = true;
+            }
+            attacks += bass.count;
+            onKick += rollKick;
+            if (bass.count > 0 && (double) rollKick / bass.count > worstShare)
+            {
+                worstShare = (double) rollKick / bass.count;
+                worst = roll;
+            }
+            for (int t = 0; t < steps; ++t)
+                hi += (g.drums.vel[rolla::HatC][t] | g.drums.vel[rolla::HatO][t] | g.drums.vel[rolla::Ride][t]
+                       | g.drums.vel[rolla::Perc][t]) > 0 ? 1 : 0;
+            bars += g.bars;
+            int run = 0, best = 0;
+            for (int t = steps - 16; t < steps; ++t)
+            {
+                run = sounding[t] ? 0 : run + 1;
+                best = std::max (best, run);
+            }
+            turn += best >= 4 ? 1 : 0;
+        }
+        const double share = attacks > 0 ? (double) onKick / attacks : 0.0;
+        const double hiPerBar = bars > 0 ? (double) hi / bars : 0.0;
+        std::cout << "BOUNCY seed " << base << " bass-on-kick " << share << " (worst roll " << worst << ": " << worstShare
+                  << ") high-band/bar " << hiPerBar << " turn " << turn << "/20 pickup " << pick << "/20\n";
+        expect (share >= 0.20 && share <= 0.45, "BOUNCY bass bounces with the kick (20-45% of attacks)");
+        expect (worstShare <= 0.35, "BOUNCY no roll puts over 35% of bass attacks on the kick");
+        expect (hiPerBar >= 8.0 && hiPerBar <= 13.0, "BOUNCY high-band onsets 8-13 a bar");
+        expect (turn >= 14, "BOUNCY bar 8 still rests into the turnaround");
+        expect (pick <= 12, "BOUNCY pickups stay optional");
+    }
+
+    rolla::RollaProcessor proc;
+    proc.waitUntilReady();
+    const auto bank = proc.sharePresets();
+    expect (bank != nullptr, "preset bank");
+    if (bank == nullptr)
+        return;
+    const auto& row = bank->dialect[rolla::Pop];
+    std::cout << "BOUNCY swing " << row.swing << " duck " << row.bassDuckDb << " dB\n";
+    expect (row.swing >= 0.53f && row.swing <= 0.62f, "BOUNCY hats swing 53-62%");
+    expect (row.bassDuck && row.bassDuckDb > 0.f && row.bassDuckDb <= 10.f, "BOUNCY bass duck is light");
+}
+
 } // namespace
 
 int main()
@@ -918,6 +998,7 @@ int main()
     testShuffleClearsAutoKeep();
     testShuffleKeepsManualLock();
     testIntensityChangesOutput();
+    testBouncyStyle();
 
     if (fails == 0)
         std::cout << "roll tests passed\n";

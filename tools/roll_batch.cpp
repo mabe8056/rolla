@@ -37,6 +37,7 @@ float swingFor (int dialect)
     {
         case rolla::UkMin: return 0.52f;
         case rolla::Long: return 0.51f;
+        case rolla::Pop: return 0.567f; // BOUNCY hat swing target (StyleBouncy.h)
         default: return 0.50f;
     }
 }

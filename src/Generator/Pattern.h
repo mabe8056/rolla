@@ -166,7 +166,7 @@ inline const StyleCopy& styleCopy (int d) noexcept
           "Pad\twide\n"
           "Plays\tbass, stab, pluck, pad, vox, drums" },
         { kStyleLabels[Pop],
-          "Groove\tswing 50%\n"
+          "Groove\tswing 57%\n"
           "Notes\t1-1.25 sixteenths\n"
           "Bass\tclick\n"
           "Stab\tclick\n"

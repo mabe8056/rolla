@@ -4,9 +4,10 @@
 // Long and Pop only, so ROLLER and JACKIN output stays byte-identical.
 //
 //  - bouncyBass: BOUNCY's bass from rules, not a shape book. About six notes
-//    a bar (BUSY scales it). About half the rolls are the legato pulse (the
+//    a bar (BUSY scales it). A quarter of the rolls are the legato pulse (the
 //    bass sounds ~90% of the loop), the rest bounce (notes held <= 1.4/16),
 //    natural minor only, and octave bounces whose share rises with BOUNCE.
+//    About 30% of attacks land on the kick (StyleBouncy.h targets).
 //    An 8-bar arc A B A B4 A B' A B8: every answer bar changes the note count.
 //  - deepArc: DEEP's tiled grammar phrase gets answers that add or drop a note
 //    on bars 4 and 8, and bars 5-6 vary pitch and rhythm.
@@ -23,6 +24,7 @@
 
 #include "Generator.h"
 #include "Pattern.h"
+#include "StyleBouncy.h"
 
 #include <algorithm>
 #include <cmath>
@@ -149,6 +151,8 @@ inline float slotWeight (int s, float bounce) noexcept
     return 0.35f + 0.35f * bounce; // e / a: the bounce
 }
 
+// Up to two kick-slot hits a bar: BOUNCY's bass bounces with the kick (refs
+// ~32% of attacks on it; the 35% hard cap is per roll).
 inline bool rhythmOk (const int* slots, int n) noexcept
 {
     bool hit[16] {};
@@ -158,7 +162,7 @@ inline bool rhythmOk (const int* slots, int n) noexcept
         hit[slots[i]] = true;
         kicks += kickSlot (slots[i]) ? 1 : 0;
     }
-    if (kicks > 1)
+    if (kicks > 2)
         return false;
     for (int beat = 0; beat < 16; beat += 4)
         if (hit[beat + 1] && hit[beat + 2] && hit[beat + 3])
@@ -169,7 +173,9 @@ inline bool rhythmOk (const int* slots, int n) noexcept
     return true;
 }
 
-inline int drawSlots (Rng& r, int n, float bounce, int lo, int* out, const int* keep, int nKeep)
+// kicks >= 0 asks for that many kick-slot hits in the whole bar (kept ones
+// count); the rest of the n new notes come off the kick.
+inline int drawSlots (Rng& r, int n, float bounce, int lo, int* out, const int* keep, int nKeep, int kicks = -1)
 {
     for (int attempt = 0; attempt < 24; ++attempt)
     {
@@ -177,12 +183,34 @@ inline int drawSlots (Rng& r, int n, float bounce, int lo, int* out, const int* 
         for (int s = 0; s < 16; ++s)
             w[s] = s < lo ? 0.f : slotWeight (s, bounce);
         int m = 0;
+        int keptKicks = 0;
         for (int i = 0; i < nKeep; ++i)
         {
             out[m++] = keep[i];
             w[keep[i]] = 0.f;
+            keptKicks += kickSlot (keep[i]) ? 1 : 0;
         }
-        for (int k = 0; k < n && m < 12; ++k)
+        int placed = 0;
+        if (kicks >= 0)
+        {
+            // Beats 1 and 3 a little likelier than 2 and 4.
+            float kw[16] {};
+            for (int s = 0; s < 16; s += 4)
+            {
+                kw[s] = w[s] > 0.f ? (s == 0 || s == 8 ? 1.0f : 0.7f) : 0.f;
+                w[s] = 0.f;
+            }
+            for (int k = 0; k < kicks - keptKicks && placed < n && m < 12; ++k)
+            {
+                const int s = pickWeighted (kw, 16, r);
+                if (kw[s] <= 0.f)
+                    break;
+                out[m++] = s;
+                kw[s] = 0.f;
+                ++placed;
+            }
+        }
+        for (int k = placed; k < n && m < 12; ++k)
         {
             const int s = pickWeighted (w, 16, r);
             if (w[s] <= 0.f)
@@ -197,9 +225,9 @@ inline int drawSlots (Rng& r, int n, float bounce, int lo, int* out, const int* 
     return 0;
 }
 
-inline int drawBar (Rng& r, int n, float bounce, int* out)
+inline int drawBar (Rng& r, int n, float bounce, int* out, int kicks = -1)
 {
-    return drawSlots (r, n, bounce, 0, out, nullptr, 0);
+    return drawSlots (r, n, bounce, 0, out, nullptr, 0, kicks);
 }
 
 struct Bar
@@ -240,7 +268,7 @@ inline void pitchBar (Bar& b, Rng& r, float pOct, int& prev, float dark)
 
 // The answer bar keeps the front half and redraws the back half with one note
 // more or fewer, so its count always differs from the call.
-inline Bar answerOf (const Bar& call, Rng& r, float bounce, float pOct, float dark)
+inline Bar answerOf (const Bar& call, Rng& r, float bounce, float pOct, float dark, float kickShare)
 {
     int front[12];
     int nFront = 0;
@@ -250,11 +278,12 @@ inline Bar answerOf (const Bar& call, Rng& r, float bounce, float pOct, float da
     const int back = call.n - nFront;
     int want = back + ((r.next() < 0.5 && call.n < 8) || back <= 1 ? 1 : -1);
     want = std::clamp (want, 1, 5);
+    const int kicks = bouncy::kicksForBar (r, nFront + want, kickShare);
     Bar b;
     int slots[12];
     for (int attempt = 0; attempt < 8; ++attempt)
     {
-        const int m = drawSlots (r, want, bounce, 8, slots, front, nFront);
+        const int m = drawSlots (r, want, bounce, 8, slots, front, nFront, kicks);
         if (m != call.n || attempt == 7)
         {
             b.n = m;
@@ -316,12 +345,13 @@ inline Bar turnOf (const Bar& call, Rng& r)
             b.semi[b.n] = call.semi[i];
             ++b.n;
         }
-    static const int kHold[] = { 7, -2, 12, 3 };
-    static const float kW[] = { 1.2f, 1.0f, 0.8f, 0.5f };
+    // Palette: the octave lift (style_rules bar-8 octave_lift 0.2), else a pitch answer.
+    static const int kHold[] = { 7, -2, 3 };
+    static const float kW[] = { 1.2f, 1.0f, 0.5f };
     const int slot = r.next() < 0.5 ? 9 : 10;
     // (The held note is cut at step 11 after legato: bar 8 rests 4/16 before bar 1.)
     b.slot[b.n] = slot;
-    b.semi[b.n] = kHold[pickWeighted (kW, 4, r)];
+    b.semi[b.n] = r.next() < (double) bouncy::kTargets.octaveLift ? 12 : kHold[pickWeighted (kW, 3, r)];
     ++b.n;
     if (b.n == call.n && b.n > 2)
     {
@@ -516,13 +546,14 @@ inline bool inMinor (int semi) noexcept
     return minorPc (semi);
 }
 
-// BOUNCY has two modes (the scorer judges each roll by the one it fits): about
-// half the rolls are the legato pulse (notes run to the next onset), the rest
+// BOUNCY has two modes (the scorer judges each roll by the one it fits): a
+// quarter of the rolls are the legato pulse (notes run to the next onset), the rest
 // bounce (the same rhythm, notes held at most 1.4/16). Drawn from the lane seed,
 // so relegato() keeps the roll's mode.
 inline bool bouncyPulse (std::uint32_t laneSeed) noexcept
 {
-    return ((mix (laneSeed, 0x9017u) >> 9) & 1u) != 0u;
+    // style_rules flavours: pulse 0.25, bounce 0.75.
+    return (float) ((mix (laneSeed, 0x9017u) >> 8) & 0xFFFFu) < bouncy::kTargets.pulseShare * 65536.f;
 }
 
 inline float bouncyMaxLen (std::uint32_t laneSeed) noexcept
@@ -540,19 +571,20 @@ inline void bouncyBass (Lane& lane, int bars, std::uint32_t seed, float dark, fl
     Rng r (mix (seed, 0xB0B5u));
     const int n = std::clamp ((int) std::lround (lerp (4.6f, 7.6f, busy) + (r.next() - 0.5) * 0.9), 4, 8);
     const float pOct = lerp (0.05f, 0.50f, std::clamp (bounce, 0.f, 1.f));
+    const float kickShare = bouncy::kickShareFor (r);
 
     Bar a;
-    a.n = drawBar (r, n, bounce, a.slot);
+    a.n = drawBar (r, n, bounce, a.slot, bouncy::kicksForBar (r, n, kickShare));
     int prev = 999;
     pitchBar (a, r, pOct, prev, dark);
     if (a.n > 0)
         a.semi[0] = 0; // each phrase starts on the root
-    Bar b = answerOf (a, r, bounce, pOct, dark);
+    Bar b = answerOf (a, r, bounce, pOct, dark, kickShare);
     Bar a2 = a;
     repitchOne (a2, r);
     Bar b4 = b;
     repitchOne (b4, r);
-    Bar b6 = answerOf (a, r, bounce, pOct, dark);
+    Bar b6 = answerOf (a, r, bounce, pOct, dark, kickShare);
     Bar b8 = turnOf (a, r);
 
     const Bar* arc8[8] = { &a, &b, &a, &b4, &a2, &b6, &a, &b8 };

@@ -972,7 +972,14 @@
       "vox": "chop",
       "drums": "tight",
       "hitsMute": true,
-      "swing": 0.5
+      "swing": 0.567,
+      "overrides": {
+        "bass": {
+          "whenPreset": "click",
+          "duckDb": 7.5,
+          "duckRecoverMs": 60
+        }
+      }
     },
     "gaskin": {
       "bass": "round",

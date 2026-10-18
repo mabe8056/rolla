@@ -21,11 +21,12 @@
 // Gates: ROLLER / JACKIN batches for seeds 1 and 2 hash to the frozen values
 // (their MIDI is unchanged by the DEEP / BOUNCY pass). DEEP: answers change the
 // density in >= 90% of rolls, 20-50% of stab onsets in bass gaps, pickups in
-// 5-85% of rolls (optional, not every roll). BOUNCY: 6-14 of 20 rolls are the
-// legato pulse (bass sounds >= 85% of the loop by duration), the rest bounce (>= 45%),
+// 5-85% of rolls (optional, not every roll). BOUNCY: 1-10 of 20 rolls are the
+// legato pulse (style_rules pulse 0.25) (bass sounds >= 85% of the loop by duration), the rest bounce (>= 45%),
 // 5-7 notes a bar, nothing outside natural minor, answers change density in
 // >= 90% of rolls, octave moves 15-26% at the default BOUNCE, <= 8.5% at
-// BOUNCE 0 and rising with BOUNCE.
+// BOUNCE 0 and rising with BOUNCE, bass on the kick 20-45% (no roll > 35%),
+// 8-13 high-band drum onsets a bar.
 
 #include <cmath> // Intensity.h uses std::floor without including it
 
@@ -166,6 +167,8 @@ struct Measures
     // BOUNCY modes, read from the output the way roll_test does (mean note length >= 1.8 is pulse).
     int pulseRolls = 0;
     double pulseTime = 0, bounceTime = 0;
+    // Share of bass attacks on a kick hit (pooled), worst roll, and high-band drum onsets a bar.
+    double onKick = 0, maxRollOnKick = 0, hiBand = 0;
 };
 
 struct Skel
@@ -193,11 +196,27 @@ Measures measure (int style, std::uint32_t base, const Settings& s)
     std::vector<Groove> seen;
     std::vector<Skel> skels;
     double octMoves = 0, moves = 0;
+    int attacks = 0, kickAttacks = 0, hiOn = 0, allBars = 0;
     for (int roll = 0; roll < kRolls; ++roll)
     {
         const Groove g = makeRoll (style, base, roll, seen, s);
         const Lane& bass = g.lane[Bass];
         const int steps = g.bars * 16;
+        {
+            int rollKick = 0;
+            for (int i = 0; i < bass.count; ++i)
+            {
+                const int t = (int) std::lround (bass.notes[i].start);
+                rollKick += t >= 0 && t < steps && g.drums.vel[Kick][t] > 0 ? 1 : 0;
+            }
+            attacks += bass.count;
+            kickAttacks += rollKick;
+            if (bass.count > 0)
+                m.maxRollOnKick = std::max (m.maxRollOnKick, (double) rollKick / bass.count);
+            for (int t = 0; t < steps; ++t)
+                hiOn += (g.drums.vel[HatC][t] | g.drums.vel[HatO][t] | g.drums.vel[Ride][t] | g.drums.vel[Perc][t]) > 0 ? 1 : 0;
+            allBars += g.bars;
+        }
         int covered = 0;
         double outT = 0, allT = 0;
         for (int t = 0; t < steps; ++t)
@@ -372,7 +391,9 @@ Measures measure (int style, std::uint32_t base, const Settings& s)
         m.clones = (int) r.size() - (int) (std::unique (r.begin(), r.end()) - r.begin());
     }
     m.oct = moves > 0 ? octMoves / moves : 0.0;
-    m.gap = m.stabOn > 0 ? (double) m.stabGap / m.stabOn : 0.0;
+    m.onKick = attacks > 0 ? (double) kickAttacks / attacks : 0.0;
+    m.hiBand = allBars > 0 ? (double) hiOn / allBars : 0.0;
+    m.gap =m.stabOn > 0 ? (double) m.stabGap / m.stabOn : 0.0;
     return m;
 }
 
@@ -470,7 +491,8 @@ int main (int argc, char** argv)
     // Every style frozen at its last intended change.
     // A style's hashes change only in the PR that means to change that style
     // (regenerate with --golden). ROLLER changed in claude/roller-phrasing;
-    // BOUNCY in #28 (relegato); JACKIN in #25 (STAB) and claude/jackin-identity.
+    // BOUNCY in #28 (relegato) and claude/style-bouncy (regenerate the Pop rows
+    // with --golden: that pass changes BOUNCY's bass and drums); JACKIN in #25 (STAB) and claude/jackin-identity.
     const struct { int style; std::uint32_t base; std::uint64_t hash; } frozen[] = {
         { UkMin, 1u, 0x7c9dcbee6dddc8eaull }, { UkMin, 2u, 0x47a4548b99fd9987ull },
         { Long, 1u, 0x3881ed002bc4c2ebull }, { Long, 2u, 0x8682efccde9fe80bull },
@@ -500,11 +522,18 @@ int main (int argc, char** argv)
         std::snprintf (what, sizeof what, "BOUNCY seed %u: pulse %d/%d sounding %.2f, bounce %.2f, %.1f notes/bar, out of mode %.3f, answers %.2f, octaves %.3f",
                        base, p.pulseRolls, p.rolls, p.pulseTime, p.bounceTime, p.npb, p.outmode, p.dens, p.oct);
         // Per mode: pulse rolls stay legato (>= 0.85 of the loop sounding), bounce
-        // rolls >= 0.45, and the split stays about half (6-14 of 20 pulse).
+        // rolls >= 0.45. The split follows style_rules flavours (pulse 0.25):
+        // 1-10 of 20 pulse (was 6-14 for the old 50/50 split; wide because 20
+        // draws at p = 0.25 spread 2-9).
         check (p.pulseTime >= 0.85 && p.bounceTime >= 0.45
-                   && p.pulseRolls >= 6 && p.pulseRolls <= 14 && p.npb >= 5.0 && p.npb <= 7.0 && p.outmode == 0.0
+                   && p.pulseRolls >= 1 && p.pulseRolls <= 10 && p.npb >= 5.0 && p.npb <= 7.0 && p.outmode == 0.0
                    && p.dens >= 0.9 && p.oct >= 0.15 && p.oct <= 0.26,
                what);
+        // Style pass: bass bounces with the kick (target 32%, 20-45% pooled, no
+        // roll over the 35% hard cap) and ~10 high-band onsets a bar (8-13).
+        std::snprintf (what, sizeof what, "BOUNCY seed %u: bass on kick %.3f (worst roll %.3f), high-band onsets/bar %.1f",
+                       base, p.onKick, p.maxRollOnKick, p.hiBand);
+        check (p.onKick >= 0.20 && p.onKick <= 0.45 && p.maxRollOnKick <= 0.35 && p.hiBand >= 8.0 && p.hiBand <= 13.0, what);
 
         Settings lo = defaults (Pop), hi = defaults (Pop);
         lo.bounce = 0.f;

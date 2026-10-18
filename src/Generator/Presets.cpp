@@ -1,4 +1,5 @@
 #include "Presets.h"
+#include "StyleBouncy.h"
 
 #include <algorithm>
 #include <cstring>
@@ -376,7 +377,15 @@ void loadDefaultPresets (PresetBank& bank)
     bank = std::move (*blank);
     fillDialect (bank.dialect[UkMin], "pluck", "dub", "warehouse", "hook", "air", "close", "tight", true, 0.52f);
     fillDialect (bank.dialect[Long], "round", "swell", "dusty", "bright", "wide", "booth", "tight", true, 0.51f);
-    fillDialect (bank.dialect[Pop], "click", "click", "rave", "soft", "air", "chop", "tight", true, 0.50f);
+    // BOUNCY: hat swing and a light duck from the style targets (StyleBouncy.h).
+    fillDialect (bank.dialect[Pop], "click", "click", "rave", "soft", "air", "chop", "tight", true, bouncy::defaultSwing());
+    {
+        auto& p = bank.dialect[Pop];
+        p.bassDuck = true;
+        p.bassDuckDb = bouncy::kTargets.duckDb;
+        p.bassDuckMs = 60.f;
+        setId (p.bassWhen, "click");
+    }
     fillDialect (bank.dialect[Gaskin], "round", "swell", "warehouse", "hook", "dark", "chop", "room", false, 0.50f);
     auto& g = bank.dialect[Gaskin];
     g.bassDuck = true;
