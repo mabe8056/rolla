@@ -252,6 +252,8 @@ add_executable(rolla-tp-test
     src/Sampler/UserSlots.cpp
     src/Generator/Generator.cpp
     src/Generator/Presets.cpp
+    src/Generator/PhraseBank.cpp
+    src/Generator/Arrangement.cpp
     src/Drums/DrumMachine.cpp
     src/Drums/DrumPattern.cpp
     src/Mix/MixProgram.cpp

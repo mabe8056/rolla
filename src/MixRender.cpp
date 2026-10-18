@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
@@ -147,7 +148,7 @@ struct Take
     std::vector<float> l, r;
 };
 
-Take renderTake (const rolla::Groove& groove, const rolla::EngineParams& params, int bars)
+Take renderTake (const rolla::Groove& groove, const rolla::EngineParams& params, int bars, float* tpGuardGrDb = nullptr)
 {
     const double beats = bars * 4.0;
     const int total = (int) std::llround (beats * 60.0 / kBpm * kSr);
@@ -158,6 +159,7 @@ Take renderTake (const rolla::Groove& groove, const rolla::EngineParams& params,
     engine.prepare (kSr, kBlock);
     int done = 0;
     double ppq = 0.0;
+    float gr = 0.f;
     while (done < total)
     {
         const int n = std::min (kBlock, total - done);
@@ -168,10 +170,22 @@ Take renderTake (const rolla::Groove& groove, const rolla::EngineParams& params,
         transport.sampleRate = kSr;
         juce::MidiBuffer midi;
         engine.process (groove, params, transport, take.l.data() + done, take.r.data() + done, nullptr, nullptr, n, midi, true);
+        // takeTpGuardGrDb clears the block peak, so the render peak is the max of the blocks.
+        gr = std::max (gr, engine.takeTpGuardGrDb());
         ppq += (double) n * kBpm / (60.0 * kSr);
         done += n;
     }
+    if (tpGuardGrDb != nullptr)
+        *tpGuardGrDb = gr;
     return take;
+}
+
+// MIX_SPEC §9.4b. mix_check.py gates tp_guard_gr_db_max at <= 1 dB when the SUM sidecar carries it.
+bool writeSumGrSidecar (const juce::File& wav, float grDb)
+{
+    char buf[80];
+    std::snprintf (buf, sizeof buf, "{\"tp_guard_gr_db_max\":%.4f}\n", (double) grDb);
+    return wav.getSiblingFile (wav.getFileName() + ".gr.json").replaceWithText (buf);
 }
 
 // 4× true-peak estimate of the linear sum. The mix checker uses scipy's
@@ -322,6 +336,8 @@ int selfTest (const rolla::PresetBank& bank, const rolla::MixProgram& mix,
     const int dialect = rolla::UkMin;
     const auto groove = makeGroove (bank, dialect);
     auto fullP = makeParams (bank, mix, dialect, false, library, index);
+    // The guard is nonlinear. Mute-null compares FULL, SOLO, and MUTE, so it stays off here.
+    fullP.tpGuard = false;
     const auto full = renderTake (groove, fullP, 4);
     const LaneId probe[] = { kLanes[8], kLanes[0], kLanes[1] }; // BASS, KICK, CLAP
     int rc = 0;
@@ -481,13 +497,17 @@ int renderSet (const rolla::PresetBank& bank, const rolla::MixProgram& mix, cons
         const auto groove = makeGroove (bank, d);
         auto base = makeParams (bank, mix, d, bypassSum, library, index);
         const auto folder = dir.getChildFile (kStyle[d]);
-        auto full = renderTake (groove, base, kBars);
+        float tpGuardGrDb = 0.f;
+        auto full = renderTake (groove, base, kBars, &tpGuardGrDb);
         const float fullPeak = truePeakLinear (full);
         const float worst = hottestIntensityPeak (groove, base, d, fullPeak);
         const float gain = sumCeilingGain (worst);
         scaleTake (full, gain);
-        if (! writeWav (folder.getChildFile ("FULL.wav"), full))
+        const auto fullWav = folder.getChildFile ("FULL.wav");
+        if (! writeWav (fullWav, full))
             return fail ("could not write FULL");
+        if (! writeSumGrSidecar (fullWav, tpGuardGrDb))
+            return fail ("could not write FULL.wav.gr.json");
         std::cout << kStyle[d] << " FULL peak " << fullPeak << " ceiling " << gain << "\n";
         for (const auto& lane : kLanes)
         {
