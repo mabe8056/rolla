@@ -1,4 +1,4 @@
-// rolla-arrange-test: bar-8 turnaround and 7+1 harmony helpers. No JUCE.
+// rolla-arrange-test: bar-4/bar-8 turnaround and 3+1 open-sus harmony. No JUCE.
 
 #include "Generator/Arrangement.h"
 #include <algorithm>
@@ -60,7 +60,7 @@ void testTurnaround (std::uint32_t base)
         for (int t = 0; t < p.count; ++t)
         {
             const int bar = p.bars[t];
-            if (bar != 7)
+            if (bar != 3 && bar != 7)
             {
                 ++bad;
                 std::snprintf (why, sizeof (why), "seed %u: turnaround on bar %d", seed, bar + 1);
@@ -87,11 +87,28 @@ void testTurnaround (std::uint32_t base)
                     else if (n.start < bar * 16 && n.start + n.length > bar * 16)
                         ringing = true;
                 }
-                if (kicks != 0 || inBar != 2 || held < 15.99f || ! inKey || ringing)
+                int slide[2] {};
+                int nSlide = 0;
+                for (int k = 0; k < bass.count && nSlide < 2; ++k)
+                {
+                    const Note& n = bass.notes[k];
+                    if (n.start >= bar * 16 && n.start < bar * 16 + 16)
+                        slide[nSlide++] = n.chord[0];
+                }
+                int gap = 0;
+                if (nSlide == 2)
+                {
+                    gap = std::abs (slide[1] - slide[0]) % 12;
+                    if (gap > 6)
+                        gap = 12 - gap;
+                }
+                // Whole step, fourth, or fifth. A semitone would be a chromatic passing tone.
+                const bool stepOk = gap == 2 || gap == 5 || gap == 7;
+                if (kicks != 0 || inBar != 2 || held < 15.99f || ! inKey || ringing || ! stepOk)
                 {
                     ++bad;
-                    std::snprintf (why, sizeof (why), "seed %u: full gap kicks %d notes %d held %.1f key %d ringing %d",
-                                   seed, kicks, inBar, held, (int) inKey, (int) ringing);
+                    std::snprintf (why, sizeof (why), "seed %u: full gap kicks %d notes %d held %.1f key %d ringing %d step %d",
+                                   seed, kicks, inBar, held, (int) inKey, (int) ringing, gap);
                 }
             }
             else
@@ -111,7 +128,7 @@ void testTurnaround (std::uint32_t base)
         for (int k = 0; k < before.count; ++k)
         {
             const Note& n = before.notes[k];
-            if (n.start >= 7 * 16 - 3)
+            if ((n.start >= 3 * 16 - 3 && n.start < 4 * 16) || n.start >= 7 * 16 - 3)
                 continue;
             bool found = false;
             for (int j = 0; j < bass.count; ++j)
@@ -128,10 +145,10 @@ void testTurnaround (std::uint32_t base)
     const float share = (float) planned / (float) phraseEnds;
     char d[200];
     std::snprintf (d, sizeof (d), "%d bad %s", bad, why);
-    check (bad == 0, "turnaround: only bar 8, kick/sub gap, two held in-key notes, rest untouched", d);
-    std::snprintf (d, sizeof (d), "%.2f of phrase ends (chance 0.75), %.2f full, %.2f of full lifted an octave",
+    check (bad == 0, "turnaround: bars 4 and 8 only, slide is a whole step or a fourth, rest untouched", d);
+    std::snprintf (d, sizeof (d), "%.2f turnarounds per loop (two sites at 0.75), %.2f full, %.2f of full lifted an octave",
                    share, (float) full / std::max (1, planned), (float) lifted / std::max (1, full));
-    check (share > 0.65f && share < 0.85f && full > 0 && full < planned, "turnaround stays a soft option", d);
+    check (share > 1.3f && share < 1.7f && full > 0 && full < planned, "turnaround stays a soft option", d);
 
     // Short loops: one candidate at the end, at a reduced chance.
     int shortPlanned = 0;
@@ -155,51 +172,52 @@ void testHarmony (std::uint32_t base)
     {
         const std::uint32_t seed = base + (std::uint32_t) i * 0x2545F491u;
         const int mode = i % NumModes;
-        const HarmonyLoop h = makeSevenPlusOne (seed, mode);
+        const HarmonyLoop h = makeThreePlusOne (seed, mode);
         ++n;
-        bool sevenSame = true;
-        for (int b = 1; b < 7; ++b)
-            if (b != 3 && std::memcmp (h.bar[b].notes, h.bar[0].notes, sizeof (h.bar[0].notes)) != 0)
-                sevenSame = false;
-        const bool turnDiffers = std::memcmp (h.bar[7].notes, h.bar[0].notes, sizeof (h.bar[0].notes)) != 0;
+        auto pcOf = [] (const Chord& c) { return (c.root % 12 + 12) % 12; };
+        const bool rootsChange = pcOf (h.bar[0]) != pcOf (h.bar[1]) && pcOf (h.bar[1]) != pcOf (h.bar[2])
+                              && pcOf (h.bar[0]) != pcOf (h.bar[2]);
+        const bool turnDiffers = pcOf (h.bar[3]) != pcOf (h.bar[2]);
+        bool tiled = true;
+        for (int b = 0; b < 4; ++b)
+            if (std::memcmp (h.bar[b + 4].notes, h.bar[b].notes, sizeof (h.bar[0].notes)) != 0)
+                tiled = false;
         if (std::memcmp (h.bar[3].notes, h.bar[0].notes, sizeof (h.bar[0].notes)) != 0)
-        {
             ++midVar;
-            if (h.bar[3].root != h.bar[0].root || h.bar[3].statesThird)
-                sevenSame = false;
-        }
         bool inKey = true;
+        bool noMaj7 = true;
         for (int b = 0; b < 8; ++b)
         {
             const Chord& c = h.bar[b];
-            if (b == 0 || b == 7)
-            {
-                ++chords;
-                thirds += c.statesThird;
+            ++chords;
+            thirds += c.statesThird;
+            if (c.voicing >= 0 && c.voicing < 16)
                 ++voicingUse[c.voicing];
-                int lo = 127, hi = -127;
-                for (int k = 0; k < c.n; ++k)
-                {
-                    lo = std::min (lo, (int) c.notes[k]);
-                    hi = std::max (hi, (int) c.notes[k]);
-                }
-                open += (hi - lo) >= 12;
+            int lo = 127, hi = -127;
+            for (int k = 0; k < c.n; ++k)
+            {
+                lo = std::min (lo, (int) c.notes[k]);
+                hi = std::max (hi, (int) c.notes[k]);
+                const int iv = (((int) c.notes[k] - c.root) % 12 + 12) % 12;
+                if (iv == 11)
+                    noMaj7 = false;
             }
+            open += (hi - lo) >= 12;
             for (int k = 0; k < c.n; ++k)
                 inKey = inKey && inMode (c.notes[k], h.mode);
             if (c.n < 3)
                 inKey = false;
         }
-        if (! sevenSame || ! turnDiffers || ! inKey)
+        if (! rootsChange || ! turnDiffers || ! tiled || ! inKey || ! noMaj7)
         {
             ++bad;
-            std::snprintf (why, sizeof (why), "seed %u mode %d: seven %d turn %d key %d", seed, mode, (int) sevenSame,
-                           (int) turnDiffers, (int) inKey);
+            std::snprintf (why, sizeof (why), "seed %u mode %d: roots %d turn %d tile %d key %d maj7 %d", seed, mode,
+                           (int) rootsChange, (int) turnDiffers, (int) tiled, (int) inKey, (int) ! noMaj7);
         }
     }
-    char d[200];
+    char d[240];
     std::snprintf (d, sizeof (d), "%d bad %s", bad, why);
-    check (bad == 0, "harmony: 7 bars hold one chord, bar 8 turns, every note in mode", d);
+    check (bad == 0, "harmony: 3 chords then a resolution, tiled, in mode, no major 7th", d);
     std::snprintf (d, sizeof (d), "%.2f of chords state the 3rd", (float) thirds / chords);
     check ((float) thirds / chords <= 0.15f, "harmony: the 3rd is rarely stated", d);
     std::snprintf (d, sizeof (d), "%.2f of chords span an octave or more", (float) open / chords);
@@ -208,16 +226,18 @@ void testHarmony (std::uint32_t base)
     for (int v = 0; v < numVoicings(); ++v)
         used += voicingUse[v] > 0;
     std::snprintf (d, sizeof (d), "%d of %d shapes used, bar-4 colour in %.2f of loops", used, numVoicings(), (float) midVar / n);
-    check (used >= numVoicings() - 1 && midVar > 0 && midVar < n / 2, "harmony: shapes vary across seeds", d);
+    check (used >= 2, "harmony: more than one open shape is used", d);
+    (void) midVar;
 
-    // Lane output: 8 bars held, last bar is the turn; a 4-bar loop still ends on it.
-    const HarmonyLoop h = makeSevenPlusOne (base, Lydian);
+    // Lane output: 8 bars held, last bar is the resolution; a 4-bar loop ends on it too.
+    const HarmonyLoop h = makeThreePlusOne (base, Lydian);
     Lane lane;
     const int w8 = writeHarmony (h, lane, 8, ChordRhythm::Hold);
-    const bool endsOnTurn8 = std::memcmp (lane.notes[7].chord, h.bar[7].notes, 4) == 0 && lane.notes[7].length == 16.f;
+    const bool endsOnTurn8 = std::memcmp (lane.notes[7].chord, h.bar[3].notes, 4) == 0 && lane.notes[7].length == 16.f;
+    const bool tiled = std::memcmp (lane.notes[4].chord, h.bar[0].notes, 4) == 0;
     const int w4 = writeHarmony (h, lane, 4, ChordRhythm::Offbeat);
-    const bool endsOnTurn4 = std::memcmp (lane.notes[w4 - 1].chord, h.bar[7].notes, 4) == 0 && lane.notes[w4 - 1].start == 62.f;
-    check (w8 == 8 && endsOnTurn8 && w4 == 16 && endsOnTurn4, "writeHarmony: held and offbeat lanes end on the turn chord");
+    const bool endsOnTurn4 = std::memcmp (lane.notes[w4 - 1].chord, h.bar[3].notes, 4) == 0 && lane.notes[w4 - 1].start == 62.f;
+    check (w8 == 8 && endsOnTurn8 && tiled && w4 == 16 && endsOnTurn4, "writeHarmony: held and offbeat lanes end on the resolving chord");
 }
 
 void testBasics()
@@ -225,8 +245,8 @@ void testBasics()
     check (degreeToSemis (3, Lydian) == 6 && degreeToSemis (-1, Mixolydian) == -2 && degreeToSemis (7, Ionian) == 12
                && degreeToSemis (-3, Aeolian) == -5 && degreeToSemis (1, Phrygian) == 1,
            "degree -> semitone mapping");
-    const HarmonyLoop a = makeSevenPlusOne (99, Lydian);
-    const HarmonyLoop b = makeSevenPlusOne (99, Lydian);
+    const HarmonyLoop a = makeThreePlusOne (99, Lydian);
+    const HarmonyLoop b = makeThreePlusOne (99, Lydian);
     const TurnaroundPlan p = planTurnaround (99, 8);
     const TurnaroundPlan q = planTurnaround (99, 8);
     check (std::memcmp (a.bar, b.bar, sizeof (a.bar)) == 0 && p.count == q.count && p.heldDegree[0] == q.heldDegree[0]

@@ -1,18 +1,19 @@
 #pragma once
 
-// Arrangement helpers taken from the BOUNCY lead reference ("In The Zone",
-// Ellia Jaya, extended mix). Only tendencies are encoded, never the riff:
+// Arrangement helpers taken from the measured BOUNCY lead ("In The Zone").
+// Tendencies only: the attack grid, the pitch set, and the riff are not stored.
 //
-//  - Bar-8 turnaround. On the last bar of an 8-bar phrase the kick and sub
-//    step out and the bass holds long notes (an approach degree, then the
-//    root) instead of its riff. A lighter variant only dips the kick.
-//  - 7+1 harmony. One open chord holds for seven bars and a different open
-//    chord takes bar 8. Voicings are sus2 / sus4 / maj7 shapes that rarely
-//    state the 3rd, so the loop never commits to happy or sad.
+//  - Turnaround on bar 4 and bar 8 of an 8-bar phrase. The bass slides a
+//    whole step (or a fourth) into the next chord tone. A full option also
+//    lets the kick step out; a lighter option only dips the kick. Neither
+//    is a chromatic walk.
+//  - 3+1 harmony. The implied chord changes every bar for three bars
+//    (root, then a fourth or flat-seven, then the other), and bar 4
+//    resolves. Bars 5-8 repeat the cycle. Voicings are open sus2 / sus4.
+//    The major 7th is not used: that layer was a harmonic artifact.
 //
-// Every choice is weighted by the seed. The generator calls these as soft
-// options; none of it is a hard rule. No JUCE, does not touch Generator.cpp.
-// Pitches are semitones from the key root (Lane convention), steps are 16ths.
+// Every choice is weighted by the seed. Nothing here is a hard rule.
+// No JUCE. Pitches are semitones from the key root, steps are 16ths.
 
 #include "Pattern.h"
 #include <cstdint>
@@ -84,7 +85,7 @@ struct Chord
 struct HarmonyOptions
 {
     float thirdChance = 0.12f; // how often a voicing may state the 3rd
-    float midVariation = 0.2f; // chance bar 4 borrows a neighbour shape (still 7+1 overall)
+    float midVariation = 0.2f; // chance the resolving bar picks a second sus shape
     int register_ = 12;        // lowest chord note around this many semitones above the key root
 };
 
@@ -95,10 +96,9 @@ struct HarmonyLoop
     int bars = 8;
 };
 
-// Bars 1-7 hold the home chord (rooted on the home degree, often the 5th
-// over a root bass for the "maj7 over the root" colour), bar 8 turns to a
-// different open chord. Every note is in `mode`.
-HarmonyLoop makeSevenPlusOne (std::uint32_t seed, int mode, const HarmonyOptions& opts = {});
+// A 4-bar cycle tiled to 8 bars: three changing open chords, then a
+// resolution. Every note is in `mode`. No major 7th.
+HarmonyLoop makeThreePlusOne (std::uint32_t seed, int mode, const HarmonyOptions& opts = {});
 
 enum class ChordRhythm : int
 {

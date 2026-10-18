@@ -82,6 +82,22 @@ bool voicingFits (const Voicing& v, int rootSemis, int mode) noexcept
     return true;
 }
 
+// True when this chord root has an open shape with no major 7th.
+bool rootVoices (int rootSemis, int mode) noexcept
+{
+    for (int i = 0; i < kNumVoicings; ++i)
+    {
+        const Voicing& v = kVoicings[i];
+        bool majorSeventh = false;
+        for (int k = 0; k < v.n; ++k)
+            if (((v.iv[k] % 12) + 12) % 12 == 11)
+                majorSeventh = true;
+        if (! majorSeventh && voicingFits (v, rootSemis, mode))
+            return true;
+    }
+    return false;
+}
+
 // Pick a voicing for a chord rooted on rootSemis. Returns -1 when none fits.
 int pickVoicing (int rootSemis, int mode, float thirdChance, bool preferSus2, int avoid, Rng& r)
 {
@@ -92,9 +108,16 @@ int pickVoicing (int rootSemis, int mode, float thirdChance, bool preferSus2, in
         const Voicing& v = kVoicings[i];
         if (i == avoid || ! voicingFits (v, rootSemis, mode))
             continue;
+        bool majorSeventh = false;
+        for (int k = 0; k < v.n; ++k)
+            if (((v.iv[k] % 12) + 12) % 12 == 11)
+                majorSeventh = true;
+        // The measured harmony has no major-7th layer. That note was an artifact.
+        if (majorSeventh)
+            continue;
         float w = v.third ? thirdChance : 1.f;
         if (preferSus2 && v.sus2)
-            w *= 2.5f;
+            w *= 4.f;
         if (w > 0.f)
             items[n++] = { i, w };
     }
@@ -178,14 +201,18 @@ TurnaroundPlan planTurnaround (std::uint32_t seed, int loopBars, const Turnaroun
     if (bars < phrase)
         add (bars - 1, o.chance * 0.5f); // short loops: a turnaround every repeat would wear thin
     else
-        for (int b = phrase - 1; b < bars; b += phrase)
-            add (b, o.chance);
+        for (int origin = 0; origin + phrase <= bars && p.count < 4; origin += phrase)
+        {
+            add (origin + phrase / 2 - 1, o.chance); // bar 4 of the phrase
+            add (origin + phrase - 1, o.chance);     // bar 8 of the phrase
+        }
 
-    const Weighted approach[] = { { 1, 1.0f }, { 3, 0.7f }, { 4, 0.6f }, { -1, 0.6f } };
+    // Home is the root or the fifth. The approach is chosen in applyTurnaround
+    // so the slide is a whole step or a fourth, never a semitone.
     const Weighted home[] = { { 0, 0.85f }, { 4, 0.15f } };
     const Weighted split[] = { { 8, 1.0f }, { 12, 0.5f }, { 6, 0.3f } };
-    p.heldDegree[0] = pick (approach, 4, r);
     p.heldDegree[1] = pick (home, 2, r);
+    p.heldDegree[0] = p.heldDegree[1] == 0 ? 6 : 0;
     if (p.heldDegree[1] == p.heldDegree[0])
         p.heldDegree[1] = 0;
     p.splitStep = pick (split, 3, r);
@@ -231,12 +258,23 @@ void applyTurnaround (const TurnaroundPlan& p, Lane& bass, DrumLane& drums, int 
         const int split = std::clamp (p.splitStep, 2, 14);
         const int starts[2] = { a, a + split };
         const int lens[2] = { split, 16 - split };
+        const int target = degreeToSemis (p.heldDegree[1], mode);
+        // Whole step under the target when the mode has it, otherwise a
+        // fourth or a fifth. Never a chromatic passing tone.
+        int approach = target - 2;
+        if (! inMode (approach, mode))
+            approach = target - 5;
+        if (! inMode (approach, mode))
+            approach = target - 7;
+        if (! inMode (approach, mode))
+            approach = target;
+        const int semis[2] = { approach, target };
         for (int k = 0; k < 2 && bass.count < kMaxNotes; ++k)
         {
             Note n;
             n.start = (float) starts[k];
             n.length = (float) lens[k];
-            n.chord[0] = (std::int8_t) (degreeToSemis (p.heldDegree[k], mode) + lift);
+            n.chord[0] = (std::int8_t) (semis[k] + lift);
             n.nChord = 1;
             n.vel = 100;
             bass.notes[bass.count++] = n;
@@ -245,42 +283,98 @@ void applyTurnaround (const TurnaroundPlan& p, Lane& bass, DrumLane& drums, int 
     }
 }
 
-HarmonyLoop makeSevenPlusOne (std::uint32_t seed, int mode, const HarmonyOptions& o)
+int degreeOfPc (int mode, int pc) noexcept
+{
+    pc = (pc % 12 + 12) % 12;
+    for (int d = 0; d < 7; ++d)
+        if (degreeToSemis (d, mode) % 12 == pc)
+            return d;
+    return -1;
+}
+
+int pickCyclePc (int mode, const int* pool, int n, int spin, int avoidA, int avoidB) noexcept
+{
+    auto usable = [&] (int pc) noexcept
+    {
+        if (pc == avoidA || pc == avoidB)
+            return false;
+        const int degree = degreeOfPc (mode, pc);
+        if (degree < 0)
+            return false;
+        // A scale tone with no open voicing (Phrygian's fifth) would fall
+        // back onto the tonic and the chord would not change.
+        return rootVoices (degreeToSemis (degree, mode), mode);
+    };
+    for (int k = 0; k < n; ++k)
+    {
+        const int pc = pool[(spin + k) % n];
+        if (usable (pc))
+            return pc;
+    }
+    for (int pc = 0; pc < 12; ++pc)
+        if (usable (pc))
+            return pc;
+    return avoidA;
+}
+
+HarmonyLoop makeThreePlusOne (std::uint32_t seed, int mode, const HarmonyOptions& o)
 {
     Rng r (mix (seed, 0x7E1Du));
     HarmonyLoop h;
     h.mode = std::clamp (mode, 0, NumModes - 1);
+    h.bars = 8;
 
-    // Home: often the 5th over a root bass ("maj7 over the root"), else the root, 4th or 6th.
-    const Weighted homeDeg[] = { { 4, 1.0f }, { 0, 0.8f }, { 3, 0.4f }, { 5, 0.3f } };
-    Chord home;
-    int hd = pick (homeDeg, 4, r);
-    for (int tries = 0; ! chordOn (hd, h.mode, o, false, -1, r, home) && tries < 7; ++tries)
-        hd = (hd + 1) % 7;
+    // Three chords a fourth apart, then a resolution. 10 is the flat seven
+    // when the mode has it (the measured F / Eb / Bb cycle); otherwise the
+    // fourth and the fifth, which every mode has. No chromatic roots.
+    const int secondPool[] = { 10, 5, 3, 8, 7 };
+    const int thirdPool[] = { 5, 7, 10, 3, 2 };
+    const int spin = (int) (r.next() * 5.0) % 5;
+    int pc[4];
+    pc[0] = degreeOfPc (h.mode, 0) >= 0 ? 0 : 7;
+    pc[1] = pickCyclePc (h.mode, secondPool, 5, spin, pc[0], pc[0]);
+    pc[2] = pickCyclePc (h.mode, thirdPool, 5, spin, pc[0], pc[1]);
+    pc[3] = pc[0];
 
-    // Bar 8: a different open chord, sus2 shapes preferred.
-    Weighted turnDeg[5] = { { 0, 1.0f }, { 1, 0.6f }, { 3, 0.6f }, { 4, 0.5f }, { 6, 0.3f } };
-    for (auto& t : turnDeg)
-        if (t.v == hd)
-            t.w = 0.f;
-    Chord turn;
-    int td = pick (turnDeg, 5, r);
-    for (int tries = 0; (td == hd || ! chordOn (td, h.mode, o, true, -1, r, turn)) && tries < 7; ++tries)
-        td = (td + 1) % 7;
-
-    for (int b = 0; b < 7; ++b)
-        h.bar[b] = home;
-    h.bar[7] = turn;
-
-    // Optional bar-4 colour: same root, another shape without the 3rd.
+    HarmonyOptions sus = o;
+    sus.thirdChance = std::min (o.thirdChance, 0.12f);
+    int prevVoicing = -1;
+    for (int i = 0; i < 4; ++i)
+    {
+        const int degree = degreeOfPc (h.mode, pc[i]);
+        const int avoid = (i == 3) ? prevVoicing : -1;
+        bool voiced = degree >= 0 && chordOn (degree, h.mode, sus, true, avoid, r, h.bar[i]);
+        if (! voiced && i == 3 && degree >= 0)
+            voiced = chordOn (degree, h.mode, sus, true, -1, r, h.bar[i]);
+        if (! voiced && i > 0 && i < 3)
+        {
+            for (int d = 0; d < 7 && ! voiced; ++d)
+            {
+                const int rpc = (degreeToSemis (d, h.mode) % 12 + 12) % 12;
+                bool used = false;
+                for (int j = 0; j < i; ++j)
+                    if (((h.bar[j].root % 12) + 12) % 12 == rpc)
+                        used = true;
+                if (! used)
+                    voiced = chordOn (d, h.mode, sus, true, -1, r, h.bar[i]);
+            }
+        }
+        if (! voiced && i > 0)
+            h.bar[i] = h.bar[0];
+        if (i == 0)
+            prevVoicing = h.bar[0].voicing;
+    }
     if (r.next() < o.midVariation)
     {
-        HarmonyOptions noThird = o;
+        HarmonyOptions noThird = sus;
         noThird.thirdChance = 0.f;
         Chord alt;
-        if (chordOn (hd, h.mode, noThird, false, home.voicing, r, alt))
+        const int degree = degreeOfPc (h.mode, pc[3]);
+        if (chordOn (degree < 0 ? 0 : degree, h.mode, noThird, true, h.bar[3].voicing, r, alt))
             h.bar[3] = alt;
     }
+    for (int i = 0; i < 4; ++i)
+        h.bar[i + 4] = h.bar[i];
     return h;
 }
 
@@ -290,8 +384,8 @@ int writeHarmony (const HarmonyLoop& h, Lane& lane, int loopBars, ChordRhythm rh
     const int bars = std::clamp (loopBars, 1, kMaxBars);
     for (int b = 0; b < bars; ++b)
     {
-        // A loop shorter than 8 bars still ends on the turn chord.
-        const int idx = (b == bars - 1) ? 7 : (b % 7);
+        // The cycle is 4 bars. The last bar of a short loop still resolves.
+        const int idx = (b == bars - 1) ? 3 : (b % 4);
         const Chord& c = h.bar[idx];
         auto put = [&] (float start, float len)
         {
