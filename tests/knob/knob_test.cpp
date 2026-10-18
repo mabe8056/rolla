@@ -13,10 +13,15 @@
 #include <string>
 #include <vector>
 
+// Linux drains the queue directly (the internal hook). macOS and Windows use
+// MessageManager::runDispatchLoopUntil, which needs JUCE_MODAL_LOOPS_PERMITTED=1
+// (set for this target in CMakeLists.txt).
+#if JUCE_LINUX
 namespace juce::detail
 {
 bool dispatchNextMessageOnSystemQueue (bool returnIfNoPendingMessages);
 }
+#endif
 
 namespace
 {
@@ -36,8 +41,12 @@ bool pumpUntil (const std::function<bool()>& done, int ms = 4000)
     const auto start = juce::Time::getMillisecondCounter();
     while (! done() && juce::Time::getMillisecondCounter() - start < (juce::uint32) ms)
     {
+#if JUCE_LINUX
         if (! juce::detail::dispatchNextMessageOnSystemQueue (true))
             juce::Thread::sleep (1);
+#else
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (2);
+#endif
     }
     return done();
 }
