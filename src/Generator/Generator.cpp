@@ -4705,12 +4705,6 @@ std::uint32_t postHash (std::uint32_t a, std::uint32_t b) noexcept
     return h;
 }
 
-void sortByStart (Lane& lane)
-{
-    std::sort (lane.notes, lane.notes + lane.count,
-               [] (const Note& a, const Note& b) { return a.start < b.start; });
-}
-
 // The last bar of a 4- or 8-bar loop keeps its four-16th turn rest (lockPhrase,
 // ensureBar8Turn). Nothing in the post passes moves or holds into it.
 float bassTailCut (int bars) noexcept
