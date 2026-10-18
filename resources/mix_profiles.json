@@ -2778,7 +2778,7 @@
      },
      "lufs_offset_vs_kick_db": -1.0,
      "st_target_lufs": -24.7,
-     "output_trim_db": 0.0,
+     "output_trim_db": -4.0,
      "level_src": "D clamp"
     },
     "STAB": {
