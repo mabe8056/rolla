@@ -353,6 +353,13 @@ int renderSwitch (const rolla::PresetBank& bank, const rolla::MixProgram& mix, c
 int renderSet (const rolla::PresetBank& bank, const rolla::MixProgram& mix, const juce::File& dir, bool solosOnly, bool bypassSum, int onlyDialect,
               rolla::SampleLibrary* library, const rolla::SampleIndex* index)
 {
+    // The loudness windows are sample-pack levels. Synth fallback still plays,
+    // so silence is no longer the signal that this machine has no pack.
+    if (library == nullptr || index == nullptr)
+    {
+        dir.createDirectory();
+        dir.getChildFile ("no_sample_pack").replaceWithText ("1\n");
+    }
     for (int d = 0; d < rolla::NumDialects; ++d)
     {
         if (onlyDialect >= 0 && d != onlyDialect)

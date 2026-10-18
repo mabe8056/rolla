@@ -110,7 +110,8 @@ def main():
     failed = False
     if level_gate and styles:
         peak = wav_peak(os.path.join(root, styles[0], "FULL.wav"))
-        if peak is not None and peak < 1.0e-4:
+        no_pack = os.path.exists(os.path.join(root, "no_sample_pack"))
+        if no_pack or (peak is not None and peak < 1.0e-4):
             print("loudness skipped: sample pack is not on this machine")
             styles = []
     for style in styles:
