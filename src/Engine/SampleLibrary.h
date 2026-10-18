@@ -1,5 +1,6 @@
 #pragma once
 
+#include "SampleChop.h"
 #include "SampleSpec.h"
 #include "../Sampler/SamplePrep.h"
 #include "../Sampler/PitchProbe.h"
@@ -39,6 +40,9 @@ struct SampleEntry
     int altVoice = -1;
     bool phraseLoop = false;
     int fileBpm = 0;
+    // Spectral flatness of a short read, or -1 when this entry was not measured.
+    // Names decide until a measurement exists.
+    float flatness = -1.f;
 };
 
 // Directory listing joined with manifest metadata. Audio is not loaded here.
@@ -230,7 +234,29 @@ inline bool roleRowApplies (const RoleRow& row, int lane) noexcept
     return row.lanes == 0 || (row.lanes & bit) != 0;
 }
 
-inline bool sampleRoleRejected (const char* text, int lane) noexcept
+inline bool sampleTokenListed (const char* token, const char* const* list, int count) noexcept
+{
+    if (token == nullptr)
+        return false;
+    for (int i = 0; i < count; ++i)
+        if (list[i] != nullptr && std::strcmp (token, list[i]) == 0)
+            return true;
+    return false;
+}
+
+inline bool sampleTextListed (const char* text, const char* const* list, int count) noexcept
+{
+    if (text == nullptr || text[0] == 0)
+        return false;
+    for (int i = 0; i < count; ++i)
+        if (list[i] != nullptr && sampleHasToken (text, list[i]))
+            return true;
+    return false;
+}
+
+// skipSoft lets a PAD bed through the name table. The caller still requires a
+// tonal measurement, and hard broadband names never take this path.
+inline bool sampleRoleRejected (const char* text, int lane, bool skipSoft = false) noexcept
 {
     if (text == nullptr || text[0] == 0)
         return false;
@@ -238,10 +264,23 @@ inline bool sampleRoleRejected (const char* text, int lane) noexcept
     {
         if (row.rule != RoleRule::Reject || ! roleRowApplies (row, lane))
             continue;
+        if (skipSoft && lane == Pad && sampleTokenListed (row.a, kSoftPadBed, 4))
+            continue;
         if (samplePhrase (text, row.a, row.b, row.c))
             return true;
     }
     return false;
+}
+
+// A PAD name the reject table drops only for texture, background, atmos or drone.
+// Hard broadband tokens, and every other reject, stay out.
+inline bool sampleOnlySoftPad (const char* path, const char* category) noexcept
+{
+    if (sampleRoleRejected (path, Pad, true) || sampleRoleRejected (category, Pad, true))
+        return false;
+    if (sampleTextListed (path, kHardBroadband, 6) || sampleTextListed (category, kHardBroadband, 6))
+        return false;
+    return sampleRoleRejected (path, Pad) || sampleRoleRejected (category, Pad);
 }
 
 inline bool sampleHitsAllowed (const char* text) noexcept
@@ -261,11 +300,19 @@ inline bool sampleHitsAllowed (const char* text) noexcept
 
 // Role lanes reject noise, fx and vinyl on the whole relative path and on the
 // category. HITS then keeps only the allow-list. Acid is out of HITS in every
-// dialect. Style bits still apply only when a dialect is set.
+// dialect. A PAD texture / background / atmos / drone name stays out until a
+// load measures it as tonal. Noise, crackle, vinyl, riser, sweep and whoosh
+// stay out either way. Style bits still apply only when a dialect is set.
 inline bool samplePoolAllows (const SampleEntry& entry, int lane, int dialect) noexcept
 {
-    if (sampleRoleRejected (entry.path, lane) || sampleRoleRejected (entry.category, lane))
-        return false;
+    const bool named = sampleRoleRejected (entry.path, lane) || sampleRoleRejected (entry.category, lane);
+    if (named)
+    {
+        const bool onlySoft = lane == Pad && sampleOnlySoftPad (entry.path, entry.category);
+        const bool measuredTonal = entry.flatness >= 0.f && entry.flatness < kTonalFlatness;
+        if (! onlySoft || ! measuredTonal)
+            return false;
+    }
     if (lane == Hits && ! sampleHitsAllowed (entry.path) && ! sampleHitsAllowed (entry.category))
         return false;
     if (dialect < 0 || dialect >= NumDialects)
@@ -395,6 +442,30 @@ inline const SampleEntry* sampleIndexAt (const SampleIndex& index, int part, con
     return nullptr;
 }
 
+// The recipe's own filter when the user's library has files for it; otherwise
+// the same lane, widened one step at a time (any loop, then any category,
+// then any pack or root) until something matches. A factory recipe whose
+// category the library lacks (e.g. the vox "loops" recipe without tempo-locked
+// loops on disk) still plays a sample from its own lane instead of going
+// silent. There is no synth fallback either way. Sampler, preload and the
+// renderer all draw through this, so they agree on the file.
+inline PoolFilter poolFilterWithFiles (const SampleIndex& index, const SampleSpec& spec, int part, int voice,
+                                       int dialect) noexcept
+{
+    PoolFilter f = poolFilterFor (spec, part, voice, dialect);
+    if (sampleIndexCount (index, part, f) > 0)
+        return f;
+    f.loop = -1;
+    if (sampleIndexCount (index, part, f) > 0)
+        return f;
+    f.category[0] = 0;
+    if (sampleIndexCount (index, part, f) > 0)
+        return f;
+    f.pack[0] = 0;
+    f.rootPc = -1;
+    return f;
+}
+
 // One roll's draw from a lane pool. mute is silence: the lane does not
 // fall through to a synth, and it does not borrow another lane.
 struct LanePick
@@ -436,6 +507,13 @@ struct SampleAudio
     PitchInfo pitch;
     // The note in the filename, -1 when none. Trusted only where the measurement agrees.
     int namedRoot = -1;
+    // -1 until loadOne measures the in-memory buffer. The file on disk is not written.
+    float flatness = -1.f;
+    int loudStart = 0;
+    // Vox chop starts on the voice, not on near-silence (SampleChop.h voicedOnsets).
+    int voicedCount = 0;
+    int voiced[24] { 0 };
+    float voicedFloor = 0.f;
 };
 
 // Loads preset-referenced files from the user sample folder on a background thread.
