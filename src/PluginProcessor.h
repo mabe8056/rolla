@@ -256,6 +256,14 @@ private:
     std::atomic<double> playPpq { 0.0 };
     std::atomic<float> lastBpm { 130.f };
     double previewPpq = 0.0;
+    // Free-running phrase (audio thread only). FL Studio loops its pattern, so its
+    // ppq wraps every pattern length while the transport keeps playing. Each host
+    // loop wrap adds the wrapped distance here, so an 8-bar roll plays through a
+    // 4-bar host loop. Cleared on stop -> start and on a real seek.
+    double phraseOffset = 0.0;
+    double hostExpectPpq = 0.0;
+    double hostLastBeats = 0.0;
+    bool hostRolling = false;
     double preparedRate = 48000.0;
     // Pattern MIDI held back by the tp_guard latency (see delayMidiOut). Audio thread only.
     juce::MidiBuffer midiLate, midiNow, midiNext;

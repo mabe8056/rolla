@@ -704,6 +704,8 @@ void RollaProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     preparedRate = sampleRate > 1000.0 ? sampleRate : 48000.0;
     engine.prepare (preparedRate, samplesPerBlock);
     setLatencySamples (engine.latencySamples());
+    phraseOffset = 0.0;
+    hostRolling = false;
     midiLate.clear();
     midiNow.clear();
     midiNext.clear();
@@ -775,6 +777,31 @@ EngineParams RollaProcessor::readParams (std::shared_ptr<const PresetBank>& hold
     return params;
 }
 
+namespace
+{
+// A backward host jump while playing is a host loop wrap (not a seek) when it
+// lands on the loop start from the loop end. Without loop points (FL's pattern
+// loop) it has to land on a bar line, back by a whole number of bars.
+bool isHostLoopWrap (const juce::AudioPlayHead::PositionInfo& pos, double expect, double now, double slack)
+{
+    const double back = expect - now;
+    if (back <= slack)
+        return false;
+    if (pos.getIsLooping())
+        if (const auto loop = pos.getLoopPoints())
+            if (loop->ppqEnd - loop->ppqStart > slack)
+                return std::abs (now - loop->ppqStart) <= slack && std::abs (expect - loop->ppqEnd) <= slack;
+    double barBeats = 4.0;
+    if (const auto sig = pos.getTimeSignature())
+        if (sig->numerator > 0 && sig->denominator > 0)
+            barBeats = sig->numerator * 4.0 / sig->denominator;
+    const double bars = std::round (back / barBeats);
+    const double intoBar = wrapLoop (now, barBeats);
+    return bars >= 1.0 && std::abs (back - bars * barBeats) <= slack
+           && (intoBar <= slack || barBeats - intoBar <= slack);
+}
+} // namespace
+
 void RollaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals noDenormals;
@@ -788,17 +815,39 @@ void RollaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     float bpm = 130.f;
     bool hostPlaying = false;
     double hostPpq = 0.0;
+    juce::Optional<juce::AudioPlayHead::PositionInfo> pos;
     if (auto* head = getPlayHead())
+        pos = head->getPosition();
+    if (pos)
     {
-        if (auto pos = head->getPosition())
-        {
-            if (auto b = pos->getBpm())
-                bpm = (float) std::clamp (*b, 20.0, 400.0);
-            hostPlaying = pos->getIsPlaying();
-            if (auto ppq = pos->getPpqPosition())
-                hostPpq = *ppq;
-        }
+        if (auto b = pos->getBpm())
+            bpm = (float) std::clamp (*b, 20.0, 400.0);
+        hostPlaying = pos->getIsPlaying();
+        if (auto ppq = pos->getPpqPosition())
+            hostPpq = *ppq;
     }
+
+    // Free-run phrase: follow the host, but play through its loop wraps. Any
+    // other jump (a seek) or a fresh start goes back to following the host.
+    if (hostPlaying)
+    {
+        const double blockBeats = (double) n * (double) bpm / (60.0 * preparedRate);
+        if (! hostRolling)
+            phraseOffset = 0.0;
+        else
+        {
+            const double slack = std::max (blockBeats, hostLastBeats) + 1.0e-3;
+            const double drift = hostPpq - hostExpectPpq;
+            // Lengths are 2, 4 or 8 bars, so the offset can wrap at 8 bars.
+            if (std::abs (drift) > slack)
+                phraseOffset = drift < 0.0 && isHostLoopWrap (*pos, hostExpectPpq, hostPpq, slack)
+                                   ? wrapLoop (phraseOffset - drift, (double) kMaxBars * 4.0)
+                                   : 0.0;
+        }
+        hostExpectPpq = hostPpq + blockBeats;
+        hostLastBeats = blockBeats;
+    }
+    hostRolling = hostPlaying;
 
     const bool previewOn = preview.load (std::memory_order_relaxed);
     Transport transport;
@@ -807,7 +856,7 @@ void RollaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     if (hostPlaying)
     {
         transport.playing = true;
-        transport.ppqStart = hostPpq;
+        transport.ppqStart = hostPpq + phraseOffset;
     }
     else if (previewOn)
     {
