@@ -661,6 +661,15 @@ void Engine::process (const Groove& groove,
             E.level[i].target = dbToGain (params.levelDb[i]);
     }
     E.outGain.target = dbToGain (params.outputDb);
+    // The smoothers rest at silence. A transport start has to open them on this
+    // sample, or the downbeat is ramped in over the level time.
+    if (justStarted)
+    {
+        for (int i = 0; i < NumParts; ++i)
+            if (! params.mute[i])
+                E.level[i].snap (dbToGain (params.levelDb[i]));
+        E.outGain.snap (dbToGain (params.outputDb));
+    }
 
     if (wasPlaying && ! transport.playing)
     {

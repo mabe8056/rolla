@@ -194,7 +194,7 @@ jobs:
             build-essential cmake ninja-build pkg-config \
             libasound2-dev libfreetype6-dev libx11-dev libxinerama-dev \
             libxrandr-dev libxcursor-dev libxcomposite-dev libxext-dev \
-            libglu1-mesa-dev libgtk-3-dev xvfb
+            libglu1-mesa-dev libgtk-3-dev xvfb python3-pip python3-venv
 
       - name: Configure and build
         run: |
@@ -206,6 +206,12 @@ jobs:
           set -euo pipefail
           ./build/rolla-sampler-test
           ./build/rolla-sample-check
+
+      - name: Renderer smoke
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user --break-system-packages numpy scipy soundfile pyloudnorm
+          python3 tests/roll/renderer_smoke.py --rolls ./build/rolla-rolls
 
       - name: Roll tests
         run: |

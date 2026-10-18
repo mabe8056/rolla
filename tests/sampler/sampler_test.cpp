@@ -933,6 +933,186 @@ int main()
         expect (slotted > 1.0e-4, "user kick slot wins over the dropped wav");
     }
 
+    {
+        rolla::SampleEntry vinyl;
+        std::snprintf (vinyl.path, sizeof vinyl.path, "PAD/vinyl_crackle.wav");
+        vinyl.lane = rolla::Pad;
+        vinyl.onDisk = true;
+        std::snprintf (vinyl.category, sizeof vinyl.category, "atmosphere");
+        rolla::SampleEntry air;
+        std::snprintf (air.path, sizeof air.path, "PAD/air_pad.wav");
+        air.lane = rolla::Pad;
+        air.onDisk = true;
+        std::snprintf (air.category, sizeof air.category, "pad");
+        rolla::SampleEntry acid;
+        std::snprintf (acid.path, sizeof acid.path, "HITS/TAT_Synth_acid.wav");
+        acid.lane = rolla::Hits;
+        acid.onDisk = true;
+        std::snprintf (acid.category, sizeof acid.category, "acid_hit");
+        rolla::SampleEntry three;
+        std::snprintf (three.path, sizeof three.path, "HITS/303saw.wav");
+        three.lane = rolla::Hits;
+        three.onDisk = true;
+        std::snprintf (three.category, sizeof three.category, "fx");
+        rolla::SampleEntry house;
+        std::snprintf (house.path, sizeof house.path, "HITS/warehouse_hit.wav");
+        house.lane = rolla::Hits;
+        house.onDisk = true;
+        std::snprintf (house.category, sizeof house.category, "fx");
+        rolla::SampleEntry riser;
+        std::snprintf (riser.path, sizeof riser.path, "HITS/noise_riser.wav");
+        riser.lane = rolla::Hits;
+        riser.onDisk = true;
+        std::snprintf (riser.category, sizeof riser.category, "fx");
+        rolla::SampleEntry tagged;
+        std::snprintf (tagged.path, sizeof tagged.path, "BASS/only_uk.wav");
+        tagged.lane = rolla::Bass;
+        tagged.onDisk = true;
+        tagged.styles = 1;
+        rolla::SampleEntry open;
+        std::snprintf (open.path, sizeof open.path, "BASS/any.wav");
+        open.lane = rolla::Bass;
+        open.onDisk = true;
+        rolla::SampleIndex pools;
+        pools.entries = { vinyl, air, acid, three, house, riser, tagged, open };
+
+        rolla::PoolFilter pad;
+        pad.on = true;
+        pad.lane = rolla::Pad;
+        pad.dialect = rolla::UkMin;
+        expect (rolla::sampleIndexCount (pools, rolla::Pad, pad) == 1, "a vinyl crackle is not a pad");
+        expect (std::string (rolla::sampleIndexAt (pools, rolla::Pad, pad, 0)->path) == "PAD/air_pad.wav",
+                "the pad pool keeps the pad");
+        pad.dialect = -1;
+        expect (rolla::sampleIndexCount (pools, rolla::Pad, pad) == 2, "dialect -1 leaves the pad pool unfiltered");
+
+        rolla::PoolFilter hits;
+        hits.on = true;
+        hits.lane = rolla::Hits;
+        hits.dialect = rolla::UkMin;
+        expect (rolla::sampleIndexCount (pools, rolla::Hits, hits) == 1, "UK MIN hits drop acid and risers");
+        expect (std::string (rolla::sampleIndexAt (pools, rolla::Hits, hits, 0)->path) == "HITS/warehouse_hit.wav",
+                "UK MIN hits keep the warehouse hit");
+        hits.dialect = rolla::Long;
+        expect (rolla::sampleIndexCount (pools, rolla::Hits, hits) == 1, "LONG hits drop acid");
+        hits.dialect = rolla::Pop;
+        expect (rolla::sampleIndexCount (pools, rolla::Hits, hits) == 3, "BOUNCY hits keep acid and drop risers");
+        hits.dialect = rolla::Gaskin;
+        expect (rolla::sampleIndexCount (pools, rolla::Hits, hits) == 3, "JACKIN hits keep acid and drop risers");
+
+        rolla::PoolFilter bass;
+        bass.on = true;
+        bass.lane = rolla::Bass;
+        bass.dialect = rolla::Pop;
+        expect (rolla::sampleIndexCount (pools, rolla::Bass, bass) == 1, "a ukmin-only file stays out of BOUNCY");
+        bass.dialect = rolla::UkMin;
+        expect (rolla::sampleIndexCount (pools, rolla::Bass, bass) == 2, "styles 0 still fits UK MIN");
+        expect (rolla::sampleHasToken ("HITS/303fx_hat.wav", "303"), "303 matches 303fx");
+        expect (! rolla::sampleHasToken ("HITS/1303_hat.wav", "303"), "303 does not match 1303");
+    }
+
+    {
+        const auto wrapRoot = rootDir.getChildFile ("wrap");
+        writeTone (wrapRoot.getChildFile ("DRUMS/KICK/down.wav"), 0.25, 0.9f, 70.f, false);
+        const char* manifest = R"JSON({"files":[{"file":"DRUMS/KICK/down.wav","lane":"DRUMS","voice":"KICK","category":"kick"}]})JSON";
+        rolla::SampleLibrary wrapLib;
+        wrapLib.setRoot (wrapRoot);
+        wrapLib.startIndex (manifest, (int) std::strlen (manifest));
+        expect (waitUntil ([&] { return wrapLib.indexedFound() >= 0; }), "downbeat index publishes");
+        const auto wrapSnap = wrapLib.index();
+        rolla::PresetBank wrapBank;
+        wrapBank.count[rolla::Drums] = 1;
+        wrapBank.drums[0].sample.mode = rolla::SampleMode::Sample;
+        wrapBank.drums[0].sample.filter.on = true;
+        wrapBank.drums[0].sample.filter.lane = rolla::Drums;
+        rolla::Sampler wrapSampler;
+        wrapSampler.prepare (48000.0);
+        rolla::EngineParams wrapParams;
+        wrapParams.presets = &wrapBank;
+        wrapParams.library = &wrapLib;
+        wrapParams.sampleIndex = wrapSnap.get();
+        wrapParams.dialect = rolla::UkMin;
+        for (int i = 0; i < rolla::NumDrumVoices; ++i)
+            wrapParams.drumDecay[i] = 0.5f;
+        expect (wrapSampler.takeDrum (rolla::Kick, 120, wrapBank, wrapParams) < 0.001f, "downbeat kick requests the file");
+        expect (waitUntil ([&] { return wrapLib.ready ("DRUMS/KICK/down.wav"); }), "downbeat kick loads");
+        wrapSampler.takeDrum (rolla::Kick, 120, wrapBank, wrapParams);
+        float bornPeak = 0.f;
+        float prev = 31.99f;
+        float pos = 0.01f;
+        for (int i = 0; i < 800; ++i)
+        {
+            float laneL[rolla::NumParts] {};
+            float laneR[rolla::NumParts] {};
+            wrapSampler.render (laneL, laneR, prev, pos, true, 32.f);
+            bornPeak = std::max (bornPeak, std::fabs (laneL[rolla::Drums]));
+            prev = pos;
+            pos += 0.02f;
+        }
+        expect (bornPeak > 0.01f, "a kick born on the downbeat wrap still sounds");
+
+        wrapSampler.reset();
+        wrapSampler.takeDrum (rolla::Kick, 120, wrapBank, wrapParams);
+        float laneL[rolla::NumParts] {};
+        float laneR[rolla::NumParts] {};
+        wrapSampler.render (laneL, laneR, 10.f, 10.02f, true, 32.f);
+        wrapSampler.render (laneL, laneR, 31.99f, 0.01f, true, 32.f);
+        float after = 0.f;
+        prev = 0.01f;
+        pos = 0.03f;
+        for (int i = 0; i < 40; ++i)
+        {
+            wrapSampler.render (laneL, laneR, prev, pos, true, 32.f);
+            after = std::max (after, std::fabs (laneL[rolla::Drums]));
+            prev = pos;
+            pos += 0.02f;
+        }
+        expect (after < 1.0e-4f, "a kick already sounding dies on the next loop wrap");
+
+        rolla::Engine downbeat;
+        downbeat.prepare (48000.0, 256);
+        rolla::Groove groove;
+        groove.bars = 2;
+        groove.key = 2;
+        groove.drums.vel[rolla::Kick][0] = 120;
+        rolla::EngineParams play = wrapParams;
+        play.bars = 2;
+        play.bpm = 130.f;
+        play.duck = false;
+        rolla::Transport transport;
+        transport.playing = true;
+        transport.bpm = 130.0;
+        transport.ppqStart = 0.0;
+        transport.sampleRate = 48000.0;
+        float left[512] {};
+        float right[512] {};
+        for (int block = 0; block < 2; ++block)
+        {
+            juce::MidiBuffer midi;
+            downbeat.process (groove, play, transport, left + block * 256, right + block * 256, nullptr, nullptr, 256, midi, true);
+            int kickMidi = -1;
+            for (const auto meta : midi)
+            {
+                const auto msg = meta.getMessage();
+                if (msg.isNoteOn() && msg.getChannel() == 10 && msg.getNoteNumber() == rolla::drumMidiNote (rolla::Kick))
+                    kickMidi = block * 256 + meta.samplePosition;
+            }
+            if (block == 0)
+                expect (kickMidi == 0, "the first kick note is sample 0");
+            transport.ppqStart += 256.0 * 130.0 / 60.0 / 48000.0;
+        }
+        const int lat = downbeat.latencySamples();
+        int onset = -1;
+        for (int i = 0; i < 512; ++i)
+            if (std::fabs (left[i]) > 1.0e-3f)
+            {
+                onset = i;
+                break;
+            }
+        expect (onset >= 0, "the downbeat kick is audible in the first block");
+        expect (onset >= lat && onset - lat < 400, "after the true-peak delay the kick is the downbeat, not the next 16th");
+    }
+
     outside.deleteFile();
     tooLong.deleteFile();
     rootDir.deleteRecursively();

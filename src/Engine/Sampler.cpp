@@ -86,27 +86,17 @@ struct LaneHit
     bool pending = false;
 };
 
-PoolFilter filterFor (const SampleSpec& spec, int part, int voice) noexcept
-{
-    PoolFilter filter = spec.filter;
-    filter.on = true;
-    if (filter.lane < 0)
-        filter.lane = part;
-    if (voice >= 0)
-        filter.voice = (voice == TomLow || voice == TomMid) ? Perc : voice;
-    return filter;
-}
-
 // Preferred file is requested. Already-loaded neighbours can play immediately.
 // A still-loading preferred file does not fall through to the synth.
 bool readyFromIndex (const SampleLibrary* library, const SampleIndex* index, int part,
-                     const SampleSpec& spec, int pick, int voice, LaneHit& hit) noexcept
+                     const SampleSpec& spec, int pick, int voice, int dialect, LaneHit& hit) noexcept
 {
     if (library == nullptr || index == nullptr)
         return false;
     if (voice < 0 && ! spec.filter.on)
         return false;
-    const PoolFilter filter = voice >= 0 ? filterFor (spec, part, voice) : filterFor (spec, part, spec.filter.voice);
+    const int queryVoice = voice >= 0 ? voice : spec.filter.voice;
+    const PoolFilter filter = poolFilterFor (spec, part, queryVoice, dialect);
     const int n = sampleIndexCount (*index, part, filter);
     if (n <= 0)
         return false;
@@ -735,6 +725,7 @@ bool Sampler::playUserSlot (int part, int drumVoice, int midiNote, int velocity,
     fresh.loopB = region.b;
     fresh.xfade = region.xfade;
     armAttack (fresh);
+    fresh.born = true;
     *voice = fresh;
 
     take.kind = decision.kind;
@@ -768,7 +759,7 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     LaneHit hit;
     const bool recipe = spec.filter.on && params.sampleIndex != nullptr;
     if (recipe)
-        readyFromIndex (params.library, params.sampleIndex, part, spec, params.samplePick[part], -1, hit);
+        readyFromIndex (params.library, params.sampleIndex, part, spec, params.samplePick[part], -1, params.dialect, hit);
     if (hit.audio == nullptr && ! hit.pending)
         hit = resolveLane (bank, params, part, midiNote, sliceIndex);
     const SampleSpec& played = hit.spec != nullptr ? *hit.spec : spec;
@@ -812,7 +803,7 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
                 {
                     LaneHit packHit;
                     const int shifted = pick + (alt == TomMid ? 1 : alt == TomLow ? 2 : 0);
-                    if (readyFromIndex (params.library, params.sampleIndex, Drums, drum.sample, shifted, alt, packHit)
+                    if (readyFromIndex (params.library, params.sampleIndex, Drums, drum.sample, shifted, alt, params.dialect, packHit)
                         && packHit.audio != nullptr)
                     {
                         audio = packHit.audio;
@@ -900,6 +891,7 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     }
 
     armAttack (fresh);
+    fresh.born = true;
     *slot = fresh;
     if (layered)
     {
@@ -980,7 +972,7 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
     else if (params.sampleIndex != nullptr)
     {
         LaneHit indexed;
-        if (readyFromIndex (params.library, params.sampleIndex, Drums, spec, pick + shift, voice, indexed))
+        if (readyFromIndex (params.library, params.sampleIndex, Drums, spec, pick + shift, voice, params.dialect, indexed))
             audio = indexed.audio;
         else if (indexed.pending)
             pending = true;
@@ -1016,7 +1008,7 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
                     continue;
                 LaneHit indexed;
                 const int shifted = pick + (alt == TomMid ? 1 : alt == TomLow ? 2 : 0);
-                if (readyFromIndex (params.library, params.sampleIndex, Drums, spec, shifted, alt, indexed))
+                if (readyFromIndex (params.library, params.sampleIndex, Drums, spec, shifted, alt, params.dialect, indexed))
                     audio = indexed.audio;
                 else if (indexed.pending)
                 {
@@ -1066,6 +1058,7 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
     fresh.loopB = region.b;
     fresh.xfade = region.xfade;
     armAttack (fresh);
+    fresh.born = true;
     *slot = fresh;
 
     return 0.f;
@@ -1084,6 +1077,10 @@ void Sampler::render (float* laneL, float* laneR, float prev16, float pos16, boo
     {
         if (! v.on)
             return;
+        // The voice is born on the same sample the playhead wraps back through
+        // the downbeat. That wrap is how step 0 is reached, not the end of the note.
+        const bool born = v.born;
+        v.born = false;
         v.noteEdge = 1.f;
         if (playing && loopEnd16 > 1.f)
         {
@@ -1101,7 +1098,7 @@ void Sampler::render (float* laneL, float* laneR, float prev16, float pos16, boo
                 if (remain < window)
                     v.noteEdge = 0.5f * (1.f - std::cos (kSincPi * remain / window));
             }
-            else if (prev16 < stop && pos16 + 1.0e-3f < prev16)
+            else if (! born && prev16 < stop && pos16 + 1.0e-3f < prev16)
             {
                 v.on = false;
                 return;
