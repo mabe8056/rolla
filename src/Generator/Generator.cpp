@@ -5159,15 +5159,23 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
         g.lane[Hits].seed = rh.s;
         writeHits (g.lane[Hits], g, s, rh);
     }
-    // A locked scale is the last pitch step, so Auto rolls are untouched byte for
-    // byte and every candidate above is drawn exactly as before. Only regenerated
-    // lanes move: a kept lane stays as the user locked it.
-    if (s.scale != ScaleAuto)
-        applyScale (g, s.scale, partMask);
     for (int part = 0; part < Drums; ++part)
         dedupeNoteOns (g.lane[part]);
     enforceMonophonic (g.lane[Bass]);
     harmonizeRoll (g, s, bassSeed, partMask);
+    // A locked scale is the last pitch step, after the roll-mode pass, so the
+    // user's scale always wins and Auto rolls are untouched byte for byte. Only
+    // regenerated lanes move: a kept lane stays as the user locked it.
+    if (s.scale != ScaleAuto)
+    {
+        applyScale (g, s.scale, partMask);
+        for (int part = 0; part < Drums; ++part)
+        {
+            dedupeNoteOns (g.lane[part]);
+            trimSamePitchOverlaps (g.lane[part]);
+        }
+        enforceMonophonic (g.lane[Bass]);
+    }
     g.guardScore = shippedHard ? 0.f : 1.f;
     g.guardLevel = shippedHard ? 2 : 0;
     std::snprintf (g.guardRef, sizeof g.guardRef, "%s", shippedHard ? "HARD" : "ORIGINAL");
