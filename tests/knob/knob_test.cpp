@@ -317,10 +317,20 @@ void testSoundControls()
         return;
     }
 
+    // INTENSITY gates lanes by style (Intensity.h). DEEP brings HITS in last,
+    // at 90, so the default 75 leaves the HITS lane empty and its knobs have
+    // nothing to shape. Full intensity puts every lane of the roll in.
+    setDenorm (proc, "intensity", 100.f);
+    expect (pumpUntil ([&] { return proc.copyGroove().lane[rolla::Hits].count > 0; }),
+            "full intensity brings the DEEP hits in");
+
     const int lanes[] = { rolla::Bass, rolla::Stab, rolla::Hits, rolla::Pluck, rolla::Pad, rolla::Vox };
     const char* names[] = { "BASS", "STAB", "HITS", "PLUCK", "PAD", "VOX" };
     for (int i = 0; i < 6; ++i)
     {
+        // A lane with no notes cannot pass its sound checks: say so first.
+        expect (proc.copyGroove().lane[lanes[i]].count > 0,
+                std::string (names[i]) + " has notes in the roll under test");
         solo (proc, lanes[i]);
         const auto id = std::string (rolla::partId (lanes[i]));
         setDenorm (proc, (id + "Punch").c_str(), 0.5f);
