@@ -2,8 +2,12 @@
 #include "Engine/Engine.h"
 #include "Engine/SampleChop.h"
 #include "Engine/Sampler.h"
+#include "GenreBrain/GenreTargetsJson.h"
+#include "GenreBrain/KitMeshJson.h"
 #include "Mix/TruePeakGuard.h"
+#include "Sampler/Fingerprint.h"
 #include "Sampler/PitchProbe.h"
+#include "Tools/FingerprintTool.h"
 #include "Sampler/PlayDecision.h"
 #include "Sampler/SamplePrep.h"
 #include "Sampler/UserSlots.h"
@@ -431,6 +435,368 @@ void testKickRetriggerSampled (const rolla::PresetBank& bank)
     }
 }
 
+std::vector<float> kickHit (double seconds = 0.4)
+{
+    std::vector<float> x ((size_t) (seconds * 48000.0));
+    double phase = 0.0;
+    for (size_t i = 0; i < x.size(); ++i)
+    {
+        const double t = (double) i / 48000.0;
+        phase += 2.0 * 3.14159265358979 * (50.0 + 70.0 * std::exp (-t / 0.03)) / 48000.0;
+        x[i] = (float) (0.8 * std::exp (-t / 0.06) * std::sin (phase));
+    }
+    return x;
+}
+
+std::vector<float> hatHit (std::uint32_t seed, double seconds = 0.15)
+{
+    std::vector<float> x ((size_t) (seconds * 48000.0));
+    float prev = 0.f, prev2 = 0.f;
+    for (size_t i = 0; i < x.size(); ++i)
+    {
+        seed = seed * 1664525u + 1013904223u;
+        const float w = (float) (seed >> 8) / 8388608.f - 1.f;
+        const float d1 = w - prev, d2 = d1 - prev2; // two differentiators: energy sits high
+        prev = w;
+        prev2 = d1;
+        x[i] = (float) (0.3 * std::exp (-(double) i / 48000.0 / 0.012)) * d2;
+    }
+    return x;
+}
+
+void testFingerprint()
+{
+    const auto kick = kickHit();
+    const auto hat = hatHit (7u);
+    auto stab = sawNotes ({ 60.0 });
+    for (size_t i = 0; i < stab.size(); ++i)
+        stab[i] *= (float) std::exp (-(double) i / 48000.0 / 0.25);
+    const auto k = rolla::fingerprintOf (kick.data(), (int) kick.size());
+    const auto h = rolla::fingerprintOf (hat.data(), (int) hat.size());
+    const auto s = rolla::fingerprintOf (stab.data(), (int) stab.size());
+    expect (k.valid && k.subRatio > 0.4f && k.centroidHz < 400.f,
+            "fingerprint: a kick owns the sub (sub " + std::to_string (k.subRatio) + ", centroid " + std::to_string (k.centroidHz) + ")");
+    expect (h.valid && h.centroidHz > 4000.f && h.decay40Ms < 200.f && h.subRatio < 0.05f,
+            "fingerprint: a hat is bright and short (centroid " + std::to_string (h.centroidHz) + ", decay40 " + std::to_string (h.decay40Ms) + ")");
+    expect (s.valid && std::fabs (s.pitch.rootPitch - 60.f) < 0.3f, "fingerprint: a C4 stab keeps its pitch beside the vector");
+    expect ((int) k.vector().size() == rolla::kFingerprintDims && rolla::fingerprintName (rolla::kFingerprintDims - 1) == "sub_ratio"
+                && rolla::fingerprintName (rolla::kDecay40Dim) == "log2_decay40_ms",
+            "fingerprint: vector and names line up (level and pitch stay out of the distance)");
+    expect (! k.truncated && ! std::isnan (k.vector()[(size_t) rolla::kDecay40Dim]), "fingerprint: a kick is not truncated");
+    {
+        std::vector<float> drone ((size_t) (48000 * 3));
+        for (size_t i = 0; i < drone.size(); ++i)
+            drone[i] = 0.4f * (float) std::sin (2.0 * 3.14159265358979 * 220.0 * (double) i / 48000.0);
+        const auto d = rolla::fingerprintOf (drone.data(), (int) drone.size());
+        expect (d.truncated && std::isnan (d.vector()[(size_t) rolla::kDecay40Dim]),
+                "fingerprint: a sound ringing past 1.5 s is truncated and its decay40 is skipped");
+    }
+
+    // Target regions: two blobs give two clusters; a point in one is a hit, a far point is not.
+    std::vector<std::vector<float>> xs;
+    std::uint32_t seed = 3u;
+    auto jitter = [&seed]
+    {
+        seed = seed * 1664525u + 1013904223u;
+        return ((float) (seed >> 8) / 16777216.f - 0.5f) * 0.6f;
+    };
+    for (int i = 0; i < 40; ++i)
+    {
+        const float c = i % 2 == 0 ? 0.f : 5.f;
+        xs.push_back ({ c + jitter(), c + jitter(), c + jitter() });
+    }
+    xs[3][2] = std::numeric_limits<float>::quiet_NaN(); // a truncated sound's missing dimension
+    const auto t = rolla::fitTarget (xs, 3);
+    expect (t.clusters.size() >= 2, "targets: two blobs give at least two clusters");
+    expect (rolla::targetDistance ({ 0.1f, 0.f, -0.1f }, t) <= t.threshold, "targets: a point in a blob is a hit");
+    expect (rolla::targetDistance ({ 20.f, -20.f, 20.f }, t) > t.threshold, "targets: a far point is a miss");
+    expect (rolla::targetDistance ({ 0.1f, 0.f, std::numeric_limits<float>::quiet_NaN() }, t) <= t.threshold,
+            "targets: a missing dimension is skipped, not counted as far");
+    std::vector<std::vector<float>> few (xs.begin(), xs.begin() + 12);
+    expect (rolla::fitTarget (few, 3).clusters.size() == 1, "targets: under 20 hits is one region");
+}
+
+int runTool (std::initializer_list<juce::String> words)
+{
+    juce::StringArray args;
+    for (const auto& w : words)
+        args.add (w);
+    return rolla::fptool::run (args);
+}
+
+void testFingerprintTool()
+{
+    namespace fp = rolla::fptool;
+    expect (fp::laneFromPath ("DRUMS/CH/x.wav") == "HAT_C" && fp::laneFromPath ("VOX/chops/y.wav") == "VOX"
+                && fp::laneFromPath ("STAB/z.wav") == "STAB" && fp::laneFromPath ("misc/z.wav").isEmpty(),
+            "fingerprint tool: lanes come from folders");
+
+    const auto base = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("rolla-fp-test");
+    base.deleteRecursively();
+    for (int i = 0; i < 3; ++i)
+        writeWave (base.getChildFile ("lib/DRUMS/KICK/k" + juce::String (i) + ".wav"), kickHit());
+    writeWave (base.getChildFile ("lib/DRUMS/CH/h0.wav"), hatHit (11u));
+    const auto libJson = base.getChildFile ("lib.json");
+    expect (runTool ({ "scan", base.getChildFile ("lib").getFullPathName(), "--out", libJson.getFullPathName() }) == 0,
+            "fingerprint tool: scan runs");
+    const auto lib = fp::entriesFromJson (juce::JSON::parse (libJson));
+    int kicks = 0, hats = 0;
+    for (const auto& e : lib)
+    {
+        kicks += e.lane == "KICK" ? 1 : 0;
+        hats += e.lane == "HAT_C" ? 1 : 0;
+    }
+    expect (lib.size() == 4 && kicks == 3 && hats == 1, "fingerprint tool: scan finds 3 kicks and a hat");
+
+    // A Demucs-style track: kicks on the beat, hats between, a four-note bass.
+    std::vector<float> drums ((size_t) (48000 * 6), 0.f), bass ((size_t) (48000 * 6), 0.f);
+    for (int b = 0; b < 12; ++b)
+    {
+        const auto kk = kickHit (0.3);
+        const auto hh = hatHit (100u + (std::uint32_t) b, 0.1);
+        const size_t at = (size_t) (b * 24000);
+        for (size_t i = 0; i < kk.size() && at + i < drums.size(); ++i)
+            drums[at + i] += kk[i];
+        for (size_t i = 0; i < hh.size() && at + 12000 + i < drums.size(); ++i)
+            drums[at + 12000 + i] += hh[i];
+    }
+    const auto note = sawNotes ({ 36.0 });
+    for (int b = 0; b < 4; ++b)
+        for (size_t i = 0; i < 30000 && b * 60000 + i < bass.size(); ++i)
+            bass[(size_t) (b * 60000) + i] = note[960 + i] * (float) std::exp (-(double) i / 48000.0 / 0.3);
+    writeWave (base.getChildFile ("stems/trackA/sep/drums.wav"), drums);
+    writeWave (base.getChildFile ("stems/trackA/sep/bass.wav"), bass);
+    // Not tracks: a tools folder and a track missing from the CSV are skipped.
+    writeWave (base.getChildFile ("stems/_tools/sep/drums.wav"), drums);
+    writeWave (base.getChildFile ("stems/trackB/sep/drums.wav"), drums);
+    // The box CSV's header: track,style,mode_or_role.
+    base.getChildFile ("styles.csv").replaceWithText ("track,style,mode_or_role\ntrackA,ukmin,support\n");
+    {
+        juce::StringArray skipped;
+        const auto got = fp::sliceStems (base.getChildFile ("stems"), fp::readStyles (base.getChildFile ("styles.csv")), 0.f, &skipped);
+        bool onlyA = ! got.empty();
+        for (const auto& e : got)
+            onlyA = onlyA && e.track == "trackA";
+        expect (onlyA && skipped.contains ("_tools") && skipped.contains ("trackB"),
+                "fingerprint tool: stems skips '_' folders and tracks missing from the CSV, and lists them");
+    }
+    const auto stemJson = base.getChildFile ("stems.json");
+    expect (runTool ({ "stems", base.getChildFile ("stems").getFullPathName(), "--styles",
+                       base.getChildFile ("styles.csv").getFullPathName(), "--out", stemJson.getFullPathName() }) == 0,
+            "fingerprint tool: stems runs");
+    const auto sliced = fp::entriesFromJson (juce::JSON::parse (stemJson));
+    int sk = 0, sh = 0, sb = 0;
+    for (const auto& e : sliced)
+    {
+        sk += e.lane == "KICK" ? 1 : 0;
+        sh += e.lane.startsWith ("HAT") ? 1 : 0;
+        sb += e.lane == "BASS" ? 1 : 0;
+        expect (e.style == "ukmin" && e.track == "trackA", "fingerprint tool: slices carry track and style");
+    }
+    expect (sk >= 10 && sh >= 10 && sb >= 3,
+            "fingerprint tool: stems slice into kicks, hats and bass (" + std::to_string (sk) + "/" + std::to_string (sh)
+                + "/" + std::to_string (sb) + ")");
+    const auto stemDoc = juce::JSON::parse (stemJson);
+    expect (fp::nonIdString (stemDoc).isEmpty(), "privacy: a stem fp.json holds only ids, labels and styles as strings");
+    auto* leaky = new juce::DynamicObject();
+    leaky->setProperty ("path", "Some Artist - Some Track/sep/drums.wav");
+    expect (fp::nonIdString (juce::var (leaky)) == "path", "privacy: a path string is caught");
+
+    const auto oneJson = base.getChildFile ("one.json");
+    expect (runTool ({ "scan-stems", base.getChildFile ("stems/trackA").getFullPathName(), "--track-id", "t01", "--style", "pop",
+                       "--min-conf", "0.55", "--out", oneJson.getFullPathName() }) == 0,
+            "fingerprint tool: scan-stems runs on one track");
+    const auto one = fp::entriesFromJson (juce::JSON::parse (oneJson));
+    bool idsOk = ! one.empty();
+    for (const auto& e : one)
+        idsOk = idsOk && e.track == "t01" && e.style == "pop";
+    expect (idsOk, "fingerprint tool: scan-stems keys slices by the given track id and style");
+    expect (one.size() <= sliced.size(), "fingerprint tool: --min-conf only drops slices");
+
+    base.getChildFile ("ids.csv").replaceWithText ("folder,track_id,style\ntrackA,t07,long\n");
+    const auto idMap = fp::readStyles (base.getChildFile ("ids.csv"));
+    expect (idMap.count ("trackA") == 1 && idMap.at ("trackA").id == "t07" && idMap.at ("trackA").style == "long",
+            "fingerprint tool: a folder,track_id,style CSV writes the id, not the folder");
+
+    const auto targetsJson = base.getChildFile ("targets.json");
+    expect (runTool ({ "targets", stemJson.getFullPathName(), "--out", targetsJson.getFullPathName() }) == 0,
+            "fingerprint tool: targets runs");
+    const auto targets = juce::JSON::parse (targetsJson);
+    const auto* kickClusters = targets["styles"]["ukmin"]["KICK"]["clusters"].getArray();
+    expect (kickClusters != nullptr && ! kickClusters->isEmpty(), "fingerprint tool: targets hold ukmin KICK clusters");
+    const auto* names = targets["features"].getArray();
+    expect (names != nullptr && names->size() == rolla::kFingerprintDims, "fingerprint tool: targets list every feature");
+    expect (! (bool) targets["styles"]["ukmin"]["KICK"]["pooled"] && (bool) targets["styles"]["ukmin"]["BASS"]["pooled"],
+            "fingerprint tool: a lane with under 8 hits takes the pooled region");
+    base.deleteRecursively();
+}
+
+void testGenreTargets()
+{
+    using namespace rolla::genre;
+    const auto mock = GenreTargets::mock();
+    expect (! mock.fromData && mock.lane (Style::Deep, Lane::Stab).centroidHz.hi < mock.lane (Style::Bouncy, Lane::Stab).centroidHz.hi
+                && mock.lane (Style::Deep, Lane::Pad).decayMs.hi > mock.lane (Style::Bouncy, Lane::Pad).decayMs.hi,
+            "genre mock: DEEP is darker and longer than BOUNCY");
+    expect (std::string (laneName (Lane::HatC)) == "HAT_C" && laneFromName ("VOX") == Lane::Vox && styleFromId ("gaskin") == Style::Jackin,
+            "genre names round-trip");
+
+    SampleFeatures kick;
+    kick.lane = Lane::Kick;
+    kick.centroidHz = 150.f;
+    kick.tiltDbPerOct = -6.f;
+    kick.attackMs = 2.f;
+    kick.decay20Ms = 200.f;
+    kick.subRatio = 0.6f;
+    expect (mock.bandMiss (Style::Roller, kick) == 0.f, "genre mock: a typical kick sits inside the kick bands");
+    kick.centroidHz = 3000.f;
+    expect (mock.bandMiss (Style::Roller, kick) > 1.f, "genre mock: a bright 'kick' misses the bands");
+    expect (mock.timbreDistance (Style::Roller, kick) == 0.f, "genre mock: no timbre regions, distance 0 (bands decide)");
+
+    // Partial real data: one style, one lane, overrides what it has and keeps the rest.
+    const char* text = R"JSON({"version":1,"norm":{"mean":[0,0,0],"std":[1,1,1]},
+      "styles":{"long":{"groove":{"swing":[0.53,0.58]},
+        "STAB":{"clusters":[{"centroid":[0,0,null],"spread":[1,1,1],"weight":1}],"threshold":1.5,"count":40,
+                "bands":{"centroid_hz":[300,900]},"pitch":{"min_conf":0.6},"loudness_db":-9}}}})JSON";
+    const auto g = parseGenreTargets (juce::JSON::parse (text));
+    const auto& stab = g.lane (Style::Deep, Lane::Stab);
+    expect (g.fromData && stab.present && stab.count == 40 && stab.timbre.clusters.size() == 1
+                && std::isnan (stab.timbre.clusters[0].centroid[2]) && stab.centroidHz.hi == 900.f && stab.minPitchConf == 0.6f
+                && g.style (Style::Deep).groove.swing.lo == 0.53f,
+            "genre json: given fields override (null centroid = NaN)");
+    expect (stab.attackMs.set && stab.attackMs.hi == mock.lane (Style::Deep, Lane::Stab).attackMs.hi
+                && g.lane (Style::Roller, Lane::Kick).centroidHz.hi == mock.lane (Style::Roller, Lane::Kick).centroidHz.hi,
+            "genre json: missing fields and styles keep the neutral values");
+    SampleFeatures s;
+    s.lane = Lane::Stab;
+    s.vector = { 0.2f, -0.1f, 5.f };
+    expect (g.timbreDistance (Style::Deep, s) < 1.f, "genre json: timbre distance skips the null dimension");
+    expect (! loadGenreTargets (juce::File ("/nonexistent/genre_targets.json")).fromData, "genre json: no file means the mock");
+
+    // The box's shape: style names (roller...), and the ext block's p10..p90 bands
+    // (ALL, then per style) and swing in percent.
+    const char* boxText = R"JSON({"version":1,"styles":{"roller":{"KICK":{"clusters":[{"centroid":[1],"spread":[1]}],"threshold":1.2,"pooled":false}}},
+      "ext":{"schema":"rolla.genre_targets.ext/1",
+        "bands":{"ALL":{"stab_chord":{"features":{"centroid_hz":{"p10":400,"p50":700,"p90":1200}}}},
+                 "DEEP":{"kick":{"n_hits":10,"features":{"centroid_hz":{"p10":200,"p50":261,"p90":330},"decay20_ms":{"p10":60,"p50":90,"p90":140}}}}},
+        "groove":{"JACKIN":{"hat_16th_swing_pct":{"p10":51.1,"p50":56.5,"p90":64.6}}}}})JSON";
+    const auto box = parseGenreTargets (juce::JSON::parse (boxText));
+    expect (box.lane (Style::Roller, Lane::Kick).timbre.clusters.size() == 1 && box.lane (Style::Roller, Lane::Kick).timbre.threshold == 1.2f,
+            "genre json: 'roller' maps to ROLLER");
+    expect (box.lane (Style::Deep, Lane::Kick).centroidHz.lo == 200.f && box.lane (Style::Deep, Lane::Kick).decayMs.hi == 140.f
+                && box.lane (Style::Bouncy, Lane::Pluck).centroidHz.hi == 1200.f,
+            "genre json: ext bands (per style over ALL) become p10..p90 bands");
+    expect (box.lane (Style::Bouncy, Lane::Hits).centroidHz.hi == mock.lane (Style::Bouncy, Lane::Hits).centroidHz.hi,
+            "genre json: stab_chord covers STAB and PLUCK only; HITS keeps its own values");
+    expect (std::fabs (box.style (Style::Jackin).groove.swing.hi - 0.646f) < 1.0e-4f, "genre json: ext swing percent becomes a ratio band");
+}
+
+// Kit meshing rules (KitMesh.h) on mock features: no audio, no library.
+void testKitMesh()
+{
+    using namespace rolla::genre;
+    auto make = [] (Lane lane, float sub, float centroid, float root, float conf)
+    {
+        SampleFeatures s;
+        s.lane = lane;
+        s.subRatio = sub;
+        s.centroidHz = centroid;
+        s.attackMs = 5.f;
+        s.decay20Ms = 150.f;
+        s.pitch.rootPitch = root;
+        s.pitch.conf = conf;
+        s.pitch.chordPcs = (std::uint16_t) (root >= 0.f ? 1 : 0);
+        return s;
+    };
+    MeshContext ctx;
+    ctx.keyRootPc = 0; // C minor
+    const float at = ctx.rules.conflictAt;
+
+    // Kick vs bass. The bass is retuned to the line (the key root, C); the kick is not.
+    const auto bass = make (Lane::Bass, 0.8f, 90.f, 36.f, 0.9f);
+    const auto kickClash = make (Lane::Kick, 0.8f, 80.f, 35.f, 0.8f); // B1, a semitone under C
+    const auto r1 = pairPenalty (kickClash, bass, ctx);
+    expect (r1.penalty >= at && r1.reason == MeshReason::FundamentalClash,
+            "mesh: sub-heavy kick a semitone off a sub-heavy bass conflicts");
+    expect (pairPenalty (bass, kickClash, ctx).penalty == r1.penalty, "mesh: pair order does not matter");
+    const auto cleanBass = make (Lane::Bass, 0.6f, 90.f, 36.f, 0.9f);
+    const auto cleanKick = make (Lane::Kick, 0.6f, 80.f, 36.f, 0.8f); // tuned to the key root
+    expect (pairPenalty (cleanKick, cleanBass, ctx).penalty == 0.f, "mesh: a kick on the key root with a normal bass is clean");
+    auto longKick = cleanKick;
+    longKick.decay20Ms = 400.f; // still over -20 dB when the offbeat bass is up (238 ms at 126 BPM)
+    const auto r2 = pairPenalty (longKick, cleanBass, ctx);
+    expect (r2.penalty >= at && r2.reason == MeshReason::KickTailOverlap, "mesh: a long kick tail over the bass conflicts");
+    const auto proxyKick = make (Lane::Kick, 0.8f, 93.5f, -1.f, 0.f); // no tail pitch: f0 from the centroid (~62 Hz, B1)
+    const float proxy = pairPenalty (proxyKick, bass, ctx).penalty;
+    expect (proxy > 0.f && proxy < at, "mesh: a centroid-proxy fundamental clash counts, but not alone");
+
+    // Bass vs stab: low-mid masking and register.
+    const auto muddyStab = make (Lane::Stab, 0.35f, 250.f, 40.f, 0.8f);
+    const auto r3 = pairPenalty (bass, muddyStab, ctx);
+    expect (r3.penalty >= at && r3.reason == MeshReason::LowMidMasking, "mesh: a dark, sub-heavy low stab over the bass conflicts");
+    const auto stab = make (Lane::Stab, 0.05f, 900.f, 60.f, 0.85f);
+    expect (pairPenalty (bass, stab, ctx).penalty == 0.f, "mesh: a bright stab two octaves up is clean against the bass");
+
+    // Stab vs pad register spacing.
+    const auto padClose = make (Lane::Pad, 0.02f, 800.f, 62.f, 0.8f);
+    const auto r4 = pairPenalty (stab, padClose, ctx);
+    expect (r4.penalty >= at && r4.reason == MeshReason::RegisterCrowding, "mesh: stab and pad roots a tone apart conflict");
+    const auto padUnder = make (Lane::Pad, 0.02f, 500.f, 48.f, 0.8f);
+    expect (pairPenalty (stab, padUnder, ctx).penalty == 0.f, "mesh: a pad an octave under the stab is clean");
+
+    // Key: a confident major-triad file on one-finger lines in C minor sounds E natural.
+    auto majorStab = stab;
+    majorStab.pitch.isChord = true;
+    majorStab.pitch.quality = rolla::ChordQuality::Major;
+    majorStab.pitch.chordPcs = (std::uint16_t) ((1u << 0) | (1u << 4) | (1u << 7));
+    const auto k1 = keyPenalty (majorStab, ctx);
+    expect (k1.penalty >= at && k1.reason == MeshReason::OutOfKey, "mesh: a major chord file conflicts in minor");
+    auto inMajor = ctx;
+    inMajor.scaleMask = kScaleMajor;
+    expect (keyPenalty (majorStab, inMajor).penalty == 0.f, "mesh: the same chord file fits a major key");
+    auto asked = ctx;
+    asked.chordAsk = true; // written minor triads: the sampler plays it from the minor third (Eb G Bb)
+    expect (keyPenalty (majorStab, asked).penalty == 0.f, "mesh: chordFileOffset rescues a major file on asked minor triads");
+    expect (keyPenalty (stab, ctx).penalty == 0.f, "mesh: a confident single note always lands in key");
+    const auto vox = make (Lane::Vox, 0.0f, 1600.f, 61.f, 0.9f); // C#, not retuned
+    expect (keyPenalty (vox, ctx).penalty >= at, "mesh: an unretuned vox on a wrong pitch class conflicts");
+    const auto weakStab = make (Lane::Stab, 0.05f, 900.f, 61.f, 0.4f); // plays as recorded
+    const float weak = keyPenalty (weakStab, ctx).penalty;
+    expect (weak > 0.f && weak < at, "mesh: a low-confidence wrong pitch counts, scaled by its confidence");
+    auto noKey = ctx;
+    noKey.keyRootPc = -1;
+    expect (keyPenalty (majorStab, noKey).penalty == 0.f, "mesh: no key, no key rule");
+
+    // Top band.
+    const auto hat = make (Lane::HatC, 0.f, 8700.f, -1.f, 0.f);
+    const auto ride = make (Lane::Ride, 0.f, 8900.f, -1.f, 0.f);
+    const auto hatO = make (Lane::HatO, 0.f, 8800.f, -1.f, 0.f);
+    expect (pairPenalty (hat, ride, ctx).reason == MeshReason::TopBandClash && pairPenalty (hat, ride, ctx).penalty >= at,
+            "mesh: a ride on the closed hat's band conflicts");
+    expect (pairPenalty (hat, hatO, ctx).penalty == 0.f, "mesh: closed and open hat are a pair by design");
+
+    // Whole kit, and the selector hook.
+    const std::vector<SampleFeatures> kit { kickClash, bass, majorStab };
+    const auto conflicts = kitConflicts (kit, ctx);
+    expect (conflicts.size() == 2 && conflicts[0].a == 0 && conflicts[0].b == 1 && conflicts[1].a == 2 && conflicts[1].b == -1
+                && conflicts[1].reason == MeshReason::OutOfKey,
+            "mesh: kitConflicts lists the kick/bass clash and the out-of-key chord");
+    const auto hook = pairPenaltyHook (ctx);
+    expect (hook (cleanKick, majorStab) >= at && hook (cleanKick, stab) == 0.f, "mesh: the hook adds each member's key penalty");
+    expect (pairPenaltyHook (ctx, false) (cleanKick, majorStab) == 0.f, "mesh: the hook without key is pairs only");
+
+    // Config: a file overrides what it has and keeps the rest.
+    const auto rules = parseMeshRules (juce::JSON::parse (R"JSON({"crowding":{"full_clear_st":[1.0,1.5]},"conflict_at":1.5})JSON"));
+    expect (rules.crowdFullSt == 1.f && rules.crowdClearSt == 1.5f && rules.conflictAt == 1.5f
+                && rules.subHeavy == MeshRules::fromMixSpec().subHeavy,
+            "mesh json: given numbers override, missing keep the mix-spec defaults");
+    auto tuned = ctx;
+    tuned.rules = rules;
+    expect (pairPenalty (stab, padClose, tuned).penalty == 0.f, "mesh json: a tighter crowding tolerance clears a tone apart");
+    expect (loadMeshRules (juce::File ("/nonexistent/mesh_rules.json")).crowdClearSt == MeshRules::fromMixSpec().crowdClearSt,
+            "mesh json: no file means the defaults");
+}
+
 } // namespace
 
 int main()
@@ -438,6 +804,10 @@ int main()
     juce::ScopedJuceInitialiser_GUI juce;
 
     testPitchProbe();
+    testFingerprint();
+    testFingerprintTool();
+    testGenreTargets();
+    testKitMesh();
 
     static_assert (rolla::kUserSlotCount == 14, "14 user slots");
     expect (rolla::userSlotForPart (rolla::Bass) == rolla::SlotBass, "bass slot");
@@ -447,6 +817,23 @@ int main()
     expect (rolla::userSlotForDrum (rolla::Perc) == rolla::SlotPerc, "perc slot");
     expect (rolla::userSlotForDrum (rolla::TomLow) < 0, "toms stay on the dropped-wav path");
     expect (std::string (rolla::userSlotFolder (rolla::SlotPerc)) == "DRUMS/PERC", "perc folder");
+
+    // Kick key follow: every key gets a root / 4th / 5th inside 40-70 Hz,
+    // never an out-of-key 55 Hz fallback.
+    for (int key = 0; key < 12; ++key)
+    {
+        const float hz = rolla::DrumMachine::kickHzForKey (key);
+        const std::string tag = "kick key follow key " + std::to_string (key);
+        expect (hz >= 40.f && hz <= 70.f, tag + " in 40-70 Hz");
+        const int midi = (int) std::lround (69.0 + 12.0 * std::log2 ((double) hz / 440.0));
+        const int interval = ((midi % 12) - key + 12) % 12;
+        expect (interval == 0 || interval == 5 || interval == 7, tag + " is root/4th/5th");
+    }
+    expect (std::fabs (rolla::DrumMachine::kickHzForKey (10) - 55.f) > 0.5f, "kick key follow A# not 55 Hz");
+    expect (std::fabs (rolla::DrumMachine::kickHzForKey (11) - 55.f) > 0.5f, "kick key follow B not 55 Hz");
+    expect (std::fabs (rolla::DrumMachine::kickHzForKey (2) - 55.f) < 0.1f, "kick key follow D keeps A1");
+    expect (std::fabs (rolla::DrumMachine::kickHzForKey (10) - 58.27f) < 0.1f, "kick key follow A# -> A#1");
+    expect (std::fabs (rolla::DrumMachine::kickHzForKey (6) - 46.25f) < 0.1f, "kick key follow F# -> F#1");
 
     expect (rolla::midiFromFilename ("BASS/THMAG_Bass_One_Shot_4_Fm.wav") == 53, "Fm -> F3");
     expect (rolla::midiFromFilename ("STAB/thing_C#.wav") == 49, "C# -> C#3");
