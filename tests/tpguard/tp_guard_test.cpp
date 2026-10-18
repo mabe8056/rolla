@@ -13,6 +13,8 @@
 // lane to SYNTH; no sample pack is needed.
 // Part C checks the DRUMS bus mono-below-120 Hz: a hard-panned stereo kick
 // through MonoBelow, and JACKIN rolls whose DRUMS stem must correlate >= 0.99 below 120 Hz.
+// Part D (chain_click_test.cpp) renders kicks and rim/perc hits through their strips and
+// asserts the A&R click score does not rise (ROLLA_CLICK_PACK=<folder> adds pack files).
 
 #include "DspUtil.h"
 #include "Engine/Engine.h"
@@ -537,11 +539,15 @@ void partC()
 }
 } // namespace
 
+// Part D (chain_click_test.cpp): KICK / RIM / PERC strips add no clicks (A&R d2_clicks).
+int runChainClickTests();
+
 int main()
 {
     partA();
     partB();
     partC();
+    failures += runChainClickTests();
     std::printf ("%s: %d failure(s)\n", failures == 0 ? "OK" : "FAILED", failures);
     return failures == 0 ? 0 : 1;
 }
