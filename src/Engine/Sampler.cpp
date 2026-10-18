@@ -264,7 +264,8 @@ void Sampler::Voice::Env::start (float aMs, float dMs, float sGain, float rMs, f
     sustain = std::clamp (sGain, 0.f, 1.f);
     attInc = 1.f / std::max (1.f, aMs * 0.001f * sr);
     decC = coefFromMs (std::max (5.f, dMs) / 3.f, sr);
-    relC = coefFromMs (std::max (5.f, rMs) / 3.f, sr);
+    // At least a 4 ms time constant: a shorter release clicks on square or saw samples.
+    relC = coefFromMs (std::max (12.f, rMs) / 3.f, sr);
 }
 
 void Sampler::Voice::Env::release() noexcept
@@ -868,6 +869,9 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
         const int s = (choice.sliceIndex % audio->sliceCount + audio->sliceCount) % audio->sliceCount;
         startFrame = (double) audio->slices[s];
     }
+    // A vox chop that would start in the file's lead-in silence starts at the first word.
+    if (part == Vox && startFrame < (double) audio->lead)
+        startFrame = (double) audio->lead;
     fresh.pos = startFrame;
     fresh.loop = ! fromPack && played.loop.on && part != Hits && part != Vox;
     const auto region = makeLoopRegion (played.loop, audio->rate, audio->frames, startFrame);
@@ -887,8 +891,9 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
         fresh.loopA = 0.0;
         fresh.loopB = std::max (8.0, (double) audio->frames - 1.0);
         fresh.xfade = 0.0;
-        fresh.pos = 0.0;
-        fresh.anchor = 0.0;
+        // Vox phrases open on the first word, not on the file's lead-in silence.
+        fresh.pos = part == Vox ? (double) audio->lead : 0.0;
+        fresh.anchor = fresh.pos;
         fresh.spliceLeft = 0;
     }
 
@@ -1100,10 +1105,13 @@ void Sampler::render (float* laneL, float* laneR, float prev16, float pos16, boo
                 if (remain < window)
                     v.noteEdge = 0.5f * (1.f - std::cos (kSincPi * remain / window));
             }
-            else if (! born && prev16 < stop && pos16 + 1.0e-3f < prev16)
+            else if (! born && prev16 < stop && pos16 + 1.0e-3f < prev16 && ! v.stopping)
             {
-                v.on = false;
-                return;
+                // Loop wrap or a host relocate cut the note: fade it over 4 ms, never a hard cut.
+                v.attackLeft = 0;
+                v.releaseN = std::max (8, (int) (0.004 * sr));
+                v.releaseLeft = v.releaseN;
+                v.stopping = true;
             }
         }
         else if (playing && v.end16 < 1.0e8f)

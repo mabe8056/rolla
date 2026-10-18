@@ -53,6 +53,7 @@ struct Knobs
     float levelDb[rolla::NumParts] {};
     int intensity = 75;
     bool stems = false;
+    unsigned stemMask = 0x7fu; // --stem-lanes picks which stems --stems writes
 
     Knobs()
     {
@@ -220,13 +221,14 @@ Rendered renderWav (const rolla::PresetBank& bank, const rolla::Groove& groove, 
         params.tone[i] = knobs.tone[i];
         params.punch[i] = knobs.punch[i];
         params.levelDb[i] = knobs.levelDb[i];
+        // A stem solos its lane but never un-mutes a lane the style mutes.
         params.mute[i] = soloPart ? i != solo : false;
         params.preset[i] = preset != nullptr ? preset[i] : 0;
         params.samplePick[i] = samplePick != nullptr ? samplePick[i] : 0;
     }
     for (int v = 0; v < rolla::NumDrumVoices; ++v)
         params.drumDecay[v] = 0.5f;
-    if (! soloPart && hitsMute)
+    if (hitsMute)
         params.mute[rolla::Hits] = true;
     params.duck = true;
     params.drumsToMain = true;
@@ -388,41 +390,33 @@ std::string pickedFile (const rolla::SampleIndex* index, const rolla::SampleSpec
     return entry != nullptr ? entry->path : "";
 }
 
-void requestPicked (rolla::SampleLibrary& library, const rolla::SampleIndex& index, const rolla::SampleSpec& spec,
-                    int part, int voice, int pick, int dialect, std::vector<std::string>& paths)
-{
-    const int queryVoice = voice >= 0 ? voice : spec.filter.voice;
-    const rolla::PoolFilter filter = rolla::poolFilterFor (spec, part, queryVoice, dialect);
-    const int n = rolla::sampleIndexCount (index, part, filter);
-    if (n <= 0)
-        return;
-    if (pick < 0)
-        pick = 0;
-    const int start = pick % n;
-    const int window = std::min (n, 8);
-    for (int i = 0; i < window; ++i)
-    {
-        const auto* entry = rolla::sampleIndexAt (index, part, filter, (start + i) % n);
-        if (entry == nullptr)
-            continue;
-        library.request (entry->path);
-        paths.emplace_back (entry->path);
-    }
-}
-
 void waitReady (rolla::SampleLibrary& library, const std::vector<std::string>& paths)
 {
-    const auto readyBy = juce::Time::getMillisecondCounter() + 20000;
-    while (juce::Time::getMillisecondCounter() < readyBy)
+    const auto readyBy = juce::Time::getMillisecondCounter() + 60000;
+    bool waiting = true;
+    while (waiting && juce::Time::getMillisecondCounter() < readyBy)
     {
-        bool waiting = false;
+        waiting = false;
         for (const auto& path : paths)
             if (! library.ready (path.c_str()) && ! library.missing (path.c_str()))
                 waiting = true;
-        if (! waiting)
-            break;
-        juce::Thread::sleep (20);
+        if (waiting)
+            juce::Thread::sleep (10);
     }
+    // Say so loudly: a file still loading here plays as a silent note.
+    // Missing files are only counted: the sampler swaps them from the same pool.
+    int absent = 0;
+    for (const auto& path : paths)
+    {
+        if (library.ready (path.c_str()))
+            continue;
+        if (library.missing (path.c_str()))
+            ++absent;
+        else
+            std::cerr << "SAMPLE NOT READY (timeout) " << path << "\n";
+    }
+    if (absent > 0)
+        std::cerr << "samples not on disk for this roll: " << absent << " (swapped from the same pool)\n";
 }
 
 void writeSidecar (const juce::File& wav, int style, const Knobs& knobs, bool hitsMute, float swing,
@@ -554,26 +548,17 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
             std::string drumOf[rolla::NumDrumVoices];
             if (index != nullptr && library != nullptr)
             {
-                std::vector<std::string> paths;
                 for (int p = 0; p < rolla::Drums; ++p)
-                {
-                    const auto& spec = rolla::specAt (bank, p, preset[p]);
-                    fileOf[p] = pickedFile (index.get(), spec, p, -1, samplePick[p], style);
-                    requestPicked (*library, *index, spec, p, -1, samplePick[p], style, paths);
-                }
+                    fileOf[p] = pickedFile (index.get(), rolla::specAt (bank, p, preset[p]), p, -1, samplePick[p], style);
                 const auto& drums = rolla::specAt (bank, rolla::Drums, preset[rolla::Drums]);
                 fileOf[rolla::Drums] = pickedFile (index.get(), drums, rolla::Drums, rolla::Kick, samplePick[rolla::Drums], style);
                 const int voices[] = { rolla::Kick, rolla::Snare, rolla::Clap, rolla::Rim, rolla::HatC, rolla::HatO, rolla::Ride, rolla::Perc };
                 for (int voice : voices)
-                {
-                    int shift = 0;
-                    if (voice == rolla::TomMid)
-                        shift = 1;
-                    else if (voice == rolla::TomLow)
-                        shift = 2;
-                    drumOf[voice] = pickedFile (index.get(), drums, rolla::Drums, voice, samplePick[rolla::Drums] + shift, style);
-                    requestPicked (*library, *index, drums, rolla::Drums, voice, samplePick[rolla::Drums] + shift, style, paths);
-                }
+                    drumOf[voice] = pickedFile (index.get(), drums, rolla::Drums, voice, samplePick[rolla::Drums], style);
+                // The same list the plugin preloads on ROLL, so the renderer cannot drift from it.
+                std::vector<std::string> paths;
+                rolla::collectPlayFiles (bank, *index, preset, samplePick, style, 8, paths);
+                library->preload (paths);
                 waitReady (*library, paths);
             }
             std::vector<std::string> written;
@@ -603,6 +588,8 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
                 {
                     for (int part = 0; part < rolla::NumParts; ++part)
                     {
+                        if ((knobs.stemMask & (1u << (unsigned) part)) == 0)
+                            continue;
                         const auto stem = wav.getSiblingFile (wav.getFileNameWithoutExtension() + "_" + stemName (part) + ".wav");
                         renderWav (bank, arranged, style, stem, library.get(), index.get(),
                                    &mix, knobs, preset, samplePick, row.hitsMute, swing, true, part);
@@ -627,7 +614,7 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
 
 const char* usageText()
 {
-    return "rolla-rolls --samples DIR --style ukmin|long|pop|gaskin|all --count N --seed S [--out DIR] [--stems]\n"
+    return "rolla-rolls --samples DIR --style ukmin|long|pop|gaskin|all --count N --seed S [--out DIR] [--stems] [--stem-lanes DRUMS,BASS]\n"
            "            [--knob DARK=0.55] [--knob BUSY=0.40] [--knob BOUNCE=0.45] [--knob STAB=0.55]\n"
            "            [--knob TONE=0.5] [--knob PUNCH=0.5] [--knob LEVEL=0] [--knob INTENSITY=75]\n"
            "            [--knob BASS.TONE=0.5] [--knob BASS.PUNCH=0.5] [--knob BASS.LEVEL=0]\n";
@@ -659,6 +646,17 @@ int main (int argc, char** argv)
             return 0;
         }
         if (arg == "--stems") { knobs.stems = true; batch = true; }
+        else if (take ("--stem-lanes"))
+        {
+            // Comma list of BASS,STAB,HITS,PLUCK,PAD,VOX,DRUMS. Implies --stems.
+            knobs.stems = true;
+            knobs.stemMask = 0;
+            const juce::StringArray names = juce::StringArray::fromTokens (juce::String (value).toUpperCase(), ",", "");
+            for (int part = 0; part < rolla::NumParts; ++part)
+                if (names.contains (stemName (part)))
+                    knobs.stemMask |= 1u << (unsigned) part;
+            batch = true;
+        }
         else if (take ("--samples")) { samples = value; batch = true; }
         else if (take ("--style")) { style = value; batch = true; }
         else if (take ("--count")) { count = std::max (1, std::atoi (value)); batch = true; }
