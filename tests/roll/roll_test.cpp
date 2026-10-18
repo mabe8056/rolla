@@ -1,5 +1,7 @@
 #include "PluginProcessor.h"
 #include "Generator/MidiFile.h"
+#include "Generator/Presets.h"
+#include "Generator/StyleRoller.h"
 
 #include <juce_events/juce_events.h>
 
@@ -865,7 +867,11 @@ void testScorerV23()
         if (style == rolla::Gaskin)
             std::cout << " call-answer " << callOk << "/20";
         std::cout << "\n";
-        expect (answers >= 8 && answers <= 18, std::string (names[style]) + " bar 4 answers bar 2");
+        // ROLLER answers with P 0.85 (style_rules.json), so its band is 13-20; the rest keep 8-18.
+        if (style == rolla::UkMin)
+            expect (answers >= 13, std::string (names[style]) + " bar 4 answers bar 2 on most rolls");
+        else
+            expect (answers >= 8 && answers <= 18, std::string (names[style]) + " bar 4 answers bar 2");
         expect (pairs <= 2, std::string (names[style]) + " near-identical rhythm pairs <= 2");
         if (style == rolla::Gaskin)
             expect (gapPct >= 12.0 && gapPct <= 45.0, "JACKIN stabs land in bass gaps");
@@ -886,6 +892,22 @@ void testScorerV23()
         if (style == rolla::Gaskin)
             expect (callOk >= 12, "JACKIN call and answer");
     }
+}
+
+// ROLLER's style default swing (the preset bank the plugin loads) sits in the hat band.
+void testRollerSwing()
+{
+    rolla::RollaProcessor proc;
+    proc.waitUntilReady();
+    const auto bank = proc.sharePresets();
+    expect (bank != nullptr, "preset bank loaded");
+    if (bank == nullptr)
+        return;
+    const float swing = bank->dialect[rolla::UkMin].swing;
+    const auto& t = rolla::roller::kTargets;
+    std::cout << "ROLLER default swing " << swing << "\n";
+    expect (swing >= t.swingMin && swing <= t.swingMax && std::fabs (swing - t.swing) < 0.0015f,
+            "ROLLER default hat swing is the 53.7% band centre");
 }
 
 void testShuffleKeepsManualLock()
@@ -914,6 +936,7 @@ int main()
 
     testEarReview();
     testScorerV23();
+    testRollerSwing();
     testRollSkipsMutedAndKept();
     testShuffleClearsAutoKeep();
     testShuffleKeepsManualLock();

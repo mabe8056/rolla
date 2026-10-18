@@ -3444,6 +3444,9 @@ void writeDrums (DrumLane& drums, std::uint32_t seed, const Settings& s, Rng& rn
     for (int bar = 0; bar < rideBars && bar < s.bars; ++bar)
         for (int slot : { 2, 6, 10, 14 })
             drums.vel[Ride][bar * 16 + slot] = (std::uint8_t) rideVel;
+    // ROLLER hats / perc / turns (StyleRoller.h). Own seed stream; BUSY still thins or fills below.
+    if (s.dialect == UkMin)
+        roller::styleDrums (drums, s.bars, drums.seed);
     if (s.busy < 0.3f)
     {
         for (int t = 0; t < steps; ++t)
@@ -4316,6 +4319,8 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
             roller::anchorBeats (g.lane[Bass], s.bars, bassSeed);
             roller::turnBar8 (g.lane[Bass], s.bars, bassSeed);
             roller::spreadPositions (g.lane[Bass], s.bars, bassSeed);
+            roller::fitDensity (g.lane[Bass], s.bars, bassSeed, s.busy);
+            roller::answerBar4 (g.lane[Bass], s.bars, bassSeed);
         }
         else if (s.dialect == Gaskin)
         {

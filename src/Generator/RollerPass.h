@@ -189,3 +189,7 @@ inline void matchStabColour (Lane& bass, const Lane& stab)
 }
 
 } // namespace rolla::roller
+
+// The style pass builds on the helpers above; including it here keeps the
+// shared Generator.cpp include list untouched.
+#include "StyleRoller.h"

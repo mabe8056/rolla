@@ -152,7 +152,7 @@ inline const StyleCopy& styleCopy (int d) noexcept
 {
     static const StyleCopy rows[] = {
         { kStyleLabels[UkMin],
-          "Groove\tswing 52%\n"
+          "Groove\tswing 54%\n"
           "Notes\t1-4.5 sixteenths\n"
           "Bass\tpluck\n"
           "Stab\tdub\n"

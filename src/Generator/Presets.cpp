@@ -374,7 +374,7 @@ void loadDefaultPresets (PresetBank& bank)
     // pluginval's 512 KB macOS test thread can open the plugin.
     auto blank = std::make_unique<PresetBank>();
     bank = std::move (*blank);
-    fillDialect (bank.dialect[UkMin], "pluck", "dub", "warehouse", "hook", "air", "close", "tight", true, 0.52f);
+    fillDialect (bank.dialect[UkMin], "pluck", "dub", "warehouse", "hook", "air", "close", "tight", true, 0.537f);
     fillDialect (bank.dialect[Long], "round", "swell", "dusty", "bright", "wide", "booth", "tight", true, 0.51f);
     fillDialect (bank.dialect[Pop], "click", "click", "rave", "soft", "air", "chop", "tight", true, 0.50f);
     fillDialect (bank.dialect[Gaskin], "round", "swell", "warehouse", "hook", "dark", "chop", "room", false, 0.50f);

@@ -32,6 +32,7 @@
 #include "Generator/Generator.h"
 #include "Generator/Intensity.h"
 #include "Generator/MidiFile.h"
+#include "Generator/StyleRoller.h"
 
 #include <algorithm>
 #include <cmath>
@@ -376,6 +377,109 @@ Measures measure (int style, std::uint32_t base, const Settings& s)
     return m;
 }
 
+// ROLLER bands from data/genre/style_rules.json (roller::kTargets), over 20 rolls.
+struct RollerBands
+{
+    double npb = 0, npbMin = 99, npbMax = 0, onKick = 0, onKickMax = 0, ea = 0, eaMax = 0;
+    double cls[4] {}, m1 = 0, m2 = 0, m4 = 0, hiBand = 0, sd = 0;
+    int answers = 0, pickups = 0, drumTurns = 0, rolls = 0;
+};
+
+RollerBands rollerBands (std::uint32_t base)
+{
+    RollerBands b;
+    std::vector<Groove> seen;
+    const Settings s = defaults (UkMin);
+    for (int roll = 0; roll < kRolls; ++roll)
+    {
+        const Groove g = makeRoll (UkMin, base, roll, seen, s);
+        const Lane& bass = g.lane[Bass];
+        const int steps = g.bars * 16;
+        const double npb = (double) bass.count / g.bars;
+        b.npb += npb;
+        b.npbMin = std::min (b.npbMin, npb);
+        b.npbMax = std::max (b.npbMax, npb);
+        int cls[4] {};
+        std::vector<int> perBar ((size_t) g.bars, 0);
+        bool pickup = false;
+        for (int i = 0; i < bass.count; ++i)
+        {
+            const int t = (int) std::lround (bass.notes[i].start);
+            ++cls[t & 3];
+            ++perBar[(size_t) std::clamp (t / 16, 0, g.bars - 1)];
+            pickup = pickup || t >= steps - 2;
+        }
+        const double n = std::max (1, bass.count);
+        // Kicks sit on every beat, so on-kick is the beat class.
+        b.onKick += cls[0] / n;
+        b.onKickMax = std::max (b.onKickMax, cls[0] / n);
+        b.ea += (cls[1] + cls[3]) / n;
+        b.eaMax = std::max (b.eaMax, (cls[1] + cls[3]) / n);
+        for (int c = 0; c < 4; ++c)
+            b.cls[c] += cls[c] / n;
+        double mean = 0, var = 0;
+        for (int v : perBar)
+            mean += v;
+        mean /= g.bars;
+        for (int v : perBar)
+            var += (v - mean) * (v - mean);
+        b.sd += std::sqrt (var / g.bars);
+        // Bar 4 answers bar 2 by density (not pitch-only).
+        b.answers += perBar[3] != perBar[1] ? 1 : 0;
+        b.pickups += pickup ? 1 : 0;
+        // mK: share of 16ths whose sounding pitch (or rest) matches K bars later.
+        std::vector<int> tok ((size_t) steps, -99);
+        for (int i = 0; i < bass.count; ++i)
+        {
+            const int a = (int) std::lround (bass.notes[i].start);
+            const int e = (int) std::lround (bass.notes[i].start + bass.notes[i].length);
+            for (int t = a; t < e && t < steps; ++t)
+                tok[(size_t) t] = bass.notes[i].chord[0];
+        }
+        auto rep = [&] (int lag)
+        {
+            int same = 0, k = 0;
+            for (int t = 0; t + lag * 16 < steps; ++t, ++k)
+                same += tok[(size_t) t] == tok[(size_t) (t + lag * 16)] ? 1 : 0;
+            return k ? (double) same / k : 0.0;
+        };
+        b.m1 += rep (1);
+        b.m2 += rep (2);
+        b.m4 += rep (4);
+        // Hat / perc onsets per bar: a 16th with any high voice counts once.
+        int hi = 0;
+        for (int t = 0; t < steps; ++t)
+            hi += (g.drums.vel[HatC][t] || g.drums.vel[HatO][t] || g.drums.vel[Ride][t] || g.drums.vel[Perc][t]) ? 1 : 0;
+        b.hiBand += (double) hi / g.bars;
+        // Drum turn: the last bar's last beat carries more perc / rim / tom than the bars before it.
+        auto fill = [&] (int bar)
+        {
+            int f = 0;
+            for (int s16 = 12; s16 < 16; ++s16)
+                for (int v : { (int) Perc, (int) Rim, (int) TomLow })
+                    f += g.drums.vel[v][bar * 16 + s16] ? 1 : 0;
+            return f;
+        };
+        double others = 0;
+        for (int bar = 0; bar < g.bars - 1; ++bar)
+            others += fill (bar);
+        b.drumTurns += fill (g.bars - 1) > others / (g.bars - 1) ? 1 : 0;
+        ++b.rolls;
+    }
+    const double r = b.rolls;
+    b.npb /= r;
+    b.onKick /= r;
+    b.ea /= r;
+    for (double& c : b.cls)
+        c /= r;
+    b.m1 /= r;
+    b.m2 /= r;
+    b.m4 /= r;
+    b.hiBand /= r;
+    b.sd /= r;
+    return b;
+}
+
 void printLoop (const char* label, std::uint32_t base, const Measures& m)
 {
     std::printf ("%-8s seed %-10u distinct bars %.1f (max %d)  rep1 %.2f  rep2 %.2f  hooks %2d/20  clones %d\n",
@@ -469,7 +573,8 @@ int main (int argc, char** argv)
 
     // Every style frozen at its last intended change.
     // A style's hashes change only in the PR that means to change that style
-    // (regenerate with --golden). ROLLER changed in claude/roller-phrasing;
+    // (regenerate with --golden). ROLLER changed in claude/style-roller (style_rules.json
+    // pass: bass density, bar-4 answer, hats); its two values below need the --golden output;
     // BOUNCY in #28 (relegato); JACKIN in #25 (STAB) and claude/jackin-identity.
     const struct { int style; std::uint32_t base; std::uint64_t hash; } frozen[] = {
         { UkMin, 1u, 0x7c9dcbee6dddc8eaull }, { UkMin, 2u, 0x47a4548b99fd9987ull },
@@ -523,6 +628,33 @@ int main (int argc, char** argv)
         std::snprintf (what, sizeof what, "ROLLER seed %u: grid-locked %d/20, no turn %d/20, b2 clashes %d/20, on-beat %.2f",
                        base, m.gridLocked, m.noTurn, m.b2Clash, m.onBeat);
         check (m.gridLocked <= 2 && m.noTurn == 0 && m.b2Clash == 0 && m.onBeat >= 0.10 && m.onBeat <= 0.30, what);
+
+        // ROLLER style bands (style_rules.json via roller::kTargets).
+        const auto& T = roller::kTargets;
+        const auto rb = rollerBands (base);
+        std::printf ("ukmin    seed %-10u npb %.2f [%.2f-%.2f] sd %.2f  on-kick %.2f (max %.2f)  e+a %.2f (max %.2f)  "
+                     "class %.2f/%.2f/%.2f/%.2f  m1 %.2f m2 %.2f m4 %.2f  bar4 %d/20  pickup %d/20  hi-band %.1f  drum turns %d/20\n",
+                     base, rb.npb, rb.npbMin, rb.npbMax, rb.sd, rb.onKick, rb.onKickMax, rb.ea, rb.eaMax, rb.cls[0], rb.cls[1],
+                     rb.cls[2], rb.cls[3], rb.m1, rb.m2, rb.m4, rb.answers, rb.pickups, rb.hiBand, rb.drumTurns);
+        std::snprintf (what, sizeof what, "ROLLER seed %u bass: %.2f notes/bar (rolls %.2f-%.2f), on-kick %.2f (max %.2f), e+a %.2f (max %.2f)",
+                       base, rb.npb, rb.npbMin, rb.npbMax, rb.onKick, rb.onKickMax, rb.ea, rb.eaMax);
+        check (rb.npb >= 4.0 && rb.npb <= 6.0 && rb.npbMin >= T.bassNpbMin && rb.npbMax <= T.bassNpbMax
+                   && rb.onKick <= T.onKickMax && rb.onKickMax <= 0.35 && rb.ea <= T.eaMax && rb.eaMax <= 0.85,
+               what);
+        std::snprintf (what, sizeof what, "ROLLER seed %u phrase: density sd %.2f, bar-4 density answers %d/20, pickups %d/20, m2 %.2f, m4 %.2f",
+                       base, rb.sd, rb.answers, rb.pickups, rb.m2, rb.m4);
+        check (rb.sd >= 0.5 && rb.answers >= 12 && rb.pickups >= (int) std::ceil (T.pickupMinShare * kRolls)
+                   && rb.m2 >= 0.6 && rb.m4 >= 0.65,
+               what);
+        std::snprintf (what, sizeof what, "ROLLER seed %u drums: %.1f hat/perc onsets a bar, last-bar turns %d/20", base, rb.hiBand,
+                       rb.drumTurns);
+        check (rb.hiBand >= 9.0 && rb.hiBand <= 14.0 && rb.drumTurns >= 14, what);
+    }
+    {
+        // Hat swing default sits in the band (swing is per style, applied by the engine).
+        const auto& T = roller::kTargets;
+        std::snprintf (what, sizeof what, "ROLLER hat swing default %.3f inside %.3f-%.3f", T.swing, T.swingMin, T.swingMax);
+        check (T.swing >= T.swingMin && T.swing <= T.swingMax && std::fabs (T.swing - 0.537f) < 1e-4f, what);
     }
 
     // JACKIN review: a hooky 2-bar loop (A B A B4 A B A B8) that still differs
