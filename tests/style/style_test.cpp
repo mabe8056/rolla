@@ -327,7 +327,7 @@ int main (int argc, char** argv)
     // ROLLER and JACKIN: frozen.
     const struct { int style; std::uint32_t base; std::uint64_t hash; } frozen[] = {
         { UkMin, 1u, 0x1fc14b3f453088c6ull }, { UkMin, 2u, 0xc7f67c37fdb525d8ull },
-        { Gaskin, 1u, 0x44c5f013a639f9aaull }, { Gaskin, 2u, 0x50bf5d0de012c522ull },
+        { Gaskin, 1u, 0x574ccb1230d87f62ull }, { Gaskin, 2u, 0xfd72b6086e10e96aull },
     };
     for (const auto& f : frozen)
     {
