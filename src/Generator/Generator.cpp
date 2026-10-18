@@ -722,6 +722,240 @@ void writeBass (Lane& lane, const Settings& s, Rng& rng, const char* plan, const
                                         : "beat1_signature,hold_lean,syncop_pair,answer_tag,rest");
 }
 
+// Repeat a 2-bar phrase so the loop matches itself, and salt bar 0 from the
+// seed so two rolls do not share a bass skeleton. The answer bar differs in
+// the back half (and, for Gaskin, on most of the front) so a call still exists.
+void lockPhrase (Lane& lane, int dialect, std::uint32_t seed, int bars)
+{
+    if (bars < 4 || lane.count <= 0)
+        return;
+    auto barOf = [] (float start) { return (int) std::floor (start / 16.f + 1.0e-4f); };
+    auto slotOf = [] (float start)
+    {
+        int s = (int) std::lround (start);
+        s %= 16;
+        if (s < 0)
+            s += 16;
+        return s;
+    };
+
+    int keep = 0;
+    for (int i = 0; i < lane.count; ++i)
+        if (barOf (lane.notes[i].start) == 0)
+            lane.notes[keep++] = lane.notes[i];
+    lane.count = keep;
+    if (lane.count <= 0)
+        return;
+
+    bool on[16] {};
+    int at[16];
+    for (int s = 0; s < 16; ++s)
+        at[s] = -1;
+    for (int i = 0; i < lane.count; ++i)
+    {
+        const int s = slotOf (lane.notes[i].start);
+        if (s >= 0 && s < 16 && ! on[s])
+        {
+            on[s] = true;
+            at[s] = i;
+        }
+    }
+    const int saltSlots[8] = { 2, 3, 6, 7, 10, 11, 14, 15 };
+    for (int k = 0; k < 2; ++k)
+    {
+        const int s = saltSlots[(seed >> (k * 3)) & 7u];
+        int nOn = 0;
+        for (bool v : on)
+            nOn += v ? 1 : 0;
+        if (on[s])
+        {
+            if (nOn > 4 && at[s] >= 0)
+            {
+                lane.notes[at[s]].length = 0.f;
+                on[s] = false;
+            }
+        }
+        else if (lane.count < kMaxNotes && nOn < 8)
+        {
+            Note extra = lane.notes[0];
+            extra.start = (float) s;
+            extra.length = 1.f;
+            extra.vel = 80;
+            extra.flags = (std::uint8_t) NoteGhost;
+            at[s] = lane.count;
+            lane.notes[lane.count++] = extra;
+            on[s] = true;
+        }
+    }
+    keep = 0;
+    for (int i = 0; i < lane.count; ++i)
+        if (lane.notes[i].length > 0.05f)
+            lane.notes[keep++] = lane.notes[i];
+    lane.count = keep;
+
+    Note phrase[32];
+    int nPhrase = 0;
+    for (int i = 0; i < lane.count && nPhrase < 16; ++i)
+        phrase[nPhrase++] = lane.notes[i];
+
+    auto pushNote = [&] (Note n)
+    {
+        if (lane.count >= kMaxNotes || n.length < 0.05f)
+            return;
+        lane.notes[lane.count++] = n;
+    };
+
+    if (dialect == Gaskin)
+    {
+        bool sound[16] {};
+        int pitchNote = 0;
+        for (int i = 0; i < nPhrase; ++i)
+        {
+            const int a = slotOf (phrase[i].start);
+            const int len = std::max (1, (int) std::lround (phrase[i].length));
+            for (int k = 0; k < len && a + k < 16; ++k)
+                sound[a + k] = true;
+            pitchNote = i;
+        }
+        const int matchA = (int) ((seed >> 8) % 8u);
+        const int matchB = (int) ((seed >> 12) % 7u);
+        const int matchC = (int) ((seed >> 16) % 6u);
+        bool keepSame[8] {};
+        keepSame[matchA] = true;
+        keepSame[(matchA + 1 + matchB) % 8] = true;
+        keepSame[(matchA + 2 + matchC) % 8] = true;
+        int attacks = 0;
+        int kickAttacks = 0;
+        Note built[16];
+        int nBuilt = 0;
+        for (int s = 0; s < 16 && nBuilt < 16; ++s)
+        {
+            const bool front = s < 8;
+            const bool want = front ? (keepSame[s] ? sound[s] : ! sound[s]) : ! sound[s];
+            if (! want)
+                continue;
+            int place = s;
+            if (kickSlot (place))
+            {
+                const int alt = place < 15 ? place + 1 : place - 1;
+                if (! kickSlot (alt))
+                    place = alt;
+            }
+            Note n = phrase[pitchNote];
+            if (front && keepSame[s])
+            {
+                for (int i = 0; i < nPhrase; ++i)
+                    if (slotOf (phrase[i].start) == s)
+                        n = phrase[i];
+            }
+            n.start = 16.f + (float) place;
+            n.length = 1.f;
+            n.flags = 0;
+            bool clash = false;
+            for (int i = 0; i < nBuilt; ++i)
+                if ((int) std::lround (built[i].start) == (int) std::lround (n.start))
+                    clash = true;
+            if (clash)
+                continue;
+            built[nBuilt++] = n;
+            ++attacks;
+            if (kickSlot (place))
+                ++kickAttacks;
+        }
+        while (nBuilt > 1 && attacks > 0 && (float) kickAttacks / (float) attacks > 0.35f)
+        {
+            bool removed = false;
+            for (int i = nBuilt - 1; i >= 0; --i)
+            {
+                const int s = (int) std::lround (built[i].start) - 16;
+                if (! kickSlot (s))
+                    continue;
+                built[i] = built[nBuilt - 1];
+                --nBuilt;
+                --attacks;
+                --kickAttacks;
+                removed = true;
+                break;
+            }
+            if (! removed)
+                break;
+        }
+        if (nBuilt == 0)
+        {
+            Note n = phrase[0];
+            n.start = 18.f;
+            n.length = 1.f;
+            built[nBuilt++] = n;
+            n.start = 26.f;
+            built[nBuilt++] = n;
+        }
+        for (int i = 0; i < nBuilt && nPhrase < 32; ++i)
+            phrase[nPhrase++] = built[i];
+    }
+    else
+    {
+        bool used[16] {};
+        const int nBar0 = nPhrase;
+        for (int i = 0; i < nBar0 && nPhrase < 32; ++i)
+        {
+            Note n = phrase[i];
+            int slot = slotOf (n.start);
+            n.start = 16.f + (float) slot;
+            if (slot >= 8)
+            {
+                const int dir = (seed & 1u) != 0u ? 1 : -1;
+                int moved = slot + dir;
+                if (moved < 8 || moved > 15)
+                    moved = slot - dir;
+                if (moved >= 8 && moved <= 15 && ! kickSlot (moved))
+                {
+                    n.start = 16.f + (float) moved;
+                    slot = moved;
+                }
+            }
+            if (used[slot])
+                continue;
+            used[slot] = true;
+            phrase[nPhrase++] = n;
+        }
+    }
+
+    lane.count = 0;
+    for (int i = 0; i < nPhrase; ++i)
+        pushNote (phrase[i]);
+    const int baseCount = lane.count;
+    for (int bar = 2; bar < bars && bar < 8; ++bar)
+    {
+        const int srcBar = bar & 1;
+        for (int i = 0; i < baseCount; ++i)
+        {
+            if (barOf (lane.notes[i].start) != srcBar)
+                continue;
+            Note n = lane.notes[i];
+            n.start += (float) ((bar - srcBar) * 16);
+            pushNote (n);
+        }
+    }
+
+    const int last = std::min (bars, 8) - 1;
+    const float cut = (float) (last * 16 + 12);
+    keep = 0;
+    for (int i = 0; i < lane.count; ++i)
+    {
+        Note n = lane.notes[i];
+        if (n.start >= (float) (last * 16) && n.start < (float) ((last + 1) * 16))
+        {
+            if (n.start >= cut - 0.05f)
+                continue;
+            if (n.start + n.length > cut)
+                n.length = cut - n.start;
+        }
+        if (n.length > 0.05f)
+            lane.notes[keep++] = n;
+    }
+    lane.count = keep;
+}
+
 bool bassSounds (const Lane& lane, int slot)
 {
     for (int i = 0; i < lane.count; ++i)
@@ -798,49 +1032,68 @@ void writeStab (Lane& lane, const Lane& bass, const Settings& s, Rng& rng, float
 void writeHits (Lane& lane, const Groove& g, const Settings& s, Rng& rng)
 {
     clearLane (lane, lane.seed);
+    // styleIntensity only adds or removes the lane. The 0-100 INTENSITY slider
+    // is applyIntensity: it gates lanes and never scales these velocities.
+    // Velocity stays 106, the level the UK MIN hits-vs-bass gate was set on.
     if (s.styleIntensity <= 0.25f)
         return;
-    const int bars[4] = { 1, 3, 5, 7 };
-    const int nHits = 2 + (int) (rng.next() * 3);
-    for (int h = 0; h < nHits; ++h)
+
+    const float mix = std::clamp (s.busy * 0.45f + s.stab * 0.55f, 0.f, 1.f);
+    int want = (int) std::lround (1.f + 8.f * mix);
+    if (s.stab < 0.08f)
+        want = std::min (want, 3);
+    want = clampi (want, 1, 10);
+    if (s.styleIntensity >= 0.75f)
+        want = std::min (10, want + 2);
+
+    const int loop = std::min (s.bars, 8) * 16;
+    const int prefer[] = { 6, 14, 10, 2, 7, 15, 3, 11 };
+    const int voi[][3] = {
+        { 0, 7, 12 },
+        { 3, 10, 15 },
+        { 7, 10, 19 },
+        { 0, 3, 10 },
+    };
+    const int voice = (int) (rng.next() * 4.0) % 4;
+
+    for (int n = 0; n < want && lane.count < kMaxNotes; ++n)
     {
-        const int bar = bars[(int) (rng.next() * 4) % 4];
-        if (bar >= s.bars)
-            continue;
-        for (int slot : { 13, 15, 14 })
+        int best = -1;
+        float bestS = -1.f;
+        for (int t = 0; t < loop; ++t)
         {
-            const int abs = bar * 16 + slot;
-            if (kickSlot (slot))
+            if (kickSlot (t % 16) || bassOnset (g.lane[Bass], t) || bassOnset (g.lane[Stab], t))
                 continue;
-            bool taken = false;
-            for (int p = 0; p < Drums; ++p)
+            bool clash = false;
+            for (int k = 0; k < lane.count; ++k)
+                if (std::fabs (lane.notes[k].start - (float) t) < 3.f)
+                    clash = true;
+            if (clash)
+                continue;
+            float sc = (float) rng.next();
+            const int slot = t % 16;
+            for (int p : prefer)
+                if (slot == p)
+                    sc += 0.8f;
+            if (((t / 16) & 1) == 1)
+                sc += 0.25f;
+            if (sc > bestS)
             {
-                if (p == Hits)
-                    continue;
-                for (int i = 0; i < g.lane[p].count; ++i)
-                    if ((int) std::lround (g.lane[p].notes[i].start) == abs)
-                        taken = true;
+                bestS = sc;
+                best = t;
             }
-            if (taken)
-                continue;
-            float len = 1.5f + (float) ((int) (rng.next() * 8)) * 0.5f;
-            const float end = (float) (s.bars * 16);
-            if ((float) abs + len > end)
-                len = end - (float) abs;
-            if ((float) abs + len > (float) ((bar + 1) * 16))
-                len = (float) ((bar + 1) * 16 - abs);
-            if (len < 1.f)
-                continue;
-            Ev e;
-            e.start = (float) abs;
-            e.len = len;
-            e.nChord = 1;
-            const int degs[] = { 0, 2, 3, 5, 7, 10 };
-            e.chord[0] = (std::int8_t) degs[(int) (rng.next() * 6.0) % 6];
-            e.vel = 90;
-            pushEv (lane, e, s.bars);
-            break;
         }
+        if (best < 0)
+            break;
+        Ev e;
+        e.start = (float) best;
+        e.len = rng.next() < 0.65 ? 1.f : 1.5f;
+        e.nChord = 3;
+        for (int c = 0; c < 3; ++c)
+            e.chord[c] = (std::int8_t) voi[voice][c];
+        e.vel = 106;
+        if (pushEv (lane, e, s.bars))
+            lane.notes[lane.count - 1].timbre = (std::uint8_t) ((int) (rng.next() * 5.0) % 5);
     }
 }
 
@@ -1625,6 +1878,8 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
     g.penalty = nPool > 0 ? pool[chosen].penalty : 0.f;
     if (nPool > 0)
         std::snprintf (g.brokenRules, sizeof g.brokenRules, "%s", pool[chosen].tag);
+    if (regen (Bass))
+        lockPhrase (g.lane[Bass], s.dialect, bassSeed, s.bars);
     g.guardScore = shippedHard ? 0.f : 1.f;
     g.guardLevel = shippedHard ? 2 : 0;
     std::snprintf (g.guardRef, sizeof g.guardRef, "%s", shippedHard ? "HARD" : "ORIGINAL");

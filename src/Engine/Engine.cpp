@@ -40,10 +40,11 @@ struct Env
         atkAge = 0;
         sustain = std::clamp (sGain, 0.f, 1.f);
         // A 1 ms linear attack opens as one sample step of the whole voice.
-        // Stretch only those short attacks into a 6 ms raised cosine. Longer
-        // attacks stay linear, which is already under the click floor.
+        // Stab chords (1 ms) need about 12 ms or the slope in a quiet bar
+        // reads as a click. Other short attacks use 6 ms. Longer attacks
+        // stay linear, which is already under the click floor.
         cosineAtk = aMs < 6.f;
-        const float atkMs = cosineAtk ? 6.f : aMs;
+        const float atkMs = aMs < 2.f ? 12.f : (cosineAtk ? 6.f : aMs);
         atkN = std::max (1, (int) std::lround (atkMs * 0.001f * sr));
         attInc = 1.f / std::max (1.f, atkMs * 0.001f * sr);
         decC = coefFromMs (std::max (5.f, dMs) / 3.f, sr);
@@ -121,7 +122,7 @@ struct BassV
     float freq = 40.f, targetFreq = 40.f, glideC = 1.f;
     bool gliding = false;
     float cut = 170.f, envOct = 2.f, fEnv = 0.f, fCoef = 0.99f, res = 0.05f, drive = 0.f;
-    float subGain = 0.5f, oct2Gain = 0.f, trim = 0.3f, velGain = 0.8f;
+    float subGain = 0.5f, oct2Gain = 0.f, trim = 0.3f, velGain = 0.8f, velTarget = 0.8f;
     float subLpfHz = 0.f;
     float pitchSt = 0.f, pitchCoef = 1.f;
     float ring = 0.f, last = 0.f;
@@ -939,7 +940,11 @@ void Engine::process (const Groove& groove,
                     E.live.fEnv = 0.f;
                 E.live.oct2Gain = bp.oct2Db < -80.f ? 0.f : dbToGain (bp.oct2Db);
                 E.live.trim = dbToGain (bp.trimDb) * 0.35f * (taken.kind == 2 ? taken.synthGain : 1.f);
-                E.live.velGain = velGainOf (incoming[e].vel);
+                // A glide keeps the envelope open. Stepping velGain there is a one-sample click.
+                const float liveVel = velGainOf (incoming[e].vel);
+                if (! legato)
+                    E.live.velGain = liveVel;
+                E.live.velTarget = liveVel;
                 E.live.dc.setCutoff (bp.hpfHz, srF);
                 E.live.midiCh = 0;
                 emitOn (i, 0, note, incoming[e].vel, E.live.midiOn, E.live.midiNote);
@@ -1022,7 +1027,12 @@ void Engine::process (const Groove& groove,
                     E.bass.fEnv = 0.f;
                 E.bass.oct2Gain = 0.f;
                 E.bass.trim = dbToGain (bp.trimDb) * 0.38f * (taken.kind == 2 ? taken.synthGain : 1.f);
-                E.bass.velGain = velGainOf (n.vel);
+                // Glide (or an explicit slide) leaves the amp open. Apply the new
+                // velocity through velTarget so the sounding note does not step.
+                const float bassVel = velGainOf (n.vel);
+                if (! legato)
+                    E.bass.velGain = bassVel;
+                E.bass.velTarget = bassVel;
                 E.bass.dc.setCutoff (bp.hpfHz, srF);
                 E.bass.midiCh = 0;
                 emitOn (i, 0, semi, n.vel, E.bass.midiOn, E.bass.midiNote);
@@ -1417,8 +1427,9 @@ void Engine::process (const Groove& groove,
                     }
                     drumOn (drumMidiNote (voice), vel, midiHold (voice));
 
-                    // Sample kits never feed the circuit model. A missing file is
-                    // another hit from the DRUMS pack, inside takeDrum.
+                    // Sample kits play the file, then the rest of the DRUMS pack.
+                    // If that slot is missing or the library is absent, takeDrum
+                    // returns the 909 gain so the hit is not silence.
                     const bool circuitKit = dp.sample.mode == SampleMode::Synth;
                     float keep = 0.f;
                     if (startSample (voice, vel, stepAcc))
@@ -1435,17 +1446,19 @@ void Engine::process (const Groove& groove,
                         req.key = drumVoiceKey (voice);
                         req.midiNote = drumMidiNote (voice);
                         const float slotKeep = slot->trigger (req);
-                        if (circuitKit)
+                        if (slotKeep <= 0.001f)
+                            keep = 0.f;
+                        else if (circuitKit)
                             keep = slotKeep;
-                        else if (slotKeep > 0.001f)
-                            sampler.takeDrum (voice, vel, bank, play);
+                        else
+                            keep = sampler.takeDrum (voice, vel, bank, play);
                     }
                     else if (circuitKit)
                         keep = 1.f;
                     else
-                        sampler.takeDrum (voice, vel, bank, play);
+                        keep = sampler.takeDrum (voice, vel, bank, play);
 
-                    if (circuitKit && keep > 0.001f)
+                    if (keep > 0.001f)
                     {
                         DrumHit hit;
                         hit.voice = voice;
@@ -1586,6 +1599,17 @@ void Engine::process (const Groove& groove,
                 if (v.subLpfHz > 1.f)
                     sub = v.subLp.process (sub, v.subLpfHz, 0.f, srF);
                 y += v.subGain * sub;
+            }
+            if (std::fabs (v.velGain - v.velTarget) > 1.0e-6f)
+            {
+                // 5 ms covers a ghost (80) against an accent (112), about a 6 dB move.
+                const float step = std::max (v.velGain, v.velTarget) / std::max (1.f, 0.005f * srF);
+                if (v.velGain + step < v.velTarget)
+                    v.velGain += step;
+                else if (v.velGain - step > v.velTarget)
+                    v.velGain -= step;
+                else
+                    v.velGain = v.velTarget;
             }
             y = v.dc.process (y) * v.env.amp * v.velGain * v.trim;
             y += v.ring;

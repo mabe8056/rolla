@@ -229,7 +229,8 @@ bool readyChoice (const SampleLibrary* library, const SampleSpec& spec, int midi
 }
 
 // The chosen preset wins. A confirmed-missing file tries the rest of the lane.
-// A file that is still loading does not get replaced, and nothing here selects the synth.
+// A file that is still loading does not get replaced by another sample.
+// If nothing is ready, take() plays the matching synth instead of silence.
 LaneHit resolveLane (const PresetBank& bank, const EngineParams& params, int part,
                      int midiNote, int sliceIndex) noexcept
 {
@@ -752,12 +753,9 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     const auto& spec = sampleSpecFor (bank, part, presetOf (params, part));
     if (spec.mode == SampleMode::Synth)
         return result;
+    // No library: the factory slot cannot load, so the lane synth plays.
     if (params.library == nullptr)
-    {
-        result.kind = 1;
-        result.synthGain = 0.f;
         return result;
-    }
 
     const int sliceIndex = sliceCursor[part]++;
     LaneHit hit;
@@ -822,20 +820,21 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
             }
         }
     }
+    // Still loading: the sample owns this hit, so the synth stays off until it arrives.
+    // Confirmed missing, with the pool empty: kind 0 is the matching lane synth.
     if (audio == nullptr || audio->frames < 8)
     {
-        result.kind = 1;
-        result.synthGain = 0.f;
+        if (hit.pending)
+        {
+            result.kind = 1;
+            result.synthGain = 0.f;
+        }
         return result;
     }
 
     Voice* slot = allocate (part);
     if (slot == nullptr)
-    {
-        result.kind = 1;
-        result.synthGain = 0.f;
         return result;
-    }
 
     const auto amp = ampFor (bank, part, presetOf (params, part));
     const float srF = (float) sr;
@@ -923,8 +922,9 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
     const auto& spec = sampleSpecFor (bank, Drums, preset);
     if (spec.mode == SampleMode::Synth)
         return 1.f;
+    // No library: keep the matching 909 voice.
     if (params.library == nullptr)
-        return 0.f;
+        return 1.f;
 
     // Own folder first. A missing hit then comes from the rest of the pack
     // (perc, open hat, ride, then the other folders). The circuit model is not a source.
@@ -1022,12 +1022,13 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
             }
         }
     }
+    // Still loading: do not also start the 909. Confirmed missing: keep the model.
     if (audio == nullptr || audio->frames < 8)
-        return 0.f;
+        return pending ? 0.f : 1.f;
 
     Voice* slot = allocate (Drums);
     if (slot == nullptr)
-        return 0.f;
+        return 1.f;
 
     const auto amp = ampFor (bank, Drums, presetOf (params, Drums));
     const float tune = std::pow (2.f, params.drumTuneSt[voice] / 12.f);
