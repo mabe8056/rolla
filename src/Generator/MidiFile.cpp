@@ -56,8 +56,12 @@ struct Event
 int basePitch (int part, int key, int dialect)
 {
     const int k = (key % 12 + 12) % 12;
+    // Every factory bass preset plays octave 1 (BOUNCY's "click" too), so the
+    // file holds the bass where it sounds: D1 = 26 in D. BOUNCY used to write
+    // octave 2, a register above what played.
+    (void) dialect;
     if (part == Bass)
-        return 12 * ((dialect == Pop ? 2 : 1) + 1) + k;
+        return 12 * (1 + 1) + k;
     if (part == Pluck)
         return 72 + k;
     if (part == Vox)

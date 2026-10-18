@@ -14,8 +14,9 @@ namespace
 int basePitch (int part, int key, int dialect)
 {
     const int k = (key % 12 + 12) % 12;
+    (void) dialect; // bass is octave 1 in every style, as MidiFile.cpp
     if (part == rolla::Bass)
-        return 12 * ((dialect == rolla::Pop ? 2 : 1) + 1) + k;
+        return 12 * (1 + 1) + k;
     if (part == rolla::Pluck)
         return 72 + k;
     if (part == rolla::Vox)

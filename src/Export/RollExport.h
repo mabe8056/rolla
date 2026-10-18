@@ -76,9 +76,9 @@ inline juce::String baseName (const Groove& g, int key, double bpm, int part)
 }
 
 // The engine plays the bass from the active preset's octave (after the style's
-// bass override). MidiExport derives it from the style instead (BOUNCY 2, the
-// rest 1), so a preset that disagrees exported the bass an octave off. Shift
-// the bass offsets so the file holds the notes that play.
+// bass override). MidiExport writes octave 1 in every style, so a preset that
+// disagrees would export the bass an octave off. Shift the bass offsets so the
+// file holds the notes that play.
 // TODO: once src/Generator/ is free, pass the octave into MidiExport instead.
 inline Groove midiGroove (const Groove& g, const PresetBank* bank, int bassPreset, int dialect)
 {
@@ -88,7 +88,7 @@ inline Groove midiGroove (const Groove& g, const PresetBank* bank, int bassPrese
     BassPatch bp = bank->bass[presetSlot (*bank, Bass, bassPreset)];
     applyDialectBass (*bank, dialect, bp);
     const int playedOctave = std::clamp (bp.octave, 0, 3);
-    const int fileOctave = g.dialect == Pop ? 2 : 1;
+    const int fileOctave = 1; // MidiFile basePitch: octave 1 in every style
     const int shift = 12 * (playedOctave - fileOctave);
     if (shift == 0)
         return out;
