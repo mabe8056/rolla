@@ -80,9 +80,12 @@ struct SelectorOptions
     float maxPenalty = 1.f; // summed over the lanes already chosen; over it, re-draw
     int maxTries = 4;       // draws per lane before the least-bad one stays
 
-    float temperature = 1.f; // score units per e-fold of weight
-    int topMin = 8;
-    float topShare = 0.15f;
+    // 0.35 and an 8% shortlist (Sound Designer, Relay 376): at 1.0 the best file got
+    // only 4-8% of the weight and every style drew the same files.
+    float temperature = 0.35f; // score units per e-fold of weight
+    int topMin = 6;
+    float topShare = 0.08f;
+    float monoWeight = 3.f;  // bass/kick L/R correlation under 150 Hz below 0.997
     float packBoost = 3.f;
     float drumPackBoost = 6.f;
     float familyBoost = 1.5f;
@@ -114,9 +117,16 @@ inline float fitScore (const GenreTargets& targets, Style style, Lane lane, cons
     // A vector that does not match the regions reads as 1e9 away; cap it so the
     // weights stay finite and such a file is merely unlikely.
     score += opt.timbreWeight * std::min (targets.timbreDistance (style, *s), 50.f);
-    const float minConf = targets.lane (style, lane).minPitchConf;
-    if (pitchedLane (lane) && minConf > 0.f && f.pitch.conf < minConf)
+    // A pitched file the sampler won't retune (conf under kPitchConfMin) plays at its
+    // own pitch, maybe out of key: costs up to pitchWeight. The reference minimum
+    // (often ~0.05) is too low to bite on its own, so kPitchConfMin is the floor.
+    const float minConf = std::max (targets.lane (style, lane).minPitchConf, kPitchConfMin);
+    if (pitchedLane (lane) && f.pitch.conf < minConf)
         score += opt.pitchWeight * (minConf - std::max (0.f, f.pitch.conf)) / minConf;
+    // BASS (and the kick's low end) is summed to mono: a stereo source with low L/R
+    // correlation under 150 Hz loses its low end. Weights only, never a filter.
+    if ((lane == Lane::Bass || lane == Lane::Kick) && f.lowCorr < 0.997f)
+        score += opt.monoWeight * std::clamp ((0.997f - f.lowCorr) / 0.10f, 0.f, 1.f);
     score -= opt.tierWeight * (float) std::max (0, f.tier);
     return std::isfinite (score) ? score : 1.0e3f;
 }
@@ -231,9 +241,12 @@ inline Kit drawKit (const std::array<std::vector<SampleFeatures>, kLanes>& pools
                 else if (! f.family.empty() && f.family == anchor->family)
                     w *= opt.familyBoost;
             }
+            // A seeded hair of jitter breaks exact ties (a lane with no timbre regions
+            // scores every file alike), so the shortlist isn't the alphabetically first files.
+            w *= 1.0 + 1.0e-6 * rng.uniform();
             cands.push_back ({ i, w });
         }
-        // Heaviest first; ties keep pool order, so the top k is the same everywhere.
+        // Heaviest first; the jitter is seeded, so the top k is still reproducible.
         std::stable_sort (cands.begin(), cands.end(),
                           [] (const selector::Candidate& a, const selector::Candidate& b) { return a.weight > b.weight; });
         const int k = std::max (std::max (1, opt.topMin), (int) std::ceil (opt.topShare * (float) n));

@@ -84,8 +84,15 @@ inline bool sampleEntry (const juce::String& id, const juce::var& e, SampleFeatu
     if (id.isEmpty() || lane == Lane::Count || ! fingerprint (e["f"], fp))
         return false;
     out = SampleFeatures::from (fp, id.replaceCharacter ('\\', '/').toStdString(), lane, numberOr (e["length_ms"], 0.f));
-    out.pack = e["pack"].toString().toStdString();
+    // The box's merged file carries pack_code; "pack" is accepted too.
+    out.pack = (e.hasProperty ("pack") ? e["pack"] : e["pack_code"]).toString().toStdString();
     out.family = e["family"].toString().toStdString();
+    const auto& f = e["f"];
+    out.lowCorr = numberOr (e.hasProperty ("low_corr") ? e["low_corr"] : f["low_corr"], 1.f);
+    if (f.hasProperty ("tilt_db_per_oct"))
+        out.tiltDbPerOct = numberOr (f["tilt_db_per_oct"], out.tiltDbPerOct);
+    if (e.hasProperty ("tilt_db_per_oct"))
+        out.tiltDbPerOct = numberOr (e["tilt_db_per_oct"], out.tiltDbPerOct);
     if (e.hasProperty ("tier"))
         out.tier = (int) e["tier"];
     return true;
