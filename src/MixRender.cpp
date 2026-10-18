@@ -418,6 +418,94 @@ int selfTest (const rolla::PresetBank& bank, const rolla::MixProgram& mix,
         std::cerr << "FAIL a quiet sum was turned down\n";
         rc = 1;
     }
+
+    // K-weighting calibration (BS.1770): a 997 Hz 0 dBFS sine reads 0 LUFS in
+    // both channels and -3.01 LUFS in one, so lane level agrees with the scorer.
+    auto kLufs = [] (float gainL, float gainR, float hz)
+    {
+        rolla::KWeight kl, kr;
+        kl.prepare (kSr);
+        kr.prepare (kSr);
+        double sum = 0.0;
+        int n = 0;
+        for (int i = 0; i < (int) (3.0 * kSr); ++i)
+        {
+            const double x = std::sin (2.0 * 3.14159265358979323846 * hz * (double) i / kSr);
+            const double a = kl.process (x * gainL);
+            const double b = kr.process (x * gainR);
+            if (i >= (int) (0.5 * kSr))
+            {
+                sum += a * a + b * b;
+                ++n;
+            }
+        }
+        return -0.691 + 10.0 * std::log10 (sum / (double) std::max (1, n) + 1.0e-30);
+    };
+    const double both = kLufs (1.f, 1.f, 997.f);
+    const double one = kLufs (1.f, 0.f, 997.f);
+    std::cout << "K-weight 997 Hz 0 dBFS: both " << both << " LUFS, one channel " << one << " LUFS\n";
+    if (std::fabs (both) > 0.05 || std::fabs (one + 3.01) > 0.05)
+    {
+        std::cerr << "FAIL K-weighting is off BS.1770\n";
+        rc = 1;
+    }
+
+    // Lane level: a steady tone about 4.5 dB under a lane's target ends on the
+    // target (±1 dB); with lane level off it stays at least 2 dB under.
+    {
+        constexpr int lane = 1; // STAB
+        const auto& chain = mix.chain[dialect][lane];
+        auto settle = [&] (bool on, float amp)
+        {
+            rolla::MixRuntime rt;
+            rt.prepare (kSr);
+            rolla::MixBlockInfo info;
+            info.dialect = dialect;
+            info.sumMask = 63;
+            info.bypassSumTrim = true;
+            info.laneLevel = on;
+            for (int p = 0; p < rolla::kMixMelodic; ++p)
+            {
+                info.presetIndex[p] = bank.dialect[dialect].presetIndex[p];
+                info.presetId[p] = bank.dialect[dialect].presetId[p];
+            }
+            rt.beginBlock (mix, info);
+            rolla::KWeight kl, kr;
+            kl.prepare (kSr);
+            kr.prepare (kSr);
+            const int n = (int) (12.0 * kSr);
+            double sum = 0.0;
+            int count = 0;
+            for (int i = 0; i < n; ++i)
+            {
+                float l = amp * (float) std::sin (2.0 * 3.14159265358979323846 * 440.0 * (double) i / kSr);
+                float r = l;
+                rt.process (lane, l, r);
+                const double a = kl.process (l);
+                const double b = kr.process (r);
+                if (i >= n - (int) (3.0 * kSr))
+                {
+                    sum += a * a + b * b;
+                    ++count;
+                }
+            }
+            return -0.691 + 10.0 * std::log10 (sum / (double) std::max (1, count) + 1.0e-30);
+        };
+        if (chain.valid)
+        {
+            // Pick an input level that lands about 4.5 dB under the target with lane level off.
+            const double probe = settle (false, 0.05f);
+            const float amp = 0.05f * (float) std::pow (10.0, (chain.stTargetLufs - 4.5 - probe) / 20.0);
+            const double before = settle (false, amp);
+            const double after = settle (true, amp);
+            std::cout << "lane level STAB: target " << chain.stTargetLufs << " LUFS, off " << before << ", on " << after << "\n";
+            if (std::fabs (after - chain.stTargetLufs) > 1.0 || before > chain.stTargetLufs - 2.0)
+            {
+                std::cerr << "FAIL lane level does not land a quiet lane on its target\n";
+                rc = 1;
+            }
+        }
+    }
     if (rc == 0)
         std::cout << "self-test pass\n";
     return rc;

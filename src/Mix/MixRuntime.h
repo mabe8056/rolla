@@ -21,6 +21,21 @@ struct MixBlockInfo
     bool laneLevel = true;
 };
 
+// BS.1770-4 K-weighting for one channel: the pre-filter shelf (+3.9998 dB at
+// 1681.97 Hz, Q 0.70718) then the RLB high-pass (38.135 Hz, Q 0.50033), as
+// pyloudnorm designs them at any rate. A 997 Hz 0 dBFS sine reads -3.01 LUFS
+// in one channel and 0 LUFS in both.
+struct KWeight
+{
+    void prepare (double sampleRate) noexcept;
+    void reset() noexcept { s1 = s2 = h1 = h2 = 0.0; }
+    double process (double x) noexcept;
+
+    double sb0 = 1, sb1 = 0, sb2 = 0, sa1 = 0, sa2 = 0;
+    double hb0 = 1, hb1 = 0, hb2 = 0, ha1 = 0, ha2 = 0;
+    double s1 = 0, s2 = 0, h1 = 0, h2 = 0;
+};
+
 // Per-lane HPF/LPF, EQ, compressor, saturation, tilt, mono-below, lane level, trim.
 // Dialect changes ramp (MIX_SPEC §9.2). The sum itself stays linear.
 class MixRuntime
@@ -41,14 +56,13 @@ private:
         float process (float x) noexcept;
         void setBell (float freq, float q, float gainDb, float sr) noexcept;
         void setShelf (bool high, float freq, float q, float gainDb, float sr) noexcept;
-        void setHighpass (float freq, float q, float sr) noexcept;
     };
 
     // BS.1770 K-weighted short-term loudness of one lane, in 100 ms blocks over 3 s.
     static constexpr int kLevelBlocks = 30;
     struct LaneLevel
     {
-        Biquad shelfL, shelfR, hpL, hpR;
+        KWeight kL, kR;
         double acc = 0.0;
         int count = 0;
         double ring[kLevelBlocks] {};

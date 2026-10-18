@@ -104,17 +104,55 @@ void MixRuntime::Biquad::setShelf (bool high, float freq, float q, float gainDb,
     a2 = aa2 / a0;
 }
 
-void MixRuntime::Biquad::setHighpass (float freq, float q, float sr) noexcept
+void KWeight::prepare (double sampleRate) noexcept
 {
-    const float w0 = 2.f * kPi * clampFreq (freq, sr) / sr;
-    const float cw = std::cos (w0);
-    const float alpha = std::sin (w0) / (2.f * std::max (0.05f, q));
-    const float a0 = 1.f + alpha;
-    b0 = (1.f + cw) * 0.5f / a0;
-    b1 = -(1.f + cw) / a0;
-    b2 = b0;
-    a1 = (-2.f * cw) / a0;
-    a2 = (1.f - alpha) / a0;
+    const double fs = sampleRate > 1000.0 ? sampleRate : 48000.0;
+    constexpr double pi = 3.14159265358979323846;
+    {
+        // Pre-filter: RBJ high shelf with alpha from Q.
+        const double G = 3.99984385397, Q = 0.7071752369554193, fc = 1681.9744509555319;
+        const double A = std::pow (10.0, G / 40.0);
+        const double w0 = 2.0 * pi * fc / fs;
+        const double cw = std::cos (w0);
+        const double alpha = std::sin (w0) / (2.0 * Q);
+        const double two = 2.0 * std::sqrt (A) * alpha;
+        const double a0 = (A + 1.0) - (A - 1.0) * cw + two;
+        sb0 = A * ((A + 1.0) + (A - 1.0) * cw + two) / a0;
+        sb1 = -2.0 * A * ((A - 1.0) + (A + 1.0) * cw) / a0;
+        sb2 = A * ((A + 1.0) + (A - 1.0) * cw - two) / a0;
+        sa1 = 2.0 * ((A - 1.0) - (A + 1.0) * cw) / a0;
+        sa2 = ((A + 1.0) - (A - 1.0) * cw - two) / a0;
+    }
+    {
+        // RLB: RBJ high-pass.
+        const double Q = 0.5003270373253953, fc = 38.13547087613982;
+        const double w0 = 2.0 * pi * fc / fs;
+        const double cw = std::cos (w0);
+        const double alpha = std::sin (w0) / (2.0 * Q);
+        const double a0 = 1.0 + alpha;
+        hb0 = (1.0 + cw) * 0.5 / a0;
+        hb1 = -(1.0 + cw) / a0;
+        hb2 = hb0;
+        ha1 = -2.0 * cw / a0;
+        ha2 = (1.0 - alpha) / a0;
+    }
+    reset();
+}
+
+double KWeight::process (double x) noexcept
+{
+    // Transposed direct form II, both stages.
+    const double y = sb0 * x + s1;
+    s1 = sb1 * x - sa1 * y + s2;
+    s2 = sb2 * x - sa2 * y;
+    const double z = hb0 * y + h1;
+    h1 = hb1 * y - ha1 * z + h2;
+    h2 = hb2 * y - ha2 * z;
+    if (std::fabs (s1) < 1.0e-30) s1 = 0.0;
+    if (std::fabs (s2) < 1.0e-30) s2 = 0.0;
+    if (std::fabs (h1) < 1.0e-30) h1 = 0.0;
+    if (std::fabs (h2) < 1.0e-30) h2 = 0.0;
+    return z;
 }
 
 void MixRuntime::RmsWin::assign (int samples) noexcept
@@ -240,12 +278,8 @@ void MixRuntime::prepare (double sampleRate) noexcept
     levelBoost = 1.f - std::exp (-1.f / (float) (1.5 * sr));
     for (auto& s : strip)
     {
-        // K-weighting: +4 dB shelf at 1.68 kHz, then the 38 Hz high-pass.
-        const float srF = (float) sr;
-        s.level.shelfL.setShelf (true, 1681.97f, 1.f, 4.f, srF);
-        s.level.shelfR.setShelf (true, 1681.97f, 1.f, 4.f, srF);
-        s.level.hpL.setHighpass (38.f, 0.5f, srF);
-        s.level.hpR.setHighpass (38.f, 0.5f, srF);
+        s.level.kL.prepare (sr);
+        s.level.kR.prepare (sr);
         s.rms.assign (rmsN);
         s.corr.assign (corrN);
         s.compEnv = 1.f;
@@ -273,8 +307,8 @@ void MixRuntime::reset() noexcept
         s.corr.reset();
         s.compEnv = 1.f;
         auto& lv = s.level;
-        lv.shelfL.reset(); lv.shelfR.reset();
-        lv.hpL.reset(); lv.hpR.reset();
+        lv.kL.reset();
+        lv.kR.reset();
         lv.acc = lv.sum = 0.0;
         lv.count = lv.w = lv.fill = 0;
         std::fill (std::begin (lv.ring), std::end (lv.ring), 0.0);
@@ -703,9 +737,9 @@ void MixRuntime::process (int lane, float& l, float& r) noexcept
 void MixRuntime::levelLane (Strip& s, const MixChain& c, float& l, float& r) noexcept
 {
     auto& lv = s.level;
-    const float kl = lv.hpL.process (lv.shelfL.process (l));
-    const float kr = lv.hpR.process (lv.shelfR.process (r));
-    lv.acc += (double) kl * kl + (double) kr * kr;
+    const double kl = lv.kL.process ((double) l);
+    const double kr = lv.kR.process ((double) r);
+    lv.acc += kl * kl + kr * kr;
     if (++lv.count >= levelBlockN)
     {
         const double block = lv.acc / (double) lv.count;
