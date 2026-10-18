@@ -268,7 +268,9 @@ struct Duck
     {
         const float floor = dbToGain (-std::clamp (depthDb, 0.f, 48.f));
         target = floor;
-        c = coefFromMs (gate ? 0.1f : 0.2f, sr);
+        // A 0.1-0.2 ms duck dropped a sustained bass by up to 48 dB in a few samples:
+        // an audible click on the kick. 2.5-3 ms is still tight and clean.
+        c = coefFromMs (gate ? 2.5f : 3.0f, sr);
         // 20 ms was gone before an off-kick bass note. Hold long enough that
         // the next 16th is still down.
         hold = (int) ((gate ? 0.060f : 0.048f) * sr);
