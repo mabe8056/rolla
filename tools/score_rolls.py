@@ -150,7 +150,7 @@ SHIP_RATE = 0.80
 REC_MAX_SHARE, REC_MIN_N = 0.40, 10      # v2.1 soft-recurrence gate (Maestro 2026-10-17)
 GATE_MAX_PAIRS, GATE_MAX_ROLLS = 2, 3      # GR v2 §4.2: <= 2 same-skeleton pairs and <= 3 rolls in any pair per 20-roll batch
 HARD_PROFILE_NAME = ["maestro"]
-INFO_SOFT = {"KICK_ASSUMED", "NO_STAB", "BONUS_STABS_IN_RESTS", "WAV_UNREADABLE"}   # not deviations
+INFO_SOFT = {"KICK_ASSUMED", "NO_STAB", "BONUS_STABS_IN_RESTS", "WAV_UNREADABLE", "SKIPPED_AUDIO"}   # not deviations
 DUP_SKEL, SAME_SKEL = 0.80, 0.55          # bass skeleton sim between two rolls (OC skel_win FAIL = 0.55)
 DRUM_RE = re.compile(r"drum|kick|perc|hat|clap|snare|rim|\bbd\b|909|808", re.I)
 BASS_RE = re.compile(r"bass|sub", re.I)
