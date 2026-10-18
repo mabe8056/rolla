@@ -1654,11 +1654,19 @@ void testOriginalityRefusalNeverShips()
     rolla::RollaProcessor proc;
     proc.waitUntilReady();
     const auto before = proc.copyGroove();
+    const auto noticeBefore = proc.rollNotice();
+    expect (noticeBefore.text.isEmpty(), "refusal: no notice before any refusal");
     rolla::orig::setIndex (refuseAll);
     proc.triggerRoll();
-    pumpFor (400);
+    pumpUntil ([&] { return proc.rollNotice().serial != noticeBefore.serial; });
+    const auto afterRoll = proc.rollNotice();
+    expect (afterRoll.serial != noticeBefore.serial, "refusal: a refused ROLL changes the notice");
+    expect (afterRoll.text == "Roll refused: too close to a reference, kept previous roll",
+            "refusal: a refused ROLL exposes the status line, got '" + afterRoll.text.toStdString() + "'");
     proc.triggerShuffle (rolla::Bass);
-    pumpFor (400);
+    pumpUntil ([&] { return proc.rollNotice().text.startsWith ("Shuffle refused"); });
+    expect (proc.rollNotice().text.startsWith ("Shuffle refused") && proc.rollNotice().text.endsWith ("kept previous roll"),
+            "refusal: a refused shuffle exposes its own status line");
     const auto during = proc.copyGroove();
     bool kept = true;
     for (int p = 0; p < rolla::NumParts; ++p)
@@ -1671,6 +1679,7 @@ void testOriginalityRefusalNeverShips()
     const auto bassBefore = seedOf (proc.copyGroove(), rolla::Bass);
     rollUntil (proc, rolla::Bass, bassBefore);
     expect (seedOf (proc.copyGroove(), rolla::Bass) != bassBefore, "refusal: ROLL works again once rolls clear");
+    expect (proc.rollNotice().text.isEmpty(), "refusal: an accepted roll clears the status line");
 }
 
 // The built-in guard (no reference data): the banned figures fire on synthetic

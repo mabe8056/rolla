@@ -436,7 +436,7 @@ void RollaProcessor::deferredStartup()
             // A refused first roll (originality floor) leaves `initial` empty: an
             // empty phrase is published rather than anything that copies.
             if (! generate (initial, currentSettings(), seeds, 0x7fu))
-                DBG ("ROLLA: first roll refused by the originality floor; starting empty");
+                setRollNotice ("First roll refused: too close to a reference, press ROLL");
             publishInitial (initial);
         }
 
@@ -640,9 +640,11 @@ void RollaProcessor::regenerate (int onlyPart)
     // changes: the previous roll, its presets and sample picks stay.
     if (! reshapeLanes (next, s, seeds, mask))
     {
-        DBG ("ROLLA: roll refused by the originality floor; keeping the previous roll");
+        setRollNotice (onlyPart >= 0 ? "Shuffle refused: too close to a reference, kept previous roll"
+                                     : "Roll refused: too close to a reference, kept previous roll");
         return;
     }
+    setRollNotice ({});
 
     for (int i = 0; i < NumParts; ++i)
     {
@@ -698,6 +700,26 @@ void RollaProcessor::requestReshape()
     });
 }
 
+void RollaProcessor::setRollNotice (const juce::String& text)
+{
+    {
+        std::lock_guard<std::mutex> lock (noticeMu);
+        if (notice.text == text)
+            return;
+        notice.text = text;
+        ++notice.serial;
+    }
+    // Logged in every build, not only debug: a refusal is a hard-rule event.
+    if (text.isNotEmpty())
+        juce::Logger::writeToLog ("ROLLA originality: " + text);
+}
+
+RollaProcessor::RollNotice RollaProcessor::rollNotice() const
+{
+    std::lock_guard<std::mutex> lock (noticeMu);
+    return notice;
+}
+
 void RollaProcessor::reshapeUnkept()
 {
     if (restoring.load (std::memory_order_acquire) || ! startupDone.load (std::memory_order_acquire))
@@ -727,9 +749,10 @@ void RollaProcessor::reshapeUnkept()
     // A refused reshape (originality floor) keeps the previous roll.
     if (! reshapeLanes (next, s, seeds, mask))
     {
-        DBG ("ROLLA: reshape refused by the originality floor; keeping the previous roll");
+        setRollNotice ("Change refused: too close to a reference, kept previous roll");
         return;
     }
+    setRollNotice ({});
     storeSource (next);
     publishDerived();
 }
