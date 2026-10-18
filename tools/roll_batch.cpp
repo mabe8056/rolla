@@ -3,6 +3,7 @@
 #include "Generator/Generator.h"
 #include "Generator/Intensity.h"
 #include "Generator/MidiFile.h"
+#include "Generator/OriginalityJson.h"
 #include "Generator/Presets.h"
 #include "Mix/MixProgram.h"
 
@@ -18,6 +19,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -499,6 +501,7 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
     const int nStyles = one == -2 ? 4 : 1;
     int wavs = 0;
     int silent = 0;
+    int origFails = 0;
     for (int s = 0; s < nStyles; ++s)
     {
         const int style = one == -2 ? styles[s] : one;
@@ -531,6 +534,12 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
                 rolla::generate (groove, settings, seeds, 0x7fu);
             }
             seen.push_back (groove);
+            if (std::strcmp (groove.guardRef, "ORIG_FAIL") == 0)
+            {
+                ++origFails;
+                std::cerr << "ORIG_FAIL " << rolla::dialectId (style) << " " << name.str()
+                          << ": every redraw still matched a reference or banned figure\n";
+            }
             rolla::Groove arranged;
             const auto plan = rolla::planIntensity (style, knobs.intensity, settings.stab);
             rolla::applyIntensity (groove, arranged, plan, 0, 0);
@@ -604,10 +613,10 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
             }
         }
     }
-    std::cout << "wav files " << wavs << " skipped " << silent << "\n";
+    std::cout << "wav files " << wavs << " skipped " << silent << " orig_fail " << origFails << "\n";
     if (! samples.empty() && wavs == 0)
         return 1;
-    return 0;
+    return origFails > 0 ? 1 : 0;
 }
 
 } // namespace
@@ -617,8 +626,70 @@ const char* usageText()
     return "rolla-rolls --samples DIR --style ukmin|long|pop|gaskin|all --count N --seed S [--out DIR] [--stems] [--stem-lanes DRUMS,BASS]\n"
            "            [--knob DARK=0.55] [--knob BUSY=0.40] [--knob BOUNCE=0.45] [--knob STAB=0.55]\n"
            "            [--knob TONE=0.5] [--knob PUNCH=0.5] [--knob LEVEL=0] [--knob INTENSITY=75]\n"
-           "            [--knob BASS.TONE=0.5] [--knob BASS.PUNCH=0.5] [--knob BASS.LEVEL=0]\n";
+           "            [--knob BASS.TONE=0.5] [--knob BASS.PUNCH=0.5] [--knob BASS.LEVEL=0]\n"
+           "            [--orig-index FILE|none]   hashed reference index (default: $ROLLA_ORIG_INDEX, else\n"
+           "                                       <ROLLA settings folder>/Originality/orig_index.json if present)\n"
+           "rolla-rolls --build-orig-index DIR [--orig-out FILE]\n"
+           "            hash every .mid/.midi under DIR into an index (default out: the default index path);\n"
+           "            prints the id -> file list, which stays out of the index\n";
 }
+
+namespace
+{
+
+// The external index for this run: an explicit file, "none", or the default path if it exists.
+bool loadOrigIndex (const std::string& choice)
+{
+    if (choice == "none")
+    {
+        rolla::orig::setIndex (nullptr);
+        std::cout << "originality: built-in guard only (--orig-index none)\n";
+        return true;
+    }
+    const juce::File file = choice.empty() ? rolla::orig::defaultIndexFile() : juce::File::getCurrentWorkingDirectory().getChildFile (juce::String (choice));
+    juce::String error;
+    auto index = rolla::orig::loadIndex (file, &error);
+    if (index == nullptr)
+    {
+        rolla::orig::setIndex (nullptr);
+        if (! choice.empty())
+        {
+            std::cerr << "FAIL --orig-index " << choice << ": " << error << "\n";
+            return false;
+        }
+        std::cout << "originality: built-in guard only (" << error << ")\n";
+        return true;
+    }
+    std::cout << "originality: built-in guard + " << index->refs.size() << " reference streams from "
+              << file.getFullPathName() << "\n";
+    rolla::orig::setIndex (std::move (index));
+    return true;
+}
+
+int buildOrigIndex (const std::string& folder, const std::string& outPath)
+{
+    const juce::File dir = juce::File::getCurrentWorkingDirectory().getChildFile (juce::String (folder));
+    if (folder.empty() || ! dir.isDirectory())
+    {
+        std::cerr << "FAIL --build-orig-index needs a folder of reference MIDI\n";
+        return 2;
+    }
+    rolla::orig::Index index;
+    const auto report = rolla::orig::buildIndex (dir, index);
+    const juce::File out = outPath.empty() ? rolla::orig::defaultIndexFile() : juce::File::getCurrentWorkingDirectory().getChildFile (juce::String (outPath));
+    if (! rolla::orig::writeIndex (index, out))
+    {
+        std::cerr << "FAIL could not write " << out.getFullPathName() << "\n";
+        return 1;
+    }
+    for (const auto& row : report.idToPath)
+        std::cout << row.first << "  " << row.second << "\n";
+    std::cout << "wrote " << out.getFullPathName() << ": " << report.files << " files, "
+              << report.streams << " reference streams (hashes only)\n";
+    return report.streams > 0 ? 0 : 1;
+}
+
+} // namespace
 
 int main (int argc, char** argv)
 {
@@ -627,6 +698,7 @@ int main (int argc, char** argv)
     std::string samples, style = "all", out = "rolls";
     int count = 20;
     std::uint32_t seed = 1;
+    std::string origIndex, buildFrom, origOut;
     bool batch = false;
     Knobs knobs;
     for (int i = 1; i < argc; ++i)
@@ -662,6 +734,9 @@ int main (int argc, char** argv)
         else if (take ("--count")) { count = std::max (1, std::atoi (value)); batch = true; }
         else if (take ("--seed")) { seed = (std::uint32_t) std::strtoul (value, nullptr, 0); batch = true; }
         else if (take ("--out")) { out = value; batch = true; }
+        else if (take ("--orig-index")) { origIndex = value; }
+        else if (take ("--build-orig-index")) { buildFrom = value; }
+        else if (take ("--orig-out")) { origOut = value; }
         else if (take ("--knob"))
         {
             if (! parseKnob (value, knobs))
@@ -672,10 +747,14 @@ int main (int argc, char** argv)
             batch = true;
         }
     }
+    if (! buildFrom.empty())
+        return buildOrigIndex (buildFrom, origOut);
+    if (! loadOrigIndex (origIndex))
+        return 2;
     if (batch)
         return renderBatch (samples, style, count, seed, out, knobs);
 
-    const std::filesystem::path root = argc > 1 ? argv[1] : "tools/out";
+    const std::filesystem::path root = argc > 1 && argv[1][0] != '-' ? argv[1] : "tools/out";
     std::filesystem::create_directories (root);
 
     rolla::StyleStat stats[rolla::NumDialects] {};

@@ -4,6 +4,7 @@
 #include "Generator/Drive.h"
 #include "Generator/Intensity.h"
 #include "Generator/MidiFile.h"
+#include "Generator/OriginalityJson.h"
 #include "Export/RollExport.h"
 #include "Engine/RollaSettings.h"
 
@@ -422,6 +423,11 @@ void RollaProcessor::deferredStartup()
                 presets = std::make_shared<PresetBank> (*parsed);
         }
         presetGen.fetch_add (1, std::memory_order_release);
+
+        // The owner's private hashed reference index, if there is one (Generator/OriginalityJson.h).
+        // Without it every roll still passes the built-in originality guard.
+        if (! startupStop.load())
+            orig::setIndex (orig::loadIndex (orig::defaultIndexFile()));
 
         if (! startupStop.load() && grooveEpoch.load (std::memory_order_relaxed) == 0)
         {

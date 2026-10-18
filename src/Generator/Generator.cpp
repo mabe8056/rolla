@@ -1,4 +1,5 @@
 #include "Generator.h"
+#include "Originality.h"
 #include "PhraseBank.h"
 
 #include <algorithm>
@@ -6,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 #include <initializer_list>
+#include <memory>
 
 #if defined (_MSC_VER)
 #include <intrin.h>
@@ -5203,7 +5205,8 @@ int rollMode (const Settings& settings, std::uint32_t bassSeed) noexcept
     return phrase::Aeolian;
 }
 
-void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[NumParts], std::uint32_t partMask)
+// One roll from these exact seeds, no originality check (generate() wraps it).
+static void generateOnce (Groove& g, const Settings& settings, const std::uint32_t seeds[NumParts], std::uint32_t partMask)
 {
     Settings s = settings;
     s.bars = clampi (s.bars, 2, kMaxBars);
@@ -5498,6 +5501,92 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
     g.guardLevel = shippedHard ? 2 : 0;
     std::snprintf (g.guardRef, sizeof g.guardRef, "%s", shippedHard ? "HARD" : "ORIGINAL");
     ++g.generation;
+}
+
+// The originality floor is a hard resample, not a score. Every roll is checked
+// (orig::check: the built-in banned figures, plus the hashed reference index
+// when one is loaded). A lane that hits is redrawn from its caller seed + k,
+// k counting that lane's redraws, up to kOrigAttempts rolls in all. Nothing
+// else feeds the seeds, so the same seeds and the same index give the same
+// roll. The caller seed still lands on the lane. If every attempt hits (not
+// seen in practice), the least similar attempt ships marked ORIG_FAIL.
+void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[NumParts], std::uint32_t partMask)
+{
+    constexpr int kOrigAttempts = 12;
+    const std::uint32_t pitched = partMask & ((1u << Drums) - 1u);
+    const auto external = orig::currentIndex();
+    const auto input = std::make_unique<Groove> (g);
+    auto fallback = std::make_unique<Groove>();
+    bool haveFallback = false;
+    float fallbackSeverity = 0.f;
+    std::uint32_t bump[NumParts] {};
+    std::uint32_t tried[NumParts] {};
+    int redraws = 0;
+
+    auto finish = [&] (bool failed)
+    {
+        for (int p = 0; p < Drums; ++p)
+            if (((pitched >> p) & 1u) != 0 && bump[p] != 0)
+                g.lane[p].seed = seeds[p] ? seeds[p] : 1u;
+        g.generation = input->generation + 1;
+        if (failed)
+        {
+            g.guardScore = 0.f;
+            g.guardLevel = 2;
+            std::snprintf (g.guardRef, sizeof g.guardRef, "%s", "ORIG_FAIL");
+        }
+        if (redraws > 0 || failed)
+        {
+            const size_t used = std::strlen (g.brokenRules);
+            if (used + 1 < sizeof g.brokenRules)
+            {
+                if (failed)
+                    std::snprintf (g.brokenRules + used, sizeof g.brokenRules - used, "|orig:fail");
+                else
+                    std::snprintf (g.brokenRules + used, sizeof g.brokenRules - used, "|orig:%d", redraws);
+            }
+        }
+    };
+
+    for (int k = 0; k < kOrigAttempts; ++k)
+    {
+        for (int p = 0; p < NumParts; ++p)
+            tried[p] = seeds[p] + bump[p];
+        g = *input;
+        generateOnce (g, settings, tried, partMask);
+        if (pitched == 0)
+        {
+            finish (false);
+            return;
+        }
+        const auto rep = orig::check (g, pitched, external.get());
+        if (rep.pass)
+        {
+            finish (false);
+            return;
+        }
+        if (! haveFallback || rep.worst.severity < fallbackSeverity)
+        {
+            *fallback = g;
+            fallbackSeverity = rep.worst.severity;
+            haveFallback = true;
+        }
+        std::uint32_t lanes = rep.bumpMask & pitched;
+        if (lanes == 0)
+            lanes = pitched;
+        // Stabs and the rest sit in the bass's holes, so a lane that keeps hitting
+        // on the same bass gets a new bass too from its third redraw on.
+        if ((pitched & (1u << Bass)) != 0)
+            for (int p = 0; p < Drums; ++p)
+                if (p != Bass && ((lanes >> p) & 1u) != 0 && bump[p] >= 2)
+                    lanes |= 1u << Bass;
+        for (int p = 0; p < Drums; ++p)
+            if (((lanes >> p) & 1u) != 0)
+                ++bump[p];
+        ++redraws;
+    }
+    g = *fallback;
+    finish (true);
 }
 
 } // namespace rolla

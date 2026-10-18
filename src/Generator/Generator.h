@@ -38,6 +38,9 @@ struct Rng
 // density, stab-vs-bass placement, plans, contours, and rests are a penalty.
 // Six candidates are ranked by that penalty and one is sampled with a
 // temperature that rises with freedom. The caller seed is what lands on the lane.
+// The finished roll then passes the originality floor (Originality.h): a lane
+// that matches a banned figure or the loaded reference index is redrawn from
+// its seed + k, up to 12 rolls; a roll that never clears ships as ORIG_FAIL.
 void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[NumParts], std::uint32_t partMask);
 
 // The one mode a roll uses for bass, stab, pad, pluck and hits
