@@ -456,13 +456,13 @@ int main (int argc, char** argv)
 
     // Every style frozen at its last intended change.
     // A style's hashes change only in the PR that means to change that style
-    // (regenerate with --golden). ROLLER changed in claude/roller-phrasing; BOUNCY
-    // in #28 (relegato after the twin nudge); JACKIN in claude/jackin-identity.
+    // (regenerate with --golden). ROLLER changed in claude/roller-phrasing;
+    // BOUNCY in #28 (relegato); JACKIN in #25 (STAB) and claude/jackin-identity.
     const struct { int style; std::uint32_t base; std::uint64_t hash; } frozen[] = {
         { UkMin, 1u, 0x7c9dcbee6dddc8eaull }, { UkMin, 2u, 0x47a4548b99fd9987ull },
-        { Long, 1u, 0x25acd182b0de5395ull }, { Long, 2u, 0x57a23354bae60f43ull },
-        { Pop, 1u, 0x838aa9ad83510593ull }, { Pop, 2u, 0x65093c18c00d81ecull },
-        { Gaskin, 1u, 0xa9a88a1c4bd8365bull }, { Gaskin, 2u, 0xf232b930bde9761full },
+        { Long, 1u, 0x3881ed002bc4c2ebull }, { Long, 2u, 0x8682efccde9fe80bull },
+        { Pop, 1u, 0x4d7bb59ba7af16fbull }, { Pop, 2u, 0x985b45c32c605044ull },
+        { Gaskin, 1u, 0x17aece70a6b89457ull }, { Gaskin, 2u, 0xdb559e8844e9ef63ull },
     };
     for (const auto& f : frozen)
     {

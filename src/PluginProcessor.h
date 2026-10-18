@@ -182,6 +182,9 @@ private:
     void deferredStartup();
     void rememberSample (int voice, const float* mono, int n, double rate, const juce::String& name);
     void applyRememberedSamples();
+    // Message thread. Loads the files the current presets and picks will play, so a
+    // freshly rolled lane is ready before the downbeat instead of starting silent.
+    void prefetchPlayFiles();
 
     struct AsyncState
     {
@@ -244,6 +247,16 @@ private:
     void delayMidiOut (juce::MidiBuffer& midi, int n);
     // The live engine's drum slot, so offline bounces hear the same user drum samples.
     std::atomic<DrumSampleSlot*> drumSlot { nullptr };
+
+    std::uint64_t prefetchedKey = 0;
+    struct PrefetchTimer : juce::Timer
+    {
+        explicit PrefetchTimer (RollaProcessor& p) : owner (p) {}
+        void timerCallback() override { owner.prefetchPlayFiles(); }
+        RollaProcessor& owner;
+    };
+    // Last member, so it stops first on destruction.
+    PrefetchTimer prefetchTimer { *this };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RollaProcessor)
 };
