@@ -1,0 +1,270 @@
+#!/usr/bin/env python3
+"""Repo hygiene guard. Fails (exit 1, offending files listed) when the tracked
+tree holds anything the public repo must not carry:
+
+  audio       .wav .aif .aiff .flac .mp3 .ogg ... (any tracked audio file)
+  midi        .mid / .midi outside the fixture allowlist
+  secret      private-key blocks, common API-token shapes, .env files, key stores
+  dump        generated corpus / transcription / roll-output paths
+  reference   data keyed to named reference tracks:
+                - structural (always on): JSON keys or code string literals that
+                  look like "Artist - Title (… Mix)" sitting on long note/event data
+                - by name (optional): names read from a file given with --names or
+                  $ROLLA_REFERENCE_NAMES. The list is never stored in the repo.
+                  A hit in code or data fails; a hit in Markdown prose is a warning.
+  large       data files over 512 KB (.json .h .hpp .inc .csv) unless allowlisted
+
+Only `git ls-files` counts, so ignored build output never trips it.
+Exceptions live in tools/repo_guard_allow.txt, one per line:
+    <category> <glob>   # reason
+e.g.  midi tests/fixtures/*.mid   # two-bar fixture for the MIDI parser test
+
+  python3 tools/check_repo_clean.py [--root DIR] [--names FILE] [--allow FILE] [--json]
+"""
+
+import argparse
+import fnmatch
+import json
+import os
+import re
+import subprocess
+import sys
+
+AUDIO = {".wav", ".wave", ".aif", ".aiff", ".aifc", ".flac", ".mp3", ".ogg", ".oga", ".opus",
+         ".m4a", ".aac", ".wma", ".caf", ".alac", ".rx2", ".rex"}
+MIDI = {".mid", ".midi", ".smf", ".kar"}
+KEY_FILES = {".pem", ".p12", ".pfx", ".key", ".keystore", ".jks", ".ppk", ".mobileprovision"}
+KEY_NAMES = {"id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", ".netrc", ".npmrc", ".pypirc", "credentials.json"}
+DATA_EXT = {".json", ".h", ".hpp", ".inc", ".csv", ".tsv"}
+CODE_EXT = {".h", ".hpp", ".c", ".cc", ".cpp", ".inc", ".py", ".js", ".ts", ".json", ".csv", ".tsv", ".txt", ".yml", ".yaml", ".xml"}
+TEXT_EXT = CODE_EXT | {".md", ".cmake", ".sh", ".mm", ".rst", ".ini", ".cfg", ".toml", ".gitignore"}
+LARGE_BYTES = 512 * 1024
+
+# Generated dumps that were removed from the tree (#12) and must not come back.
+DUMP_GLOBS = [
+    "tools/out/*", "out/*", "renders/*", "data/corpus*", "*/CorpusData.h", "CorpusData.h",
+    "transcriptions/*", "*/transcriptions/*", "*measured_drops*.json", "*ar_vocab_measure*.json",
+    "*_transcription*.json", "*.mid.json",
+]
+
+SECRETS = [
+    ("private key block", r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY(?: BLOCK)?-----"),
+    ("AWS access key id", r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"),
+    ("GitHub token", r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}\b|\bgithub_pat_[A-Za-z0-9_]{60,}\b"),
+    ("Slack token", r"\bxox[abprs]-[A-Za-z0-9-]{10,}\b"),
+    ("Google API key", r"\bAIza[0-9A-Za-z_\-]{35}\b"),
+    ("Anthropic API key", r"\bsk-ant-[A-Za-z0-9_\-]{20,}"),
+    ("OpenAI-style key", r"\bsk-(?:proj-)?[A-Za-z0-9]{32,}\b"),
+    ("Stripe live key", r"\b[rs]k_live_[0-9A-Za-z]{20,}\b"),
+    ("assigned secret", r"(?i)\b(?:api[_-]?key|secret[_-]?key|client[_-]?secret|password|passwd|auth[_-]?token|access[_-]?token)\b"
+                        r"[\"']?\s*[:=]\s*[\"'][^\"'\s]{16,}[\"']"),
+]
+SECRET_RES = [(name, re.compile(rx)) for name, rx in SECRETS]
+
+# "Artist - Title", "Title (Extended Mix)", "... Remix", "feat." — the shape of a track name.
+TRACKY = re.compile(
+    r"^\s*[A-Za-z0-9][A-Za-z0-9&.,'’ ]{0,40}[A-Za-z]\s[-–—]\s[A-Za-z0-9][A-Za-z0-9&.,'’()\[\] -]{0,80}$"  # Artist - Title
+    r"|(?i:\b(?:original|extended|radio|club|dub|vocal|instrumental)\s+mix\b|\bremix\b|\bfeat\.\s|\bft\.\s)")
+EVENT_KEYS = {"note", "notes", "pitch", "midi", "vel", "velocity", "start", "tick", "ticks", "time", "step",
+              "steps", "dur", "duration", "len", "length", "on", "off", "onset", "onsets", "events"}
+STRING_LIT = re.compile(r'"((?:[^"\\\n]|\\.){4,120})"')
+NUMBER = re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?f?(?![\w.])")
+
+
+def git_files(root):
+    out = subprocess.run(["git", "ls-files", "-z"], cwd=root, capture_output=True, check=True).stdout
+    return [p for p in out.decode("utf-8", "replace").split("\0") if p]
+
+
+def load_allow(path):
+    rules = []
+    if path and os.path.exists(path):
+        for raw in open(path, encoding="utf-8"):
+            line = raw.split("#", 1)[0].strip()
+            if not line:
+                continue
+            parts = line.split(None, 1)
+            if len(parts) == 2:
+                rules.append((parts[0], parts[1].strip()))
+    return rules
+
+
+def allowed(rules, category, path):
+    return any(cat in (category, "*") and fnmatch.fnmatch(path, glob) for cat, glob in rules)
+
+
+def load_names(path):
+    names = []
+    if path and os.path.exists(path):
+        for raw in open(path, encoding="utf-8"):
+            line = raw.split("#", 1)[0].strip()
+            if len(line) >= 3:
+                names.append(line.lower())
+    return names
+
+
+def read_text(full, size_cap=8 * 1024 * 1024):
+    try:
+        with open(full, "rb") as f:
+            data = f.read(size_cap)
+    except OSError:
+        return None
+    if b"\0" in data[:4096]:
+        return None
+    return data.decode("utf-8", "replace")
+
+
+def count_event_data(value):
+    """Numbers and event-shaped dicts under a JSON value."""
+    nums = 0
+    events = 0
+    stack = [value]
+    while stack:
+        v = stack.pop()
+        if isinstance(v, bool):
+            continue
+        if isinstance(v, (int, float)):
+            nums += 1
+        elif isinstance(v, list):
+            stack.extend(v)
+        elif isinstance(v, dict):
+            if len(EVENT_KEYS & {str(k).lower() for k in v.keys()}) >= 2:
+                events += 1
+            stack.extend(v.values())
+    return nums, events
+
+
+def json_reference_hits(doc, path, out, depth=0):
+    if depth > 40:
+        return
+    if isinstance(doc, dict):
+        for k, v in doc.items():
+            key = str(k)
+            if TRACKY.search(key):
+                nums, events = count_event_data(v)
+                if nums >= 64 or events >= 8:
+                    out.append(f"{path}: key '{key[:80]}' holds {nums} numbers / {events} note events")
+                    continue
+            json_reference_hits(v, path, out, depth + 1)
+        # A record that names a track and carries events.
+        label = next((str(doc[k]) for k in ("track", "title", "song", "reference", "ref") if isinstance(doc.get(k), str)), None)
+        if label and TRACKY.search(label):
+            nums, events = count_event_data(doc)
+            if nums >= 64 or events >= 8:
+                out.append(f"{path}: record '{label[:80]}' holds {nums} numbers / {events} note events")
+    elif isinstance(doc, list):
+        for v in doc:
+            json_reference_hits(v, path, out, depth + 1)
+
+
+def code_reference_hits(text, path, out):
+    """A track-like string literal in a file that also carries a big numeric table."""
+    numbers = len(NUMBER.findall(text))
+    if numbers < 256:
+        return
+    for m in STRING_LIT.finditer(text):
+        lit = m.group(1)
+        if TRACKY.search(lit) and re.search(r"[A-Za-z]{3}", lit):
+            out.append(f"{path}: literal \"{lit[:80]}\" in a file with {numbers} numeric literals")
+            return
+
+
+def scan(root, names, allow_rules):
+    fails = {k: [] for k in ("audio", "midi", "secret", "dump", "reference", "large")}
+    warns = []
+    for rel in git_files(root):
+        full = os.path.join(root, rel)
+        base = os.path.basename(rel)
+        ext = os.path.splitext(base)[1].lower()
+        low = rel.lower()
+
+        if ext in AUDIO and not allowed(allow_rules, "audio", rel):
+            fails["audio"].append(rel)
+            continue
+        if ext in MIDI and not allowed(allow_rules, "midi", rel):
+            fails["midi"].append(rel)
+            continue
+        if any(fnmatch.fnmatch(rel, g) for g in DUMP_GLOBS) and not allowed(allow_rules, "dump", rel):
+            fails["dump"].append(rel)
+            continue
+        is_env = base == ".env" or (base.startswith(".env.") and not base.endswith((".example", ".sample", ".template")))
+        if (is_env or ext in KEY_FILES or base in KEY_NAMES) and not allowed(allow_rules, "secret", rel):
+            fails["secret"].append(f"{rel}: secret-bearing file type")
+            continue
+
+        try:
+            size = os.path.getsize(full)
+        except OSError:
+            continue
+        if ext in DATA_EXT and size > LARGE_BYTES and not allowed(allow_rules, "large", rel):
+            fails["large"].append(f"{rel}: {size // 1024} KB data file")
+
+        if ext not in TEXT_EXT and base not in (".gitignore", "CMakeLists.txt"):
+            continue
+        text = read_text(full)
+        if text is None:
+            continue
+
+        if not allowed(allow_rules, "secret", rel):
+            for name, rx in SECRET_RES:
+                m = rx.search(text)
+                if m:
+                    line = text.count("\n", 0, m.start()) + 1
+                    fails["secret"].append(f"{rel}:{line}: {name}")
+                    break
+
+        if not allowed(allow_rules, "reference", rel):
+            hits = []
+            if ext == ".json":
+                try:
+                    json_reference_hits(json.loads(text), rel, hits)
+                except ValueError:
+                    pass
+            if ext in CODE_EXT - {".json"}:
+                code_reference_hits(text, rel, hits)
+            fails["reference"].extend(hits)
+
+            if names:
+                hay_path = low
+                hay = text.lower()
+                for n in names:
+                    if n in hay_path or n in hay:
+                        line = hay[: hay.find(n)].count("\n") + 1 if n in hay else 0
+                        msg = f"{rel}:{line}: names reference '{n}'"
+                        if ext == ".md":
+                            warns.append(msg)
+                        else:
+                            fails["reference"].append(msg)
+                        break
+    return fails, warns
+
+
+def main(argv=None):
+    here = os.path.dirname(os.path.abspath(__file__))
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--root", default=os.path.dirname(here))
+    ap.add_argument("--names", default=os.environ.get("ROLLA_REFERENCE_NAMES", ""),
+                    help="file of reference artist / track names, one per line (kept outside the repo)")
+    ap.add_argument("--allow", default=None, help="allowlist (default: <root>/tools/repo_guard_allow.txt)")
+    ap.add_argument("--json", action="store_true")
+    a = ap.parse_args(argv)
+    root = os.path.abspath(a.root)
+    allow_path = a.allow or os.path.join(root, "tools", "repo_guard_allow.txt")
+    names = load_names(a.names)
+    fails, warns = scan(root, names, load_allow(allow_path))
+    total = sum(len(v) for v in fails.values())
+    if a.json:
+        print(json.dumps({"pass": total == 0, "fails": fails, "warnings": warns, "names_checked": len(names)}, indent=1))
+    else:
+        for cat, items in fails.items():
+            for item in items:
+                print(f"FAIL {cat}: {item}")
+        for w in warns:
+            print(f"WARN reference (prose): {w}")
+        print(f"repo guard: {'PASS' if total == 0 else 'FAIL'} ({total} finding(s), {len(warns)} warning(s), "
+              f"{len(names)} reference name(s) checked)")
+    return 0 if total == 0 else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
