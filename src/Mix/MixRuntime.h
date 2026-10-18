@@ -17,9 +17,26 @@ struct MixBlockInfo
     int sumMask = -1;
     bool bypassSumTrim = false;
     int activeMask = 63;
+    // Steer each lane's short-term loudness toward its profile st_target_lufs.
+    bool laneLevel = true;
 };
 
-// Per-lane HPF/LPF, EQ, compressor, saturation, tilt, mono-below, trim.
+// BS.1770-4 K-weighting for one channel: the pre-filter shelf (+3.9998 dB at
+// 1681.97 Hz, Q 0.70718) then the RLB high-pass (38.135 Hz, Q 0.50033), in
+// libebur128's design (the BS.1770 48 kHz table exactly). A 997 Hz 0 dBFS sine
+// reads -3.01 LUFS in one channel and 0 LUFS in both.
+struct KWeight
+{
+    void prepare (double sampleRate) noexcept;
+    void reset() noexcept { s1 = s2 = h1 = h2 = 0.0; }
+    double process (double x) noexcept;
+
+    double sb0 = 1, sb1 = 0, sb2 = 0, sa1 = 0, sa2 = 0;
+    double hb0 = 1, hb1 = 0, hb2 = 0, ha1 = 0, ha2 = 0;
+    double s1 = 0, s2 = 0, h1 = 0, h2 = 0;
+};
+
+// Per-lane HPF/LPF, EQ, compressor, saturation, tilt, mono-below, lane level, trim.
 // Dialect changes ramp (MIX_SPEC §9.2). The sum itself stays linear.
 class MixRuntime
 {
@@ -39,6 +56,21 @@ private:
         float process (float x) noexcept;
         void setBell (float freq, float q, float gainDb, float sr) noexcept;
         void setShelf (bool high, float freq, float q, float gainDb, float sr) noexcept;
+    };
+
+    // BS.1770 K-weighted short-term loudness of one lane, in 100 ms blocks over 3 s.
+    static constexpr int kLevelBlocks = 30;
+    struct LaneLevel
+    {
+        KWeight kL, kR;
+        double acc = 0.0;
+        int count = 0;
+        double ring[kLevelBlocks] {};
+        double sum = 0.0;
+        int w = 0, fill = 0;
+        float holdDb = -200.f;
+        float wantLin = 1.f;
+        float gain = 1.f;
     };
 
     struct RmsWin
@@ -71,6 +103,7 @@ private:
         Biquad eqLOld[2], eqROld[2];
         RmsWin rms;
         Corr corr;
+        LaneLevel level;
         float compEnv = 1.f;
         MixChain cur {};
         MixChain from {};
@@ -97,9 +130,13 @@ private:
     MixChain blended (const Strip& s) const noexcept;
     float filterBank (Strip& s, float x, bool right, bool hpf, float freq, int slope, bool oldPath) noexcept;
     float eqBank (Strip& s, float x, bool right, int band, const MixEqBand& eq, bool oldPath) noexcept;
+    void levelLane (Strip& s, const MixChain& c, float& l, float& r) noexcept;
 
     double sr = 48000.0;
     int ramp50 = 2400, ramp80 = 3840, ramp120 = 5760, corrN = 2400, rmsN = 240;
+    int levelBlockN = 4800;
+    float levelCut = 0.f, levelBoost = 0.f;
+    bool laneLevel = true;
     Strip strip[kMixLanes];
     const MixProgram* program = nullptr;
     int dialect = 0;

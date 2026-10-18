@@ -24,6 +24,9 @@ constexpr bool kCleanBus = false;
 #endif
 
 
+// MIX_SPEC: kick and bass hold corr <120 Hz ≥ 0.99 on the master.
+constexpr float kSubMonoHz = 120.f;
+
 float coefFromMs (float ms, float sr) noexcept
 {
     return 1.f - std::exp (-1.f / std::max (1.f, ms * 0.001f * sr));
@@ -357,6 +360,8 @@ struct Engine::Impl
     juce::Reverb reverb;
     int reverbIdle = 1000000;
     DcBlock mainDc, mainDcR, drumDc, drumDcR;
+    // Master sub-mono crossover (mix path only).
+    Svf subL, subR;
     MixRuntime mixRt;
     TruePeakGuard tpGuard;
     bool primed = false;
@@ -437,6 +442,8 @@ struct Engine::Impl
         mainDcR.reset();
         drumDc.reset();
         drumDcR.reset();
+        subL.reset();
+        subR.reset();
         mixRt.reset();
         tpGuard.reset();
         lastPos = -1.0;
@@ -2253,6 +2260,14 @@ void Engine::process (const Groove& groove,
             // Linear sum. The shared fastTanh was the mute leak: MUTE − (FULL − SOLO)
             // left a common 250 Hz–4 kHz residual from the cubic term of the sum.
             const float sg = E.mixRt.sumGain();
+            // Mono below 120 Hz on the master: the plate, the delay and the unstripped
+            // toms / slot kicks put side energy under the lanes' own mono-below.
+            // Linear, so MUTE − (FULL − SOLO) still nulls.
+            const float lowL = E.subL.lowpass (outL, kSubMonoHz, 0.70710678f, srF);
+            const float lowR = E.subR.lowpass (outR, kSubMonoHz, 0.70710678f, srF);
+            const float lowM = 0.5f * (lowL + lowR);
+            outL += lowM - lowL;
+            outR += lowM - lowR;
             outL = flush (E.mainDc.process (outL) * sg * og);
             outR = flush (E.mainDcR.process (outR) * sg * og);
         }
