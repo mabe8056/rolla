@@ -21,6 +21,13 @@ jobs:
       - name: Preset files match SAMPLE_MANIFEST.json
         run: python3 tools/check_sample_coverage.py
 
+      - name: Repo guard
+        run: |
+          set -euo pipefail
+          python3 tools/check_repo_clean.py
+          python3 tests/repo_guard/test_check_repo_clean.py
+          python3 tests/repo_guard/test_tp_guard_table.py
+
   macos:
     name: macOS universal VST3 + AU
     runs-on: macos-14
@@ -351,3 +358,7 @@ jobs:
           ./build/rolla-mix-render --switch --stim "$GITHUB_WORKSPACE/mix-renders/stimulus.wav" --from LONG --to POP --at 1.0 --lane STAB "$GITHUB_WORKSPACE/mix-renders/switch/LONG_POP.wav"
           ./build/rolla-mix-render --switch --stim "$GITHUB_WORKSPACE/mix-renders/stimulus.wav" --from POP --to GASKIN --at 1.0 --lane STAB "$GITHUB_WORKSPACE/mix-renders/switch/POP_GASKIN.wav"
           python3 tests/mix/run_mix_checks.py --gate --switch-dir "$GITHUB_WORKSPACE/mix-renders/switch" "$GITHUB_WORKSPACE/mix-renders"
+
+      - name: tp_guard table
+        # Report only for now; add --gate once the factory renders are known to sit under the bar.
+        run: python3 tools/tp_guard_table.py "$GITHUB_WORKSPACE/mix-renders"
