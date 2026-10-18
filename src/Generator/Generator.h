@@ -40,6 +40,15 @@ struct Rng
 // temperature that rises with freedom. The caller seed is what lands on the lane.
 void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[NumParts], std::uint32_t partMask);
 
+// The one mode a roll uses for bass, stab, pad, pluck and hits
+// (phrase::Dorian / Aeolian / Phrygian). JACKIN is always phrygian; DEEP
+// follows its phrase bank; ROLLER/BOUNCY draw from DARK and the bass seed.
+// After generation, generate() snaps the regenerated lanes to this mode, caps
+// the bass b2 at 6% of sounding time (one-16th passing notes only) outside
+// phrygian, and removes every bass vs stab/pad semitone clash: up to 8
+// deterministic resamples per note, then the nearest sounding chord tone.
+int rollMode (const Settings& settings, std::uint32_t bassSeed) noexcept;
+
 // OC-style bass skeleton similarity in [0, 1]. A pair at or above 0.55 is the
 // same skeleton (GENERATOR_RULES v2 §4.2). Deterministic and history-free.
 float bassSkeletonSimilarity (const Groove& a, const Groove& b) noexcept;

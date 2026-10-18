@@ -4056,6 +4056,301 @@ void separateTwinRhythm (Lane& lane, int dialect, std::uint32_t seed)
     rememberRhythm (ring, snap);
 }
 
+namespace
+{
+
+// ---- Roll harmony: one mode per roll, b2 cap, bass vs stab/pad semitone guard ----
+
+constexpr float kB2TimeMax = 0.06f;
+constexpr int kClashTries = 8;
+
+// Out-of-mode pitch class -> the in-mode neighbour. Works for all three modes:
+// 1->0, 2->3 (phrygian), 4->3, 6->7, 8->7 (dorian), 9->8, 11->10.
+int snapToMode (int semi, int mode) noexcept
+{
+    if (phrase::inMode (semi, mode))
+        return semi;
+    const int pc = pcOf (semi);
+    return semi + ((pc == 2 || pc == 6) ? 1 : -1);
+}
+
+void conformUpperLane (Lane& lane, int mode)
+{
+    for (int i = 0; i < lane.count; ++i)
+    {
+        Note& n = lane.notes[i];
+        const int nc = clampi ((int) n.nChord, 1, 4);
+        for (int c = 0; c < nc; ++c)
+            n.chord[c] = (std::int8_t) snapToMode (n.chord[c], mode);
+        uniqueChord (n);
+    }
+}
+
+void sortByStart (Lane& lane)
+{
+    std::stable_sort (lane.notes, lane.notes + lane.count,
+                      [] (const Note& a, const Note& b) { return a.start < b.start; });
+}
+
+// Sounding length of bass note i (the lane is monophonic and sorted).
+float bassSounding (const Lane& lane, int i) noexcept
+{
+    float len = lane.notes[i].length;
+    if (i + 1 < lane.count)
+        len = std::min (len, lane.notes[i + 1].start - lane.notes[i].start);
+    return std::max (0.f, len);
+}
+
+// Root on slot 1 and slot 3 of one bar is the banned reaction figure.
+bool makesReaction (const Lane& lane, int idx, int semi) noexcept
+{
+    if (pcOf (semi) != 0)
+        return false;
+    const int st = (int) std::lround (lane.notes[idx].start);
+    const int slot = st % 16;
+    if (slot != 1 && slot != 3)
+        return false;
+    const int want = slot == 1 ? 3 : 1;
+    for (int i = 0; i < lane.count; ++i)
+    {
+        if (i == idx)
+            continue;
+        const int s2 = (int) std::lround (lane.notes[i].start);
+        if (s2 / 16 == st / 16 && s2 % 16 == want && pcOf (lane.notes[i].chord[0]) == 0)
+            return true;
+    }
+    return false;
+}
+
+// Keep the register: move to the nearest octave of target pc.
+int retarget (int semi, int pc) noexcept
+{
+    int d = pc - pcOf (semi);
+    if (d > 6)
+        d -= 12;
+    if (d < -6)
+        d += 12;
+    return semi + d;
+}
+
+void conformBass (Lane& lane, int mode)
+{
+    sortByStart (lane);
+    for (int i = 0; i < lane.count; ++i)
+        if (pcOf (lane.notes[i].chord[0]) != 1 || mode == phrase::Phrygian)
+            lane.notes[i].chord[0] = (std::int8_t) snapToMode (lane.notes[i].chord[0], mode);
+    if (mode == phrase::Phrygian)
+        return;
+
+    // Outside phrygian the b2 is a one-sixteenth passing/neighbour note between
+    // 1 and 2, and holds at most kB2TimeMax of the bass sounding time.
+    float total = 0.f;
+    for (int i = 0; i < lane.count; ++i)
+        total += bassSounding (lane, i);
+    const float budget = kB2TimeMax * total;
+    float used = 0.f;
+    auto edgePc = [] (int pc) { return pc == 0 || pc == 2; };
+    for (int i = 0; i < lane.count; ++i)
+    {
+        const int semi = lane.notes[i].chord[0];
+        if (pcOf (semi) != 1)
+            continue;
+        const float t = bassSounding (lane, i);
+        bool passing = lane.notes[i].length <= 1.05f && i > 0 && i + 1 < lane.count;
+        if (passing)
+        {
+            const Note& p = lane.notes[i - 1];
+            const Note& n = lane.notes[i + 1];
+            passing = edgePc (pcOf (p.chord[0])) && edgePc (pcOf (n.chord[0]))
+                   && lane.notes[i].start - (p.start + p.length) <= 1.05f
+                   && n.start - (lane.notes[i].start + lane.notes[i].length) <= 1.05f;
+        }
+        if (passing && used + t <= budget + 1e-4f)
+        {
+            used += t;
+            continue;
+        }
+        int to = semi - 1; // root
+        if (makesReaction (lane, i, to))
+            to = semi + 2; // b3
+        lane.notes[i].chord[0] = (std::int8_t) to;
+    }
+}
+
+bool overlaps (const Note& a, const Note& b) noexcept
+{
+    return a.start < b.start + b.length - 1e-3f && b.start < a.start + a.length - 1e-3f;
+}
+
+// Pitch-class bitmask of every stab/pad tone sounding with bass note i.
+std::uint32_t upperPcsWith (const Groove& g, int i) noexcept
+{
+    const Note& b = g.lane[Bass].notes[i];
+    std::uint32_t m = 0;
+    for (int part : { (int) Stab, (int) Pad })
+    {
+        const Lane& l = g.lane[part];
+        for (int k = 0; k < l.count; ++k)
+        {
+            if (l.notes[k].vel <= 2 || ! overlaps (b, l.notes[k]))
+                continue;
+            const int nc = clampi ((int) l.notes[k].nChord, 1, 4);
+            for (int c = 0; c < nc; ++c)
+                m |= 1u << pcOf (l.notes[k].chord[c]);
+        }
+    }
+    return m;
+}
+
+// Bass pcs that sit a semitone (m2 / m9 / M7) from any tone in `upper`.
+std::uint32_t clashMask (std::uint32_t upper) noexcept
+{
+    std::uint32_t m = 0;
+    for (int pc = 0; pc < 12; ++pc)
+        if (upper & (1u << pc))
+            m |= (1u << ((pc + 1) % 12)) | (1u << ((pc + 11) % 12));
+    return m;
+}
+
+void fixBassClashes (Groove& g, int mode, std::uint32_t seed)
+{
+    Lane& lane = g.lane[Bass];
+    for (int i = 0; i < lane.count; ++i)
+    {
+        if (lane.notes[i].vel <= 2)
+            continue;
+        const std::uint32_t upper = upperPcsWith (g, i);
+        const std::uint32_t bad = clashMask (upper);
+        const int semi = lane.notes[i].chord[0];
+        if ((bad & (1u << pcOf (semi))) == 0)
+            continue;
+        auto ok = [&] (int pc)
+        {
+            if (bad & (1u << pc))
+                return false;
+            if (! phrase::inMode (pc, mode))
+                return false;
+            if (pc == 1 && mode != phrase::Phrygian)
+                return false;
+            return ! makesReaction (lane, i, retarget (semi, pc));
+        };
+        // Resample: bounded, deterministic from the bass seed and the note.
+        int chosen = -1;
+        Rng r (seed ^ (0x5EC0DEu + (std::uint32_t) i * 0x9E3779B9u));
+        for (int t = 0; t < kClashTries && chosen < 0; ++t)
+        {
+            const int pc = phrase::degreeToSemis ((int) (r.nextU() % 7u), mode);
+            if (ok (pc))
+                chosen = pc;
+        }
+        // Fallback: nearest chord tone sounding above, then the root, then any safe pc.
+        if (chosen < 0)
+        {
+            const int here = pcOf (semi);
+            for (int d = 0; d <= 6 && chosen < 0; ++d)
+                for (int sgn : { -1, 1 })
+                {
+                    const int pc = (here + sgn * d + 12) % 12;
+                    if (chosen < 0 && (upper & (1u << pc)) && ok (pc))
+                        chosen = pc;
+                }
+        }
+        if (chosen < 0 && ok (0))
+            chosen = 0;
+        for (int pc = 0; pc < 12 && chosen < 0; ++pc)
+            if (ok (pc))
+                chosen = pc;
+        if (chosen >= 0)
+            lane.notes[i].chord[0] = (std::int8_t) retarget (semi, chosen);
+    }
+}
+
+// Bass is kept: drop the stab/pad tones that clash with it instead.
+void fixUpperClashes (Groove& g, int part)
+{
+    Lane& l = g.lane[part];
+    const Lane& bass = g.lane[Bass];
+    for (int k = 0; k < l.count; ++k)
+    {
+        std::uint32_t bassPcs = 0;
+        int firstBass = -1;
+        for (int i = 0; i < bass.count; ++i)
+            if (bass.notes[i].vel > 2 && overlaps (bass.notes[i], l.notes[k]))
+            {
+                bassPcs |= 1u << pcOf (bass.notes[i].chord[0]);
+                if (firstBass < 0)
+                    firstBass = i;
+            }
+        if (bassPcs == 0)
+            continue;
+        const std::uint32_t bad = clashMask (bassPcs);
+        Note& n = l.notes[k];
+        const int nc = clampi ((int) n.nChord, 1, 4);
+        std::int8_t keep[4];
+        int w = 0;
+        for (int c = 0; c < nc; ++c)
+            if ((bad & (1u << pcOf (n.chord[c]))) == 0)
+                keep[w++] = n.chord[c];
+        if (w == 0)
+            keep[w++] = (std::int8_t) retarget (n.chord[0], pcOf (bass.notes[firstBass].chord[0]));
+        n.nChord = (std::uint8_t) w;
+        for (int c = 0; c < 4; ++c)
+            n.chord[c] = c < w ? keep[c] : 0;
+    }
+}
+
+void harmonizeRoll (Groove& g, const Settings& s, std::uint32_t bassSeed, std::uint32_t partMask)
+{
+    auto regen = [&] (int part) { return (partMask & (1u << part)) != 0; };
+    const int mode = rollMode (s, bassSeed);
+    for (int part : { (int) Stab, (int) Pad, (int) Pluck, (int) Hits })
+        if (regen (part))
+            conformUpperLane (g.lane[part], mode);
+    if (regen (Bass))
+    {
+        conformBass (g.lane[Bass], mode);
+        fixBassClashes (g, mode, bassSeed);
+        // The fixer never adds a b2 outside phrygian, so the cap still holds.
+    }
+    else
+    {
+        for (int part : { (int) Stab, (int) Pad })
+            if (regen (part))
+                fixUpperClashes (g, part);
+    }
+}
+
+} // namespace
+
+int rollMode (const Settings& settings, std::uint32_t bassSeed) noexcept
+{
+    const int dialect = clampi (settings.dialect, 0, NumDialects - 1);
+    const float dark = std::clamp (settings.dark, 0.f, 1.f);
+    const std::uint32_t seed = bassSeed ? bassSeed : 1u;
+    // JACKIN's lane is phrygian; DEEP uses the mode its phrase bank drew.
+    if (dialect == Gaskin)
+        return phrase::Phrygian;
+    if (dialect == Long)
+    {
+        phrase::PhraseSettings ps;
+        ps.busy = 0.40f;
+        ps.bounce = std::clamp (settings.bounce, 0.f, 1.f);
+        ps.dark = dark;
+        ps.bars = 2;
+        return phrase::makeBassPhrase (phrase::Style::Deep, seed, ps).mode;
+    }
+    // Same dark-weighted mix as the phrase bank.
+    Rng r (seed ^ 0x3D0DE5u);
+    const float pDor = 0.35f * (1.f - dark);
+    const float pPhr = 0.22f * dark * dark;
+    const float x = (float) r.next();
+    if (x < pDor)
+        return phrase::Dorian;
+    if (x < pDor + pPhr)
+        return phrase::Phrygian;
+    return phrase::Aeolian;
+}
+
 void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[NumParts], std::uint32_t partMask)
 {
     Settings s = settings;
@@ -4280,6 +4575,7 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
     for (int part = 0; part < Drums; ++part)
         dedupeNoteOns (g.lane[part]);
     enforceMonophonic (g.lane[Bass]);
+    harmonizeRoll (g, s, bassSeed, partMask);
     g.guardScore = shippedHard ? 0.f : 1.f;
     g.guardLevel = shippedHard ? 2 : 0;
     std::snprintf (g.guardRef, sizeof g.guardRef, "%s", shippedHard ? "HARD" : "ORIGINAL");

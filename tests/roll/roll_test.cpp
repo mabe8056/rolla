@@ -1,6 +1,8 @@
 #include "PluginProcessor.h"
 #include "../common/ScratchProfile.h"
 #include "Generator/MidiFile.h"
+#include "Generator/Generator.h"
+#include "Generator/PhraseBank.h"
 
 #include <juce_events/juce_events.h>
 
@@ -889,6 +891,106 @@ void testScorerV23()
     }
 }
 
+// 4 styles x 50 seeds: no instant where the bass and a stab/pad tone are a
+// semitone apart (m2 / m9 / M7), the bass b2 holds <= 6% of bass sounding time
+// unless the roll's mode is phrygian, the major 6 only shows up in dorian rolls,
+// and a dorian stab never carries the b6.
+void testHarmonyClashes()
+{
+    const std::uint32_t base = 1u;
+    const char* names[] = { "ROLLER", "DEEP", "BOUNCY", "JACKIN" };
+    for (int style = 0; style < 4; ++style)
+    {
+        int clashes = 0;
+        int b2Over = 0;
+        int sixthBad = 0;
+        int phrygianRolls = 0;
+        for (int roll = 0; roll < 50; ++roll)
+        {
+            rolla::Settings s;
+            s.dialect = style;
+            s.bars = 8;
+            std::uint32_t seeds[rolla::NumParts] {};
+            for (int p = 0; p < rolla::NumParts; ++p)
+                seeds[p] = base + (std::uint32_t) roll * 0x9E3779B9u + (std::uint32_t) p * 17u
+                         + (std::uint32_t) style * 101u;
+            rolla::Groove g {};
+            rolla::generate (g, s, seeds, 0x7fu);
+            const int mode = rolla::rollMode (s, seeds[rolla::Bass]);
+            if (mode == rolla::phrase::Phrygian)
+                ++phrygianRolls;
+
+            auto bass = g.lane[rolla::Bass];
+            std::sort (bass.notes, bass.notes + bass.count,
+                       [] (const rolla::Note& a, const rolla::Note& b) { return a.start < b.start; });
+            double total = 0;
+            double b2 = 0;
+            for (int i = 0; i < bass.count; ++i)
+            {
+                double len = bass.notes[i].length;
+                if (i + 1 < bass.count)
+                    len = std::min (len, (double) (bass.notes[i + 1].start - bass.notes[i].start));
+                len = std::max (0.0, len);
+                total += len;
+                const int pc = pcOfNote (bass.notes[i].chord[0]);
+                if (pc == 1)
+                    b2 += len;
+                if (pc == 9 && mode != rolla::phrase::Dorian)
+                    ++sixthBad;
+            }
+            if (mode != rolla::phrase::Phrygian && total > 0 && b2 / total > 0.06 + 1e-6)
+                ++b2Over;
+            if (mode == rolla::phrase::Dorian)
+            {
+                const auto& stab = g.lane[rolla::Stab];
+                for (int k = 0; k < stab.count; ++k)
+                    for (int c = 0; c < std::max (1, (int) stab.notes[k].nChord) && c < 4; ++c)
+                        if (pcOfNote (stab.notes[k].chord[c]) == 8)
+                            ++sixthBad;
+            }
+
+            // Sample every quarter-16th midpoint across the loop.
+            for (int q = 0; q < g.bars * 64; ++q)
+            {
+                const float t = (float) q * 0.25f + 0.125f;
+                int bpc = -1;
+                for (int i = 0; i < bass.count; ++i)
+                    if (bass.notes[i].vel > 2 && t >= bass.notes[i].start && t < bass.notes[i].start + bass.notes[i].length)
+                        bpc = pcOfNote (bass.notes[i].chord[0]);
+                if (bpc < 0)
+                    continue;
+                bool clash = false;
+                for (int part : { (int) rolla::Stab, (int) rolla::Pad })
+                {
+                    const auto& l = g.lane[part];
+                    for (int k = 0; k < l.count && ! clash; ++k)
+                    {
+                        const auto& n = l.notes[k];
+                        if (n.vel <= 2 || t < n.start || t >= n.start + n.length)
+                            continue;
+                        for (int c = 0; c < std::max (1, (int) n.nChord) && c < 4; ++c)
+                        {
+                            const int d = (pcOfNote (n.chord[c]) - bpc + 12) % 12;
+                            if (d == 1 || d == 11)
+                                clash = true;
+                        }
+                    }
+                }
+                if (clash)
+                {
+                    ++clashes;
+                    break;
+                }
+            }
+        }
+        std::cout << names[style] << " harmony: clash rolls " << clashes << "/50 b2-over " << b2Over
+                  << " sixth-bad " << sixthBad << " phrygian rolls " << phrygianRolls << "\n";
+        expect (clashes == 0, std::string (names[style]) + " bass never sits a semitone from stab/pad");
+        expect (b2Over == 0, std::string (names[style]) + " b2 <= 6% of bass time outside phrygian");
+        expect (sixthBad == 0, std::string (names[style]) + " major 6 only in dorian, no b6 stab in dorian");
+    }
+}
+
 void testShuffleKeepsManualLock()
 {
     rolla::RollaProcessor proc;
@@ -921,6 +1023,7 @@ int main()
 
     testEarReview();
     testScorerV23();
+    testHarmonyClashes();
     testRollSkipsMutedAndKept();
     testShuffleClearsAutoKeep();
     testShuffleKeepsManualLock();
