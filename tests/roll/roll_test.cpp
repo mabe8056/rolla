@@ -2,6 +2,7 @@
 #include "../common/ScratchProfile.h"
 #include "Generator/MidiFile.h"
 #include "Generator/Generator.h"
+#include "Generator/Intensity.h"
 #include "Generator/PhraseBank.h"
 #include "Generator/Presets.h"
 
@@ -1514,6 +1515,685 @@ void testArGateBass()
     }
 }
 
+// ---- A&R MIDI gate repros (msg 490): rolla-rolls --seed 2026101852 ----
+
+// tools/roll_batch.cpp renderBatch, MIDI side: the default knobs (DARK 0.55,
+// BUSY 0.40, BOUNCE 0.45, STAB 0.55, STYLE 0.5 = Settings defaults), key D,
+// 8 bars, no fill; per-part seeds from the batch seed; the skeleton redraw
+// against the earlier rolls of the batch; then INTENSITY 75, which is what
+// the batch writes to MIDI. generate() remembers recent rhythms per style for
+// the whole process (separateTwinRhythm), so the tests that use this run first
+// in main(): a fresh process is what rolla-rolls starts from.
+struct BatchRoll
+{
+    rolla::Groove arranged {};
+    std::uint32_t seeds[rolla::NumParts] {};
+};
+
+rolla::Settings batchSettings (int style)
+{
+    rolla::Settings s;
+    s.dialect = style;
+    s.key = 2;
+    s.bars = 8;
+    s.fill = false;
+    return s;
+}
+
+std::vector<BatchRoll> batchRolls (std::uint32_t batchSeed, int style, int count)
+{
+    const rolla::Settings s = batchSettings (style);
+    std::vector<BatchRoll> out;
+    std::vector<rolla::Groove> seen;
+    out.reserve ((std::size_t) count);
+    seen.reserve ((std::size_t) count);
+    for (int roll = 0; roll < count; ++roll)
+    {
+        out.emplace_back();
+        BatchRoll& r = out.back();
+        for (int p = 0; p < rolla::NumParts; ++p)
+            r.seeds[p] = batchSeed + (std::uint32_t) roll * 0x9E3779B9u + (std::uint32_t) p * 17u
+                       + (std::uint32_t) style * 101u;
+        rolla::Groove groove {};
+        rolla::generate (groove, s, r.seeds, 0x7fu);
+        for (int guard = 0; guard < 8; ++guard)
+        {
+            bool close = false;
+            for (const auto& prev : seen)
+                if (rolla::bassSkeletonSimilarity (groove, prev) >= 0.55f)
+                    close = true;
+            if (! close)
+                break;
+            r.seeds[rolla::Bass] ^= 0x6D2B79F5u * (std::uint32_t) (guard + 1);
+            rolla::generate (groove, s, r.seeds, 0x7fu);
+        }
+        seen.push_back (groove);
+        const auto plan = rolla::planIntensity (style, 75, s.stab);
+        rolla::applyIntensity (groove, r.arranged, plan, 0, 0);
+    }
+    return out;
+}
+
+const char* modeName (int mode)
+{
+    if (mode == rolla::phrase::Dorian)
+        return "dorian";
+    if (mode == rolla::phrase::Phrygian)
+        return "phrygian";
+    return "aeolian";
+}
+
+// A&R 490 #2: ROLLER roll_04 of batch 2026101852 played seven Eb bass notes in
+// D minor (gate run before #62). Every bass pitch must be in the roll's mode
+// (rollMode). The one exception is the style rule's b2 (style_rules.json
+// ROLLER scales.chromatic, Composer 434): outside phrygian only as a one-16th
+// passing note between the root and the 2, at most 12% of bass time
+// (phrygian 30%). The root must also be one of the two most-sounding pitch
+// classes (H1), so a listener and the scorer hear D as the key.
+void testBatchRollerKey()
+{
+    const std::uint32_t batch = 2026101852u;
+    const auto rolls = batchRolls (batch, rolla::UkMin, 5);
+    const auto& r = rolls[4];
+    const int mode = rolla::rollMode (batchSettings (rolla::UkMin), r.seeds[rolla::Bass]);
+    auto bass = r.arranged.lane[rolla::Bass];
+    std::sort (bass.notes, bass.notes + bass.count,
+               [] (const rolla::Note& a, const rolla::Note& b) { return a.start < b.start; });
+
+    auto passing = [&] (int i)
+    {
+        if (i <= 0 || i + 1 >= bass.count || bass.notes[i].length > 1.05f)
+            return false;
+        const auto& p = bass.notes[i - 1];
+        const auto& n = bass.notes[i + 1];
+        const int pp = pcOfNote (p.chord[0]);
+        const int np = pcOfNote (n.chord[0]);
+        return (pp == 0 || pp == 2) && (np == 0 || np == 2)
+            && bass.notes[i].start - (p.start + p.length) <= 1.05f
+            && n.start - (bass.notes[i].start + bass.notes[i].length) <= 1.05f;
+    };
+
+    double total = 0.0;
+    double b2Time = 0.0;
+    double pcTime[12] {};
+    int b2Notes = 0;
+    int outOfMode = 0;
+    int stranded = 0;
+    std::string outList;
+    for (int i = 0; i < bass.count; ++i)
+    {
+        const auto& n = bass.notes[i];
+        if (n.vel <= 2)
+            continue; // MidiExport drops these
+        double len = n.length;
+        if (i + 1 < bass.count)
+            len = std::min (len, (double) (bass.notes[i + 1].start - n.start));
+        len = std::max (0.0, len);
+        const int pc = pcOfNote (n.chord[0]);
+        total += len;
+        pcTime[pc] += len;
+        if (pc == 1)
+        {
+            ++b2Notes;
+            b2Time += len;
+        }
+        if (rolla::phrase::inMode (pc, mode))
+            continue;
+        if (pc == 1 && mode != rolla::phrase::Phrygian)
+        {
+            if (! passing (i))
+            {
+                ++stranded;
+                outList += " b2@" + std::to_string (n.start);
+            }
+            continue;
+        }
+        ++outOfMode;
+        outList += " pc" + std::to_string (pc) + "@" + std::to_string (n.start);
+    }
+    int rootRank = 0;
+    for (int pc = 1; pc < 12; ++pc)
+        if (pcTime[pc] > pcTime[0] + 1.0e-9)
+            ++rootRank;
+    const double cap = mode == rolla::phrase::Phrygian ? 0.30 : 0.12;
+    const double b2Share = total > 0.0 ? b2Time / total : 0.0;
+    std::cout << "ROLLER batch " << batch << " roll_04: bass seed " << r.seeds[rolla::Bass] << " mode " << modeName (mode)
+              << ", " << bass.count << " bass notes, Eb (b2) notes " << b2Notes << " (" << (100.0 * b2Share)
+              << "% of bass time), out of mode " << outOfMode << ", stranded b2 " << stranded
+              << ", root rank " << (rootRank + 1) << (outList.empty() ? "" : " :") << outList << "\n";
+    expect (bass.count > 0, "ROLLER roll_04 has a bass line");
+    expect (outOfMode == 0, "ROLLER roll_04: every bass pitch is in the roll's " + std::string (modeName (mode)) + " mode");
+    expect (stranded == 0, "ROLLER roll_04: a b2 outside phrygian is only a one-16th passing note between 1 and 2");
+    expect (b2Share <= cap + 1.0e-5, "ROLLER roll_04: b2 within the style cap");
+    expect (rootRank <= 1, "ROLLER roll_04: the root is one of the two most-sounding bass pitch classes");
+}
+
+// A&R 490 #4: the gate's BOUNCY rolls were all pulse. #70 plays BOUNCE on
+// about three quarters of rolls; batch 2026101852 should land near 15 / 5.
+void testBatchBouncyModes()
+{
+    const std::uint32_t batch = 2026101852u;
+    const auto rolls = batchRolls (batch, rolla::Pop, 20);
+    int bounce = 0;
+    int pulse = 0;
+    std::string order;
+    for (const auto& r : rolls)
+    {
+        if (r.arranged.bassMode == rolla::BassModeBounce)
+        {
+            ++bounce;
+            order.push_back ('B');
+        }
+        else if (r.arranged.bassMode == rolla::BassModePulse)
+        {
+            ++pulse;
+            order.push_back ('P');
+        }
+        else
+            order.push_back ('?');
+    }
+    std::cout << "BOUNCY batch " << batch << ": bounce " << bounce << " pulse " << pulse << " (" << order << ")\n";
+    expect (bounce + pulse == 20, "every BOUNCY batch roll carries a mode");
+    expect (bounce >= 11 && bounce <= 19, "BOUNCY batch " + std::to_string (batch) + " is mostly bounce (11-19 of 20), got "
+                                              + std::to_string (bounce));
+}
+
+// tools/score_rolls.py v2.2.1, read on the exported MIDI the way the A&R gate
+// does: LOOP_NO_REPEAT and the JACKIN ("gaskin") lane-fit features F1-F11
+// (F12 is the duck, which the scorer does not read on a full mix). A roll is
+// LANE_FIT_LOW when more than two measurable features miss.
+struct ScoreNote
+{
+    double s = 0.0; // 16ths
+    double e = 0.0;
+    int p = 0;
+};
+
+int pyRound (double x)
+{
+    return (int) std::nearbyint (x); // round half to even, as Python's round()
+}
+
+double pyMedian (std::vector<double> v)
+{
+    if (v.empty())
+        return 0.0;
+    std::sort (v.begin(), v.end());
+    const std::size_t n = v.size();
+    return (n & 1u) ? v[n / 2] : 0.5 * (v[n / 2 - 1] + v[n / 2]);
+}
+
+double roundTo (double x, double scale)
+{
+    return std::nearbyint (x * scale) / scale;
+}
+
+struct JackinScore
+{
+    double gm2 = 0.0;
+    double gm4 = 0.0;
+    double rep1 = -1.0;
+    double rep2 = -1.0;
+    bool loopNoRepeat = true;
+    int measurable = 0;
+    int misses = 0;
+    std::string missList;
+    std::string detail;
+};
+
+JackinScore scoreJackin (const std::vector<ScoreNote>& bassIn, const std::vector<ScoreNote>& stabIn,
+                         const std::vector<ScoreNote>& drums, int bars)
+{
+    JackinScore out;
+    const int L = bars * 16;
+    // mono_bass: the lowest pitch per 16th, sounding until the next attack.
+    std::map<int, ScoreNote> by;
+    for (const auto& n : bassIn)
+    {
+        const int k = pyRound (n.s);
+        auto it = by.find (k);
+        if (it == by.end() || n.p < it->second.p)
+            by[k] = n;
+    }
+    struct Bn { double s, e; int p; double ln; };
+    std::vector<Bn> all;
+    for (const auto& kv : by)
+        all.push_back ({ kv.second.s, kv.second.e, kv.second.p, 0.0 });
+    for (std::size_t i = 0; i < all.size(); ++i)
+        all[i].ln = i + 1 < all.size() ? std::max (0.05, std::min (all[i].e, all[i + 1].s) - all[i].s)
+                                       : std::max (0.05, all[i].e - all[i].s);
+    std::vector<Bn> bn;
+    for (const auto& n : all)
+        if (n.s < L - 0.5)
+            bn.push_back (n);
+    if (bn.size() < 4)
+    {
+        out.misses = 99;
+        out.missList = "NO_BASS";
+        return out;
+    }
+    const double nb = (double) bn.size();
+
+    std::vector<double> kick;
+    std::vector<double> hats;
+    for (const auto& d : drums)
+    {
+        if (d.p == 35 || d.p == 36)
+            kick.push_back (d.s);
+        if (d.p == 42 || d.p == 44 || d.p == 46)
+            hats.push_back (d.s);
+    }
+    std::sort (kick.begin(), kick.end());
+    std::sort (hats.begin(), hats.end());
+    if (! kick.empty())
+    {
+        const int nbar = std::max (1, (int) (kick.back() / 16.0) + 1);
+        std::map<int, int> cnt;
+        for (double t : kick)
+            if (pyRound (t) % 4 != 0)
+                ++cnt[pyRound (t) % 16];
+        std::vector<double> keep;
+        for (double t : kick)
+            if (pyRound (t) % 4 == 0 || cnt[pyRound (t) % 16] >= 0.5 * nbar)
+                keep.push_back (t);
+        kick = keep;
+    }
+
+    // F1 off the kick
+    int off = 0;
+    for (const auto& n : bn)
+    {
+        bool onKick = false;
+        for (double k : kick)
+            if (std::fabs (n.s - k) <= 0.49)
+                onKick = true;
+        if (! onKick)
+            ++off;
+    }
+    const double offkick = roundTo (100.0 * off / nb, 10.0);
+    // F2 pitch classes (time-weighted; ties keep first appearance, like Counter)
+    double tpc[12] {};
+    int firstAt[12];
+    for (int& f : firstAt)
+        f = 1 << 30;
+    double tot = 0.0;
+    for (std::size_t i = 0; i < bn.size(); ++i)
+    {
+        const int pc = pcOfNote (bn[i].p);
+        tpc[pc] += bn[i].ln;
+        tot += bn[i].ln;
+        firstAt[pc] = std::min (firstAt[pc], (int) i);
+    }
+    std::vector<int> pcsOrder;
+    for (int pc = 0; pc < 12; ++pc)
+        if (firstAt[pc] < (1 << 30))
+            pcsOrder.push_back (pc);
+    std::stable_sort (pcsOrder.begin(), pcsOrder.end(), [&] (int a, int b)
+    {
+        if (tpc[a] != tpc[b])
+            return tpc[a] > tpc[b];
+        return firstAt[a] < firstAt[b];
+    });
+    const int tonic = pcsOrder[0];
+    const double top2 = roundTo (100.0 * (tpc[pcsOrder[0]] + (pcsOrder.size() > 1 ? tpc[pcsOrder[1]] : 0.0)) / tot, 10.0);
+    int pcs5 = 0;
+    for (int pc = 0; pc < 12; ++pc)
+        if (tpc[pc] > 0.0 && tpc[pc] >= 0.05 * tot)
+            ++pcs5;
+    // F3 length
+    std::vector<double> lens;
+    int long6 = 0;
+    for (const auto& n : bn)
+    {
+        lens.push_back (n.ln);
+        if (n.ln >= 6.0)
+            ++long6;
+    }
+    const double lenMed = roundTo (pyMedian (lens), 100.0);
+    const double long6Pct = roundTo (100.0 * long6 / nb, 10.0);
+    // F4 density
+    std::set<int> att;
+    for (const auto& n : bn)
+        att.insert (pyRound (n.s));
+    int run = 1;
+    int bestRun = 1;
+    int prevSlot = -100;
+    for (int sl : att)
+    {
+        run = sl == prevSlot + 1 ? run + 1 : 1;
+        bestRun = std::max (bestRun, run);
+        prevSlot = sl;
+    }
+    const double npb = roundTo (nb / bars, 100.0);
+    int eaa = 0;
+    for (int b = 0; b < L; b += 4)
+        if (att.count (b + 1) && att.count (b + 2) && att.count (b + 3))
+            ++eaa;
+    const double eaaPct = roundTo (100.0 * eaa / (L / 4), 10.0);
+    // F5 register
+    std::vector<double> pitches;
+    for (const auto& n : bn)
+        pitches.push_back ((double) n.p);
+    const double regMed = pyMedian (pitches);
+    // F7 octave moves
+    int moves = 0;
+    int octs = 0;
+    for (std::size_t i = 0; i + 1 < bn.size(); ++i)
+    {
+        const int x = std::abs (bn[i + 1].p - bn[i].p);
+        ++moves;
+        if (x == 12 || x == 24)
+            ++octs;
+    }
+    const double octPct = roundTo (100.0 * octs / std::max (1, moves), 10.0);
+    // F6 loop: attack/pitch-class tokens, and the flavour
+    std::vector<int> tok ((std::size_t) L, -1); // -1 rest, -2 sustain, else pc
+    for (const auto& n : bn)
+    {
+        const int a = pyRound (n.s);
+        if (a < 0 || a >= L)
+            continue;
+        tok[(std::size_t) a] = pcOfNote (n.p);
+        for (int k = a + 1; k < std::min (L, pyRound (n.s + n.ln)); ++k)
+            if (tok[(std::size_t) k] == -1)
+                tok[(std::size_t) k] = -2;
+    }
+    auto gridMatch = [&] (int lag) -> double
+    {
+        int pairs = 0;
+        int same = 0;
+        for (int i = 0; i + lag < L; ++i)
+        {
+            const int a = tok[(std::size_t) i] < 0 ? -1 : tok[(std::size_t) i];
+            const int b = tok[(std::size_t) (i + lag)] < 0 ? -1 : tok[(std::size_t) (i + lag)];
+            if (a == -1 && b == -1)
+                continue;
+            ++pairs;
+            if (a == b)
+                ++same;
+        }
+        return pairs > 0 ? roundTo ((double) same / pairs, 1000.0) : -1.0;
+    };
+    out.rep1 = gridMatch (16);
+    out.rep2 = gridMatch (32);
+    int dottedN = 0;
+    for (int k : att)
+    {
+        const int sl = k % 16;
+        if (sl == 0 || sl == 3 || sl == 6 || sl == 9 || sl == 12 || sl == 15)
+            ++dottedN;
+    }
+    const double dotted = roundTo (100.0 * dottedN / (double) att.size(), 10.0);
+    const double b2Pct = roundTo (100.0 * tpc[(tonic + 1) % 12] / tot, 10.0);
+    // LOOP_NO_REPEAT: sounding pitch (or rest) per 16th, 2 and 4 bars apart
+    std::vector<int> sp ((std::size_t) L, -1);
+    for (const auto& n : bn)
+        for (int k = pyRound (n.s); k < std::min (L, pyRound (n.s + n.ln)); ++k)
+            if (k >= 0)
+                sp[(std::size_t) k] = n.p;
+    auto gm = [&] (int lag) -> double
+    {
+        if (L <= lag)
+            return -1.0;
+        int same = 0;
+        for (int i = 0; i + lag < L; ++i)
+            if (sp[(std::size_t) i] == sp[(std::size_t) (i + lag)])
+                ++same;
+        return roundTo ((double) same / (L - lag), 1000.0);
+    };
+    out.gm2 = gm (32);
+    out.gm4 = gm (64);
+    out.loopNoRepeat = out.gm2 < 0.50 && (out.gm4 < 0.0 || out.gm4 < 0.47);
+    // F8 / F9 stab
+    std::map<int, std::vector<ScoreNote>> hitsBy;
+    for (const auto& n : stabIn)
+        if (n.s < L - 0.5)
+            hitsBy[pyRound (n.s)].push_back (n);
+    const int stabHits = (int) hitsBy.size();
+    double stabOnbeat = -1.0;
+    double stabPcsMed = 0.0;
+    double stabDurMed = 0.0;
+    if (stabHits > 0)
+    {
+        int onbeat = 0;
+        std::vector<double> pcsPer;
+        std::vector<double> durs;
+        for (const auto& kv : hitsBy)
+        {
+            if (kv.first % 4 == 0)
+                ++onbeat;
+            std::set<int> pcs;
+            double dur = 0.0;
+            for (const auto& n : kv.second)
+            {
+                pcs.insert (pcOfNote (n.p));
+                dur = std::max (dur, n.e - n.s);
+            }
+            pcsPer.push_back ((double) pcs.size());
+            durs.push_back (dur);
+        }
+        stabOnbeat = roundTo (100.0 * onbeat / stabHits, 10.0);
+        stabPcsMed = pyMedian (pcsPer);
+        stabDurMed = roundTo (pyMedian (durs), 100.0);
+    }
+    // F10 / F11 drums
+    int covered = 0;
+    for (int q = 0; q < L; q += 4)
+    {
+        bool hit = false;
+        for (double k : kick)
+            if (std::fabs (k - q) <= 0.5)
+                hit = true;
+        if (hit)
+            ++covered;
+    }
+    const double kickCov = roundTo ((double) covered / (L / 4), 100.0);
+    std::set<int> claps;
+    std::set<int> hatSlots;
+    int closed = 0;
+    for (const auto& d : drums)
+    {
+        if (d.s >= L - 0.5)
+            continue;
+        if (d.p == 38 || d.p == 39 || d.p == 40)
+            claps.insert (pyRound (d.s));
+        if (d.p == 42 || d.p == 44 || d.p == 46)
+            hatSlots.insert (pyRound (d.s));
+        if (d.p == 42 || d.p == 44)
+            ++closed;
+    }
+    int clapBars = 0;
+    int hatBars = 0;
+    for (int b = 0; b < bars; ++b)
+    {
+        if (claps.count (b * 16 + 4) && claps.count (b * 16 + 12))
+            ++clapBars;
+        if (hatSlots.count (b * 16 + 2) || hatSlots.count (b * 16 + 6) || hatSlots.count (b * 16 + 10)
+            || hatSlots.count (b * 16 + 14))
+            ++hatBars;
+    }
+    const double clapPct = claps.empty() ? 0.0 : roundTo (100.0 * clapBars / bars, 10.0);
+    const double hatOffPct = roundTo (100.0 * hatBars / bars, 10.0);
+    const double closedPerBar = roundTo ((double) closed / bars, 100.0);
+    double hatSwing = -1.0;
+    {
+        std::vector<double> odd;
+        std::vector<double> even;
+        for (double t : hats)
+            ((pyRound (t) % 2) == 1 ? odd : even).push_back (t - pyRound (t));
+        if (odd.size() >= 4 && even.size() >= 4)
+            hatSwing = roundTo (50.0 + 50.0 * (pyMedian (odd) - pyMedian (even)), 10.0);
+    }
+
+    // LANE["gaskin"] (score_rolls.py): range membership per feature.
+    struct F { const char* id; bool measurable; bool ok; };
+    const bool flav = dotted >= 55.0 || b2Pct >= 10.0 || stabDurMed >= 6.0
+                   || (stabHits > 0 && stabDurMed <= 1.5 && stabOnbeat >= 0.0 && stabOnbeat <= 10.0);
+    const F feats[] = {
+        { "F1_offkick", true, offkick >= 65.0 && offkick <= 100.0 },
+        { "F2_pitch", true, top2 >= 45.0 && pcs5 >= 2 && pcs5 <= 5 },
+        { "F3_length", true, lenMed >= 1.5 && lenMed <= 2.6 && long6Pct <= 8.0 },
+        { "F4_density", true, npb >= 3.9 && npb <= 8.7 && bestRun <= 7 && eaaPct <= 20.0 },
+        { "F5_register", true, regMed >= 25.0 && regMed <= 36.0 },
+        { "F6_loop", out.rep1 >= 0.0, out.rep1 >= 0.0 && out.rep1 <= 0.10 && out.rep2 >= 0.60 && flav },
+        { "F7_octaves", true, (octPct >= 0.0 && octPct <= 8.5) || (octPct >= 15.0 && octPct <= 26.0) },
+        { "F8_stab", stabHits > 0, stabHits > 0 && stabOnbeat <= 50.0 && stabPcsMed >= 1.0 && stabPcsMed <= 4.0 },
+        { "F9_stab_vs_bass", stabHits > 0, true },
+        { "F10_kick_clap", ! kick.empty(), kickCov >= 0.85 && clapPct >= 75.0 },
+        { "F11_hats", ! drums.empty(), hatOffPct >= 50.0 && closedPerBar <= 10.0 && (hatSwing < 0.0 || (hatSwing >= 50.0 && hatSwing <= 57.0)) },
+    };
+    for (const auto& f : feats)
+    {
+        if (! f.measurable)
+            continue;
+        ++out.measurable;
+        if (! f.ok)
+        {
+            ++out.misses;
+            out.missList += std::string (out.missList.empty() ? "" : " ") + f.id;
+        }
+    }
+    out.detail = "offkick " + std::to_string (offkick) + " top2 " + std::to_string (top2) + " pcs " + std::to_string (pcs5)
+               + " len " + std::to_string (lenMed) + " long6 " + std::to_string (long6Pct) + " npb " + std::to_string (npb)
+               + " run " + std::to_string (bestRun) + " eaa " + std::to_string (eaaPct) + " reg " + std::to_string (regMed)
+               + " dotted " + std::to_string (dotted) + " b2 " + std::to_string (b2Pct) + " oct " + std::to_string (octPct)
+               + " stabDur " + std::to_string (stabDurMed) + " stabOnbeat " + std::to_string (stabOnbeat);
+    return out;
+}
+
+std::vector<ScoreNote> midiNotes (const std::string& path, bool drums)
+{
+    std::vector<ScoreNote> out;
+    std::vector<MidiHit> hits;
+    int dups = 0;
+    int low = 0;
+    if (! readMidi (path, hits, dups, low))
+        return out;
+    for (const auto& h : hits)
+        if ((h.ch == 9) == drums)
+            out.push_back ({ h.on / 120.0, h.off / 120.0, h.pitch });
+    return out;
+}
+
+bool endsWith (const std::string& text, const std::string& tail)
+{
+    return text.size() >= tail.size() && text.compare (text.size() - tail.size(), tail.size(), tail) == 0;
+}
+
+// Stab tokens of one bar: (16th, pitch-class set) per chord onset.
+std::set<std::pair<int, int>> stabBarTokens (const rolla::Lane& stab, int bar)
+{
+    std::set<std::pair<int, int>> out;
+    std::map<int, int> mask;
+    for (int i = 0; i < stab.count; ++i)
+    {
+        const auto& n = stab.notes[i];
+        const int st = (int) std::lround (n.start);
+        if (st / 16 != bar || n.vel <= 2)
+            continue;
+        for (int c = 0; c < std::max (1, (int) n.nChord) && c < 4; ++c)
+            mask[st % 16] |= 1 << pcOfNote (n.chord[c]);
+    }
+    for (const auto& kv : mask)
+        out.insert ({ kv.first, kv.second });
+    return out;
+}
+
+// A&R 490 #3: JACKIN "loop doesn't repeat" on 14 of 20 rolls, plus 4
+// LANE_FIT_LOW. Batch 2026101852, the 20 JACKIN rolls, scored as the gate
+// does: no LOOP_NO_REPEAT and the F6 2-bar repeat >= 0.60 on every roll,
+// LANE_FIT_LOW (more than 2 of F1-F11 out of range) on at most one. Every
+// feature and miss is printed per roll. The stab follows the bass, so its
+// bars repeat on the same 2-bar grid away from the bar-4 answer and the
+// bar-8 turn.
+void testBatchJackinLoop()
+{
+    const std::uint32_t batch = 2026101852u;
+    const auto rolls = batchRolls (batch, rolla::Gaskin, 20);
+    auto bank = std::make_unique<rolla::PresetBank>();
+    expect (rolla::loadPresetsFromJson (*bank, BinaryData::presets_json, BinaryData::presets_jsonSize),
+            "presets.json loads for the JACKIN batch");
+    const float swing = bank->dialect[rolla::Gaskin].swing > 0.f ? bank->dialect[rolla::Gaskin].swing : 0.5f;
+    int noRepeat = 0;
+    int laneLow = 0;
+    int f6Ok = 0;
+    double stabRepeat = 0.0;
+    int stabPairs = 0;
+    double gm2Sum = 0.0;
+    for (int roll = 0; roll < (int) rolls.size(); ++roll)
+    {
+        const auto& g = rolls[(std::size_t) roll].arranged;
+        const std::string tag = "JACKIN batch roll_" + std::string (roll < 10 ? "0" : "") + std::to_string (roll);
+        const auto dir = std::filesystem::path ("/tmp/rolla_batch_jackin") / std::to_string (roll);
+        std::filesystem::create_directories (dir);
+        std::vector<std::string> written;
+        std::string error;
+        expect (rolla::MidiExport::writeAll (dir.string(), g, 2, swing, 130.0, written, error), tag + " midi export");
+        std::vector<ScoreNote> bass, stab, hits, drums;
+        for (const auto& path : written)
+        {
+            if (endsWith (path, "_bass.mid"))
+                bass = midiNotes (path, false);
+            else if (endsWith (path, "_stab.mid"))
+                stab = midiNotes (path, false);
+            else if (endsWith (path, "_hits.mid"))
+                hits = midiNotes (path, false);
+            // The scorer reads every MIDI in the roll folder: drums from the
+            // drums file and again from the combined file.
+            if (endsWith (path, "_drums.mid") || endsWith (path, "_all.mid"))
+            {
+                const auto d = midiNotes (path, true);
+                drums.insert (drums.end(), d.begin(), d.end());
+            }
+        }
+        // assign_parts: the named stab group with the most notes (hits first on a tie).
+        const auto& stabPart = hits.size() >= 4 && hits.size() >= stab.size() ? hits : stab;
+        const auto sc = scoreJackin (bass, stabPart, drums, g.bars);
+        gm2Sum += sc.gm2;
+        if (sc.loopNoRepeat)
+            ++noRepeat;
+        if (sc.misses > 2)
+            ++laneLow;
+        const bool f6 = sc.missList.find ("F6_loop") == std::string::npos && sc.rep1 >= 0.0;
+        if (f6)
+            ++f6Ok;
+        std::cout << tag << " match@2 " << sc.gm2 << " match@4 " << sc.gm4 << " rep1 " << sc.rep1 << " rep2 " << sc.rep2
+                  << " lane " << (sc.measurable - sc.misses) << "/" << sc.measurable
+                  << (sc.missList.empty() ? "" : " miss: " + sc.missList) << " | " << sc.detail << "\n";
+        expect (! sc.loopNoRepeat, tag + " repeats on the bar grid (LOOP_NO_REPEAT: match@2 " + std::to_string (sc.gm2)
+                                      + ", match@4 " + std::to_string (sc.gm4) + ")");
+        expect (sc.rep2 >= 0.60, tag + " 2-bar attack/pitch repeat >= 0.60 (lane F6), got " + std::to_string (sc.rep2));
+
+        const auto& stabLane = g.lane[rolla::Stab];
+        const int pairs[3][2] = { { 2, 4 }, { 4, 6 }, { 1, 5 } };
+        for (const auto& pr : pairs)
+        {
+            const auto a = stabBarTokens (stabLane, pr[0]);
+            const auto b = stabBarTokens (stabLane, pr[1]);
+            std::set<std::pair<int, int>> uni = a;
+            uni.insert (b.begin(), b.end());
+            int inter = 0;
+            for (const auto& t : a)
+                if (b.count (t))
+                    ++inter;
+            if (! uni.empty())
+            {
+                stabRepeat += (double) inter / (double) uni.size();
+                ++stabPairs;
+            }
+        }
+    }
+    const double stabMean = stabPairs > 0 ? stabRepeat / stabPairs : 0.0;
+    std::cout << "JACKIN batch " << batch << ": LOOP_NO_REPEAT " << noRepeat << "/20, LANE_FIT_LOW " << laneLow
+              << "/20, F6 loop " << f6Ok << "/20, match@2 mean " << (gm2Sum / 20.0)
+              << ", stab 2-bar repeat " << stabMean << "\n";
+    expect (noRepeat == 0, "JACKIN batch: every roll repeats on the bar grid");
+    // The gate saw 4/20. A roll fails when 3+ of the 11 features miss; F6 was
+    // the shared one, so with the loop fixed at most one roll may still miss.
+    expect (laneLow <= 1, "JACKIN batch: LANE_FIT_LOW on at most 1 of 20 (was 4), got " + std::to_string (laneLow));
+    expect (stabMean >= 0.80, "JACKIN batch: stab bars repeat on the 2-bar grid (Jaccard " + std::to_string (stabMean) + ")");
+}
+
 void testShuffleKeepsManualLock()
 {
     rolla::RollaProcessor proc;
@@ -1544,6 +2224,11 @@ int main()
     }
     juce::ScopedJuceInitialiser_GUI juce;
 
+    // First: these reproduce a fresh rolla-rolls process (generate() keeps a
+    // per-style rhythm history for the process).
+    testBatchRollerKey();
+    testBatchBouncyModes();
+    testBatchJackinLoop();
     testEarReview();
     testScorerV23();
     testAr423Bass();
