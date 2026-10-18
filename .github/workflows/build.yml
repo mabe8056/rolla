@@ -220,13 +220,6 @@ jobs:
           python3 -m pip install --user --break-system-packages numpy scipy soundfile pyloudnorm
           python3 tests/roll/renderer_smoke.py --rolls ./build/rolla-rolls
 
-      - name: Sample pack render checks (bar-1 kick, silent lanes, mutes, STAB)
-        run: |
-          set -euo pipefail
-          # Generated pack (no sample audio in git), bigger than the old load table.
-          python3 tests/roll/sample_pack_check.py --rolls ./build/rolla-rolls \
-            --seeds 1,2 --count 20 --full-count 6 --jobs 4 --stab-sweep
-
       - name: Export end to end
         run: |
           set -euo pipefail
@@ -322,6 +315,36 @@ jobs:
             python3 tools/score_rolls.py "$GITHUB_WORKSPACE/ci-rolls/$style" --style "$style" --no-orig || true
           done
           echo "clicks, tails, loudness: SKIPPED (no sample pack on this runner)"
+
+  # Split out of the Linux job: it was ~43 of its ~87 minutes, against a
+  # 90-minute timeout. Builds only rolla-rolls and runs in parallel.
+  linux-pack:
+    name: Linux sample pack checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake ninja-build pkg-config \
+            libasound2-dev libfreetype6-dev libx11-dev libxinerama-dev \
+            libxrandr-dev libxcursor-dev libxcomposite-dev libxext-dev \
+            libglu1-mesa-dev libgtk-3-dev xvfb python3-pip python3-venv
+
+      - name: Configure and build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --target rolla-rolls
+
+      - name: Sample pack render checks (bar-1 kick, silent lanes, mutes, STAB)
+        run: |
+          set -euo pipefail
+          # Generated pack (no sample audio in git), bigger than the old load table.
+          python3 tests/roll/sample_pack_check.py --rolls ./build/rolla-rolls \
+            --seeds 1,2 --count 20 --full-count 6 --jobs 4 --stab-sweep
 
   mix:
     name: Mix strip renders
