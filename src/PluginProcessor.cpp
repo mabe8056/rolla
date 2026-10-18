@@ -674,6 +674,7 @@ void RollaProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     preparedRate = sampleRate > 1000.0 ? sampleRate : 48000.0;
     engine.prepare (preparedRate, samplesPerBlock);
+    setLatencySamples (engine.latencySamples());
     applyRememberedSamples();
 }
 

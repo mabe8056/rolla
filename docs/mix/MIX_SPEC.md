@@ -4329,6 +4329,18 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
   "tp_capped": "files at the -6 dBTP cap stay as-is, no per-file limiter; LUFS may be below -24; not a fail (Q16)",
   "tp_cap_dbtp": -6.0,
   "tp_tol_db": 0.05
+ },
+ "tp_guard": {
+  "stage": "MAIN, after the E21 trim; safety only, not the E21 sum limiter",
+  "counts_as_sum_limiter": false,
+  "oversample": 4,
+  "detector_taps_per_phase": 24,
+  "lookahead_ms": 1.5,
+  "release_ms": 80.0,
+  "ceiling_dbtp": -6.0,
+  "margin_db": 0.2,
+  "max_gr_db_factory": 1.0,
+  "sidecar_key": "tp_guard_gr_db_max"
  }
 }
 ```
@@ -4453,6 +4465,16 @@ Run it for every lane/voice × every dialect pair, both directions. Also run it 
 
 **Total: 20 of 256 combos fail; under the old ±0.5 gate it was 40.** Every remaining fail misses by 0.03–0.18 LU. Each one is a peak-limited set: its ST is set by the −5 dBTP cap minus the set's PLR, and the trim cannot fix that. A fix has to lower the PLR of those sets (for example, transient control on the top lanes in LONG) or come from real renders that show a lower PLR than the reference stems.
 **Caveat:** the PLRs come from mastered reference stems. These are estimates, and real `COMBO_*.wav` renders decide (`mix_check.py combos <dir>` gates them with the lane-count window).
+
+### 9.4b Master true-peak guard (`tp_guard`; DECIDED by Maestro 2026-10-18)
+
+A safety stage on MAIN after the E21 trim: `MAIN out = Σ lanes → output_trim_db → E21 trim → tp_guard`. It is **not** the E21 sum limiter. The E21 rule above ("no sum limiter, limiter GR stays 0") is unchanged, and `tp_guard` is reported on its own.
+- **What it does:** 4× oversampled true-peak detection (24-tap Kaiser sinc per phase), 1.5 ms lookahead, 80 ms release, ceiling **−6 dBTP** with a 0.2 dB internal margin. Below the ceiling the gain is exactly 1, so the sum passes bit for bit, only delayed.
+- **Latency:** fixed, 95 samples at 48 kHz, the same with the guard off. The plugin reports it to the host, and the DRUMS bus rides the same delay.
+- **Code:** `src/Mix/TruePeakGuard.h`, `EngineParams.tpGuard` (default on), `Engine::takeTpGuardGrDb()`. Settings: `mix_profiles.json` → `tp_guard`. `validate_profiles.py` checks that the JSON and the header agree.
+- **Bar:** on the factory renders, peak guard GR stays ≤ 1 dB (`max_gr_db_factory`). When a render writes `tp_guard_gr_db_max` to its `.gr.json` sidecar, `mix_check.py` gates on it. E21 (§9.4) is what holds the sum under −6 dBTP; the guard should rarely engage.
+- **Test:** `rolla-tp-test` covers 4 styles × INTENSITY 0/25/50/75/100 plus a +12 dB hot pass, all ≤ −6 dBTP on the `mix_check.py` meter (scipy `resample_poly` 4×), along with inter-sample, noise, square, impulse, burst and bypass cases.
+- **Mute null (§9.5):** the guard is nonlinear by design, so the FULL / MUTE / SOLO null takes run with `tpGuard = false`. That line goes into `src/MixRender.cpp` after #12 lands.
 
 ### 9.5 Tests that exist
 `render` / `sample` / `scan` (§5), `styles` (§5, including the any-combo SUM gate with the lane-count window), `mute` (§5.1, P0), `switch` (§9.3), `combos` (§9.4).

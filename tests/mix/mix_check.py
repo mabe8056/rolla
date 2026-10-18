@@ -34,6 +34,7 @@ Measures (all from the file):
   centroid_hz      power-weighted spectral centroid 20 Hz-20 kHz; band % sub<60 / low 60-200 / lowmid 200-800 / mid 800-5k / high >5k
   tilt_db_oct      least-squares slope of 1/3-octave band powers vs log2(f), bands 200-8k / 1k-16k / 40-400 Hz
   gr               read from optional sidecar <wav>.gr.json {"gr_db_max":x,"gr_db_mean":y} written by the engine; else 'n/a' (not a fail)
+                   tp_guard_gr_db_max (MIX_SPEC §9.4b), when present, must be <= 1 dB on SUM renders
 """
 import sys, os, json, glob, argparse
 import numpy as np, soundfile as sf, scipy.signal as ss
@@ -204,6 +205,8 @@ def sum_gate(r,T,label,n_active=None):
        chk(f'{label} SUM true peak',r['tp_dbtp'],inv['sum_tp']-inv['sum_tp_tol'],inv['sum_tp']+inv['sum_tp_tol'])]
     if r['lt120_energy_db_re_total']>-40: C.append(chk(f'{label} SUM corr<120',r['corr_lt120'],inv['corr_lt120_min'],None))
     if isinstance(r.get('gr'),dict) and r['gr'].get('limiter_gr_db_max') is not None: C.append(chk(f'{label} safety limiter GR',r['gr']['limiter_gr_db_max'],None,0.0))
+    # MIX_SPEC §9.4b: the master tp_guard is separate from the E21 limiter; its peak GR stays small on factory renders.
+    if isinstance(r.get('gr'),dict) and r['gr'].get('tp_guard_gr_db_max') is not None: C.append(chk(f'{label} tp_guard GR',r['gr']['tp_guard_gr_db_max'],None,1.0))
     return C
 MAIN_LANES=['BASS','STAB','PLUCK','HITS','PAD','VOX']; DRUM_DEFAULT=['DRUMS:KICK','DRUMS:CLAP','DRUMS:CH','DRUMS:OH','DRUMS:PERC']
 def _ps(v): return float(10*np.log10(sum(10**(x/10) for x in v)))

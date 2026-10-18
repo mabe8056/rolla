@@ -3,6 +3,7 @@
 #include "../DspUtil.h"
 #include "../Drums/DrumMachine.h"
 #include "../Mix/MixRuntime.h"
+#include "../Mix/TruePeakGuard.h"
 #include "../Sampler/UserSlots.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
@@ -348,6 +349,7 @@ struct Engine::Impl
     int reverbIdle = 1000000;
     DcBlock mainDc, mainDcR, drumDc;
     MixRuntime mixRt;
+    TruePeakGuard tpGuard;
     bool primed = false;
     bool fxHeld = false;
     double lastPos = -1.0;
@@ -397,6 +399,7 @@ struct Engine::Impl
         drumDc.setCutoff (25.f, sr);
         drums.prepare (sr);
         mixRt.prepare (sampleRate);
+        tpGuard.prepare (sampleRate);
         reset();
         primed = true;
     }
@@ -424,6 +427,7 @@ struct Engine::Impl
         mainDcR.reset();
         drumDc.reset();
         mixRt.reset();
+        tpGuard.reset();
         lastPos = -1.0;
         for (auto& p : play)
             p = {};
@@ -2251,6 +2255,20 @@ void Engine::process (const Groove& groove,
         if (drumR != nullptr)
             drumR[i] = params.mix != nullptr && params.mix->loaded ? flush (drumRgt * og) : flush (fastTanh (drumRgt) * og);
     }
+
+    // Master true-peak safety (-6 dBTP). The DRUMS bus rides the same delay.
+    E.tpGuard.setEnabled (params.tpGuard);
+    E.tpGuard.process (mainL, mainR, drumL, drumR, numSamples);
+}
+
+int Engine::latencySamples() const noexcept
+{
+    return impl != nullptr ? impl->tpGuard.latencySamples() : 0;
+}
+
+float Engine::takeTpGuardGrDb() noexcept
+{
+    return impl != nullptr ? impl->tpGuard.takeMaxGrDb() : 0.f;
 }
 
 } // namespace rolla

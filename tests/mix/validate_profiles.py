@@ -93,4 +93,18 @@ ML=P.get('engine_contracts',{}).get('mute_leak'); TM=TJ.get('mute_leak',{})
 ok(ML is not None and ML['priority']=='P0','engine_contracts.mute_leak missing')
 if ML: ok(ML['pass']['resid_max_dbfs_rms']==TM.get('resid_max_dbfs_rms')==-90.0 and ML['pass']['resid_max_re_lane_db']==TM.get('resid_max_re_lane_db')==-60.0,'mute_leak thresholds profiles vs targets')
 ok('gate DECIDED by Maestro 2026-10-17, option (a)' in md and '### 5.1 P0 mute-leak test' in md,'MIX_SPEC §9.4 DECIDED / §5.1 text missing')
+# tp_guard (MIX_SPEC §9.4b): master true-peak safety, separate from the E21 sum limiter rule.
+TPG=P.get('tp_guard'); ok(TPG is not None,'tp_guard missing in mix_profiles.json')
+if TPG:
+    ok(TPG.get('counts_as_sum_limiter') is False,'tp_guard must not count as the E21 sum limiter')
+    ok(TPG.get('ceiling_dbtp')==-6.0 and TPG.get('oversample')==4,'tp_guard ceiling -6 dBTP / 4x oversample')
+    ok(0.0<TPG.get('max_gr_db_factory',99)<=1.0,'tp_guard factory GR bar must be <= 1 dB')
+    hdr=open(os.path.join(ROOT,'src','Mix','TruePeakGuard.h')).read()
+    def cnum(pat):
+        m=re.search(pat,hdr); return float(m.group(1)) if m else None
+    ok(cnum(r'kDefaultCeilingDbtp\s*=\s*(-?[0-9.]+)f')==TPG['ceiling_dbtp'],'TruePeakGuard.h ceiling != tp_guard.ceiling_dbtp')
+    ok(cnum(r'kMarginDb\s*=\s*([0-9.]+)f')==TPG['margin_db'],'TruePeakGuard.h margin != tp_guard.margin_db')
+    ok(cnum(r'kTaps\s*=\s*([0-9]+);')==TPG['detector_taps_per_phase'],'TruePeakGuard.h taps != tp_guard.detector_taps_per_phase')
+    ok(cnum(r'float lookaheadMs\s*=\s*([0-9.]+)f')==TPG['lookahead_ms'] and cnum(r'float releaseMs\s*=\s*([0-9.]+)f')==TPG['release_ms'],'TruePeakGuard.h lookahead/release != tp_guard')
+    ok('### 9.4b Master true-peak guard' in md,'MIX_SPEC §9.4b tp_guard clause missing')
 out={'pass':not fails,'n_checks':n[0],'fails':fails}; print(json.dumps(out,indent=1,ensure_ascii=False)); sys.exit(0 if not fails else 1)
