@@ -69,10 +69,16 @@ inline const char* styleId (Style s) noexcept
     return i >= 0 && i < kStyles ? ids[i] : "";
 }
 
+// Accepts the internal ids (ukmin, long, pop, gaskin) and the style names the box
+// writes (roller, deep, bouncy, jackin), in any case.
 inline Style styleFromId (const std::string& id) noexcept
 {
+    std::string s;
+    for (char c : id)
+        s += (char) ((c >= 'A' && c <= 'Z') ? c - 'A' + 'a' : c);
+    static const char* const names[] = { "roller", "deep", "bouncy", "jackin" };
     for (int i = 0; i < kStyles; ++i)
-        if (id == styleId ((Style) i))
+        if (s == styleId ((Style) i) || s == names[i])
             return (Style) i;
     return Style::Count;
 }
@@ -103,6 +109,9 @@ struct SampleFeatures
     std::string pack;   // source pack code (tendency: same pack x3)
     std::string family; // pack family (same family x1.5)
     int tier = 0;       // manifest tier, higher is better; 0 unknown
+    // Missing from the feature index or unusable (e.g. digitally silent): kept in
+    // the pool so pick ordinals still line up, but never drawn.
+    bool excluded = false;
 
     std::vector<float> vector; // Fingerprint::vector(), raw (normalise with GenreTargets::norm)
     float centroidHz = 0.f;
@@ -113,6 +122,7 @@ struct SampleFeatures
     bool truncated = false;
     float subRatio = 0.f;      // energy share under 120 Hz
     float loudnessDb = -120.f; // RMS over the first 300 ms, before load gain
+    float lowCorr = 1.f;       // L/R correlation under 150 Hz (1 mono); 1 when unknown
     float lengthMs = 0.f;
     PitchInfo pitch;
 
