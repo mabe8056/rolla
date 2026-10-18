@@ -130,20 +130,20 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout (const PresetBa
         add (std::make_unique<AudioParameterBool> (ParameterID { id + "Shuffle", 1 }, label + " Shuffle", false));
     }
 
-    // Appended last so saved sessions and host automation keep their parameter indices.
-    for (int part = 0; part < NumParts; ++part)
-        add (std::make_unique<AudioParameterBool> (ParameterID { String (partId (part)) + "Solo", 1 },
-                                                   String (partName (part)) + " Solo", false));
-
     // KEY / SCALE picker (#13). Appended so older sessions and index-based hosts
     // keep every existing slot. "key" stays the root (C..B, saved sessions load
     // unchanged); keyLock off is the dropdown's Auto. Scale Auto is each style's
-    // own minor, exactly as before.
+    // own minor, exactly as before. Both ship in the same build as SOLO.
     add (std::make_unique<AudioParameterBool> (ParameterID { "keyLock", 1 }, "Key Lock", false));
     StringArray scaleNames;
     for (int i = 0; i < NumScales; ++i)
         scaleNames.add (scaleName (i));
     add (std::make_unique<AudioParameterChoice> (ParameterID { "scale", 1 }, "Scale", scaleNames, ScaleAuto));
+
+    // Appended last so saved sessions and host automation keep their parameter indices.
+    for (int part = 0; part < NumParts; ++part)
+        add (std::make_unique<AudioParameterBool> (ParameterID { String (partId (part)) + "Solo", 1 },
+                                                   String (partName (part)) + " Solo", false));
 
     return { p.begin(), p.end() };
 }
