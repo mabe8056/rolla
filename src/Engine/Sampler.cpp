@@ -869,6 +869,9 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
         const int s = (choice.sliceIndex % audio->sliceCount + audio->sliceCount) % audio->sliceCount;
         startFrame = (double) audio->slices[s];
     }
+    // A vox chop that would start in the file's lead-in silence starts at the first word.
+    if (part == Vox && startFrame < (double) audio->lead)
+        startFrame = (double) audio->lead;
     fresh.pos = startFrame;
     fresh.loop = ! fromPack && played.loop.on && part != Hits && part != Vox;
     const auto region = makeLoopRegion (played.loop, audio->rate, audio->frames, startFrame);
@@ -888,8 +891,9 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
         fresh.loopA = 0.0;
         fresh.loopB = std::max (8.0, (double) audio->frames - 1.0);
         fresh.xfade = 0.0;
-        fresh.pos = 0.0;
-        fresh.anchor = 0.0;
+        // Vox phrases open on the first word, not on the file's lead-in silence.
+        fresh.pos = part == Vox ? (double) audio->lead : 0.0;
+        fresh.anchor = fresh.pos;
         fresh.spliceLeft = 0;
     }
 

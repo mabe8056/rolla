@@ -55,8 +55,19 @@ void findSlices (SampleAudio& audio)
 {
     audio.sliceCount = 1;
     audio.slices[0] = 0;
+    audio.lead = 0;
     if (audio.frames < 64)
         return;
+    for (int i = 0; i < audio.frames; ++i)
+    {
+        const float a = std::max (std::fabs (audio.left[(size_t) i]),
+                                  audio.right.size() > (size_t) i ? std::fabs (audio.right[(size_t) i]) : 0.f);
+        if (a > 0.01f)
+        {
+            audio.lead = std::max (0, i - (int) (0.002 * audio.rate));
+            break;
+        }
+    }
     const int hop = std::max (1, (int) (audio.rate / 200.0));
     const int gap = std::max (hop, (int) (audio.rate * 0.04));
     float env = 0.f;

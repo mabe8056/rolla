@@ -427,6 +427,8 @@ struct SampleAudio
     std::vector<float> right;
     int sliceCount = 1;
     int slices[24] { 0 };
+    // First audible frame (2 ms early). Vox phrases often open on silence.
+    int lead = 0;
 };
 
 // Loads preset-referenced files from the user sample folder on a background thread.
