@@ -4,6 +4,7 @@
 #include "Engine/SampleLibrary.h"
 #include "Mix/MixProgram.h"
 #include "Sampler/UserSlots.h"
+#include "Sampler/RetuneGuard.h"
 #include "Generator/Generator.h"
 #include "Generator/Pattern.h"
 #include "Generator/Presets.h"
@@ -200,6 +201,10 @@ private:
     // Message thread. Loads the files the current presets and picks will play, so a
     // freshly rolled lane is ready before the downbeat instead of starting silent.
     void prefetchPlayFiles();
+    // Message thread (prefetch timer). With the key or scale locked, checks each
+    // pitched lane's pick against the retune guard for the shifts this roll needs
+    // and moves samplePick to the next pool file that survives. Never the audio thread.
+    void guardRetunes();
 
     struct AsyncState
     {
@@ -264,6 +269,11 @@ private:
     std::atomic<DrumSampleSlot*> drumSlot { nullptr };
 
     std::uint64_t prefetchedKey = 0;
+    // Retune guard state. Message thread only, except the cache (locked).
+    RetuneTolerances retuneTol;
+    RetuneCache retuneCache;
+    std::uint64_t guardedStamp = 0;
+    bool guardPending = false;
     struct PrefetchTimer : juce::Timer
     {
         explicit PrefetchTimer (RollaProcessor& p) : owner (p) {}

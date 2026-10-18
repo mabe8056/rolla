@@ -3,6 +3,7 @@
 
 #include "DspUtil.h"
 #include "Generator/Intensity.h"
+#include "Generator/Scale.h"
 #include "LaneSampleUi.h"
 #include "RollFace.h"
 #include "UiTokens.h"
@@ -1277,6 +1278,66 @@ struct Stepper : Component
     }
 };
 
+// Compact header dropdown (KEY, SCALE): the value over a caption, and a caret.
+// Same pill as Stepper, without the arrows, so two fit in the stepperKey slot.
+struct DropPill : Component
+{
+    String title, sub;
+    std::function<void()> onOpen;
+
+    DropPill()
+    {
+        setMouseCursor (MouseCursor::PointingHandCursor);
+        setWantsKeyboardFocus (true);
+    }
+
+    void mouseDown (const MouseEvent&) override
+    {
+        if (onOpen)
+            onOpen();
+    }
+
+    bool keyPressed (const KeyPress& key) override
+    {
+        if (key == KeyPress::spaceKey || key == KeyPress::returnKey)
+        {
+            if (onOpen)
+                onOpen();
+            return true;
+        }
+        return false;
+    }
+
+    void mouseEnter (const MouseEvent&) override { repaint(); }
+    void mouseExit (const MouseEvent&) override { repaint(); }
+
+    void paint (Graphics& g) override
+    {
+        auto b = getLocalBounds().toFloat();
+        g.setColour (col (kPaper));
+        g.fillRoundedRectangle (b, b.getHeight() * 0.5f);
+        g.setColour (col (isMouseOver (false) ? kInk2 : kLine2));
+        g.drawRoundedRectangle (b.reduced (0.5f), b.getHeight() * 0.5f - 0.5f, Theme::strokeHair);
+
+        auto text = getLocalBounds().toFloat().withTrimmedLeft ((float) Theme::space8).withTrimmedRight ((float) Theme::space16);
+        g.setColour (col (kInk));
+        g.setFont (Theme::font (Theme::Role::pill));
+        g.drawText (title, text.removeFromTop (text.getHeight() * 0.58f), Justification::centred, false);
+        g.setColour (col (kInk3));
+        g.setFont (Theme::font (Theme::Role::meta));
+        g.drawText (sub, text, Justification::centredTop, false);
+
+        const float cx = b.getRight() - (float) Theme::space8 - 4.f;
+        const float cy = b.getCentreY();
+        Path caret;
+        caret.startNewSubPath (cx - 3.5f, cy - 1.5f);
+        caret.lineTo (cx, cy + 2.f);
+        caret.lineTo (cx + 3.5f, cy - 1.5f);
+        g.setColour (col (isMouseOver (false) ? kInk : kInk2));
+        g.strokePath (caret, PathStrokeType (Theme::strokeIcon, PathStrokeType::curved, PathStrokeType::rounded));
+    }
+};
+
 struct DialectBar : Component
 {
     QuietButton buttons[NumDialects];
@@ -2230,7 +2291,7 @@ struct RollaEditor::Content : Component
     LogoButton logo;
     DialectBar dialects;
     IntensitySlider intensity;
-    Stepper keyStep;
+    DropPill keyDrop, scaleDrop;
     BpmReadout bpm;
     HistoryButton undoBtn { false }, redoBtn { true };
     LaneRow rows[NumParts];
@@ -2281,18 +2342,16 @@ struct RollaEditor::Content : Component
         addAndMakeVisible (logo);
         addAndMakeVisible (dialects);
         addAndMakeVisible (intensity);
-        addAndMakeVisible (keyStep);
+        addAndMakeVisible (keyDrop);
+        addAndMakeVisible (scaleDrop);
         intensityA = std::make_unique<AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "intensity", intensity);
         addAndMakeVisible (bpm);
         addAndMakeVisible (undoBtn);
         addAndMakeVisible (redoBtn);
         logo.onClick = [this] { showScaleMenu (&logo); };
         dialects.onPick = [this] (int i) { setChoiceIndex (proc, "dialect", i); };
-        keyStep.onStep = [this] (int dir)
-        {
-            const int n = (choiceIndex (proc.apvts, "key") + dir + 12) % 12;
-            setChoiceIndex (proc, "key", n);
-        };
+        keyDrop.onOpen = [this] { showKeyMenu(); };
+        scaleDrop.onOpen = [this] { showScaleModeMenu(); };
         undoBtn.onClick = [this] { proc.undo.undo(); };
         redoBtn.onClick = [this] { proc.undo.redo(); };
 
@@ -2380,7 +2439,8 @@ struct RollaEditor::Content : Component
 
         bindHelp (logo, "Menu. Window scale, reduce motion, and the samples folder.");
         bindHelp (dialects, "Style. Each pill sets the groove, the sounds, and which lanes play.");
-        bindHelp (keyStep, "Key. Every lane follows this minor key.");
+        bindHelp (keyDrop, "Key. Auto keeps the session key; pick a note to lock it through every roll.");
+        bindHelp (scaleDrop, "Scale. Auto plays each style's own minor; lock Minor, Dorian, Phrygian, Major or Mixolydian.");
         bindHelp (intensity, "INTENSITY 75\t" + String (dialectName (0)));
         bindHelp (bpm, "Host tempo, in beats per minute.");
         bindHelp (undoBtn, "Undo the last edit.");
@@ -2472,6 +2532,47 @@ struct RollaEditor::Content : Component
                                     setBool (proc, "reduceMotion", paramRaw (proc.apvts, "reduceMotion") < 0.5f);
                                 else if (result == 7)
                                     chooseSamplesFolder();
+                            });
+    }
+
+    // KEY dropdown: Auto (the session key, unlocked) or a locked note.
+    void showKeyMenu()
+    {
+        PopupMenu menu;
+        const bool lockedNow = paramRaw (proc.apvts, "keyLock") >= 0.5f;
+        const int current = choiceIndex (proc.apvts, "key");
+        menu.addItem (1, String ("Auto (") + keyName (current) + ")", true, ! lockedNow);
+        menu.addSeparator();
+        for (int k = 0; k < 12; ++k)
+            menu.addItem (k + 2, keyName (k), true, lockedNow && k == current);
+        menu.showMenuAsync (PopupMenu::Options().withTargetComponent (&keyDrop),
+                            [this] (int result)
+                            {
+                                if (result == 1)
+                                    setBool (proc, "keyLock", false);
+                                else if (result >= 2 && result <= 13)
+                                {
+                                    setChoiceIndex (proc, "key", result - 2);
+                                    if (paramRaw (proc.apvts, "keyLock") < 0.5f)
+                                        setBool (proc, "keyLock", true);
+                                }
+                            });
+    }
+
+    // SCALE dropdown: Auto or one of the five locked scales.
+    void showScaleModeMenu()
+    {
+        PopupMenu menu;
+        const int current = choiceIndex (proc.apvts, "scale");
+        menu.addItem (1, "Auto (style minor)", true, current == ScaleAuto);
+        menu.addSeparator();
+        for (int s = ScaleMinor; s < NumScales; ++s)
+            menu.addItem (s + 1, scaleName (s), true, s == current);
+        menu.showMenuAsync (PopupMenu::Options().withTargetComponent (&scaleDrop),
+                            [this] (int result)
+                            {
+                                if (result >= 1 && result <= NumScales)
+                                    setChoiceIndex (proc, "scale", result - 1);
                             });
     }
 
@@ -2926,8 +3027,26 @@ struct RollaEditor::Content : Component
         dialects.setCurrent (choiceIndex (proc.apvts, "dialect"));
         for (int i = 0; i < NumDialects; ++i)
             dialects.buttons[i].repaint();
-        keyStep.title = String (keyName (choiceIndex (proc.apvts, "key"))) + " MIN";
-        keyStep.repaint();
+        {
+            const String keyTitle = keyName (choiceIndex (proc.apvts, "key"));
+            const String keySub = paramRaw (proc.apvts, "keyLock") >= 0.5f ? "KEY" : "AUTO";
+            const int scaleNow = choiceIndex (proc.apvts, "scale");
+            // Auto shows what plays: the style's own minor.
+            const String scaleTitle = scaleShort (scaleNow == ScaleAuto ? ScaleMinor : scaleNow);
+            const String scaleSub = scaleNow == ScaleAuto ? "AUTO" : "SCALE";
+            if (keyDrop.title != keyTitle || keyDrop.sub != keySub)
+            {
+                keyDrop.title = keyTitle;
+                keyDrop.sub = keySub;
+                keyDrop.repaint();
+            }
+            if (scaleDrop.title != scaleTitle || scaleDrop.sub != scaleSub)
+            {
+                scaleDrop.title = scaleTitle;
+                scaleDrop.sub = scaleSub;
+                scaleDrop.repaint();
+            }
+        }
 
         const bool canUndo = proc.undo.canUndo();
         const bool canRedo = proc.undo.canRedo();
@@ -3070,7 +3189,12 @@ struct RollaEditor::Content : Component
         logo.setBounds (16, 16, 76, 24);
         dialects.setBounds (100, 8, Theme::segmentLarge * NumDialects + Theme::space8, Theme::heightControl);
         intensity.setBounds (504, 8, 176, Theme::heightControl);
-        keyStep.setBounds (688, 8, Theme::stepperKey, Theme::heightControl);
+        {
+            // KEY and SCALE share the old key stepper's slot.
+            const int half = (Theme::stepperKey - Theme::space8) / 2;
+            keyDrop.setBounds (688, 8, half, Theme::heightControl);
+            scaleDrop.setBounds (688 + half + Theme::space8, 8, Theme::stepperKey - half - Theme::space8, Theme::heightControl);
+        }
         bpm.setBounds (832, 20, 72, 16);
         undoBtn.setBounds (912, 8, 40, 40);
         redoBtn.setBounds (968, 8, 40, 40);

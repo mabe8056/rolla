@@ -1,5 +1,6 @@
 #include "Generator.h"
 #include "PhraseBank.h"
+#include "Scale.h"
 
 #include <algorithm>
 #include <cmath>
@@ -4070,6 +4071,7 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
     s.stab = std::clamp (s.stab, 0.f, 1.f);
     s.styleIntensity = std::clamp (s.styleIntensity, 0.f, 1.f);
     s.freedom = std::clamp (s.freedom, 0.f, 1.f);
+    s.scale = clampi (s.scale, 0, NumScales - 1);
 
     auto regen = [&] (int part) { return (partMask & (1u << part)) != 0; };
 
@@ -4277,6 +4279,11 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
         char stabBreaks[48] = "";
         writeStab (g.lane[Stab], g.lane[Bass], s, rs, freedom, stabBreaks, (int) sizeof stabBreaks);
     }
+    // A locked scale is the last pitch step, so Auto rolls are untouched byte for
+    // byte and every candidate above is drawn exactly as before. Only regenerated
+    // lanes move: a kept lane stays as the user locked it.
+    if (s.scale != ScaleAuto)
+        applyScale (g, s.scale, partMask);
     for (int part = 0; part < Drums; ++part)
         dedupeNoteOns (g.lane[part]);
     enforceMonophonic (g.lane[Bass]);

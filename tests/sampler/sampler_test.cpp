@@ -2,6 +2,7 @@
 #include "Engine/Sampler.h"
 #include "Sampler/PitchProbe.h"
 #include "Sampler/PlayDecision.h"
+#include "Sampler/RetuneGuard.h"
 #include "Sampler/SamplePrep.h"
 #include "Sampler/UserSlots.h"
 #include "Generator/Presets.h"
@@ -304,6 +305,139 @@ void testPitchProbe()
     expect (rolla::chordFileOffset (ChordQuality::Neutral, ChordQuality::Major) == 0, "neutral fits either");
 }
 
+// Synthetic harmonic tone: partials at 1/h, a linear attack, a 50 ms fade out.
+std::vector<float> harmonicTone (double midi, int partials, double seconds, double attackS, double rate = 48000.0)
+{
+    const int n = (int) (seconds * rate);
+    std::vector<float> out ((size_t) n, 0.f);
+    const double f = 440.0 * std::pow (2.0, (midi - 69.0) / 12.0);
+    for (int i = 0; i < n; ++i)
+    {
+        const double t = (double) i / rate;
+        const double env = std::min (1.0, t / attackS) * std::min (1.0, (seconds - t) / 0.05);
+        double x = 0.0;
+        for (int h = 1; h <= partials && f * h < 0.45 * rate; ++h)
+            x += 0.2 / h * std::sin (2.0 * 3.14159265358979 * f * h * t);
+        out[(size_t) i] = (float) (env * x);
+    }
+    return out;
+}
+
+rolla::RetuneRequest retuneAsk (const std::vector<float>& audio, double root, double semis, rolla::RetuneKind kind)
+{
+    rolla::RetuneRequest req;
+    req.left = audio.data();
+    req.frames = (int) audio.size();
+    req.rate = 48000.0;
+    req.outRate = 48000.0;
+    req.rootMidi = root;
+    req.semis = semis;
+    req.kind = kind;
+    return req;
+}
+
+void testRetuneGuard()
+{
+    using rolla::RetuneKind;
+    const auto npos = std::string::npos;
+
+    // A clean pad (G3, 50 ms attack) up 2 st reads the same: every check passes.
+    const auto pad = harmonicTone (55.0, 20, 1.5, 0.05);
+    const auto modest = rolla::judgeRetune (retuneAsk (pad, 55.0, 2.0, RetuneKind::Tonal));
+    expect (modest.ok, "guard: +2 st on a clean pad passes (" + modest.reason + ")");
+    expect (std::fabs (modest.metrics.centroidExcessOct) < 0.1, "guard: a clean shift moves the centroid only by the shift");
+    expect (rolla::judgeRetune (retuneAsk (pad, 55.0, 0.0, RetuneKind::Tonal)).ok, "guard: no shift is not a retune");
+
+    // Extreme: a pad pushed 9 st is past the +-3 st tonal cap.
+    const auto extreme = rolla::judgeRetune (retuneAsk (pad, 55.0, 9.0, RetuneKind::Tonal));
+    expect (! extreme.ok && extreme.reason.find ("cap") != npos,
+            "guard: +9 st on a pad fails the shift cap (" + extreme.reason + ")");
+    expect (! rolla::judgeRetune (retuneAsk (pad, 55.0, -6.0, RetuneKind::Short)).ok, "guard: -6 st is past the +-5 st stab cap");
+
+    // Bass: a D1 one-shot (36.7 Hz) down 4 st lands at 29.1 Hz, under the 30 Hz sub floor.
+    const auto bass = harmonicTone (26.0, 8, 1.0, 0.005);
+    const auto under = rolla::judgeRetune (retuneAsk (bass, 26.0, -4.0, RetuneKind::Bass));
+    expect (! under.ok && under.reason.find ("sub floor") != npos,
+            "guard: a bass pushed under the sub floor fails (" + under.reason + ")");
+    expect (under.metrics.fundamentalHz[1] < 30.0 && under.metrics.fundamentalHz[1] > 28.0, "guard: shifted fundamental is reported");
+    const auto bassUp = rolla::judgeRetune (retuneAsk (bass, 26.0, 2.0, RetuneKind::Bass));
+    expect (bassUp.ok, "guard: a D1 bass up 2 st stays in the sub band (" + bassUp.reason + ")");
+    // A bass pushed out of the sub band (A2 + 4 = C#3, 139 Hz) fails the ceiling.
+    const auto high = rolla::judgeRetune (retuneAsk (harmonicTone (45.0, 8, 1.0, 0.005), 45.0, 4.0, RetuneKind::Bass));
+    expect (! high.ok && high.reason.find ("sub band") != npos, "guard: a bass pushed too high fails (" + high.reason + ")");
+
+    // Aliasing: a strong 20 kHz partial up 4 st lands at 25.2 kHz and folds back.
+    std::vector<float> bright (48000, 0.f);
+    for (int i = 0; i < (int) bright.size(); ++i)
+    {
+        const double t = (double) i / 48000.0;
+        const double env = std::min (1.0, t / 0.005);
+        bright[(size_t) i] = (float) (env * (0.4 * std::sin (2.0 * 3.14159265358979 * 1000.0 * t)
+                                             + 0.4 * std::sin (2.0 * 3.14159265358979 * 20000.0 * t)));
+    }
+    const auto alias = rolla::judgeRetune (retuneAsk (bright, 83.2, 4.0, RetuneKind::Short));
+    expect (! alias.ok && alias.reason.find ("alias") != npos, "guard: a shift that aliases fails (" + alias.reason + ")");
+    expect (alias.metrics.foldShare > 0.3, "guard: the folded share is reported");
+
+    // Not retunable: under the confidence threshold with no agreeing filename note.
+    rolla::PitchInfo weak;
+    weak.rootPitch = 60.f;
+    weak.conf = 0.3f;
+    expect (rolla::retuneRoot (weak, -1) < 0.0, "guard: a weak measurement is not retuned");
+    expect (std::fabs (rolla::retuneRoot (weak, 48) - 60.0) < 1.0e-9, "guard: a weak measurement the label agrees with is");
+    expect (rolla::retuneKindFor (rolla::Bass, 0.5, false) == RetuneKind::Bass, "guard: bass class");
+    expect (rolla::retuneKindFor (rolla::Stab, 0.3, false) == RetuneKind::Short, "guard: a short stab is short");
+    expect (rolla::retuneKindFor (rolla::Stab, 2.0, true) == RetuneKind::Tonal, "guard: a held chord stab is tonal");
+
+    // An over-shifted pad is rejected and replaced. The note is G3 (55): the first
+    // pad is rooted on C#3 (+6 st), the next on F#3 (+1 st).
+    const auto padFar = harmonicTone (49.0, 20, 1.5, 0.05);
+    const auto padNear = harmonicTone (54.0, 20, 1.5, 0.05);
+    rolla::RetuneCache cache;
+    int judged = 0;
+    auto judge = [&] (int at, double& worst)
+    {
+        ++judged;
+        const double root = at == 0 ? 49.0 : 54.0;
+        rolla::PitchInfo info;
+        info.rootPitch = (float) root;
+        info.conf = 0.9f;
+        const double semis = rolla::tonalShift (info, -1, 55.0, rolla::ShiftRule {});
+        worst = std::fabs (semis);
+        const auto req = retuneAsk (at == 0 ? padFar : padNear, root, semis, RetuneKind::Tonal);
+        return cache.get (at == 0 ? "PAD/far" : "PAD/near", RetuneKind::Tonal, semis,
+                          [&] { return rolla::judgeRetune (req); });
+    };
+    const auto pick = rolla::pickRetuneSafe (2, 0, 8, judge);
+    expect (pick.safe && pick.index == 1, "guard: an over-shifted pad is rejected and the next pad plays");
+    expect (cache.size() == 2, "guard: one cached verdict per file and shift");
+    const auto again = rolla::pickRetuneSafe (2, 0, 8, judge);
+    expect (again.index == 1 && cache.size() == 2, "guard: a second roll reads the cache");
+
+    // Nothing passes: the nearest workable file (smallest shift) plays, flagged unsafe.
+    auto none = [] (int at, double& worst)
+    {
+        worst = at == 0 ? 7.0 : 6.0;
+        rolla::RetuneVerdict v;
+        v.ok = false;
+        v.reason = "over the cap";
+        return v;
+    };
+    const auto fallback = rolla::pickRetuneSafe (2, 0, 8, none);
+    expect (! fallback.safe && fallback.index == 1, "guard: with no pass, the smallest shift is the fallback");
+
+    // A file still loading is never skipped: judge it again later.
+    auto loading = [] (int, double&)
+    {
+        rolla::RetuneVerdict v;
+        v.ok = false;
+        v.known = false;
+        return v;
+    };
+    const auto wait = rolla::pickRetuneSafe (3, 2, 8, loading);
+    expect (wait.pending && wait.index == 2, "guard: a loading file keeps the pick");
+}
+
 } // namespace
 
 int main()
@@ -311,6 +445,7 @@ int main()
     juce::ScopedJuceInitialiser_GUI juce;
 
     testPitchProbe();
+    testRetuneGuard();
 
     static_assert (rolla::kUserSlotCount == 14, "14 user slots");
     expect (rolla::userSlotForPart (rolla::Bass) == rolla::SlotBass, "bass slot");

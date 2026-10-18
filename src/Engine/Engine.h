@@ -39,6 +39,9 @@ struct EngineParams
     int bars = 8;
     int key = 2;
     int dialect = UkMin;
+    // ScaleMode (Generator/Scale.h). Auto leaves preset chord memory as written;
+    // a locked scale folds its parallel intervals into the scale.
+    int scale = 0;
     const PresetBank* presets = nullptr;
     const SampleLibrary* library = nullptr;
     // Published sample-folder index. Null until the background scan finishes.
