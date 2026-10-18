@@ -3,6 +3,7 @@
 #include "SampleChop.h"
 #include "SampleSpec.h"
 #include "../Sampler/SamplePrep.h"
+#include "../Sampler/PitchProbe.h"
 
 #include <atomic>
 #include <condition_variable>
@@ -502,6 +503,10 @@ struct SampleAudio
     int slices[24] { 0 };
     // First audible frame (2 ms early). Vox phrases often open on silence.
     int lead = 0;
+    // Measured at load (PitchProbe.h). Library files only; user slots keep their own root.
+    PitchInfo pitch;
+    // The note in the filename, -1 when none. Trusted only where the measurement agrees.
+    int namedRoot = -1;
     // -1 until loadOne measures the in-memory buffer. The file on disk is not written.
     float flatness = -1.f;
     int loudStart = 0;

@@ -826,13 +826,22 @@ void Engine::process (const Groove& groove,
             else if (incoming[e].ch == 2 && incoming[e].on)
             {
                 const int nIv = (sp.chordOn && sp.chordN > 1) ? std::min (4, sp.chordN) : 1;
+                const ChordAsk ask = nIv > 1 ? chordAskOf (sp.chordIv, nIv) : ChordAsk {};
+                bool chordSounding = false;
                 for (int c = 0; c < nIv; ++c)
                 {
                     const int note = std::clamp (incoming[e].note + (nIv == 1 ? 0 : sp.chordIv[c]), 0, 127);
-                    const auto taken = sampler.take (Stab, note, incoming[e].vel, 1.0e9f, bank, play);
+                    const auto onMsg = juce::MidiMessage::noteOn (Stab + 1, note, (juce::uint8) std::clamp (incoming[e].vel, 1, 127));
+                    if (chordSounding)
+                    {
+                        midi.addEvent (onMsg, i);
+                        continue;
+                    }
+                    const auto taken = sampler.take (Stab, note, incoming[e].vel, 1.0e9f, bank, play, c == 0 ? ask : ChordAsk {});
                     if (taken.kind == 1)
                     {
-                        midi.addEvent (juce::MidiMessage::noteOn (Stab + 1, note, (juce::uint8) std::clamp (incoming[e].vel, 1, 127)), i);
+                        midi.addEvent (onMsg, i);
+                        chordSounding = c == 0 && taken.chordFile;
                         continue;
                     }
                     PolyV* slot = nullptr;
@@ -1081,13 +1090,23 @@ void Engine::process (const Groove& groove,
                             iv[c] = std::clamp (root + sp.chordIv[c], -48, 48);
                     }
                     const Extras& ex = part == Stab ? sp.ex : (part == Pluck ? pp.ex : padP.ex);
+                    const ChordAsk ask = chordAskOf (iv, std::min (count, 4));
+                    // A recorded chord sounds every tone from its root: the other
+                    // notes go to MIDI only, never stacked through the sampler.
+                    bool chordSounding = false;
                     for (int c = 0; c < count; ++c)
                     {
                         const int note = std::clamp (base + iv[c], 0, 127);
-                        const auto taken = sampler.take (part, note, n.vel, en, bank, play);
+                        if (chordSounding)
+                        {
+                            emitHeld (part, note, n.vel, st, en);
+                            continue;
+                        }
+                        const auto taken = sampler.take (part, note, n.vel, en, bank, play, c == 0 ? ask : ChordAsk {});
                         if (taken.kind == 1)
                         {
                             emitHeld (part, note, n.vel, st, en);
+                            chordSounding = c == 0 && taken.chordFile;
                             continue;
                         }
                         PolyV* slot = nullptr;
