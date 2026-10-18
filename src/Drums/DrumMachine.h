@@ -62,6 +62,7 @@ public:
     void process (float& left, float& right, float* voiceL, float* voiceR) noexcept;
 
     // Key follow: root / 4th / 5th nearest 52.8 Hz inside 49–56 Hz. Tie → 5th.
+    // If none lies there (F, F#, A#, B), the nearest one inside 40–70 Hz.
     static float kickHzForKey (int key) noexcept;
 
 private:

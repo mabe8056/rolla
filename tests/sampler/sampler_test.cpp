@@ -1,3 +1,4 @@
+#include "Drums/DrumMachine.h"
 #include "Engine/Engine.h"
 #include "Engine/SampleChop.h"
 #include "Engine/Sampler.h"
@@ -954,6 +955,23 @@ int main()
     expect (rolla::userSlotForDrum (rolla::Perc) == rolla::SlotPerc, "perc slot");
     expect (rolla::userSlotForDrum (rolla::TomLow) < 0, "toms stay on the dropped-wav path");
     expect (std::string (rolla::userSlotFolder (rolla::SlotPerc)) == "DRUMS/PERC", "perc folder");
+
+    // Kick key follow: every key gets a root / 4th / 5th inside 40-70 Hz,
+    // never an out-of-key 55 Hz fallback.
+    for (int key = 0; key < 12; ++key)
+    {
+        const float hz = rolla::DrumMachine::kickHzForKey (key);
+        const std::string tag = "kick key follow key " + std::to_string (key);
+        expect (hz >= 40.f && hz <= 70.f, tag + " in 40-70 Hz");
+        const int midi = (int) std::lround (69.0 + 12.0 * std::log2 ((double) hz / 440.0));
+        const int interval = ((midi % 12) - key + 12) % 12;
+        expect (interval == 0 || interval == 5 || interval == 7, tag + " is root/4th/5th");
+    }
+    expect (std::fabs (rolla::DrumMachine::kickHzForKey (10) - 55.f) > 0.5f, "kick key follow A# not 55 Hz");
+    expect (std::fabs (rolla::DrumMachine::kickHzForKey (11) - 55.f) > 0.5f, "kick key follow B not 55 Hz");
+    expect (std::fabs (rolla::DrumMachine::kickHzForKey (2) - 55.f) < 0.1f, "kick key follow D keeps A1");
+    expect (std::fabs (rolla::DrumMachine::kickHzForKey (10) - 58.27f) < 0.1f, "kick key follow A# -> A#1");
+    expect (std::fabs (rolla::DrumMachine::kickHzForKey (6) - 46.25f) < 0.1f, "kick key follow F# -> F#1");
 
     expect (rolla::midiFromFilename ("BASS/THMAG_Bass_One_Shot_4_Fm.wav") == 53, "Fm -> F3");
     expect (rolla::midiFromFilename ("STAB/thing_C#.wav") == 49, "C# -> C#3");
