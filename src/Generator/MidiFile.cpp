@@ -67,12 +67,23 @@ int basePitch (int part, int key, int dialect)
 
 void addNote (std::vector<Event>& ev, int channel, int pitch, int vel, std::uint32_t on, std::uint32_t off)
 {
+    // Velocity 1-2 is a placeholder (the old beat-1 anchor). It does not ship.
+    if (vel <= 2)
+        return;
     pitch = std::clamp (pitch, 0, 127);
     vel = std::clamp (vel, 1, 127);
     if (off <= on)
         off = on + 1;
     ev.push_back ({ on, (std::uint8_t) (0x90 | (channel & 15)), (std::uint8_t) pitch, (std::uint8_t) vel });
     ev.push_back ({ off, (std::uint8_t) (0x80 | (channel & 15)), (std::uint8_t) pitch, 0 });
+}
+
+bool noteOnTaken (const std::vector<Event>& ev, std::uint32_t tick, int pitch)
+{
+    for (const auto& e : ev)
+        if (e.tick == tick && (e.status & 0xf0) == 0x90 && e.d1 == (std::uint8_t) pitch)
+            return true;
+    return false;
 }
 
 std::vector<std::uint8_t> trackBytes (const std::vector<Event>& events, double bpm, int bars, bool withTempo)
@@ -170,7 +181,7 @@ void collectPart (std::vector<Event>& ev, const Groove& g, int part, int key, fl
             for (int t = 0; t < steps; ++t)
             {
                 const int vel = g.drums.vel[v][t];
-                if (vel == 0)
+                if (vel <= 2)
                     continue;
                 const auto on = tickAt ((float) t, swing);
                 int gate = 60; // half a 16th
@@ -182,7 +193,10 @@ void collectPart (std::vector<Event>& ev, const Groove& g, int part, int key, fl
                 if ((int) off >= loopTicks)
                     off = (std::uint32_t) (loopTicks - 1);
                 int accented = g.drums.accent[t] ? std::min (127, vel + 6) : vel;
-                addNote (ev, 9, drumMidiNote (v), accented, on, off);
+                const int pitch = drumMidiNote (v);
+                if (noteOnTaken (ev, on, pitch))
+                    continue;
+                addNote (ev, 9, pitch, accented, on, off);
             }
         }
         return;
@@ -191,17 +205,67 @@ void collectPart (std::vector<Event>& ev, const Groove& g, int part, int key, fl
     const int channel = part; // 0..5
     const int base = basePitch (part, key, g.dialect);
     const auto& lane = g.lane[part];
+
+    struct Hit
+    {
+        std::uint32_t on = 0;
+        std::uint32_t off = 0;
+        int pitch = 0;
+        int vel = 0;
+    };
+    std::vector<Hit> hits;
     for (int i = 0; i < lane.count; ++i)
     {
         const auto& n = lane.notes[i];
+        if (n.vel <= 2)
+            continue;
         const auto on = tickAt (n.start, swing);
         auto off = on + (std::uint32_t) std::max (1, (int) std::round (n.length * 120.f));
         if ((int) off >= loopTicks)
             off = (std::uint32_t) std::max (1, loopTicks - 1);
         const int count = std::max (1, (int) n.nChord);
         for (int c = 0; c < count; ++c)
-            addNote (ev, channel, base + n.chord[c], n.vel, on, off);
+        {
+            const int pitch = std::clamp (base + n.chord[c], 0, 127);
+            bool taken = false;
+            for (const auto& h : hits)
+                if (h.on == on && h.pitch == pitch)
+                    taken = true;
+            if (taken)
+                continue;
+            hits.push_back ({ on, off, pitch, n.vel });
+        }
     }
+
+    if (part == Bass && hits.size() > 1)
+    {
+        std::sort (hits.begin(), hits.end(), [] (const Hit& a, const Hit& b)
+        {
+            if (a.on != b.on)
+                return a.on < b.on;
+            return a.vel > b.vel;
+        });
+        // One bass pitch at a time. The note ends a tick before the next onset.
+        std::vector<Hit> mono;
+        for (const auto& h : hits)
+        {
+            if (! mono.empty() && mono.back().on == h.on)
+                continue;
+            mono.push_back (h);
+        }
+        for (std::size_t i = 0; i + 1 < mono.size(); ++i)
+        {
+            if (mono[i + 1].on <= mono[i].on)
+                continue;
+            const auto limit = mono[i + 1].on - 1;
+            if (mono[i].off > limit)
+                mono[i].off = std::max (mono[i].on + 1, limit);
+        }
+        hits.swap (mono);
+    }
+
+    for (const auto& h : hits)
+        addNote (ev, channel, h.pitch, h.vel, h.on, h.off);
 }
 
 bool writeFile (const std::string& path, const std::vector<std::uint8_t>& bytes, std::string& error)

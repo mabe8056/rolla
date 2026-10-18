@@ -1073,7 +1073,8 @@ bool popIsPulse (float bounce, std::uint32_t seed) noexcept
 {
     if (bounce >= 0.80f || bounce <= 0.15f)
         return false;
-    return (((seed ? seed : 1u) * 0x27D4EB2Du) % 100u) < 32u;
+    // About half of mid-bounce rolls. The knob's extremes stay on the bounce grid.
+    return (((seed ? seed : 1u) * 0x27D4EB2Du) % 100u) < 50u;
 }
 
 float rootShareOf (const Lane& lane) noexcept
@@ -1415,8 +1416,18 @@ void enforceMonophonic (Lane& lane)
         const int st = (int) std::lround (n.start);
         if (w > 0 && (int) std::lround (lane.notes[w - 1].start) == st)
             continue;
-        if (w > 0 && lane.notes[w - 1].start + lane.notes[w - 1].length > n.start)
-            lane.notes[w - 1].length = std::max (0.5f, n.start - lane.notes[w - 1].start);
+        // End one tick before the next onset. A full 16th of hold into the
+        // next note is what the scorer rejects; a couple of ticks would pass.
+        if (w > 0)
+        {
+            const float tick = 1.f / 120.f;
+            const float gap = n.start - lane.notes[w - 1].start;
+            float len = gap - tick;
+            if (len < tick)
+                len = tick;
+            if (lane.notes[w - 1].length > len)
+                lane.notes[w - 1].length = len;
+        }
         if (n.length < 0.25f)
             continue;
         lane.notes[w++] = n;
@@ -1625,6 +1636,132 @@ void paintPhraseVariety (Lane& lane, int dialect, std::uint32_t seed)
     paintOctaveShare (lane, seed);
 }
 
+// Bar 4 answers bar 2 on about three fifths of rolls. The back half of bar 4
+// moves, so the 8-bar loop is not a photocopy of the opening pair. The other
+// two fifths keep the copy.
+void differBar4 (Lane& lane, int bars, std::uint32_t seed)
+{
+    if (bars < 4)
+        return;
+    const bool answer = (((seed ? seed : 1u) * 0xC2B2AE35u) % 100u) < 60u;
+    const int srcBar = 1;
+    const int dstBar = 3;
+    if (dstBar >= bars)
+        return;
+
+    bool src[16] {};
+    bool dst[16] {};
+    int back[8];
+    int nBack = 0;
+    int inDst = 0;
+    for (int i = 0; i < lane.count; ++i)
+    {
+        const int st = (int) std::lround (lane.notes[i].start);
+        if (st < 0)
+            continue;
+        const int bar = st / 16;
+        const int slot = ((st % 16) + 16) % 16;
+        if (bar == srcBar)
+            src[slot] = true;
+        if (bar == dstBar)
+        {
+            dst[slot] = true;
+            ++inDst;
+            if (slot >= 8 && nBack < 8)
+                back[nBack++] = i;
+        }
+    }
+    bool sameBack = true;
+    for (int s = 8; s < 16; ++s)
+        if (src[s] != dst[s])
+            sameBack = false;
+    if (! answer)
+    {
+        if (sameBack)
+            return;
+        // Keep the photocopy on the other two fifths, including when a darker
+        // fill had already moved bar 4.
+        int w = 0;
+        for (int i = 0; i < lane.count; ++i)
+        {
+            const int st = (int) std::lround (lane.notes[i].start);
+            const int bar = st / 16;
+            const int slot = ((st % 16) + 16) % 16;
+            if (bar == dstBar && slot >= 8 && ! src[slot])
+                continue;
+            lane.notes[w++] = lane.notes[i];
+        }
+        lane.count = w;
+        bool have[16] {};
+        for (int i = 0; i < lane.count; ++i)
+        {
+            const int st = (int) std::lround (lane.notes[i].start);
+            if (st / 16 == dstBar)
+                have[st % 16] = true;
+        }
+        for (int s = 8; s < 16 && lane.count < kMaxNotes; ++s)
+        {
+            if (! src[s] || have[s])
+                continue;
+            Note n;
+            n.start = (float) (dstBar * 16 + s);
+            n.length = 1.5f;
+            n.chord[0] = 0;
+            n.vel = 104;
+            n.nChord = 1;
+            for (int i = 0; i < lane.count; ++i)
+            {
+                const int st = (int) std::lround (lane.notes[i].start);
+                if (st / 16 == srcBar && st % 16 == s)
+                {
+                    n = lane.notes[i];
+                    n.start = (float) (dstBar * 16 + s);
+                    break;
+                }
+            }
+            lane.notes[lane.count++] = n;
+        }
+        return;
+    }
+    if (! sameBack)
+        return;
+
+    const int spin = (int) ((seed >> 4) & 7u);
+    int dest = -1;
+    for (int t = 0; t < 8 && dest < 0; ++t)
+    {
+        const int s = 8 + ((spin + t) % 8);
+        if (! dst[s] && ! kickSlot (s))
+            dest = s;
+    }
+    if (nBack > 0 && dest >= 0)
+    {
+        const int ni = back[(int) ((seed >> 8) % (std::uint32_t) nBack)];
+        const int old = (int) std::lround (lane.notes[ni].start) % 16;
+        dst[old] = false;
+        lane.notes[ni].start = (float) (dstBar * 16 + dest);
+        return;
+    }
+    if (nBack > 0 && inDst > 1)
+    {
+        // The back half is full and identical. Dropping one attack is the answer.
+        const int ni = back[(int) ((seed >> 8) % (std::uint32_t) nBack)];
+        for (int i = ni + 1; i < lane.count; ++i)
+            lane.notes[i - 1] = lane.notes[i];
+        --lane.count;
+        return;
+    }
+    if (dest < 0 || lane.count >= kMaxNotes)
+        return;
+    Note n;
+    n.start = (float) (dstBar * 16 + dest);
+    n.length = 1.5f;
+    n.chord[0] = 7;
+    n.nChord = 1;
+    n.vel = 104;
+    lane.notes[lane.count++] = n;
+}
+
 // LONG / GASKIN bass is the phrase grammar (PhraseBank): half-bar cells from
 // resources/phrase_bank.json, joined and re-pitched per seed. Nothing here is
 // a stored phrase. Bar 8 still opens a four-16th gap so the loop can turn
@@ -1743,6 +1880,7 @@ void lockFromBook (Lane& lane, int dialect, std::uint32_t seed, int bars, float 
     applyBusyDensity (lane, dialect, bars, busy, seed);
     if (dialect == Long)
         fitRootShare (lane, 0.42f, 0.68f, seed);
+    differBar4 (lane, bars, seed);
     finishBass (lane);
 }
 
@@ -2075,6 +2213,7 @@ void lockPhrase (Lane& lane, int dialect, std::uint32_t seed, int bars, float da
     if (dialect != Pop)
     {
         paintPhraseVariety (lane, dialect, seed);
+        differBar4 (lane, bars, seed);
         finishBass (lane);
         return;
     }
@@ -2106,8 +2245,13 @@ void lockPhrase (Lane& lane, int dialect, std::uint32_t seed, int bars, float da
     }
     softenFifths (lane, seed);
     if (popIsPulse (bounce, seed))
+    {
         makePulse (lane, bars, seed);
+        // The pulse grid replaces the phrase, so BUSY has to scale it again.
+        applyBusyDensity (lane, dialect, bars, busy, seed);
+    }
     paintPhraseVariety (lane, dialect, seed);
+    differBar4 (lane, bars, seed);
     finishBass (lane);
 }
 
@@ -2182,42 +2326,100 @@ void writeStab (Lane& lane, const Lane& bass, const Settings& s, Rng& rng, float
         const int par = bar & 1;
         const int* voi = book[voice[par]];
         bool taken[16] {};
-        int placed = 0;
-        // Gaps first, then sustains, then any free off-kick so BUSY can still add hits.
-        for (int pass = 0; pass < 3 && placed < per; ++pass)
+        int sustain[12];
+        int onsetSlots[12];
+        int rest[12];
+        int nSus = 0;
+        int nOn = 0;
+        int nRest = 0;
+        for (int t = 0; t < 12; ++t)
         {
-            for (int t = 0; t < 12 && placed < per; ++t)
+            const int slot = order[par][t];
+            if (slot < 0 || slot > 15 || kickSlot (slot))
+                continue;
+            const int abs = bar * 16 + slot;
+            if (bassOnset (bass, abs))
+                onsetSlots[nOn++] = slot;
+            else if (bassSounds (bass, abs))
+                sustain[nSus++] = slot;
+            else
+                rest[nRest++] = slot;
+        }
+
+        int placed = 0;
+        int placedIdx[12];
+        bool placedRest[12] {};
+        auto place = [&] (int slot, bool isRest)
+        {
+            if (placed >= per || taken[slot])
+                return;
+            const int abs = bar * 16 + slot;
+            float hold = len;
+            const float barEnd = (float) ((bar + 1) * 16);
+            if ((float) abs + hold > barEnd)
+                hold = barEnd - (float) abs;
+            if (hold < 0.5f)
+                return;
+            Ev e;
+            e.start = (float) abs;
+            e.len = hold;
+            e.nChord = 3;
+            e.vel = 98;
+            for (int c = 0; c < 3; ++c)
+                e.chord[c] = (std::int8_t) voi[c];
+            if (! pushEv (lane, e, s.bars))
+                return;
+            taken[slot] = true;
+            if (placed < 12)
             {
-                const int slot = order[par][t];
-                if (slot < 0 || slot > 15 || kickSlot (slot) || taken[slot])
-                    continue;
-                const int abs = bar * 16 + slot;
-                const bool onset = bassOnset (bass, abs);
-                const bool sounding = bassSounds (bass, abs);
-                if (pass == 0 && (onset || sounding))
-                    continue;
-                if (pass == 1 && onset)
-                    continue;
-                float hold = len;
-                const float barEnd = (float) ((bar + 1) * 16);
-                if ((float) abs + hold > barEnd)
-                    hold = barEnd - (float) abs;
-                if (hold < 0.5f)
-                    continue;
-                Ev e;
-                e.start = (float) abs;
-                e.len = hold;
-                e.nChord = 3;
-                e.vel = 98;
-                for (int c = 0; c < 3; ++c)
-                    e.chord[c] = (std::int8_t) voi[c];
-                if (! pushEv (lane, e, s.bars))
-                    continue;
-                taken[slot] = true;
-                ++placed;
-                if (onset)
-                    noteBreak (breaks, breaksN, "stab");
+                placedIdx[placed] = lane.count - 1;
+                placedRest[placed] = isRest;
             }
+            ++placed;
+            if (bassOnset (bass, abs))
+                noteBreak (breaks, breaksN, "stab");
+        };
+        // Most stabs sit on the bass. A rest is a light preference, about 8%.
+        for (int i = 0; i < nSus; ++i)
+            place (sustain[i], false);
+        for (int i = 0; i < nOn; ++i)
+            place (onsetSlots[i], false);
+        for (int i = 0; i < nRest; ++i)
+            place (rest[i], true);
+
+        int alreadyRest = 0;
+        for (int i = 0; i < placed && i < 12; ++i)
+            if (placedRest[i])
+                ++alreadyRest;
+        for (int i = 0; i < placed && i < 12 && alreadyRest == 0; ++i)
+        {
+            if (placedRest[i])
+                continue;
+            const std::uint32_t h = (seed + (std::uint32_t) bar * 17u + (std::uint32_t) i * 3u) * 0x9E3779B9u;
+            if ((h % 100u) >= 8u)
+                continue;
+            int dest = -1;
+            for (int g = 0; g < nRest; ++g)
+                if (! taken[rest[g]])
+                {
+                    dest = rest[g];
+                    break;
+                }
+            if (dest < 0)
+                continue;
+            const float start = (float) (bar * 16 + dest);
+            float hold = len;
+            const float barEnd = (float) ((bar + 1) * 16);
+            if (start + hold > barEnd)
+                hold = barEnd - start;
+            if (hold < 0.5f)
+                continue;
+            const int old = (int) std::lround (lane.notes[placedIdx[i]].start) % 16;
+            taken[old] = false;
+            taken[dest] = true;
+            lane.notes[placedIdx[i]].start = start;
+            lane.notes[placedIdx[i]].length = hold;
+            placedRest[i] = true;
         }
     }
     (void) rng;
@@ -2364,14 +2566,19 @@ void writePad (Lane& lane, const Settings& s, Rng& rng)
             len = limit - start;
         if (len < 8.f)
             continue;
-        const int pool[] = { 3, 7, 10, 14, 15, 17, 2, 8 };
         Ev e;
         e.start = start;
         e.len = len;
         e.nChord = 3;
         e.vel = 70;
+        int bag[8] = { 3, 7, 10, 14, 15, 17, 2, 8 };
+        for (int i = 7; i > 0; --i)
+        {
+            const int j = (int) (rng.next() * (double) (i + 1));
+            std::swap (bag[i], bag[std::clamp (j, 0, i)]);
+        }
         for (int c = 0; c < 3; ++c)
-            e.chord[c] = (std::int8_t) pool[(int) (rng.next() * 8) % 8];
+            e.chord[c] = (std::int8_t) bag[c];
         (void) voi;
         pushEv (lane, e, s.bars);
     }
@@ -2886,6 +3093,191 @@ float bassSkeletonSimilarity (const Groove& a, const Groove& b) noexcept
     return best;
 }
 
+void uniqueChord (Note& n)
+{
+    const int nc = clampi ((int) n.nChord, 1, 4);
+    std::int8_t kept[4];
+    int w = 0;
+    for (int c = 0; c < nc; ++c)
+    {
+        bool seen = false;
+        for (int k = 0; k < w; ++k)
+            if (kept[k] == n.chord[c])
+                seen = true;
+        if (! seen)
+            kept[w++] = n.chord[c];
+    }
+    if (w <= 0)
+        kept[w++] = 0;
+    n.nChord = (std::uint8_t) w;
+    for (int c = 0; c < 4; ++c)
+        n.chord[c] = c < w ? kept[c] : 0;
+}
+
+// One note-on per (onset, pitch) inside a lane. Velocity 1-2 is the old
+// downbeat anchor and any other placeholder; those notes do not ship.
+void dedupeNoteOns (Lane& lane)
+{
+    int order[kMaxNotes];
+    const int n = std::min (lane.count, kMaxNotes);
+    for (int i = 0; i < n; ++i)
+        order[i] = i;
+    std::sort (order, order + n, [&] (int a, int b)
+    {
+        if (lane.notes[a].start != lane.notes[b].start)
+            return lane.notes[a].start < lane.notes[b].start;
+        return lane.notes[a].vel > lane.notes[b].vel;
+    });
+
+    Note out[kMaxNotes];
+    int w = 0;
+    for (int oi = 0; oi < n; ++oi)
+    {
+        Note note = lane.notes[order[oi]];
+        if (note.vel <= 2)
+            continue;
+        uniqueChord (note);
+        const int st = (int) std::lround (note.start);
+        std::int8_t kept[4];
+        int k = 0;
+        const int nc = clampi ((int) note.nChord, 1, 4);
+        for (int c = 0; c < nc; ++c)
+        {
+            bool used = false;
+            for (int j = 0; j < w && ! used; ++j)
+            {
+                if ((int) std::lround (out[j].start) != st)
+                    continue;
+                const int nj = clampi ((int) out[j].nChord, 1, 4);
+                for (int p = 0; p < nj; ++p)
+                    if (out[j].chord[p] == note.chord[c])
+                        used = true;
+            }
+            if (! used)
+                kept[k++] = note.chord[c];
+        }
+        if (k <= 0)
+            continue;
+        note.nChord = (std::uint8_t) k;
+        for (int c = 0; c < 4; ++c)
+            note.chord[c] = c < k ? kept[c] : 0;
+        out[w++] = note;
+    }
+    lane.count = w;
+    for (int i = 0; i < w; ++i)
+        lane.notes[i] = out[i];
+}
+
+struct RhythmRing
+{
+    std::uint64_t lo[20] {};
+    std::uint64_t hi[20] {};
+    int n = 0;
+    int head = 0;
+};
+
+RhythmRing& rhythmRing (int dialect)
+{
+    static RhythmRing rings[NumDialects];
+    if (dialect < 0 || dialect >= NumDialects)
+        dialect = 0;
+    return rings[dialect];
+}
+
+void rhythmOf (const Lane& lane, std::uint64_t& lo, std::uint64_t& hi)
+{
+    lo = 0;
+    hi = 0;
+    for (int i = 0; i < lane.count; ++i)
+    {
+        const int st = (int) std::lround (lane.notes[i].start);
+        if (st < 0 || st >= 128)
+            continue;
+        if (st < 64)
+            lo |= 1ull << st;
+        else
+            hi |= 1ull << (st - 64);
+    }
+}
+
+bool rhythmSeen (const RhythmRing& ring, std::uint64_t lo, std::uint64_t hi)
+{
+    const int n = std::min (ring.n, 20);
+    for (int i = 0; i < n; ++i)
+        if (ring.lo[i] == lo && ring.hi[i] == hi)
+            return true;
+    return false;
+}
+
+void rememberRhythm (RhythmRing& ring, std::uint64_t lo, std::uint64_t hi)
+{
+    ring.lo[ring.head] = lo;
+    ring.hi[ring.head] = hi;
+    ring.head = (ring.head + 1) % 20;
+    if (ring.n < 20)
+        ++ring.n;
+}
+
+bool nudgeRhythm (Lane& lane, std::uint32_t salt)
+{
+    if (lane.count <= 1)
+        return false;
+    bool used[8][16] {};
+    int idx[8][16];
+    int nIn[8] {};
+    for (int i = 0; i < lane.count; ++i)
+    {
+        const int st = (int) std::lround (lane.notes[i].start);
+        if (st < 0 || st >= 128)
+            continue;
+        const int b = st / 16;
+        const int s = st % 16;
+        if (b < 0 || b >= 8)
+            continue;
+        used[b][s] = true;
+        if (nIn[b] < 16)
+            idx[b][nIn[b]++] = i;
+    }
+    // Bar 4's answer and the last-bar turn stay put.
+    const int barsTry[] = { 0, 2, 5, 6, 1, 3 };
+    for (int attempt = 0; attempt < 6; ++attempt)
+    {
+        const int b = barsTry[attempt];
+        if (nIn[b] < 2)
+            continue;
+        const int ni = idx[b][(int) ((salt + (std::uint32_t) attempt) % (std::uint32_t) nIn[b])];
+        const int from = (int) std::lround (lane.notes[ni].start) % 16;
+        for (int step = 1; step < 16; ++step)
+        {
+            const int dest = (from + step * 2) % 16;
+            if (kickSlot (dest) || used[b][dest])
+                continue;
+            used[b][from] = false;
+            used[b][dest] = true;
+            lane.notes[ni].start = (float) (b * 16 + dest);
+            return true;
+        }
+    }
+    return false;
+}
+
+// A batch of 20 should not reprint the same 8-bar bass rhythm. One off-kick
+// move is enough to leave an exact twin of a roll still in the session.
+void separateTwinRhythm (Lane& lane, int dialect, std::uint32_t seed)
+{
+    RhythmRing& ring = rhythmRing (dialect);
+    std::uint64_t lo = 0;
+    std::uint64_t hi = 0;
+    rhythmOf (lane, lo, hi);
+    for (int t = 0; t < 6 && rhythmSeen (ring, lo, hi); ++t)
+    {
+        if (! nudgeRhythm (lane, seed + (std::uint32_t) t * 17u))
+            break;
+        rhythmOf (lane, lo, hi);
+    }
+    rememberRhythm (ring, lo, hi);
+}
+
 void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[NumParts], std::uint32_t partMask)
 {
     Settings s = settings;
@@ -3080,11 +3472,12 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
         lockPhrase (g.lane[Bass], s.dialect, bassSeed, s.bars, s.dark, s.bounce, s.busy);
     if (regen (Bass))
     {
+        separateTwinRhythm (g.lane[Bass], s.dialect, bassSeed);
         enforceMonophonic (g.lane[Bass]);
         avoidReaction (g.lane[Bass]);
     }
-    // Stabs are rewritten on the bass that actually ships, as one chord per
-    // 16th in a 2-bar figure that prefers the gaps.
+    // Stabs are rewritten on the bass that ships. A bass rest is only a light
+    // preference: the reference rolls put about 8% of stabs there.
     if (regen (Stab))
     {
         const std::uint32_t stabSeed = g.lane[Stab].seed ? g.lane[Stab].seed : 1u;
@@ -3093,6 +3486,9 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
         char stabBreaks[48] = "";
         writeStab (g.lane[Stab], g.lane[Bass], s, rs, freedom, stabBreaks, (int) sizeof stabBreaks);
     }
+    for (int part = 0; part < Drums; ++part)
+        dedupeNoteOns (g.lane[part]);
+    enforceMonophonic (g.lane[Bass]);
     g.guardScore = shippedHard ? 0.f : 1.f;
     g.guardLevel = shippedHard ? 2 : 0;
     std::snprintf (g.guardRef, sizeof g.guardRef, "%s", shippedHard ? "HARD" : "ORIGINAL");
