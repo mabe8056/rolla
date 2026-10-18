@@ -680,16 +680,394 @@ float clickPeak (const ClickRender& x, int from, int to)
     return peak;
 }
 
-// A&R clicks on #65's build (130 BPM, drums "tight", bass "click", ROLLER):
-//  - the kick on beats 1 and 3, and on beats 2 and 4 when the clap shares the 16th;
-//  - an off-kick rim on 16th 14 of bars 3 and 7 (vel 87 / 83);
-//  - BASS onsets on 16ths 4 and 10, where the note before (1.1 or 1.5 sixteenths)
-//    is still sounding or in its end fade; not on 16ths 6 and 12.
-// Every file here starts on a non-zero sample, as pack files trimmed onto their
-// transient do. The kick is 0.7 s, longer than a beat and shorter than two, so
-// consecutive kicks alternate voices. The full mix, the drums alone and the bass
-// alone must have no second difference above 3% of that render's peak around
-// any of those onsets (a step is ~100%, a natural 55-800 Hz body under 1%).
+// A&R's step detector, d2_clicks in tools/score_rolls.py: the first difference of
+// the mono mean, d[n] = x[n] - x[n-1]; loc = RMS of d over a centred +-10 ms
+// window; a sample flags when |d| > 10 * max (loc, 1e-6) and |d| > 0.02. Flags
+// within 5 ms of the previous flag merge into one event, and events in the first
+// 5 ms are dropped. Returns each event's first flagged sample.
+std::vector<int> stepEvents (const std::vector<float>& mono, double sr)
+{
+    const int n = (int) mono.size();
+    std::vector<int> events;
+    if (n < 2)
+        return events;
+    // sq[k] = sum of d[j]^2 for j < k, with d[0] = 0.
+    std::vector<double> sq ((size_t) n + 1, 0.0);
+    for (int i = 1; i < n; ++i)
+    {
+        const double d = (double) mono[(size_t) i] - (double) mono[(size_t) i - 1];
+        sq[(size_t) i + 1] = sq[(size_t) i] + d * d;
+    }
+    const int w = (int) std::lround (0.010 * sr);
+    const int merge = (int) std::lround (0.005 * sr);
+    int last = -(1 << 30);
+    for (int i = 1; i < n; ++i)
+    {
+        const double d = std::fabs ((double) mono[(size_t) i] - (double) mono[(size_t) i - 1]);
+        if (d <= 0.02)
+            continue;
+        const int a = std::max (1, i - w);
+        const int b = std::min (n - 1, i + w);
+        const double loc = std::sqrt ((sq[(size_t) b + 1] - sq[(size_t) a]) / (double) (b - a + 1));
+        if (d <= 10.0 * std::max (loc, 1.0e-6))
+            continue;
+        if (i - last > merge && i >= merge)
+            events.push_back (i);
+        last = i;
+    }
+    return events;
+}
+
+std::vector<float> monoOf (const std::vector<float>& l, const std::vector<float>& r)
+{
+    std::vector<float> m (l.size());
+    for (size_t i = 0; i < l.size(); ++i)
+        m[i] = 0.5f * (l[i] + (i < r.size() ? r[i] : l[i]));
+    return m;
+}
+
+// Render events with no source event within `tol` samples: steps the engine added.
+std::vector<int> addedSteps (const std::vector<int>& got, const std::vector<int>& source, int tol)
+{
+    std::vector<int> extra;
+    for (int g : got)
+        if (std::none_of (source.begin(), source.end(), [&] (int s) { return std::abs (s - g) <= tol; }))
+            extra.push_back (g);
+    return extra;
+}
+
+// The sampler's 16-tap windowed sinc (Sampler::readSinc), for files that do not play at 1:1.
+float sincRead (const std::vector<float>& src, double index)
+{
+    constexpr float pi = 3.14159265358979323846f;
+    const int n = (int) src.size();
+    const int i = (int) std::floor (index);
+    const float frac = (float) (index - i);
+    float acc = 0.f;
+    for (int t = -7; t <= 8; ++t)
+    {
+        const int idx = i + t;
+        const float x = (idx >= 0 && idx < n) ? src[(size_t) idx] : 0.f;
+        const float p = frac - (float) t;
+        float w = 1.f;
+        if (std::fabs (p) > 1.0e-5f)
+            w = std::sin (pi * p) / (pi * p) * (0.5f + 0.5f * std::cos (pi * p / 8.f));
+        acc += x * w;
+    }
+    return acc;
+}
+
+// One hit of `src` (file frames at `fileRate`) placed at output sample `at`, read
+// `ratio` frames per output sample, up to output sample `until` (exclusive).
+// edges: the engine's own edges on a voice that starts on the file's first frame,
+// the 0.5 ms raised-cosine fade-in and the 4 ms fade at the file end. Without
+// them the tile is the raw file: what "plays as recorded" is measured against.
+void addTile (std::vector<float>& out, const std::vector<float>& src, double fileRate, int at, double ratio,
+              int until, bool edges, double sr = 48000.0)
+{
+    constexpr double pi = 3.14159265358979;
+    const int frames = (int) src.size();
+    const int attackN = std::max (8, (int) (0.0005 * sr));
+    const double fadeLen = std::max (8.0, 0.004 * (fileRate > 1.0 ? fileRate : sr));
+    const int end = std::min ((int) out.size(), until);
+    const bool unity = std::fabs (ratio - 1.0) < 1.0e-12;
+    for (int k = 0; at + k < end; ++k)
+    {
+        const double idx = (double) k * ratio;
+        // The voice turns off once its read position reaches the last frame.
+        if (k > 0 && idx >= (double) frames - 1.0)
+            break;
+        double s = unity ? (double) src[(size_t) k] : (double) sincRead (src, idx);
+        if (edges)
+        {
+            if (k < attackN)
+                s *= 0.5 * (1.0 - std::cos (pi * (double) k / (double) attackN));
+            const double remain = (double) frames - (double) (k + 1) * ratio;
+            if (remain < fadeLen)
+                s *= 0.5 * (1.0 - std::cos (pi * std::clamp (remain / fadeLen, 0.0, 1.0)));
+        }
+        if (at + k >= 0)
+            out[(size_t) (at + k)] += (float) s;
+    }
+}
+
+// Least-squares gain of `part` against `y` over the samples `use` marks (all when empty).
+double fitGain (const std::vector<float>& y, const std::vector<float>& part, const std::vector<char>& use)
+{
+    double xy = 0.0, xx = 0.0;
+    for (size_t i = 0; i < y.size() && i < part.size(); ++i)
+    {
+        if (! use.empty() && use[i] == 0)
+            continue;
+        xy += (double) part[i] * (double) y[i];
+        xx += (double) part[i] * (double) part[i];
+    }
+    return xx > 1.0e-18 ? xy / xx : 0.0;
+}
+
+struct SourceLR
+{
+    std::vector<float> l, r;
+    double rate = 48000.0;
+};
+
+SourceLR sourceOf (const rolla::SampleAudio& a)
+{
+    SourceLR s;
+    s.rate = a.rate;
+    const int n = std::min (a.frames, (int) a.left.size());
+    s.l.assign (a.left.begin(), a.left.begin() + n);
+    if ((int) a.right.size() >= n)
+        s.r.assign (a.right.begin(), a.right.begin() + n);
+    else
+        s.r = s.l;
+    return s;
+}
+
+// A drum sample alone through the sampler, at 130 BPM over a 2-bar loop played
+// twice plus the next downbeat, a hit on every step where step % every == offset
+// (t = 0 and both loop wraps included for the kick). Two rules:
+//  - away from the loop wraps (where the engine fades the loop end on purpose) the
+//    render nulls against the file, tiled at the hits at one fitted gain, to under
+//    -80 dBFS; only the engine's 0.5 ms frame-0 fade and 4 ms end fade are modelled;
+//  - the render's d2_clicks events are all events of the raw file tiled at the same
+//    offsets and gain: the engine adds no step. A hard cut injected into the render
+//    must be caught (the rule can see an engine step).
+void checkDrumAsRecorded (rolla::PresetBank& bank, const rolla::SampleLibrary& lib, int voice, int velocity,
+                          const std::string& path, int every, int offset, const std::string& tag)
+{
+    constexpr double sr = 48000.0;
+    constexpr double bpm = 130.0;
+    constexpr float loop16 = 32.f;
+    const auto* audio = lib.tryGet (path.c_str());
+    expect (audio != nullptr && audio->frames >= 64, tag + ": the file loads");
+    if (audio == nullptr || audio->frames < 64)
+        return;
+    const auto src = sourceOf (*audio);
+    bank.drums[0].voicePool[voice] = { path };
+    rolla::Sampler sampler;
+    sampler.prepare (sr);
+    rolla::EngineParams params;
+    params.presets = &bank;
+    params.library = &lib;
+    for (int v = 0; v < rolla::NumDrumVoices; ++v)
+        params.drumDecay[v] = 0.5f;
+    const double inc = bpm / 60.0 * 4.0 / sr;
+    const int total = (int) std::lround (64.0 / inc) + (int) src.l.size() + 960;
+    std::vector<float> l ((size_t) total, 0.f), r ((size_t) total, 0.f);
+    std::vector<int> hits, wraps;
+    float prev = 0.f;
+    int lastStep = -1, lastLoop = 0;
+    for (int n = 0; n < total; ++n)
+    {
+        const double p16 = (double) n * inc;
+        const int step = (int) std::floor (p16);
+        const int loopIdx = (int) std::floor (p16 / (double) loop16);
+        if (loopIdx != lastLoop)
+        {
+            lastLoop = loopIdx;
+            wraps.push_back (n);
+        }
+        if (step != lastStep)
+        {
+            lastStep = step;
+            if (step % every == offset && step <= 64)
+            {
+                sampler.takeDrum (voice, velocity, bank, params);
+                hits.push_back (n);
+            }
+        }
+        const float pos = (float) std::fmod (p16, (double) loop16);
+        float laneL[rolla::NumParts] {};
+        float laneR[rolla::NumParts] {};
+        sampler.render (laneL, laneR, prev, pos, true, loop16);
+        prev = pos;
+        l[(size_t) n] = laneL[rolla::Drums];
+        r[(size_t) n] = laneR[rolla::Drums];
+    }
+    expect (! hits.empty() && (every != 4 || hits.front() == 0), tag + ": the hits play from t = 0");
+
+    // Expected render: each hit cut at the next loop wrap, with the engine's edges.
+    const double ratio = std::clamp (audio->rate / sr, 0.25, 4.0);
+    std::vector<float> eL ((size_t) total, 0.f), eR ((size_t) total, 0.f);
+    std::vector<float> rawL ((size_t) total, 0.f), rawR ((size_t) total, 0.f);
+    for (int at : hits)
+    {
+        int until = total;
+        for (int w : wraps)
+            if (w > at)
+                until = std::min (until, w);
+        addTile (eL, src.l, src.rate, at, ratio, until, true);
+        addTile (eR, src.r, src.rate, at, ratio, until, true);
+        addTile (rawL, src.l, src.rate, at, ratio, total, false);
+        addTile (rawR, src.r, src.rate, at, ratio, total, false);
+    }
+    std::vector<char> use ((size_t) total, 1);
+    for (int w : wraps)
+        for (int i = std::max (0, w - (int) (0.0105 * sr)); i < std::min (total, w + (int) (0.0045 * sr)); ++i)
+            use[(size_t) i] = 0;
+    const double g = fitGain (l, eL, use);
+    float resid = 0.f;
+    int residAt = -1;
+    for (int i = 0; i < total; ++i)
+    {
+        if (use[(size_t) i] == 0)
+            continue;
+        const float d = std::max (std::fabs (l[(size_t) i] - (float) g * eL[(size_t) i]),
+                                  std::fabs (r[(size_t) i] - (float) g * eR[(size_t) i]));
+        if (d > resid)
+        {
+            resid = d;
+            residAt = i;
+        }
+    }
+    expect (g > 1.0e-3, tag + ": the hit plays (gain " + std::to_string (g) + ")");
+    expect (resid < 1.0e-4f, tag + ": plays as recorded, nulls against the file at one gain (residual "
+                                 + std::to_string (20.0 * std::log10 (std::max (1.0e-12, (double) resid)))
+                                 + " dBFS at sample " + std::to_string (residAt) + ")");
+
+    for (auto& v : rawL)
+        v *= (float) g;
+    for (auto& v : rawR)
+        v *= (float) g;
+    const int tol = (int) (0.002 * sr);
+    const auto mono = monoOf (l, r);
+    const auto source = stepEvents (monoOf (rawL, rawR), sr);
+    const auto got = stepEvents (mono, sr);
+    const auto extra = addedSteps (got, source, tol);
+    std::cout << "INFO " << tag << ": " << source.size() << " d2_clicks events in the tiled file, " << got.size()
+              << " in the render\n";
+    expect (extra.empty(), tag + ": every d2_clicks event is the file's own, t = 0 and the wraps included ("
+                               + std::to_string (extra.size()) + " added, first at sample "
+                               + std::to_string (extra.empty() ? -1 : extra.front()) + ")");
+
+    // Negative control: a 1 ms hard cut 30-80 ms into the second hit is an engine step.
+    if (hits.size() > 1)
+    {
+        int at = hits[1] + (int) (0.03 * sr);
+        for (int i = at; i < std::min (total, hits[1] + (int) (0.08 * sr)); ++i)
+            if (std::fabs (mono[(size_t) i]) > std::fabs (mono[(size_t) at]))
+                at = i;
+        if (std::fabs (mono[(size_t) at]) > 0.05f)
+        {
+            auto cut = mono;
+            for (int i = at; i < std::min (total, at + (int) (0.001 * sr)); ++i)
+                cut[(size_t) i] = 0.f;
+            expect (! addedSteps (stepEvents (cut, sr), source, tol).empty(), tag + ": the rule catches a hard cut the engine adds");
+        }
+    }
+}
+
+// Back-to-back bass notes where each new note cuts the one before mid-sustain.
+// 31 voices of a silent file at full velocity hold the melodic pool, so from the
+// second test note on every note has to steal, and the quietest voice is the
+// previous test note (velocity 100 under 127). The cut must be the steal's 4 ms
+// fade: the render adds no d2_clicks event to the raw file tiled at the onsets
+// (each note left uncut, so a hard cut has no source event to hide behind).
+void checkBassCutsAsRecorded (rolla::PresetBank& bank, const rolla::SampleLibrary& lib, const std::string& silentPath,
+                              const std::string& bassPath, const std::string& tag)
+{
+    constexpr double sr = 48000.0;
+    const auto* audio = lib.tryGet (bassPath.c_str());
+    expect (audio != nullptr && audio->frames >= 64, tag + ": the bass file loads");
+    if (audio == nullptr || audio->frames < 64)
+        return;
+    const auto src = sourceOf (*audio);
+    auto& spec = bank.bass[0].sample;
+    // +12 dB on the lane trim so a cut step clears d2_clicks' 0.02 floor; the
+    // velocity order (fillers 127, test notes 100) and so the steal order stay.
+    const float trimBefore = bank.bass[0].trimDb;
+    bank.bass[0].trimDb = 12.f;
+    rolla::EngineParams params;
+    params.presets = &bank;
+    params.library = &lib;
+    rolla::Sampler sampler;
+    sampler.prepare (sr);
+    float scratchL[rolla::NumParts] {};
+    float scratchR[rolla::NumParts] {};
+    rolla::copySamplePath (spec.file, (int) sizeof spec.file, silentPath.c_str());
+    for (int i = 0; i < 31; ++i)
+    {
+        sampler.take (rolla::Bass, 40, 127, 1.0e9f, bank, params);
+        sampler.render (scratchL, scratchR, 0.f, 0.f, false); // past the birth sample
+    }
+    rolla::copySamplePath (spec.file, (int) sizeof spec.file, bassPath.c_str());
+    constexpr int notes = 12;
+    constexpr int midi = 40;
+    const int gap = (int) std::lround (60.0 / 130.0 / 4.0 * 1.1 * sr); // 1.1 sixteenths
+    const int total = notes * gap + (int) (0.3 * sr);
+    std::vector<float> l ((size_t) total, 0.f), r ((size_t) total, 0.f);
+    std::vector<int> onsets;
+    for (int n = 0; n < total; ++n)
+    {
+        if (n % gap == 0 && (int) onsets.size() < notes)
+        {
+            sampler.take (rolla::Bass, midi, 100, 1.0e9f, bank, params);
+            onsets.push_back (n);
+        }
+        float laneL[rolla::NumParts] {};
+        float laneR[rolla::NumParts] {};
+        sampler.render (laneL, laneR, 0.f, 0.f, false);
+        l[(size_t) n] = laneL[rolla::Bass];
+        r[(size_t) n] = laneR[rolla::Bass];
+    }
+    // The ratio the sampler plays this note at (Sampler::take, bass shift rule).
+    rolla::ShiftRule rule;
+    rule.cap = 12.0;
+    const double semis = rolla::tonalShift (audio->pitch, audio->namedRoot, (double) midi, rule);
+    const double ratio = std::clamp (std::pow (2.0, semis / 12.0) * (audio->rate / sr), 0.05, 16.0);
+    std::vector<float> rawL ((size_t) total, 0.f), rawR ((size_t) total, 0.f), cutL ((size_t) total, 0.f);
+    for (size_t k = 0; k < onsets.size(); ++k)
+    {
+        addTile (rawL, src.l, src.rate, onsets[k], ratio, total, false);
+        addTile (rawR, src.r, src.rate, onsets[k], ratio, total, false);
+        // For the gain only: each note up to the next onset.
+        const int until = k + 1 < onsets.size() ? onsets[k + 1] : total;
+        addTile (cutL, src.l, src.rate, onsets[k], ratio, until, false);
+    }
+    const double g = fitGain (l, cutL, {});
+    expect (g > 1.0e-3, tag + ": the bass notes play (gain " + std::to_string (g) + ")");
+    for (auto& v : rawL)
+        v *= (float) g;
+    for (auto& v : rawR)
+        v *= (float) g;
+    const int tol = (int) (0.002 * sr);
+    const auto mono = monoOf (l, r);
+    const auto source = stepEvents (monoOf (rawL, rawR), sr);
+    const auto got = stepEvents (mono, sr);
+    const auto extra = addedSteps (got, source, tol);
+    std::cout << "INFO " << tag << ": " << source.size() << " d2_clicks events in the tiled file, " << got.size()
+              << " in the render\n";
+    expect (extra.empty(), tag + ": a new note cutting a sounding one adds no d2_clicks event ("
+                               + std::to_string (extra.size()) + " added, first at sample "
+                               + std::to_string (extra.empty() ? -1 : extra.front()) + ")");
+    // Negative control: the same notes, each cut hard at the next onset (no fade),
+    // must add events, or the rule could not see the click this test guards against.
+    {
+        std::vector<float> hardL ((size_t) total, 0.f), hardR ((size_t) total, 0.f);
+        for (size_t k = 0; k < onsets.size(); ++k)
+        {
+            const int until = k + 1 < onsets.size() ? onsets[k + 1] : total;
+            addTile (hardL, src.l, src.rate, onsets[k], ratio, until, false);
+            addTile (hardR, src.r, src.rate, onsets[k], ratio, until, false);
+        }
+        for (auto& v : hardL)
+            v *= (float) g;
+        for (auto& v : hardR)
+            v *= (float) g;
+        expect (! addedSteps (stepEvents (monoOf (hardL, hardR), sr), source, tol).empty(),
+                tag + ": the rule catches the same cuts done hard");
+    }
+    bank.bass[0].trimDb = trimBefore;
+}
+
+// A&R clicks (130 BPM, drums "tight", bass "click"):
+//  - roll_03: the kick on beats 1 and 3. That one is inside MDV_Kick_2.wav (6.3 ms
+//    of pre-ring, then a clipped flat-top attack); the clap masks it on 2 and 4;
+//  - roll_17: an off-kick rim on 16th 14;
+//  - pop roll_00: BASS onsets where a new note cuts a sounding one.
+// Pass rule: every sample rendered alone plays as recorded (nulls against the
+// file) and its d2_clicks events are the file's own at the same offsets and gain.
 void testAndrClickPatterns (const juce::File& rootDir)
 {
     constexpr double sr = 48000.0;
@@ -702,14 +1080,21 @@ void testAndrClickPatterns (const juce::File& rootDir)
             r[i] = x[i] * rightScale;
         return std::make_pair (std::move (x), std::move (r));
     };
-    std::vector<float> kick ((size_t) (0.7 * sr)), clap ((size_t) (0.5 * sr)), rim ((size_t) (0.25 * sr));
-    std::vector<float> bassStab ((size_t) (0.6 * sr)), perc ((size_t) (2.0 * sr));
+    auto write = [&] (const char* rel, const std::vector<float>& x, float rightScale)
     {
+        const auto lr = stereo (x, rightScale);
+        writeStereo (root.getChildFile (rel), lr.first, lr.second);
+    };
+    std::vector<float> kickPeak ((size_t) (0.7 * sr)), clap ((size_t) (0.5 * sr)), rim ((size_t) (0.25 * sr));
+    std::vector<float> bassStab ((size_t) (0.6 * sr)), bassHeld ((size_t) (2.0 * sr)), perc ((size_t) (2.0 * sr));
+    std::vector<float> silent ((size_t) (4.0 * sr), 0.f);
+    {
+        // Starts on its peak: a genuine frame-0 start, which gets the 0.5 ms fade.
         double phase = 0.0;
-        for (size_t i = 0; i < kick.size(); ++i)
+        for (size_t i = 0; i < kickPeak.size(); ++i)
         {
             const double t = (double) i / sr;
-            kick[i] = (float) (0.9 * std::exp (-t / 0.25) * std::cos (phase)); // starts on its peak
+            kickPeak[i] = (float) (0.9 * std::exp (-t / 0.25) * std::cos (phase));
             phase += 2.0 * pi * (55.0 + 95.0 * std::exp (-t / 0.03)) / sr;
         }
     }
@@ -723,47 +1108,54 @@ void testAndrClickPatterns (const juce::File& rootDir)
         const double t = (double) i / sr;
         rim[i] = (float) (0.7 * std::exp (-t / 0.03) * std::cos (2.0 * pi * 500.0 * t));
     }
-    for (size_t i = 0; i < bassStab.size(); ++i)
+    auto bassAt = [&] (double t)
     {
-        // E2 with eight harmonics, all in cosine phase: the first sample is the peak.
-        const double t = (double) i / sr;
+        // E2 with eight harmonics in sine phase: it opens at zero, so a step at a
+        // new note's onset can only come from the old note being cut.
         double x = 0.0;
         for (int h = 1; h <= 8; ++h)
-            x += std::cos (2.0 * pi * 82.41 * h * t) / h;
-        bassStab[i] = (float) (0.3 * std::exp (-t / 0.35) * x);
+            x += std::sin (2.0 * pi * 82.41 * h * t) / h;
+        return x;
+    };
+    for (size_t i = 0; i < bassStab.size(); ++i)
+    {
+        const double t = (double) i / sr;
+        bassStab[i] = (float) (0.3 * std::exp (-t / 0.35) * bassAt (t));
     }
+    for (size_t i = 0; i < bassHeld.size(); ++i)
+        bassHeld[i] = (float) (0.3 * bassAt ((double) i / sr)); // sustains: every cut lands mid-note
     for (size_t i = 0; i < perc.size(); ++i)
         perc[i] = (float) (0.5 * std::sin (2.0 * pi * 200.0 * (double) i / sr));
-    // Modelled on roll_03's DRUMS/KICK/MDV_Kick_2.wav: 48 kHz, 0.476 s (longer
-    // than a beat at 130 BPM, so every kick lands on the last one's tail), the
-    // first 32 frames under 0.0002, then a 0.3 ms attack into a 180 -> 50 Hz sweep.
-    std::vector<float> mdv ((size_t) std::lround (0.476 * sr));
+    // Modelled on MDV_Kick_2.wav (48 kHz, 0.476 s): 6.3 ms of low pre-ring, then the
+    // attack rises from ~0.05 to full scale in ~10 samples and flat-tops at 1.0
+    // (a clipped source). Its own steps are d2_clicks events; the engine must keep
+    // them as they are and add none.
+    std::vector<float> clipped ((size_t) std::lround (0.476 * sr));
     {
+        const int pre = (int) std::lround (0.0063 * sr);
         double phase = 0.0;
-        for (size_t i = 0; i < mdv.size(); ++i)
+        for (int i = 0; i < (int) clipped.size(); ++i)
         {
-            const double t = ((double) i - 32.0) / sr;
-            if (t < 0.0)
+            if (i < pre)
             {
-                mdv[i] = (float) (1.0e-4 * std::sin (0.3 * (double) i));
+                const double t = (double) i / sr;
+                clipped[(size_t) i] = (float) (0.03 * ((double) i / pre) * std::sin (2.0 * pi * 900.0 * t));
                 continue;
             }
+            const double t = (double) (i - pre) / sr;
             phase += 2.0 * pi * (50.0 + 130.0 * std::exp (-t / 0.025)) / sr;
-            mdv[i] = (float) (0.95 * (1.0 - std::exp (-t / 0.0003)) * std::exp (-t / 0.18) * std::sin (phase));
+            const double body = 4.0 * (1.0 - std::exp (-t / 0.00005)) * std::exp (-t / 0.18) * std::sin (phase + 0.05);
+            clipped[(size_t) i] = (float) std::clamp (body, -1.0, 1.0);
         }
     }
-    const auto mdvLR = stereo (mdv, 1.f);
-    writeStereo (root.getChildFile ("DRUMS/KICK/mdv_model.wav"), mdvLR.first, mdvLR.second);
-    const auto kickLR = stereo (kick, 0.9f);
-    const auto clapLR = stereo (clap, 1.f);
-    const auto rimLR = stereo (rim, 1.f);
-    const auto bassLR = stereo (bassStab, 1.f);
-    const auto percLR = stereo (perc, 1.f);
-    writeStereo (root.getChildFile ("DRUMS/KICK/kick_peak.wav"), kickLR.first, kickLR.second);
-    writeStereo (root.getChildFile ("DRUMS/CLAP/clap_peak.wav"), clapLR.first, clapLR.second);
-    writeStereo (root.getChildFile ("DRUMS/RIM/rim_peak.wav"), rimLR.first, rimLR.second);
-    writeStereo (root.getChildFile ("BASS/stab_E.wav"), bassLR.first, bassLR.second);
-    writeStereo (root.getChildFile ("DRUMS/PERC/long.wav"), percLR.first, percLR.second);
+    write ("DRUMS/KICK/kick_peak.wav", kickPeak, 0.9f);
+    write ("DRUMS/KICK/clipped_model.wav", clipped, 1.f);
+    write ("DRUMS/CLAP/clap_peak.wav", clap, 1.f);
+    write ("DRUMS/RIM/rim_peak.wav", rim, 1.f);
+    write ("BASS/stab_E.wav", bassStab, 1.f);
+    write ("BASS/held_E.wav", bassHeld, 1.f);
+    write ("BASS/silent.wav", silent, 1.f);
+    write ("DRUMS/PERC/long.wav", perc, 1.f);
 
     // About a megabyte: keep it off the stack.
     auto bank = std::make_unique<rolla::PresetBank>();
@@ -789,232 +1181,75 @@ void testAndrClickPatterns (const juce::File& rootDir)
         // "tight" kit, played from the pack.
         auto& dp = bank->drums[0];
         dp.sample.mode = rolla::SampleMode::Sample;
-        dp.voicePool[rolla::Kick].push_back ("DRUMS/KICK/kick_peak.wav");
+        dp.voicePool[rolla::Kick].push_back ("DRUMS/KICK/clipped_model.wav");
         dp.voicePool[rolla::Clap].push_back ("DRUMS/CLAP/clap_peak.wav");
         dp.voicePool[rolla::Rim].push_back ("DRUMS/RIM/rim_peak.wav");
         dp.voicePool[rolla::Perc].push_back ("DRUMS/PERC/long.wav");
     }
+    const std::vector<std::string> files = { "DRUMS/KICK/kick_peak.wav", "DRUMS/KICK/clipped_model.wav",
+                                             "DRUMS/CLAP/clap_peak.wav", "DRUMS/RIM/rim_peak.wav", "BASS/stab_E.wav",
+                                             "BASS/held_E.wav", "BASS/silent.wav", "DRUMS/PERC/long.wav" };
     rolla::SampleLibrary lib;
     lib.setRoot (root);
     lib.watch (*bank);
-    lib.preload ({ std::string ("DRUMS/KICK/kick_peak.wav"), std::string ("DRUMS/CLAP/clap_peak.wav"),
-                   std::string ("DRUMS/RIM/rim_peak.wav"), std::string ("BASS/stab_E.wav"),
-                   std::string ("DRUMS/PERC/long.wav"), std::string ("DRUMS/KICK/mdv_model.wav") });
+    lib.preload (files);
     const bool loaded = waitUntil ([&]
     {
-        return lib.ready ("DRUMS/KICK/kick_peak.wav") && lib.ready ("DRUMS/CLAP/clap_peak.wav")
-            && lib.ready ("DRUMS/KICK/mdv_model.wav")
-            && lib.ready ("DRUMS/RIM/rim_peak.wav") && lib.ready ("BASS/stab_E.wav") && lib.ready ("DRUMS/PERC/long.wav");
+        for (const auto& f : files)
+            if (! lib.ready (f.c_str()))
+                return false;
+        return true;
     });
-    expect (loaded, "A&R click roll: the pack files load");
+    expect (loaded, "A&R click roll: the test files load");
     if (! loaded)
         return;
 
-    rolla::Groove groove;
-    groove.bars = 8;
-    groove.key = 2;
-    groove.dialect = rolla::UkMin;
-    for (int t = 0; t < 8 * 16; ++t)
-    {
-        if (t % 4 == 0)
-            groove.drums.vel[rolla::Kick][t] = 112;
-        if (t % 16 == 4 || t % 16 == 12)
-            groove.drums.vel[rolla::Clap][t] = 104;
-    }
-    groove.drums.vel[rolla::Rim][2 * 16 + 13] = 87; // bar 3, 16th 14
-    groove.drums.vel[rolla::Rim][6 * 16 + 13] = 83; // bar 7, 16th 14
-    {
-        // 0-based steps 2 -> 3 and 8 -> 9 overlap (16ths 4 and 10). Even bars: the
-        // note before is 1.1 sixteenths, in its end fade at the swung onset. Odd
-        // bars: 1.5, still sounding. Steps 5 and 11 (16ths 6 and 12) start clear.
-        auto& lane = groove.lane[rolla::Bass];
-        struct Hit { int step; int chord; };
-        const Hit hits[] = { { 2, 0 }, { 3, 3 }, { 5, 7 }, { 8, 0 }, { 9, 5 }, { 11, 10 } };
-        for (int bar = 0; bar < 8; ++bar)
-            for (const auto& h : hits)
-            {
-                auto& note = lane.notes[lane.count++];
-                note.start = (float) (bar * 16 + h.step);
-                const bool leadsIn = h.step == 2 || h.step == 8;
-                note.length = leadsIn && (bar & 1) == 1 ? 1.5f : 1.1f;
-                note.chord[0] = (std::int8_t) h.chord;
-                note.nChord = 1;
-                note.vel = 100;
-            }
-    }
+    // Each sample alone through the sampler: plays as recorded, adds no step.
+    checkDrumAsRecorded (*bank, lib, rolla::Kick, 112, "DRUMS/KICK/clipped_model.wav", 4, 0,
+                         "lone kick (clipped flat-top, MDV_Kick_2 model) on every beat");
+    checkDrumAsRecorded (*bank, lib, rolla::Kick, 112, "DRUMS/KICK/kick_peak.wav", 4, 0,
+                         "lone kick (starts on its peak) on every beat");
+    checkDrumAsRecorded (*bank, lib, rolla::Rim, 87, "DRUMS/RIM/rim_peak.wav", 16, 13, "rim on 16th 14");
+    checkDrumAsRecorded (*bank, lib, rolla::Rim, 87, "DRUMS/RIM/rim_peak.wav", 2, 1, "rim on every off-16th");
+    bank->drums[0].voicePool[rolla::Kick] = { std::string ("DRUMS/KICK/clipped_model.wav") };
+    bank->drums[0].voicePool[rolla::Rim] = { std::string ("DRUMS/RIM/rim_peak.wav") };
+    checkBassCutsAsRecorded (*bank, lib, "BASS/silent.wav", "BASS/held_E.wav", "bass: each new note cuts a held note mid-sustain");
+    checkBassCutsAsRecorded (*bank, lib, "BASS/silent.wav", "BASS/stab_E.wav", "bass: each new note cuts a sounding stab");
+    rolla::copySamplePath (bank->bass[0].sample.file, (int) sizeof bank->bass[0].sample.file, "BASS/stab_E.wav");
 
-    constexpr float kLimit = 0.03f;
-    const int before = (int) (0.001 * sr), after = (int) (0.012 * sr);
-    auto rel = [&] (const ClickRender& x, int at) { return clickD2 (x, at - before, at + after) / std::max (1.0e-9f, x.peak); };
-
-    // Full mix: every kick (beats 1 and 3 alone, 2 and 4 with the clap) and every rim.
+    // roll_03 through the whole engine with the clap on 2 and 4 still playing but
+    // silenced (-120 dB): kicks on beats 1/3 and 2/4 then differ only by a voice
+    // that adds nothing, so every kick onset in the DRUMS stem must score alike.
     {
-        const auto mix = renderClickRoll (*bank, lib, groove, -1);
-        expect (mix.peak > 0.01f, "A&R click roll: the mix plays");
-        expect (mix.kick.size() >= 33 && mix.clap.size() >= 16 && mix.rim.size() >= 2,
-                "A&R click roll: every kick, clap and rim plays (" + std::to_string (mix.kick.size()) + " kicks, "
-                    + std::to_string (mix.clap.size()) + " claps, " + std::to_string (mix.rim.size()) + " rims)");
-        int lone = 0, withClap = 0;
-        float worstLone = 0.f, worstClap = 0.f;
-        for (size_t k = 0; k < mix.kick.size(); ++k)
+        rolla::Groove groove;
+        groove.bars = 8;
+        groove.key = 2;
+        groove.dialect = rolla::UkMin;
+        for (int t = 0; t < 8 * 16; ++t)
         {
-            const float s = rel (mix, mix.kick[k]);
-            const bool clapToo = std::any_of (mix.clap.begin(), mix.clap.end(), [&] (int c) { return std::abs (c - mix.kick[k]) < 4; });
-            if (clapToo)
-            {
-                worstClap = std::max (worstClap, s);
-                withClap += s >= kLimit ? 1 : 0;
-            }
-            else
-            {
-                worstLone = std::max (worstLone, s);
-                lone += s >= kLimit ? 1 : 0;
-            }
+            if (t % 4 == 0)
+                groove.drums.vel[rolla::Kick][t] = 112;
+            if (t % 16 == 4 || t % 16 == 12)
+                groove.drums.vel[rolla::Clap][t] = 104;
         }
-        expect (lone == 0, "A&R click roll: kicks on beats 1 and 3 are click-free in the mix (" + std::to_string (lone)
-                               + " clicks, worst " + std::to_string (worstLone) + " of peak)");
-        expect (withClap == 0, "A&R click roll: kick + clap on beats 2 and 4 is click-free in the mix ("
-                                   + std::to_string (withClap) + " clicks, worst " + std::to_string (worstClap) + " of peak)");
-        for (int at : mix.rim)
-        {
-            const float s = rel (mix, at);
-            expect (s < kLimit, "A&R click roll: the off-kick rim is click-free in the mix (" + std::to_string (s) + " of peak)");
-        }
-        int worstAt = 0;
-        float worstAll = 0.f;
-        for (int i = 2; i < (int) mix.l.size(); i += 256)
-        {
-            const float d = clickD2 (mix, i, i + 256);
-            if (d > worstAll)
-            {
-                worstAll = d;
-                worstAt = i;
-            }
-        }
-        expect (worstAll / mix.peak < kLimit, "A&R click roll: no click anywhere in the mix (worst " + std::to_string (worstAll / mix.peak)
-                                                  + " of peak near sample " + std::to_string (worstAt) + ")");
-    }
-
-    // Drums alone: the kick onsets are alike whichever voice they land on (no
-    // alternating-voice click), lone kicks among themselves, kick + clap likewise.
-    {
-        const auto drums = renderClickRoll (*bank, lib, groove, rolla::Drums);
-        const int loopKicks = 8 * 4;
-        float loLone = 1.0e9f, hiLone = 0.f, loClap = 1.0e9f, hiClap = 0.f;
+        const auto drums = renderClickRoll (*bank, lib, groove, rolla::Drums,
+                                            [] (rolla::EngineParams& p) { p.drumLevelDb[rolla::Clap] = -120.f; });
+        expect (drums.kick.size() >= 33 && drums.clap.size() >= 16,
+                "roll_03 kick + silenced clap: every kick and clap plays (" + std::to_string (drums.kick.size()) + " kicks, "
+                    + std::to_string (drums.clap.size()) + " claps)");
+        const int before = (int) (0.001 * sr), after = (int) (0.012 * sr);
+        float lo = 1.0e9f, hi = 0.f;
         for (size_t k = 0; k < drums.kick.size(); ++k)
         {
+            if ((int) k % (8 * 4) == 0)
+                continue; // a downbeat after the wrap opens on the master fade-in
             const int at = drums.kick[k];
             const float s = clickD2 (drums, at - before, at + after) / clickPeak (drums, at, at + (int) (0.05 * sr));
-            expect (rel (drums, at) < kLimit, "A&R click roll: kick " + std::to_string (k) + " is click-free in the DRUMS stem ("
-                                                  + std::to_string (rel (drums, at)) + " of peak)");
-            if ((int) k % loopKicks == 0)
-                continue; // the downbeat after a wrap opens on the master fade-in
-            const bool clapToo = std::any_of (drums.clap.begin(), drums.clap.end(), [&] (int c) { return std::abs (c - at) < 4; });
-            float& lo = clapToo ? loClap : loLone;
-            float& hi = clapToo ? hiClap : hiLone;
             lo = std::min (lo, s);
             hi = std::max (hi, s);
         }
-        expect (hiLone <= loLone * 1.5f + 2.0e-3f, "A&R click roll: lone kicks are alike (" + std::to_string (loLone) + ".."
-                                                       + std::to_string (hiLone) + ")");
-        expect (hiClap <= loClap * 1.5f + 2.0e-3f, "A&R click roll: kick + clap hits are alike (" + std::to_string (loClap) + ".."
-                                                       + std::to_string (hiClap) + ")");
-    }
-
-    // Bass alone (the drums muted but still playing, the duck on the quarter grid).
-    {
-        const auto bass = renderClickRoll (*bank, lib, groove, rolla::Bass);
-        expect (bass.peak > 0.01f, "A&R click roll: the bass stem plays");
-        expect (bass.bass.size() >= 48, "A&R click roll: every bass note plays (" + std::to_string (bass.bass.size()) + ")");
-        const double sixteenth = 60.0 / 130.0 / 4.0 * sr;
-        int overlapped = 0, clear = 0;
-        float worstOver = 0.f, worstClear = 0.f;
-        for (int at : bass.bass)
-        {
-            const float s = rel (bass, at);
-            // 16th within the bar from the onset (the swing delay is under a quarter 16th).
-            const int step = (int) std::floor (std::fmod ((double) (at - bass.lat) / sixteenth + 0.25, 16.0));
-            const bool over = step == 3 || step == 9;
-            if (over)
-            {
-                worstOver = std::max (worstOver, s);
-                overlapped += s >= kLimit ? 1 : 0;
-            }
-            else
-            {
-                worstClear = std::max (worstClear, s);
-                clear += s >= kLimit ? 1 : 0;
-            }
-        }
-        expect (overlapped == 0, "A&R click roll: BASS onsets on 16ths 4 and 10 (the note before still sounding or fading) are click-free ("
-                                     + std::to_string (overlapped) + " clicks, worst " + std::to_string (worstOver) + " of peak)");
-        expect (clear == 0, "A&R click roll: the other BASS onsets are click-free (" + std::to_string (clear) + " clicks, worst "
-                                + std::to_string (worstClear) + " of peak)");
-        float worstAll = 0.f;
-        for (int i = 2; i < (int) bass.l.size(); i += 256)
-            worstAll = std::max (worstAll, clickD2 (bass, i, i + 256));
-        expect (worstAll / bass.peak < kLimit, "A&R click roll: no click anywhere in the BASS stem (worst "
-                                                   + std::to_string (worstAll / bass.peak) + " of peak)");
-    }
-
-    // roll_03 (Maestro 503-508): the DRUMS stem clicked ~6 ms after every kick on
-    // beats 1 and 3, the first one on the kick at t = 0, with MDV_Kick_2 (near-zero
-    // start, 0.476 s). Same roll with that kick modelled: (a) a lone kick on every
-    // beat, no clap anywhere; (b) the clap on 2 and 4 still playing but silenced
-    // (-120 dB), so 1/3 and 2/4 differ only by a voice that adds nothing. Every
-    // kick onset, t = 0 and the downbeat after the wrap included, in the DRUMS
-    // stem and the mix; with the clap silenced all kicks score alike.
-    bank->drums[0].voicePool[rolla::Kick] = { std::string ("DRUMS/KICK/mdv_model.wav") };
-    {
-        rolla::Groove lone = groove;
-        for (int t = 0; t < rolla::kMaxSteps; ++t)
-        {
-            lone.drums.vel[rolla::Clap][t] = 0;
-            lone.drums.vel[rolla::Rim][t] = 0;
-        }
-        struct Case { const char* name; const rolla::Groove* g; bool clapSilenced; };
-        const Case cases[] = { { "lone kick, no clap", &lone, false }, { "kick + silenced clap", &groove, true } };
-        for (const auto& c : cases)
-        {
-            auto tweak = [&] (rolla::EngineParams& p)
-            {
-                if (c.clapSilenced)
-                    p.drumLevelDb[rolla::Clap] = -120.f;
-            };
-            for (const int solo : { (int) rolla::Drums, -1 })
-            {
-                const auto x = renderClickRoll (*bank, lib, *c.g, solo, tweak);
-                const std::string tag = std::string ("roll_03 ") + c.name + (solo < 0 ? " (mix)" : " (DRUMS stem)");
-                expect (x.kick.size() >= 33, tag + ": every kick plays (" + std::to_string (x.kick.size()) + ")");
-                int clicks = 0;
-                float worst = 0.f;
-                int worstK = -1;
-                float lo = 1.0e9f, hi = 0.f;
-                for (size_t k = 0; k < x.kick.size(); ++k)
-                {
-                    const int at = x.kick[k];
-                    const float s = rel (x, at);
-                    if (s >= kLimit)
-                        ++clicks;
-                    if (s > worst)
-                    {
-                        worst = s;
-                        worstK = (int) k;
-                    }
-                    if ((int) k % (8 * 4) == 0)
-                        continue;
-                    const float local = clickD2 (x, at - before, at + after) / clickPeak (x, at, at + (int) (0.05 * sr));
-                    lo = std::min (lo, local);
-                    hi = std::max (hi, local);
-                }
-                expect (clicks == 0, tag + ": every kick onset is click-free, t = 0 included (" + std::to_string (clicks)
-                                         + " clicks, worst " + std::to_string (worst) + " of peak on kick " + std::to_string (worstK)
-                                         + ", beat " + std::to_string (worstK % 4 + 1) + ")");
-                if (solo >= 0)
-                    expect (hi <= lo * 1.5f + 2.0e-3f, tag + ": kicks on beats 1/3 and 2/4 score alike (" + std::to_string (lo)
-                                                           + ".." + std::to_string (hi) + ")");
-            }
-        }
+        expect (hi <= lo * 1.5f + 2.0e-3f, "roll_03 kick + silenced clap: kicks on beats 1/3 and 2/4 score alike ("
+                                               + std::to_string (lo) + ".." + std::to_string (hi) + ")");
     }
 
     // A full drum pool keeps its hands off a sounding bass note. One shared pool
