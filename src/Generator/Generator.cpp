@@ -2782,27 +2782,16 @@ void lockPhrase (Lane& lane, int dialect, std::uint32_t seed, int bars, float da
     anchorPopRoot (lane, seed);
 }
 
-bool bassSounds (const Lane& lane, int slot)
-{
-    for (int i = 0; i < lane.count; ++i)
-    {
-        const float a = lane.notes[i].start;
-        const float b = a + lane.notes[i].length;
-        if (a < (float) slot + 1.f - 0.05f && b > (float) slot + 0.05f)
-            return true;
-    }
-    return false;
-}
-
 // The scorer marks a 16th sounding only when round(start) <= slot < round(start + length).
 // A 2.2-length note spills into the next slot without covering it, and that spill
-// must not count as a place to sit a stab.
+// must not count as a place to sit a stab. Python's round() is half-to-even,
+// which is nearbyint in the default rounding mode (lround rounds 4.5 to 5).
 bool bassCovers (const Lane& lane, int slot)
 {
     for (int i = 0; i < lane.count; ++i)
     {
-        const int a = (int) std::lround (lane.notes[i].start);
-        const int b = (int) std::lround (lane.notes[i].start + lane.notes[i].length);
+        const int a = (int) std::nearbyint (lane.notes[i].start);
+        const int b = (int) std::nearbyint (lane.notes[i].start + lane.notes[i].length);
         if (slot >= a && slot < b)
             return true;
     }
@@ -2959,9 +2948,10 @@ void writeStab (Lane& lane, const Lane& bass, const Settings& s, Rng& rng, float
             if (slot < 0 || slot > 15 || kickSlot (slot))
                 continue;
             const int abs = bar * 16 + slot;
-            // ROLLER uses the scorer's covered 16ths. A note that only spills
-            // into the next slot is a rest there, not a sustain.
-            const bool covered = s.dialect == UkMin ? bassCovers (bass, abs) : bassSounds (bass, abs);
+            // Every style uses the scorer's covered 16ths. A note that only spills
+            // into the next slot (a 1.1 or 2.2 length) is a rest there, not a
+            // sustain, so a stab sat on it is a stab in a rest.
+            const bool covered = bassCovers (bass, abs);
             if (bassOnset (bass, abs))
                 onsetSlots[nOn++] = slot;
             else if (covered)
