@@ -108,15 +108,26 @@ def main():
         T = json.load(open(os.path.join(os.path.dirname(__file__), "targets.json")))
     rows = []
     failed = False
+    skip_windows = False
     if level_gate and styles:
         peak = wav_peak(os.path.join(root, styles[0], "FULL.wav"))
         no_pack = os.path.exists(os.path.join(root, "no_sample_pack"))
         if no_pack or (peak is not None and peak < 1.0e-4):
-            print("loudness skipped: sample pack is not on this machine")
-            styles = []
+            print("loudness windows skipped: sample pack is not on this machine")
+            skip_windows = True
     for style in styles:
         folder = os.path.join(root, style)
-        if level_gate:
+        if level_gate and skip_windows:
+            ok = True
+            fails = []
+            if args.gate:
+                import mix_check as mc
+                measured = mc.measure(os.path.join(folder, "FULL.wav"))
+                pok, pwhy = sum_peak_ok(measured)
+                if not pok:
+                    ok = False
+                    fails.append(pwhy)
+        elif level_gate:
             ok, why, measured = loudness_ok(os.path.join(folder, "FULL.wav"), "SUM", None, style, T)
             fails = [] if ok else [why]
             if args.gate:
@@ -137,7 +148,10 @@ def main():
         for name, lane, voice in LANES:
             solo = os.path.join(folder, f"SOLO_{name}.wav")
             mute = os.path.join(folder, f"MUTE_{name}.wav")
-            if level_gate:
+            if level_gate and skip_windows:
+                ok_r, why_r = True, "loudness window skipped"
+                data_r = {"results": [{"checks": [{"pass": True, "why": why_r}]}]}
+            elif level_gate:
                 ok_r, why_r, _measured = loudness_ok(solo, lane, voice, style, T)
                 data_r = {"results": [{"checks": [{"pass": ok_r, "why": why_r}]}]}
             else:
