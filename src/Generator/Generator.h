@@ -31,8 +31,10 @@ struct Rng
 // partMask bit N regenerates that part. Other parts are kept and only clamped
 // to the new bar length. A regenerated stab is placed in the holes of the bass
 // left in `g`, and drums sit under that pair, so a shuffle fits the kept lanes.
-// Each draw builds an 8-bar phrase from typed rhythm cells, phrase plans, and
-// a contour. Only four things reject a candidate: out-of-key notes, a bass
+// Each draw composes an 8-bar phrase fresh from the rule composer
+// (RuleComposer.h: per-16th onset probabilities, a length distribution, a
+// degree / interval Markov chain, call / answer and a density arc, all from
+// the abstracted statistics in RuleTables.h). Only four things reject a candidate: out-of-key notes, a bass
 // attack on a kick with the low end stacked past 35% of the onsets, an empty
 // bar in a lane that is supposed to play, and a banned figure. Slot weights,
 // density, stab-vs-bass placement, plans, contours, and rests are a penalty.
@@ -55,8 +57,8 @@ inline constexpr int kOrigRounds = 3;
 std::uint32_t originalityRecomposeSeed (std::uint32_t seed, int part, int round) noexcept;
 
 // The one mode a roll uses for bass, stab, pad, pluck and hits
-// (phrase::Dorian / Aeolian / Phrygian). JACKIN is always phrygian; DEEP
-// follows its phrase bank; ROLLER/BOUNCY draw from DARK and the bass seed.
+// (phrase::Dorian / Aeolian / Phrygian, RuleComposer.h). JACKIN is always
+// phrygian; the other styles draw from DARK and the bass seed.
 // After generation, generate() snaps the regenerated lanes to this mode, caps
 // the bass b2 share of sounding time (phrygian 30%; otherwise one-16th passing
 // notes only, ROLLER 12%, DEEP 6%, JACKIN 6%, BOUNCY 3%), and removes every

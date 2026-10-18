@@ -65,7 +65,7 @@ target_sources(ROLLA
         src/Sampler/SamplePrep.cpp
         src/Sampler/UserSlots.cpp
         src/Generator/Generator.cpp
-        src/Generator/PhraseBank.cpp
+        src/Generator/RuleComposer.cpp
         src/Generator/Presets.cpp
         src/Generator/MidiFile.cpp
         src/Drums/DrumMachine.cpp
@@ -136,7 +136,7 @@ add_executable(rolla-render
     src/Engine/SampleLibrary.cpp
     src/Sampler/SamplePrep.cpp
     src/Generator/Generator.cpp
-    src/Generator/PhraseBank.cpp
+    src/Generator/RuleComposer.cpp
     src/Generator/Presets.cpp
     src/Generator/MidiFile.cpp
     src/Drums/DrumMachine.cpp
@@ -172,7 +172,7 @@ add_executable(rolla-sample-check
     src/Engine/SampleLibrary.cpp
     src/Sampler/SamplePrep.cpp
     src/Generator/Generator.cpp
-    src/Generator/PhraseBank.cpp
+    src/Generator/RuleComposer.cpp
     src/Generator/Presets.cpp
     src/Drums/DrumMachine.cpp
     src/Drums/DrumPattern.cpp
@@ -208,7 +208,7 @@ add_executable(rolla-ui-shot
     src/Sampler/SamplePrep.cpp
     src/Sampler/UserSlots.cpp
     src/Generator/Generator.cpp
-    src/Generator/PhraseBank.cpp
+    src/Generator/RuleComposer.cpp
     src/Generator/Presets.cpp
     src/Generator/MidiFile.cpp
     src/Drums/DrumMachine.cpp
@@ -243,7 +243,7 @@ add_executable(rolla-sampler-test
     src/Sampler/SamplePrep.cpp
     src/Sampler/UserSlots.cpp
     src/Generator/Generator.cpp
-    src/Generator/PhraseBank.cpp
+    src/Generator/RuleComposer.cpp
     src/Generator/Presets.cpp
     src/Drums/DrumMachine.cpp
     src/Drums/DrumPattern.cpp
@@ -302,7 +302,7 @@ add_executable(rolla-tp-test
     src/Sampler/UserSlots.cpp
     src/Generator/Generator.cpp
     src/Generator/Presets.cpp
-    src/Generator/PhraseBank.cpp
+    src/Generator/RuleComposer.cpp
     src/Generator/Arrangement.cpp
     src/Drums/DrumMachine.cpp
     src/Drums/DrumPattern.cpp
@@ -341,7 +341,7 @@ add_executable(rolla-roll-test
     src/Sampler/SamplePrep.cpp
     src/Sampler/UserSlots.cpp
     src/Generator/Generator.cpp
-    src/Generator/PhraseBank.cpp
+    src/Generator/RuleComposer.cpp
     src/Generator/Presets.cpp
     src/Generator/MidiFile.cpp
     src/Drums/DrumMachine.cpp
@@ -370,10 +370,10 @@ target_link_libraries(rolla-roll-test
         juce::juce_recommended_warning_flags
 )
 
-# DEEP / JACKIN phrase grammar checks. No JUCE.
+# Rule composer checks (hard rules, skeleton variety, determinism). No JUCE.
 add_executable(rolla-phrase-test
     tests/phrase/phrase_test.cpp
-    src/Generator/PhraseBank.cpp
+    src/Generator/RuleComposer.cpp
 )
 
 target_include_directories(rolla-phrase-test PRIVATE src)
@@ -386,7 +386,7 @@ add_executable(rolla-mix-render
     src/Sampler/SamplePrep.cpp
     src/Sampler/UserSlots.cpp
     src/Generator/Generator.cpp
-    src/Generator/PhraseBank.cpp
+    src/Generator/RuleComposer.cpp
     src/Generator/Presets.cpp
     src/Drums/DrumMachine.cpp
     src/Drums/DrumPattern.cpp
@@ -432,7 +432,7 @@ add_executable(rolla-export-test
     src/Sampler/SamplePrep.cpp
     src/Sampler/UserSlots.cpp
     src/Generator/Generator.cpp
-    src/Generator/PhraseBank.cpp
+    src/Generator/RuleComposer.cpp
     src/Generator/Presets.cpp
     src/Generator/MidiFile.cpp
     src/Drums/DrumMachine.cpp
@@ -476,7 +476,7 @@ add_executable(rolla-bundle-test
     src/Sampler/SamplePrep.cpp
     src/Sampler/UserSlots.cpp
     src/Generator/Generator.cpp
-    src/Generator/PhraseBank.cpp
+    src/Generator/RuleComposer.cpp
     src/Generator/Presets.cpp
     src/Generator/MidiFile.cpp
     src/Drums/DrumMachine.cpp
@@ -521,7 +521,7 @@ add_executable(rolla-knob-test
     src/Sampler/SamplePrep.cpp
     src/Sampler/UserSlots.cpp
     src/Generator/Generator.cpp
-    src/Generator/PhraseBank.cpp
+    src/Generator/RuleComposer.cpp
     src/Generator/Presets.cpp
     src/Generator/MidiFile.cpp
     src/Drums/DrumMachine.cpp
@@ -555,7 +555,7 @@ add_executable(rolla-variety
     tools/variety_main.cpp
     tools/PatternStats.cpp
     src/Generator/Generator.cpp
-    src/Generator/PhraseBank.cpp
+    src/Generator/RuleComposer.cpp
 )
 target_include_directories(rolla-variety PRIVATE src tools)
 target_compile_options(rolla-variety PRIVATE -Wall -Wextra -Wpedantic)
@@ -564,7 +564,7 @@ target_compile_options(rolla-variety PRIVATE -Wall -Wextra -Wpedantic)
 add_executable(rolla-dump
     tools/dump_grooves.cpp
     src/Generator/Generator.cpp
-    src/Generator/PhraseBank.cpp
+    src/Generator/RuleComposer.cpp
 )
 target_include_directories(rolla-dump PRIVATE src)
 target_compile_options(rolla-dump PRIVATE -Wall -Wextra -Wpedantic)
@@ -580,7 +580,7 @@ add_executable(rolla-rolls
     src/Sampler/SamplePrep.cpp
     src/Sampler/UserSlots.cpp
     src/Generator/Generator.cpp
-    src/Generator/PhraseBank.cpp
+    src/Generator/RuleComposer.cpp
     src/Generator/Presets.cpp
     src/Generator/MidiFile.cpp
     src/Drums/DrumMachine.cpp

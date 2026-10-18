@@ -12,6 +12,11 @@ tree holds anything the public repo must not carry:
                 - by name (optional): names read from a file given with --names or
                   $ROLLA_REFERENCE_NAMES. The list is never stored in the repo.
                   A hit in code or data fails; a hit in Markdown prose is a warning.
+  generator   the removed reference-derived generator tables (owner rule: references
+              only as learned statistics). Their files must not come back, their
+              identifiers must not reappear in src/ or resources/, and no
+              reference-named cell may sit there. The names are stored shifted by
+              one character, so the plain names never live in the repo.
   large       data files over 512 KB (.json .h .hpp .inc .csv) unless allowlisted
   audio, hard cap: an allowlisted audio fixture still fails over 64 KB. Real packs
               go into a built bundle (tools/inject_pack.sh), never the repo.
@@ -49,6 +54,37 @@ DUMP_GLOBS = [
     "transcriptions/*", "*/transcriptions/*", "*measured_drops*.json", "*ar_vocab_measure*.json",
     "*_transcription*.json", "*.mid.json",
 ]
+
+# Generator tables removed by the rule-composer rewrite. A note sequence, rhythm
+# cell, motif, skeleton, codebook or stab line taken from a reference must never
+# be stored again; the composer samples from RuleTables.h statistics only.
+GENERATOR_BANNED_PATHS = {
+    "resources/phrase_bank.json", "src/Generator/PhraseBankData.h", "src/Generator/PhraseBank.h",
+    "src/Generator/PhraseBank.cpp", "src/Generator/VocabCells.h", "tools/apply_ar_vocab.py",
+    "tools/extract_corpus.py", "tools/build_phrase_bank.py",
+}
+GENERATOR_BANNED_TOKENS = [
+    "kPhrase", "kLongPhrase", "kGaskinPhrase", "kDeg", "kLongDeg", "kGaskDeg", "PhraseBankData", "VocabCells",
+    "baseSlots", "deepBook", "bouncyBook", "jackinBook", "kPrefer0", "kPrefer1", "kPrefer2",
+    "pushJackinVariationBack", "lockFromBook", "lockPhrase", "makeBassPhrase", "phrase_bank", "rolesFor", "assignSemi",
+]
+# Reference-named cells, each character shifted up by one (decoded at run time).
+GENERATOR_SHIFTED_NAMES = ["N.Ijhi", "NIJHI", "NIjhi", "W!Mjof", "WMJOF", "WMjof", "W`Mjof", "Dmptfs", "Mpdbm!Evc", "MpdbmEvc"]
+# The sample-library manifest lists pack file names, not references.
+GENERATOR_NAME_SKIP = {"resources/SAMPLE_MANIFEST.json"}
+GENERATOR_SCOPES = ("src/", "resources/")
+
+
+def unshift(s):
+    return "".join(chr(ord(c) - 1) for c in s)
+
+
+def word_re(word):
+    return re.compile(r"(?<![A-Za-z0-9_])" + re.escape(word) + r"(?![A-Za-z0-9_])")
+
+
+GENERATOR_TOKEN_RES = [(t, word_re(t)) for t in GENERATOR_BANNED_TOKENS]
+GENERATOR_NAME_RES = [word_re(unshift(n)) for n in GENERATOR_SHIFTED_NAMES]
 
 SECRETS = [
     ("private key block", r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY(?: BLOCK)?-----"),
@@ -173,7 +209,7 @@ def code_reference_hits(text, path, out):
 
 
 def scan(root, names, allow_rules):
-    fails = {k: [] for k in ("audio", "midi", "secret", "dump", "reference", "large")}
+    fails = {k: [] for k in ("audio", "midi", "secret", "dump", "reference", "generator", "large")}
     warns = []
     for rel in git_files(root):
         full = os.path.join(root, rel)
@@ -197,6 +233,9 @@ def scan(root, names, allow_rules):
             continue
         if any(fnmatch.fnmatch(rel, g) for g in DUMP_GLOBS) and not allowed(allow_rules, "dump", rel):
             fails["dump"].append(rel)
+            continue
+        if rel in GENERATOR_BANNED_PATHS and not allowed(allow_rules, "generator", rel):
+            fails["generator"].append(f"{rel}: removed reference-derived generator table")
             continue
         is_env = base == ".env" or (base.startswith(".env.") and not base.endswith((".example", ".sample", ".template")))
         if (is_env or ext in KEY_FILES or base in KEY_NAMES) and not allowed(allow_rules, "secret", rel):
@@ -223,6 +262,21 @@ def scan(root, names, allow_rules):
                     line = text.count("\n", 0, m.start()) + 1
                     fails["secret"].append(f"{rel}:{line}: {name}")
                     break
+
+        if rel.startswith(GENERATOR_SCOPES) and not allowed(allow_rules, "generator", rel):
+            for token, rx in GENERATOR_TOKEN_RES:
+                m = rx.search(text)
+                if m:
+                    line = text.count("\n", 0, m.start()) + 1
+                    fails["generator"].append(f"{rel}:{line}: removed table symbol '{token}'")
+                    break
+            if rel not in GENERATOR_NAME_SKIP:
+                for rx in GENERATOR_NAME_RES:
+                    m = rx.search(text)
+                    if m:
+                        line = text.count("\n", 0, m.start()) + 1
+                        fails["generator"].append(f"{rel}:{line}: reference-named cell")
+                        break
 
         if not allowed(allow_rules, "reference", rel):
             hits = []

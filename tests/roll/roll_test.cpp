@@ -5,13 +5,15 @@
 #include "Generator/Originality.h"
 #include "Generator/OriginalityJson.h"
 #include "Generator/Intensity.h"
-#include "Generator/PhraseBank.h"
+#include "Generator/RuleComposer.h"
 #include "Generator/Presets.h"
 
 #include <BinaryData.h>
 #include <juce_events/juce_events.h>
 
 #include <algorithm>
+#include <cctype>
+#include <cstdlib>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -1224,9 +1226,12 @@ void testHarmonyClashes()
                 if (bpc < 0)
                     continue;
                 bool clash = false;
-                for (int part : { (int) rolla::Stab, (int) rolla::Pad })
+                // Every upper lane (Composer gate): stab, pad, pluck, hits and vox.
+                // Vox is written from MIDI 64, four semitones over the key root.
+                for (int part : { (int) rolla::Stab, (int) rolla::Pad, (int) rolla::Pluck, (int) rolla::Hits, (int) rolla::Vox })
                 {
                     const auto& l = g.lane[part];
+                    const int bias = part == rolla::Vox ? 4 : 0;
                     for (int k = 0; k < l.count && ! clash; ++k)
                     {
                         const auto& n = l.notes[k];
@@ -1234,7 +1239,7 @@ void testHarmonyClashes()
                             continue;
                         for (int c = 0; c < std::max (1, (int) n.nChord) && c < 4; ++c)
                         {
-                            const int d = (pcOfNote (n.chord[c]) - bpc + 12) % 12;
+                            const int d = (pcOfNote (n.chord[c] + bias) - bpc + 12) % 12;
                             if (d == 1 || d == 11)
                                 clash = true;
                         }
@@ -1250,7 +1255,7 @@ void testHarmonyClashes()
         std::cout << names[style] << " harmony: clash rolls " << clashes << "/50 b2-over " << b2Over
                   << " sixth-bad " << sixthBad << " phrygian rolls " << phrygianRolls
                   << " phrygian natural-2 " << natural2 << "\n";
-        expect (clashes == 0, std::string (names[style]) + " bass never sits a semitone from stab/pad");
+        expect (clashes == 0, std::string (names[style]) + " bass never sits a semitone from stab/pad/pluck/hits/vox");
         expect (b2Over == 0, std::string (names[style]) + " b2 under the style cap (phrygian 30%)");
         expect (natural2 == 0, std::string (names[style]) + " phrygian stab/pad carry no natural 2");
         expect (sixthBad == 0, std::string (names[style]) + " major 6 only in dorian, no b6 stab in dorian");
@@ -2541,6 +2546,311 @@ void testShuffleKeepsManualLock()
     expect (flag (proc, "stabMute"), "shuffle leaves the muted lane muted");
 }
 
+// ---- rule composer: no reference-derived tables, variety, back-half guard ----
+
+void seedsFrom (std::uint32_t base, int style, int roll, std::uint32_t seeds[rolla::NumParts])
+{
+    for (int p = 0; p < rolla::NumParts; ++p)
+        seeds[p] = base + (std::uint32_t) roll * 0x9E3779B9u + (std::uint32_t) p * 17u + (std::uint32_t) style * 101u;
+}
+
+std::filesystem::path repoRoot()
+{
+    namespace fs = std::filesystem;
+    const fs::path p = fs::path (__FILE__).parent_path().parent_path().parent_path();
+    std::error_code ec;
+    if (fs::exists (p / "src" / "Generator", ec))
+        return p;
+    return {};
+}
+
+bool isWordChar (char c)
+{
+    return std::isalnum ((unsigned char) c) != 0 || c == '_';
+}
+
+// Whole-word, case-sensitive occurrences of `word` in `text`.
+int countWord (const std::string& text, const std::string& word)
+{
+    int n = 0;
+    for (std::size_t at = text.find (word); at != std::string::npos; at = text.find (word, at + 1))
+    {
+        const bool left = at == 0 || ! isWordChar (text[at - 1]);
+        const bool right = at + word.size() >= text.size() || ! isWordChar (text[at + word.size()]);
+        if (left && right)
+            ++n;
+    }
+    return n;
+}
+
+// Reference names are kept shifted by one character so the plain names never
+// sit in the repo (tools/check_repo_clean.py decodes the same list).
+std::string unshift (const char* s)
+{
+    std::string out;
+    for (; *s != '\0'; ++s)
+        out.push_back ((char) (*s - 1));
+    return out;
+}
+
+// The owner's rule: no reference-derived sequence, cell, skeleton, codebook or
+// stab line in the generator. The removed tables, their files and any
+// reference-named cell must not come back into src/ or resources/.
+void testRemovedTables()
+{
+    namespace fs = std::filesystem;
+    const fs::path root = repoRoot();
+    if (root.empty())
+    {
+        std::cout << "SKIP removed-table scan: source tree not found from __FILE__ (tools/check_repo_clean.py covers CI)\n";
+        return;
+    }
+    const char* goneFiles[] = {
+        "resources/phrase_bank.json", "src/Generator/PhraseBankData.h", "src/Generator/PhraseBank.h",
+        "src/Generator/PhraseBank.cpp", "src/Generator/VocabCells.h", "tools/apply_ar_vocab.py",
+        "tools/extract_corpus.py", "tools/build_phrase_bank.py",
+    };
+    for (const char* f : goneFiles)
+    {
+        std::error_code ec;
+        expect (! fs::exists (root / f, ec), std::string ("removed table file is back: ") + f);
+    }
+    const char* tokens[] = {
+        "kPhrase", "kLongPhrase", "kGaskinPhrase", "kDeg", "kLongDeg", "kGaskDeg", "PhraseBankData", "VocabCells",
+        "baseSlots", "deepBook", "bouncyBook", "jackinBook", "kPrefer0", "kPrefer1", "kPrefer2",
+        "pushJackinVariationBack", "lockFromBook", "lockPhrase", "makeBassPhrase", "phrase_bank", "rolesFor", "assignSemi",
+    };
+    const char* shiftedNames[] = { "N.Ijhi", "NIJHI", "NIjhi", "W!Mjof", "WMJOF", "WMjof", "W`Mjof", "Dmptfs", "Mpdbm!Evc", "MpdbmEvc" };
+    int scanned = 0;
+    for (const char* dir : { "src", "resources" })
+    {
+        std::error_code ec;
+        for (fs::recursive_directory_iterator it (root / dir, ec), end; ! ec && it != end; it.increment (ec))
+        {
+            if (! it->is_regular_file())
+                continue;
+            const auto ext = it->path().extension().string();
+            if (ext != ".h" && ext != ".hpp" && ext != ".cpp" && ext != ".json" && ext != ".txt" && ext != ".inc" && ext != ".py")
+                continue;
+            const std::string text = fileBytes (it->path().string());
+            const std::string rel = fs::relative (it->path(), root, ec).string();
+            ++scanned;
+            for (const char* t : tokens)
+                expect (countWord (text, t) == 0, "removed table symbol '" + std::string (t) + "' is back in " + rel);
+            // The sample-library manifest lists pack file names, not references.
+            if (it->path().filename() == "SAMPLE_MANIFEST.json")
+                continue;
+            for (const char* sh : shiftedNames)
+                expect (countWord (text, unshift (sh)) == 0, "a reference-named cell is in " + rel);
+        }
+    }
+    std::cout << "removed-table scan: " << scanned << " source/resource files checked\n";
+    expect (scanned > 10, "the removed-table scan saw the source tree");
+}
+
+// 2-bar bass rhythm skeletons (the bars 1-2 onset mask of the shipped bass)
+// across 4 styles x 50 seeds: no single skeleton in more than 10% of rolls.
+void testBassSkeletonDiversity()
+{
+    const char* names[] = { "ROLLER", "DEEP", "BOUNCY", "JACKIN" };
+    for (int style = 0; style < 4; ++style)
+    {
+        std::map<std::uint32_t, int> count;
+        for (int roll = 0; roll < 50; ++roll)
+        {
+            rolla::Settings s;
+            s.dialect = style;
+            s.bars = 8;
+            std::uint32_t seeds[rolla::NumParts];
+            seedsFrom (5150u, style, roll, seeds);
+            rolla::Groove g {};
+            rolla::generate (g, s, seeds, 0x7fu);
+            std::uint32_t mask = 0;
+            for (int i = 0; i < g.lane[rolla::Bass].count; ++i)
+            {
+                const int st = (int) std::lround (g.lane[rolla::Bass].notes[i].start);
+                if (st >= 0 && st < 32)
+                    mask |= 1u << st;
+            }
+            ++count[mask];
+        }
+        int worst = 0;
+        for (const auto& kv : count)
+            worst = std::max (worst, kv.second);
+        std::cout << names[style] << " 2-bar bass skeletons: " << count.size() << " distinct in 50, most common " << worst << "\n";
+        expect (worst <= 5, std::string (names[style]) + " no 2-bar bass skeleton in more than 10% of rolls");
+    }
+}
+
+// 200 rolls a style: distinct 1-bar rhythm (onset mask) and interval patterns
+// per lane, and no single pattern dominating. Also the originality redraw
+// rate (rolls the backstop had to redraw) and the A&R back-half guard sweep.
+void testLanePatternDiversity()
+{
+    const char* names[] = { "ROLLER", "DEEP", "BOUNCY", "JACKIN" };
+    int redrawn = 0;
+    int total = 0;
+    for (int style = 0; style < 4; ++style)
+    {
+        std::map<std::uint32_t, int> bassRhythm;
+        std::map<std::string, int> bassIntervals;
+        std::map<std::uint32_t, int> stabRhythm;
+        int bassBars = 0;
+        int intervalBars = 0;
+        int stabBars = 0;
+        int thin = 0;
+        for (int roll = 0; roll < 200; ++roll)
+        {
+            rolla::Settings s;
+            s.dialect = style;
+            s.bars = 8;
+            std::uint32_t seeds[rolla::NumParts];
+            seedsFrom (6262u, style, roll, seeds);
+            rolla::Groove g {};
+            if (! rolla::generate (g, s, seeds, 0x7fu))
+                continue;
+            ++total;
+            if (std::strstr (g.brokenRules, "|orig:") != nullptr)
+                ++redrawn;
+            if (rolla::rules::thinRepeatedBackHalf (g.lane[rolla::Bass], g.bars))
+                ++thin;
+            for (int bar = 0; bar < g.bars; ++bar)
+            {
+                std::uint32_t mask = 0;
+                std::string iv;
+                int prev = -1000;
+                int notes = 0;
+                for (int i = 0; i < g.lane[rolla::Bass].count; ++i)
+                {
+                    const auto& n = g.lane[rolla::Bass].notes[i];
+                    const int st = (int) std::lround (n.start);
+                    if (st / 16 != bar)
+                        continue;
+                    mask |= 1u << (st % 16);
+                    if (prev > -1000)
+                        iv += std::to_string ((int) n.chord[0] - prev) + ",";
+                    prev = n.chord[0];
+                    ++notes;
+                }
+                if (mask != 0)
+                {
+                    ++bassRhythm[mask];
+                    ++bassBars;
+                }
+                if (notes >= 3)
+                {
+                    ++bassIntervals[iv];
+                    ++intervalBars;
+                }
+                std::uint32_t smask = 0;
+                for (int i = 0; i < g.lane[rolla::Stab].count; ++i)
+                {
+                    const int st = (int) std::lround (g.lane[rolla::Stab].notes[i].start);
+                    if (st / 16 == bar)
+                        smask |= 1u << (st % 16);
+                }
+                if (smask != 0)
+                {
+                    ++stabRhythm[smask];
+                    ++stabBars;
+                }
+            }
+        }
+        auto top = [] (const auto& m)
+        {
+            int w = 0;
+            for (const auto& kv : m)
+                w = std::max (w, kv.second);
+            return w;
+        };
+        const double bassTop = bassBars > 0 ? (double) top (bassRhythm) / bassBars : 1.0;
+        const double ivTop = intervalBars > 0 ? (double) top (bassIntervals) / intervalBars : 1.0;
+        const double stabTop = stabBars > 0 ? (double) top (stabRhythm) / stabBars : 1.0;
+        std::cout << names[style] << " 1-bar patterns over 200 rolls: bass rhythm " << bassRhythm.size() << " distinct (top "
+                  << 100.0 * bassTop << "%), bass intervals " << bassIntervals.size() << " (top " << 100.0 * ivTop
+                  << "%), stab rhythm " << stabRhythm.size() << " (top " << 100.0 * stabTop << "%), thin back halves " << thin << "\n";
+        expect (bassTop <= 0.10, std::string (names[style]) + " no 1-bar bass rhythm takes more than 10% of bars");
+        expect (ivTop <= 0.25, std::string (names[style]) + " no 1-bar bass interval pattern takes more than 25% of bars");
+        expect (stabTop <= 0.35, std::string (names[style]) + " no 1-bar stab rhythm takes more than 35% of bars");
+        expect (thin == 0, std::string (names[style]) + " no shipped roll has a thin repeated back half (A&R guard)");
+    }
+    const double rate = total > 0 ? (double) redrawn / total : 0.0;
+    std::cout << "originality backstop redraw rate " << 100.0 * rate << "% (" << redrawn << "/" << total << ")\n";
+    expect (rate <= 0.30, "the composer rarely needs the originality backstop (<= 30% of rolls redrawn)");
+}
+
+// ROLLER roll_17 (A&R): bars 5-8 bass on one pitch class at a few offbeat
+// 16ths every bar. Seed sweep over every style and three DARK settings: no
+// shipped roll carries a thin repeated back half.
+void testThinBackHalfSweep()
+{
+    int shipped = 0;
+    int thin = 0;
+    for (int style = 0; style < 4; ++style)
+        for (float dark : { 0.1f, 0.55f, 0.9f })
+            for (int roll = 0; roll < 30; ++roll)
+            {
+                rolla::Settings s;
+                s.dialect = style;
+                s.bars = 8;
+                s.dark = dark;
+                std::uint32_t seeds[rolla::NumParts];
+                seedsFrom (171717u, style, roll, seeds);
+                rolla::Groove g {};
+                if (! rolla::generate (g, s, seeds, 0x7fu))
+                    continue;
+                ++shipped;
+                if (rolla::rules::thinRepeatedBackHalf (g.lane[rolla::Bass], g.bars))
+                    ++thin;
+            }
+    std::cout << "back-half guard sweep: " << thin << " thin of " << shipped << " shipped\n";
+    expect (shipped > 300 && thin == 0, "back-half guard: no thin repeated back half ships");
+}
+
+// Offline n-gram / skeleton overlap against the private reference index. Runs
+// only when ROLLA_ORIG_INDEX names a loadable index; skips cleanly otherwise.
+void testOfflineIndexOverlap()
+{
+    const char* env = std::getenv ("ROLLA_ORIG_INDEX");
+    if (env == nullptr || *env == '\0' || ! juce::File::isAbsolutePath (juce::String (env)))
+    {
+        std::cout << "SKIP offline index overlap: ROLLA_ORIG_INDEX is not set\n";
+        return;
+    }
+    const auto index = rolla::orig::loadIndex (juce::File (juce::String (env)));
+    if (index == nullptr)
+    {
+        std::cout << "SKIP offline index overlap: no loadable index at " << env << "\n";
+        return;
+    }
+    const char* names[] = { "ROLLER", "DEEP", "BOUNCY", "JACKIN" };
+    for (int style = 0; style < 4; ++style)
+    {
+        int raw = 0;
+        int shippedFail = 0;
+        for (int roll = 0; roll < 200; ++roll)
+        {
+            rolla::Settings s;
+            s.dialect = style;
+            s.bars = 8;
+            std::uint32_t seeds[rolla::NumParts];
+            seedsFrom (8080u, style, roll, seeds);
+            rolla::orig::setIndex (nullptr);
+            rolla::Groove plain {};
+            if (rolla::generate (plain, s, seeds, 0x7fu) && ! rolla::orig::check (plain, 0x3fu, index.get()).pass)
+                ++raw;
+            rolla::orig::setIndex (index);
+            rolla::Groove guarded {};
+            if (rolla::generate (guarded, s, seeds, 0x7fu) && ! rolla::orig::check (guarded, 0x3fu, index.get()).pass)
+                ++shippedFail;
+        }
+        rolla::orig::setIndex (nullptr);
+        std::cout << names[style] << " offline index overlap: composer hits " << raw << "/200, shipped hits " << shippedFail << "/200\n";
+        expect (shippedFail == 0, std::string (names[style]) + " nothing that ships overlaps the private index");
+        expect (raw <= 20, std::string (names[style]) + " the composer itself overlaps the index in <= 10% of rolls");
+    }
+}
+
 } // namespace
 
 int main()
@@ -2575,6 +2885,13 @@ int main()
     testShuffleClearsAutoKeep();
     testShuffleKeepsManualLock();
     testIntensityChangesOutput();
+    // Rule composer gates. Last, so the per-process rhythm history the earlier
+    // (batch-reproducing) tests rely on is untouched.
+    testRemovedTables();
+    testBassSkeletonDiversity();
+    testLanePatternDiversity();
+    testThinBackHalfSweep();
+    testOfflineIndexOverlap();
 
     if (fails == 0)
         std::cout << "roll tests passed\n";

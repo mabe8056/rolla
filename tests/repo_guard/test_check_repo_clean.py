@@ -85,6 +85,13 @@ def main():
         ("dump", "data/corpus.json", "{}", "corpus"),
         ("dump", "src/Generator/CorpusData.h", "int x;", "CorpusData"),
         ("large", "resources/big.json", json.dumps({"v": list(range(150000))}), "big.json"),
+        # Removed reference-derived generator tables (rule-composer rewrite).
+        ("generator", "src/Generator/VocabCells.h", "int x;\n", "VocabCells.h"),
+        ("generator", "resources/phrase_bank.json", "{}", "phrase_bank.json"),
+        ("generator", "src/Generator/G.cpp", "static const int kPhrase[] = { 1 };\n", "kPhrase"),
+        ("generator", "src/Generator/H.cpp", "void baseSlots ();\n", "baseSlots"),
+        # A reference-named cell, built from the shifted list so this file never holds the name.
+        ("generator", "src/Generator/N.cpp", "// " + "".join(chr(ord(c) - 1) for c in "Dmptfs") + " cell\n", "reference-named"),
     ]
     for cat, rel, content, needle in cases:
         code, res = run(make_repo(dict(CLEAN, **{rel: content})))
@@ -103,6 +110,11 @@ def main():
     check(code == 0, "a big table with no track name passes")
     code, res = run(make_repo(dict(CLEAN, **{"docs/x.json": json.dumps({"Kick - Snare": [1, 2, 3]})})))
     check(code == 0, "a short track-shaped key without event data passes")
+
+    # Generator rule: whole words only, case-sensitive, and only in src/ and resources/.
+    code, res = run(make_repo(dict(CLEAN, **{"src/Generator/K.cpp": "const float kDegreeEmphasis = 1.f; bool closer = true;\n",
+                                             "docs/notes.md": "The old kPhrase table is gone.\n"})))
+    check(code == 0, "generator: kDegreeEmphasis, a lowercase 'closer' and prose outside src/ pass")
 
     # Reference data, by name: the list lives outside the repo.
     names_dir = tempfile.mkdtemp(prefix="repo-guard-names-")
