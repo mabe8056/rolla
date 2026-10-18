@@ -86,6 +86,7 @@ struct SelectorOptions
     int topMin = 6;
     float topShare = 0.08f;
     float monoWeight = 3.f;  // bass/kick L/R correlation under 150 Hz below 0.997
+    float bassBandWeight = 2.f; // bass under 91% below 200 Hz / over 0.5% above 1 kHz
     float packBoost = 3.f;
     float drumPackBoost = 6.f;
     float familyBoost = 1.5f;
@@ -127,6 +128,11 @@ inline float fitScore (const GenreTargets& targets, Style style, Lane lane, cons
     // correlation under 150 Hz loses its low end. Weights only, never a filter.
     if ((lane == Lane::Bass || lane == Lane::Kick) && f.lowCorr < 0.997f)
         score += opt.monoWeight * std::clamp ((0.997f - f.lowCorr) / 0.10f, 0.f, 1.f);
+    // Bass energy where a house bass lives: >= 91% under 200 Hz, little over 1 kHz.
+    if (lane == Lane::Bass && f.lt200 >= 0.f)
+        score += opt.bassBandWeight * std::clamp ((0.91f - f.lt200) / 0.05f, 0.f, 1.f);
+    if (lane == Lane::Bass && f.gt1k >= 0.f)
+        score += opt.bassBandWeight * std::clamp ((f.gt1k - 0.005f) / 0.01f, 0.f, 1.f);
     score -= opt.tierWeight * (float) std::max (0, f.tier);
     return std::isfinite (score) ? score : 1.0e3f;
 }

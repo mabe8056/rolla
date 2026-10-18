@@ -24,6 +24,11 @@
         "family": { "type": "string", "description": "pack family code (same family: x1.5)" },
         "tier": { "type": "integer", "minimum": 0, "description": "manifest tier, higher is better; 0 unknown" },
         "length_ms": { "type": "number", "minimum": 0 },
+        "pack_code": { "type": "string", "description": "same as pack (either is read)" },
+        "low_corr": { "type": "number", "description": "L/R correlation under 150 Hz; 1 = mono" },
+        "lt200": { "type": "number", "minimum": 0, "maximum": 1, "description": "power share under 200 Hz (mono, first 20 s)" },
+        "gt1k": { "type": "number", "minimum": 0, "maximum": 1, "description": "power share over 1 kHz" },
+        "chord_pcs": { "type": "integer", "minimum": 0, "maximum": 4095, "description": "absolute pitch-class mask, bit 0 = C" },
         "f": { "$ref": "#/$defs/features" }
       },
       "additionalProperties": false
@@ -45,6 +50,8 @@
         "sub_ratio": { "type": "number" },
         "rms_db": { "type": "number" },
         "tilt_db_oct": { "type": "number" },
+        "tilt_db_per_oct": { "type": "number" },
+        "low_corr": { "type": "number" },
         "root_pitch": { "type": "number", "description": "MIDI, -1 unpitched" },
         "root_conf": { "type": "number", "minimum": 0, "maximum": 1 },
         "is_chord": { "type": "boolean" },

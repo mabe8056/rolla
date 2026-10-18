@@ -93,6 +93,15 @@ inline bool sampleEntry (const juce::String& id, const juce::var& e, SampleFeatu
         out.tiltDbPerOct = numberOr (f["tilt_db_per_oct"], out.tiltDbPerOct);
     if (e.hasProperty ("tilt_db_per_oct"))
         out.tiltDbPerOct = numberOr (e["tilt_db_per_oct"], out.tiltDbPerOct);
+    out.lt200 = numberOr (e["lt200"], -1.f);
+    out.gt1k = numberOr (e["gt1k"], -1.f);
+    // chord_pcs: absolute pitch classes (bit 0 = C). PitchInfo keeps them relative to the root.
+    if (e.hasProperty ("chord_pcs") && out.pitch.isChord && out.pitch.pitched())
+    {
+        const unsigned abs = (unsigned) (int) e["chord_pcs"] & 0xfffu;
+        const int root = ((int) std::lround (out.pitch.rootPitch) % 12 + 12) % 12;
+        out.pitch.chordPcs = (std::uint16_t) (((abs >> root) | (abs << (12 - root))) & 0xfffu);
+    }
     if (e.hasProperty ("tier"))
         out.tier = (int) e["tier"];
     return true;
