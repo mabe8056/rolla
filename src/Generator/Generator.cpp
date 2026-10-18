@@ -4104,6 +4104,232 @@ void separateTwinRhythm (Lane& lane, int dialect, std::uint32_t seed)
     rememberRhythm (ring, snap);
 }
 
+namespace
+{
+
+// A&R msg 423 #1: target share of bass note-ons on kick steps, per style.
+// Reference medians: ROLLER ~17%, DEEP ~7%, BOUNCY ~32%, JACKIN ~19%.
+// The 35% hard cap (hardFail, PhraseBank kMaxKickShare) always wins.
+float bassKickTarget (int dialect) noexcept
+{
+    switch (dialect)
+    {
+        case Long:   return 0.07f;
+        case Pop:    return 0.32f;
+        case Gaskin: return 0.19f;
+        default:     return 0.17f;
+    }
+}
+
+// A&R msg 423 #2: how often a held bass note leaves a one-16th breath before
+// the next onset. JACKIN keeps the most, so its stabs still find bass rests.
+float bassBreathShare (int dialect) noexcept
+{
+    switch (dialect)
+    {
+        case Long:   return 0.25f;
+        case Gaskin: return 0.45f;
+        default:     return 0.35f;
+    }
+}
+
+std::uint32_t postHash (std::uint32_t a, std::uint32_t b) noexcept
+{
+    std::uint32_t h = a * 0x9E3779B1u ^ (b * 0x85EBCA6Bu + 0x7F4A7C15u);
+    h ^= h >> 16;
+    h *= 0x85EBCA6Bu;
+    h ^= h >> 13;
+    h *= 0xC2B2AE35u;
+    h ^= h >> 16;
+    return h;
+}
+
+void sortByStart (Lane& lane)
+{
+    std::sort (lane.notes, lane.notes + lane.count,
+               [] (const Note& a, const Note& b) { return a.start < b.start; });
+}
+
+// The last bar of a 4- or 8-bar loop keeps its four-16th turn rest (lockPhrase,
+// ensureBar8Turn). Nothing in the post passes moves or holds into it.
+float bassTailCut (int bars) noexcept
+{
+    return bars >= 4 ? (float) ((bars - 1) * 16 + 12) : (float) (bars * 16);
+}
+
+// Moves bass attacks one 16th (then two) onto a free kick step in the same
+// bar until the on-kick share reaches the style target, never above 35%.
+// Only empty slots are used and a two-16th move needs the slot between free,
+// so note order (and every interval / octave figure) is unchanged. The pick
+// is keyed on the position in the 2-bar cycle, so repeats move together.
+void placeBassOnKicks (Lane& lane, int dialect, int bars, std::uint32_t seed)
+{
+    const int n = std::min (lane.count, kMaxNotes);
+    const int nslots = std::min (bars, kMaxBars) * 16;
+    if (n <= 1 || nslots <= 0)
+        return;
+    sortByStart (lane);
+    const int cap = (int) std::floor (0.35f * (float) n + 1.0e-4f);
+    const int want = std::min (cap, (int) std::lround (bassKickTarget (dialect) * (float) n));
+    bool used[kMaxSteps] {};
+    int onKick = 0;
+    for (int i = 0; i < n; ++i)
+    {
+        const int st = (int) std::lround (lane.notes[i].start);
+        if (st >= 0 && st < nslots)
+            used[st] = true;
+        if (st >= 0 && kickSlot (st % 16))
+            ++onKick;
+    }
+    const float tailCut = bassTailCut (bars);
+
+    struct Move { int i; int q; std::uint32_t prio; };
+    Move moves[kMaxNotes * 2];
+    bool moved[kMaxNotes] {};
+    for (int dist = 1; dist <= 2 && onKick < want; ++dist)
+    {
+        int nm = 0;
+        for (int i = 0; i < n; ++i)
+        {
+            const int st = (int) std::lround (lane.notes[i].start);
+            if (st < 0 || st >= nslots || kickSlot (st % 16) || moved[i])
+                continue;
+            for (int dir = -1; dir <= 1; dir += 2)
+            {
+                const int q = st + dir * dist;
+                if (q < 0 || q >= nslots || q / 16 != st / 16 || ! kickSlot (q % 16))
+                    continue;
+                if ((float) q >= tailCut || nm >= kMaxNotes * 2)
+                    continue;
+                const auto key = (std::uint32_t) ((st % 32) * 8 + dist * 2 + (dir > 0 ? 1 : 0));
+                moves[nm].i = i;
+                moves[nm].q = q;
+                moves[nm].prio = postHash (seed ^ 0x4B1Cu, key);
+                ++nm;
+            }
+        }
+        std::sort (moves, moves + nm, [] (const Move& a, const Move& b)
+        {
+            if (a.prio != b.prio)
+                return a.prio < b.prio;
+            return a.i < b.i;
+        });
+        for (int m = 0; m < nm && onKick < want; ++m)
+        {
+            const int i = moves[m].i;
+            const int q = moves[m].q;
+            if (moved[i] || used[q])
+                continue;
+            const int st = (int) std::lround (lane.notes[i].start);
+            if (dist == 2 && used[(st + q) / 2])
+                continue;
+            used[st] = false;
+            used[q] = true;
+            moved[i] = true;
+            lane.notes[i].start = (float) q;
+            ++onKick;
+        }
+    }
+    sortByStart (lane);
+    // A note moved earlier can now run into the one before it.
+    for (int i = 0; i + 1 < n; ++i)
+    {
+        const float room = lane.notes[i + 1].start - lane.notes[i].start;
+        if (lane.notes[i].length > room)
+            lane.notes[i].length = std::max (0.25f, room);
+    }
+}
+
+// Holds every bass note up to the next onset (or the turn rest / loop end),
+// so the line sounds for most of the loop. Some notes leave a one-16th
+// breath, a repeated pitch always does (no tie into the next note), and the
+// breaths stop once the sounding fraction would fall under 0.78. Nothing
+// overlaps, nothing passes the loop end, and no note gets shorter.
+void holdBassNotes (Lane& lane, int dialect, int bars, std::uint32_t seed)
+{
+    const int n = std::min (lane.count, kMaxNotes);
+    const float loopEnd = (float) (std::min (bars, kMaxBars) * 16);
+    if (n <= 0 || loopEnd <= 0.f)
+        return;
+    sortByStart (lane);
+    const float tailCut = bassTailCut (bars);
+
+    float room[kMaxNotes];
+    float len[kMaxNotes];
+    bool forced[kMaxNotes] {};
+    for (int i = 0; i < n; ++i)
+    {
+        const Note& note = lane.notes[i];
+        float next = i + 1 < n ? lane.notes[i + 1].start : loopEnd;
+        if (note.start < tailCut)
+            next = std::min (next, tailCut);
+        next = std::min (next, loopEnd);
+        // A b3 late in the bar held over the barline is a banned figure (AV14).
+        const int slot = (int) std::lround (note.start) % 16;
+        if (slot >= 14 && pcOf (note.chord[0]) == 3)
+            next = std::min (next, (float) (((int) std::lround (note.start) / 16 + 1) * 16));
+        room[i] = std::max (0.f, next - note.start);
+        const float orig = std::min (note.length, std::max (0.25f, loopEnd - note.start));
+        if (note.start >= tailCut)
+        {
+            // Inside the turn rest: leave it as written.
+            len[i] = orig;
+            room[i] = -1.f;
+            continue;
+        }
+        if (room[i] <= orig)
+        {
+            // No space to grow (or it already fills the space): keep it, clipped.
+            len[i] = room[i] >= 0.25f ? std::min (orig, room[i]) : orig;
+            room[i] = -1.f;
+            continue;
+        }
+        len[i] = room[i];
+        const bool samePitch = i + 1 < n && lane.notes[i + 1].start < tailCut
+                               && lane.notes[i + 1].chord[0] == note.chord[0];
+        if (samePitch)
+        {
+            forced[i] = true;
+            len[i] = std::max (orig, room[i] - (room[i] >= 2.f ? 1.f : 0.5f));
+        }
+    }
+
+    float total = 0.f;
+    for (int i = 0; i < n; ++i)
+        total += len[i];
+    const float floorTotal = 0.78f * loopEnd;
+
+    int cand[kMaxNotes] {};
+    std::uint32_t prio[kMaxNotes] {};
+    int nc = 0;
+    for (int i = 0; i < n; ++i)
+    {
+        if (room[i] < 2.f || forced[i])
+            continue;
+        cand[nc] = i;
+        prio[i] = postHash (seed ^ 0x401Du, (std::uint32_t) i);
+        ++nc;
+    }
+    std::sort (cand, cand + nc, [&] (int a, int b) { return prio[a] < prio[b]; });
+    const int wantBreaths = (int) std::lround (bassBreathShare (dialect) * (float) nc);
+    for (int k = 0; k < wantBreaths && k < nc; ++k)
+    {
+        const int i = cand[k];
+        const float orig = lane.notes[i].length;
+        const float shorter = std::max (orig, room[i] - 1.f);
+        const float cost = len[i] - shorter;
+        if (total - cost < floorTotal)
+            continue;
+        total -= cost;
+        len[i] = shorter;
+    }
+
+    for (int i = 0; i < n; ++i)
+        lane.notes[i].length = len[i];
+}
+
+} // namespace
+
 void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[NumParts], std::uint32_t partMask)
 {
     Settings s = settings;
@@ -4314,6 +4540,14 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
         }
         enforceMonophonic (g.lane[Bass]);
         avoidReaction (g.lane[Bass]);
+    }
+    // A&R msg 423 #1 and #2: some bass on the kick, then hold the notes. Runs
+    // before the stab rewrite so stabs see the bass that ships.
+    if (regen (Bass))
+    {
+        placeBassOnKicks (g.lane[Bass], s.dialect, s.bars, bassSeed);
+        holdBassNotes (g.lane[Bass], s.dialect, s.bars, bassSeed);
+        enforceMonophonic (g.lane[Bass]);
     }
     // Stabs are rewritten on the bass that ships. A bass rest is only a light
     // preference: the reference rolls put about 8% of stabs there.
