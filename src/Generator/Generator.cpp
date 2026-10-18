@@ -1,4 +1,5 @@
 #include "Generator.h"
+#include "DeepBouncy.h"
 #include "PhraseBank.h"
 
 #include <algorithm>
@@ -2395,6 +2396,12 @@ void openRollerCell (Lane& lane, std::uint32_t seed)
 // many of those attacks survive, around the shipped 0.40 phrase.
 void lockPhrase (Lane& lane, int dialect, std::uint32_t seed, int bars, float dark, float bounce, float busy)
 {
+    // BOUNCY's bass is built from rules (DeepBouncy.cpp), for every loop length.
+    if (dialect == Pop)
+    {
+        deepbouncy::bouncyBass (lane, bars, seed, dark, bounce, busy);
+        return;
+    }
     if (bars < 4 || lane.count <= 0)
         return;
     if (dialect == Long || dialect == Gaskin)
@@ -4229,11 +4236,8 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
         separateTwinRhythm (g.lane[Bass], s.dialect, bassSeed);
         enforceMonophonic (g.lane[Bass]);
         avoidReaction (g.lane[Bass]);
-        if (s.dialect == Pop)
-        {
-            ensureBar8Turn (g.lane[Bass], s.bars, bassSeed);
-            anchorPopRoot (g.lane[Bass], bassSeed);
-        }
+        if (s.dialect == Long)
+            deepbouncy::deepArc (g.lane[Bass], s.bars, bassSeed, s.busy);
         else if (s.dialect == Gaskin)
         {
             contrastCallAnswer (g.lane[Bass], s.bars);
@@ -4252,6 +4256,22 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
         Rng rs (stabSeed);
         char stabBreaks[48] = "";
         writeStab (g.lane[Stab], g.lane[Bass], s, rs, freedom, stabBreaks, (int) sizeof stabBreaks);
+    }
+    // DEEP / BOUNCY only: DEEP's own stab voicings, stabs answering in bass
+    // gaps, and an optional pickup into bar 1. ROLLER / JACKIN are untouched.
+    if (s.dialect == Long || s.dialect == Pop)
+    {
+        if (regen (Stab) && s.dialect == Long)
+            deepbouncy::deepStabVoicing (g.lane[Stab], g.lane[Bass], g.lane[Stab].seed);
+        if (regen (Bass) || regen (Stab))
+            deepbouncy::stabsInGaps (g.lane[Stab], g.lane[Bass], s.bars, s.dialect == Pop ? 0.92f : 0.55f);
+        if (regen (Bass))
+        {
+            deepbouncy::pickup (g.lane[Bass], s.bars, bassSeed, s.dialect == Pop ? 0.6f : 0.45f);
+            deepbouncy::fixAnswers (g.lane[Bass], s.bars);
+            if (s.dialect == Pop)
+                deepbouncy::steerOctaves (g.lane[Bass], s.bounce, bassSeed);
+        }
     }
     for (int part = 0; part < Drums; ++part)
         dedupeNoteOns (g.lane[part]);
