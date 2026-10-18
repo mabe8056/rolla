@@ -590,7 +590,8 @@ struct ClickRender
 // blocks from the downbeat, plugin shaping on, duck on, true-peak guard on.
 // solo >= 0 mutes the other lanes, which still play into the sampler (a stem).
 ClickRender renderClickRoll (const rolla::PresetBank& bank, const rolla::SampleLibrary& lib,
-                             const rolla::Groove& groove, int solo)
+                             const rolla::Groove& groove, int solo,
+                             const std::function<void (rolla::EngineParams&)>& tweak = {})
 {
     constexpr double sr = 48000.0;
     constexpr double bpm = 130.0;
@@ -612,6 +613,8 @@ ClickRender renderClickRoll (const rolla::PresetBank& bank, const rolla::SampleL
     }
     for (int v = 0; v < rolla::NumDrumVoices; ++v)
         params.drumDecay[v] = 0.5f;
+    if (tweak)
+        tweak (params);
     const int lat = eng.latencySamples();
     const double beatN = 60.0 / bpm * sr;
     // The loop, then the wrap and the next downbeat.
@@ -731,6 +734,26 @@ void testAndrClickPatterns (const juce::File& rootDir)
     }
     for (size_t i = 0; i < perc.size(); ++i)
         perc[i] = (float) (0.5 * std::sin (2.0 * pi * 200.0 * (double) i / sr));
+    // Modelled on roll_03's DRUMS/KICK/MDV_Kick_2.wav: 48 kHz, 0.476 s (longer
+    // than a beat at 130 BPM, so every kick lands on the last one's tail), the
+    // first 32 frames under 0.0002, then a 0.3 ms attack into a 180 -> 50 Hz sweep.
+    std::vector<float> mdv ((size_t) std::lround (0.476 * sr));
+    {
+        double phase = 0.0;
+        for (size_t i = 0; i < mdv.size(); ++i)
+        {
+            const double t = ((double) i - 32.0) / sr;
+            if (t < 0.0)
+            {
+                mdv[i] = (float) (1.0e-4 * std::sin (0.3 * (double) i));
+                continue;
+            }
+            phase += 2.0 * pi * (50.0 + 130.0 * std::exp (-t / 0.025)) / sr;
+            mdv[i] = (float) (0.95 * (1.0 - std::exp (-t / 0.0003)) * std::exp (-t / 0.18) * std::sin (phase));
+        }
+    }
+    const auto mdvLR = stereo (mdv, 1.f);
+    writeStereo (root.getChildFile ("DRUMS/KICK/mdv_model.wav"), mdvLR.first, mdvLR.second);
     const auto kickLR = stereo (kick, 0.9f);
     const auto clapLR = stereo (clap, 1.f);
     const auto rimLR = stereo (rim, 1.f);
@@ -776,10 +799,11 @@ void testAndrClickPatterns (const juce::File& rootDir)
     lib.watch (*bank);
     lib.preload ({ std::string ("DRUMS/KICK/kick_peak.wav"), std::string ("DRUMS/CLAP/clap_peak.wav"),
                    std::string ("DRUMS/RIM/rim_peak.wav"), std::string ("BASS/stab_E.wav"),
-                   std::string ("DRUMS/PERC/long.wav") });
+                   std::string ("DRUMS/PERC/long.wav"), std::string ("DRUMS/KICK/mdv_model.wav") });
     const bool loaded = waitUntil ([&]
     {
         return lib.ready ("DRUMS/KICK/kick_peak.wav") && lib.ready ("DRUMS/CLAP/clap_peak.wav")
+            && lib.ready ("DRUMS/KICK/mdv_model.wav")
             && lib.ready ("DRUMS/RIM/rim_peak.wav") && lib.ready ("BASS/stab_E.wav") && lib.ready ("DRUMS/PERC/long.wav");
     });
     expect (loaded, "A&R click roll: the pack files load");
@@ -931,6 +955,66 @@ void testAndrClickPatterns (const juce::File& rootDir)
             worstAll = std::max (worstAll, clickD2 (bass, i, i + 256));
         expect (worstAll / bass.peak < kLimit, "A&R click roll: no click anywhere in the BASS stem (worst "
                                                    + std::to_string (worstAll / bass.peak) + " of peak)");
+    }
+
+    // roll_03 (Maestro 503-508): the DRUMS stem clicked ~6 ms after every kick on
+    // beats 1 and 3, the first one on the kick at t = 0, with MDV_Kick_2 (near-zero
+    // start, 0.476 s). Same roll with that kick modelled: (a) a lone kick on every
+    // beat, no clap anywhere; (b) the clap on 2 and 4 still playing but silenced
+    // (-120 dB), so 1/3 and 2/4 differ only by a voice that adds nothing. Every
+    // kick onset, t = 0 and the downbeat after the wrap included, in the DRUMS
+    // stem and the mix; with the clap silenced all kicks score alike.
+    bank->drums[0].voicePool[rolla::Kick] = { std::string ("DRUMS/KICK/mdv_model.wav") };
+    {
+        rolla::Groove lone = groove;
+        for (int t = 0; t < rolla::kMaxSteps; ++t)
+        {
+            lone.drums.vel[rolla::Clap][t] = 0;
+            lone.drums.vel[rolla::Rim][t] = 0;
+        }
+        struct Case { const char* name; const rolla::Groove* g; bool clapSilenced; };
+        const Case cases[] = { { "lone kick, no clap", &lone, false }, { "kick + silenced clap", &groove, true } };
+        for (const auto& c : cases)
+        {
+            auto tweak = [&] (rolla::EngineParams& p)
+            {
+                if (c.clapSilenced)
+                    p.drumLevelDb[rolla::Clap] = -120.f;
+            };
+            for (const int solo : { (int) rolla::Drums, -1 })
+            {
+                const auto x = renderClickRoll (*bank, lib, *c.g, solo, tweak);
+                const std::string tag = std::string ("roll_03 ") + c.name + (solo < 0 ? " (mix)" : " (DRUMS stem)");
+                expect (x.kick.size() >= 33, tag + ": every kick plays (" + std::to_string (x.kick.size()) + ")");
+                int clicks = 0;
+                float worst = 0.f;
+                int worstK = -1;
+                float lo = 1.0e9f, hi = 0.f;
+                for (size_t k = 0; k < x.kick.size(); ++k)
+                {
+                    const int at = x.kick[k];
+                    const float s = rel (x, at);
+                    if (s >= kLimit)
+                        ++clicks;
+                    if (s > worst)
+                    {
+                        worst = s;
+                        worstK = (int) k;
+                    }
+                    if ((int) k % (8 * 4) == 0)
+                        continue;
+                    const float local = clickD2 (x, at - before, at + after) / clickPeak (x, at, at + (int) (0.05 * sr));
+                    lo = std::min (lo, local);
+                    hi = std::max (hi, local);
+                }
+                expect (clicks == 0, tag + ": every kick onset is click-free, t = 0 included (" + std::to_string (clicks)
+                                         + " clicks, worst " + std::to_string (worst) + " of peak on kick " + std::to_string (worstK)
+                                         + ", beat " + std::to_string (worstK % 4 + 1) + ")");
+                if (solo >= 0)
+                    expect (hi <= lo * 1.5f + 2.0e-3f, tag + ": kicks on beats 1/3 and 2/4 score alike (" + std::to_string (lo)
+                                                           + ".." + std::to_string (hi) + ")");
+            }
+        }
     }
 
     // A full drum pool keeps its hands off a sounding bass note. One shared pool
