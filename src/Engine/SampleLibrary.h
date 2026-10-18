@@ -293,6 +293,15 @@ public:
     bool missing (const char* relative) const noexcept;
     bool ready (const char* relative) const noexcept;
 
+    // Any thread. True when no request or job is queued, no index scan is due,
+    // and the worker is not loading. Offline export waits on this so a lane
+    // whose file was requested during a pre-roll is loaded before the bounce.
+    bool idle() const;
+    // How many times playback asked for a file that was not loaded yet,
+    // duplicates and full-ring drops included. An offline bounce that saw this
+    // move (from any engine) may have played a note without its sample.
+    std::uint64_t notReadyRequests() const noexcept { return notReady.load (std::memory_order_acquire); }
+
 private:
     struct Slot
     {
@@ -312,7 +321,7 @@ private:
 
     mutable std::mutex rootMu;
     juce::File rootDir;
-    std::mutex jobMu;
+    mutable std::mutex jobMu;
     mutable std::condition_variable jobCv;
     std::vector<std::string> jobs;
     std::thread worker;
@@ -341,6 +350,8 @@ private:
     mutable char reqRing[kReq][256] {};
     mutable std::atomic<int> reqHead { 0 };
     mutable std::atomic<int> reqTail { 0 };
+    mutable std::atomic<std::uint64_t> notReady { 0 };
+    std::atomic<int> working { 0 };
 
     static constexpr int kSlots = 384;
     Slot slots[kSlots];
