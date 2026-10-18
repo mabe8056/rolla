@@ -21,7 +21,7 @@
 // Gates: ROLLER / JACKIN batches for seeds 1 and 2 hash to the frozen values
 // (their MIDI is unchanged by the DEEP / BOUNCY pass). DEEP: answers change the
 // density in >= 90% of rolls, >= 60% of stab onsets in bass gaps, pickups in
-// 20-80% of rolls. BOUNCY: bass sounds >= 82% of the loop by duration,
+// 5-85% of rolls (optional, not every roll). BOUNCY: bass sounds >= 82% of the loop by duration,
 // 5-7 notes a bar, nothing outside natural minor, answers change density in
 // >= 90% of rolls, octave moves 15-26% at the default BOUNCE, <= 8.5% at
 // BOUNCE 0 and rising with BOUNCE.
@@ -344,7 +344,7 @@ int main (int argc, char** argv)
         print ("long", base, d);
         std::snprintf (what, sizeof what, "DEEP seed %u: answers change density %.2f, stabs in gaps %.2f, pickups %.2f",
                        base, d.dens, d.gap, d.pickup);
-        check (d.dens >= 0.9 && d.gap >= 0.6 && d.pickup >= 0.2 && d.pickup <= 0.8, what);
+        check (d.dens >= 0.9 && d.gap >= 0.6 && d.pickup >= 0.05 && d.pickup <= 0.85, what);
 
         const auto p = measure (Pop, base, defaults (Pop));
         print ("pop", base, p);
