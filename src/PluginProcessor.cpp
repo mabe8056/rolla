@@ -281,9 +281,6 @@ RetuneTolerances loadRetuneTolerances (const char* data, int size)
     return t;
 }
 
-// Pool files the guard walks before it settles for the nearest workable one.
-constexpr int kRetuneWindow = 8;
-
 } // namespace
 
 RollaProcessor::RollaProcessor()
@@ -495,6 +492,7 @@ void RollaProcessor::guardRetunes()
                 // locked key that means a different file, not an off-key one.
                 verdict.ok = false;
                 verdict.reason = "unpitched or under the pitch confidence threshold";
+                juce::Logger::writeToLog (juce::String ("ROLLA retune guard: skip ") + entry->path + " (" + juce::String (verdict.reason) + ")");
                 return verdict;
             }
             const bool chordFile = pitch.isChord && pitch.conf >= kPitchConfMin && part != Bass;
@@ -529,11 +527,19 @@ void RollaProcessor::guardRetunes()
                 if (! got.ok)
                     verdict = got;
             }
+            // Every skip is logged with its reason, so a degraded retune is never
+            // silent and the scorer can count them.
+            if (! verdict.ok)
+                juce::Logger::writeToLog (juce::String ("ROLLA retune guard: skip ") + entry->path + " ("
+                                          + juce::String (verdict.reason) + ", up to "
+                                          + juce::String (worst, 1) + " st)");
             return verdict;
         };
 
+        // The whole pool is walked: a degraded retune is never played while another
+        // file in the lane survives this key.
         const int pick = std::max (0, samplePick[part].load (std::memory_order_relaxed));
-        const RetunePick res = pickRetuneSafe (n, pick, kRetuneWindow, judge);
+        const RetunePick res = pickRetuneSafe (n, pick, n, judge);
         if (res.pending)
         {
             guardPending = true;
@@ -543,9 +549,9 @@ void RollaProcessor::guardRetunes()
         if (res.index >= 0 && res.index != at)
             samplePick[part].store (pick + (res.index - at + n) % n, std::memory_order_relaxed);
         if (! res.safe)
-            juce::Logger::writeToLog (juce::String ("ROLLA retune guard: no ") + partName (part)
-                                      + " file in the next " + juce::String (res.judged)
-                                      + " survives this key; playing the nearest workable one");
+            juce::Logger::writeToLog (juce::String ("ROLLA retune guard: NO SAFE FILE: none of the ") + juce::String (res.judged)
+                                      + " " + partName (part)
+                                      + " files survives this key; playing the least-shifted one rather than silence");
     }
 }
 
