@@ -77,6 +77,8 @@ target_sources(ROLLA
 
 target_compile_definitions(ROLLA
     PUBLIC
+        # Samples only in the plugin: no preset or saved state brings the synth back.
+        ROLLA_PLUGIN_BUILD=1
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
         JUCE_VST3_CAN_REPLACE_VST2=0
@@ -96,6 +98,37 @@ target_link_libraries(ROLLA
     PUBLIC
         juce::juce_recommended_config_flags
 )
+
+# A sample pack copied into each built plugin bundle, Contents/Resources/Samples,
+# where ROLLA looks first. Audio stays out of the repo: point this at a folder on disk.
+#   cmake -B build -DROLLA_SAMPLE_PACK_DIR=/path/to/pack
+set(ROLLA_SAMPLE_PACK_DIR "" CACHE PATH "Sample pack folder copied into the built plugin bundles")
+if(ROLLA_SAMPLE_PACK_DIR)
+    if(NOT IS_DIRECTORY "${ROLLA_SAMPLE_PACK_DIR}")
+        message(FATAL_ERROR "ROLLA_SAMPLE_PACK_DIR is not a folder: ${ROLLA_SAMPLE_PACK_DIR}")
+    endif()
+    set(rolla_pack_formats VST3 AU)
+    if(APPLE)
+        list(APPEND rolla_pack_formats Standalone)
+    endif()
+    foreach(rolla_format IN LISTS rolla_pack_formats)
+        if(NOT TARGET ROLLA_${rolla_format})
+            continue()
+        endif()
+        get_target_property(rolla_bundle ROLLA_${rolla_format} JUCE_PLUGIN_ARTEFACT_FILE)
+        if(WIN32)
+            add_custom_command(TARGET ROLLA_${rolla_format} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E remove_directory "${rolla_bundle}/Contents/Resources/Samples"
+                COMMAND ${CMAKE_COMMAND} -E copy_directory "${ROLLA_SAMPLE_PACK_DIR}" "${rolla_bundle}/Contents/Resources/Samples"
+                VERBATIM)
+        else()
+            # Copies (APFS clones on macOS), writes .rolla-pack.json, re-signs ad hoc.
+            add_custom_command(TARGET ROLLA_${rolla_format} POST_BUILD
+                COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tools/inject_pack.sh" "${rolla_bundle}" "${ROLLA_SAMPLE_PACK_DIR}"
+                VERBATIM)
+        endif()
+    endforeach()
+endif()
 
 add_executable(rolla-render
     src/RenderMain.cpp
@@ -400,6 +433,53 @@ target_compile_definitions(rolla-export-test
 )
 
 target_link_libraries(rolla-export-test
+    PRIVATE
+        RollaData
+        juce::juce_audio_utils
+        juce::juce_dsp
+        juce::juce_audio_formats
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags
+)
+
+# Bundled sample pack: resolve order, one bar per lane from the bundle, silence
+# with no samples, settings never take a temp root. Scratch profile only.
+add_executable(rolla-bundle-test
+    tests/bundle/bundle_root_test.cpp
+    src/PluginProcessor.cpp
+    src/PluginEditor.cpp
+    src/ui/Theme.cpp
+    src/Engine/Engine.cpp
+    src/Engine/Sampler.cpp
+    src/Engine/SampleLibrary.cpp
+    src/Sampler/SamplePrep.cpp
+    src/Sampler/UserSlots.cpp
+    src/Generator/Generator.cpp
+    src/Generator/PhraseBank.cpp
+    src/Generator/Presets.cpp
+    src/Generator/MidiFile.cpp
+    src/Drums/DrumMachine.cpp
+    src/Drums/DrumPattern.cpp
+    src/Mix/MixProgram.cpp
+    src/Mix/MixRuntime.cpp
+)
+
+target_include_directories(rolla-bundle-test PRIVATE src)
+
+target_compile_definitions(rolla-bundle-test
+    PRIVATE
+        # The plugin's rules (samples only), with ROLLA_BUNDLE_ROOT standing in for the bundle.
+        ROLLA_PLUGIN_BUILD=1
+        ROLLA_TEST_HOOKS=1
+        # Lets the test pump the message loop on macOS (runDispatchLoopUntil).
+        JUCE_MODAL_LOOPS_PERMITTED=1
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_DISPLAY_SPLASH_SCREEN=0
+        JUCE_REPORT_APP_USAGE=0
+)
+
+target_link_libraries(rolla-bundle-test
     PRIVATE
         RollaData
         juce::juce_audio_utils

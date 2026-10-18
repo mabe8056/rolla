@@ -1452,7 +1452,12 @@ void Engine::process (const Groove& groove,
                     // Sample kits play the file, then the rest of the DRUMS pack.
                     // If that slot is missing or the library is absent, takeDrum
                     // returns the 909 gain so the hit is not silence.
+                    // Plugin builds have no circuit kit: the 909 never plays.
+#if ROLLA_PLUGIN_BUILD
+                    const bool circuitKit = false;
+#else
                     const bool circuitKit = dp.sample.mode == SampleMode::Synth;
+#endif
                     float keep = 0.f;
                     if (startSample (voice, vel, stepAcc))
                         keep = 0.f;

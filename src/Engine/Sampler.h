@@ -1,6 +1,8 @@
 #pragma once
 
 #include "SampleLibrary.h"
+#include <atomic>
+#include <string>
 #include "../DspUtil.h"
 #include "../Generator/Presets.h"
 
@@ -34,11 +36,27 @@ public:
     // loopEnd16 > 0 fades every voice out at the phrase end so nothing runs into the next bar.
     void render (float* laneL, float* laneR, float prev16, float pos16, bool playing, float loopEnd16 = 0.f) noexcept;
 
+    // The file the last note on a lane (or drum voice) started, library-relative;
+    // empty if nothing played. Read from the message thread by tests and status.
+    std::string lastPickedFile (int part, int drumVoice = -1) const;
+
     // Filled by render(). Melodic playback stays on the lane buses; drum hits are also split per voice.
     float drumOutL[NumDrumVoices] {};
     float drumOutR[NumDrumVoices] {};
 
 private:
+    std::atomic<const SampleAudio*> lastAudio[NumParts] {};
+    std::atomic<const SampleAudio*> lastDrumAudio[NumDrumVoices] {};
+    void notePicked (int part, int drumVoice, const SampleAudio* audio) noexcept
+    {
+        if (audio == nullptr)
+            return;
+        if (drumVoice >= 0 && drumVoice < NumDrumVoices)
+            lastDrumAudio[drumVoice].store (audio, std::memory_order_relaxed);
+        else if (part >= 0 && part < NumParts)
+            lastAudio[part].store (audio, std::memory_order_relaxed);
+    }
+
     struct Voice
     {
         bool on = false;
@@ -57,6 +75,11 @@ private:
         double loopA = 0.0;
         double loopB = 0.0;
         double xfade = 0.0;
+        // In-memory slice of a longer file. chopEnd 0 plays the whole buffer.
+        // The published SampleAudio is never edited.
+        double chopStart = 0.0;
+        double chopEnd = 0.0;
+        int chopFade = 0;
         bool loop = false;
         // Phrase loops keep their pitch and follow the host tempo.
         bool tempoSync = false;

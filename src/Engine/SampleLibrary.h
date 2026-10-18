@@ -1,5 +1,6 @@
 #pragma once
 
+#include "SampleChop.h"
 #include "SampleSpec.h"
 #include "../Sampler/SamplePrep.h"
 
@@ -38,6 +39,9 @@ struct SampleEntry
     int altVoice = -1;
     bool phraseLoop = false;
     int fileBpm = 0;
+    // Spectral flatness of a short read, or -1 when this entry was not measured.
+    // Names decide until a measurement exists.
+    float flatness = -1.f;
 };
 
 // Directory listing joined with manifest metadata. Audio is not loaded here.
@@ -229,7 +233,29 @@ inline bool roleRowApplies (const RoleRow& row, int lane) noexcept
     return row.lanes == 0 || (row.lanes & bit) != 0;
 }
 
-inline bool sampleRoleRejected (const char* text, int lane) noexcept
+inline bool sampleTokenListed (const char* token, const char* const* list, int count) noexcept
+{
+    if (token == nullptr)
+        return false;
+    for (int i = 0; i < count; ++i)
+        if (list[i] != nullptr && std::strcmp (token, list[i]) == 0)
+            return true;
+    return false;
+}
+
+inline bool sampleTextListed (const char* text, const char* const* list, int count) noexcept
+{
+    if (text == nullptr || text[0] == 0)
+        return false;
+    for (int i = 0; i < count; ++i)
+        if (list[i] != nullptr && sampleHasToken (text, list[i]))
+            return true;
+    return false;
+}
+
+// skipSoft lets a PAD bed through the name table. The caller still requires a
+// tonal measurement, and hard broadband names never take this path.
+inline bool sampleRoleRejected (const char* text, int lane, bool skipSoft = false) noexcept
 {
     if (text == nullptr || text[0] == 0)
         return false;
@@ -237,10 +263,23 @@ inline bool sampleRoleRejected (const char* text, int lane) noexcept
     {
         if (row.rule != RoleRule::Reject || ! roleRowApplies (row, lane))
             continue;
+        if (skipSoft && lane == Pad && sampleTokenListed (row.a, kSoftPadBed, 4))
+            continue;
         if (samplePhrase (text, row.a, row.b, row.c))
             return true;
     }
     return false;
+}
+
+// A PAD name the reject table drops only for texture, background, atmos or drone.
+// Hard broadband tokens, and every other reject, stay out.
+inline bool sampleOnlySoftPad (const char* path, const char* category) noexcept
+{
+    if (sampleRoleRejected (path, Pad, true) || sampleRoleRejected (category, Pad, true))
+        return false;
+    if (sampleTextListed (path, kHardBroadband, 6) || sampleTextListed (category, kHardBroadband, 6))
+        return false;
+    return sampleRoleRejected (path, Pad) || sampleRoleRejected (category, Pad);
 }
 
 inline bool sampleHitsAllowed (const char* text) noexcept
@@ -260,11 +299,19 @@ inline bool sampleHitsAllowed (const char* text) noexcept
 
 // Role lanes reject noise, fx and vinyl on the whole relative path and on the
 // category. HITS then keeps only the allow-list. Acid is out of HITS in every
-// dialect. Style bits still apply only when a dialect is set.
+// dialect. A PAD texture / background / atmos / drone name stays out until a
+// load measures it as tonal. Noise, crackle, vinyl, riser, sweep and whoosh
+// stay out either way. Style bits still apply only when a dialect is set.
 inline bool samplePoolAllows (const SampleEntry& entry, int lane, int dialect) noexcept
 {
-    if (sampleRoleRejected (entry.path, lane) || sampleRoleRejected (entry.category, lane))
-        return false;
+    const bool named = sampleRoleRejected (entry.path, lane) || sampleRoleRejected (entry.category, lane);
+    if (named)
+    {
+        const bool onlySoft = lane == Pad && sampleOnlySoftPad (entry.path, entry.category);
+        const bool measuredTonal = entry.flatness >= 0.f && entry.flatness < kTonalFlatness;
+        if (! onlySoft || ! measuredTonal)
+            return false;
+    }
     if (lane == Hits && ! sampleHitsAllowed (entry.path) && ! sampleHitsAllowed (entry.category))
         return false;
     if (dialect < 0 || dialect >= NumDialects)
@@ -445,6 +492,8 @@ inline LanePick pickLaneSample (const SampleIndex& index, int part, const PoolFi
 // Immutable audio published to the realtime thread. Never freed while the library is alive.
 struct SampleAudio
 {
+    // Library-relative path ("BASS/foo.wav"), for status and tests. Set at load.
+    std::string path;
     int frames = 0;
     double rate = 48000.0;
     std::vector<float> left;
@@ -453,6 +502,13 @@ struct SampleAudio
     int slices[24] { 0 };
     // First audible frame (2 ms early). Vox phrases often open on silence.
     int lead = 0;
+    // -1 until loadOne measures the in-memory buffer. The file on disk is not written.
+    float flatness = -1.f;
+    int loudStart = 0;
+    // Vox chop starts on the voice, not on near-silence (SampleChop.h voicedOnsets).
+    int voicedCount = 0;
+    int voiced[24] { 0 };
+    float voicedFloor = 0.f;
 };
 
 // Loads preset-referenced files from the user sample folder on a background thread.
@@ -467,6 +523,20 @@ public:
     SampleLibrary& operator= (const SampleLibrary&) = delete;
 
     static juce::File defaultRoot();
+    // The samples shipped inside the plugin bundle: <bundle>/Contents/Resources/Samples
+    // (VST3, AU component and standalone app; the binary sits two levels below
+    // Contents). Non-plugin builds (tests, tools) may point it elsewhere with
+    // ROLLA_BUNDLE_ROOT; the plugin ignores that variable.
+    static juce::File bundledRoot();
+    // Where the library reads from: the bundle when it holds audio; else a saved
+    // root that exists, holds audio and is not a temp folder; else defaultRoot().
+    static juce::File resolveSampleRoot (const juce::String& savedRoot);
+    // True for the pack inside the plugin bundle (or a folder in it). Nothing is ever
+    // written there: no lane folders, no caches, no user-slot copies.
+    static bool isBundledRoot (const juce::File& root);
+    // Where user-slot imports are copied: the sample root, or ~/Music/ROLLA/Samples
+    // when the sample root is the read-only bundled pack.
+    static juce::File userSlotRootFor (const juce::File& sampleRoot);
     void setRoot (const juce::File& root);
     juce::File root() const;
 

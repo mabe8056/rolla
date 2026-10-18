@@ -1,4 +1,5 @@
 #include "PluginProcessor.h"
+#include "../common/ScratchProfile.h"
 #include "UiTokens.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -631,7 +632,8 @@ void testExport()
     rolla::RollaProcessor proc;
     proc.waitUntilReady();
     const auto cache = proc.exportCache();
-    expect (cache.getFullPathName().contains ("ROLLA"), "cache folder is ROLLA");
+    // The scratch profile puts caches under a temp "rolla-knob-..." folder (ROLLA_CACHE_DIR).
+    expect (cache.getFullPathName().containsIgnoreCase ("ROLLA"), "cache folder is ROLLA");
     expect (cache.isDirectory(), "cache exists");
 
     const auto bass = proc.writeLaneMidi (rolla::Bass);
@@ -837,6 +839,12 @@ void testStabDice()
 
 int main()
 {
+    // Never the real user profile: settings, caches and sample folders go to a scratch folder.
+    if (rolla::test::useScratchProfile ("knob").empty())
+    {
+        std::cerr << "could not set up a scratch profile\n";
+        return 1;
+    }
     juce::ScopedJuceInitialiser_GUI juce;
     testBindings();
     testBusyDensity();
