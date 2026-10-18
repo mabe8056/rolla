@@ -273,6 +273,10 @@ public:
     // Factory playback does not use this to preload a lane; the index does that lazily.
     void watch (const PresetBank& bank);
 
+    // Message thread. Loads these files next, ahead of the background watch list.
+    // ROLL and preset changes call this so the lanes are ready before the downbeat.
+    void preload (const std::vector<std::string>& relativePaths);
+
     // Message thread. Scans <root>/<LANE>/(<VOICE>/) on the worker and joins manifest metadata.
     // A SAMPLE_MANIFEST_v2.json or SAMPLE_MANIFEST.json in the root overrides this text.
     void startIndex (const char* manifestJson, int size);
@@ -308,6 +312,7 @@ private:
     bool cachedGain (const std::string& relative, juce::int64 bytes, float& gainDb);
     void rememberGain (const std::string& relative, juce::int64 bytes, float gainDb);
     Slot* slotFor (const char* relative) noexcept;
+    Slot* claimSlot (const char* relative) noexcept;
     const Slot* slotFor (const char* relative) const noexcept;
 
     mutable std::mutex rootMu;
@@ -337,13 +342,15 @@ private:
     std::atomic<int> indexedFoundCount { -1 };
     std::atomic<int> indexedMissingCount { -1 };
 
-    static constexpr int kReq = 64;
+    static constexpr int kReq = 512;
     mutable char reqRing[kReq][256] {};
     mutable std::atomic<int> reqHead { 0 };
     mutable std::atomic<int> reqTail { 0 };
 
-    static constexpr int kSlots = 384;
-    Slot slots[kSlots];
+    // Power of two. Larger than the 2,697-file manifest so a session of rolls never runs out.
+    static constexpr int kSlots = 8192;
+    std::unique_ptr<Slot[]> slots { new Slot[kSlots] };
+    std::atomic<bool> tableFullLogged { false };
     std::mutex slotMu;
     std::vector<std::unique_ptr<SampleAudio>> kept;
 };
@@ -358,6 +365,15 @@ struct InstalledPack
 InstalledPack openInstalledPack (const char* manifestJson, int manifestSize);
 
 void ensureSampleFolders (const juce::File& root);
+
+// The files the sampler will reach for first with these presets and picks:
+// each lane's preferred pool entry and its next neighbours (window), and every drum voice.
+void collectPlayFiles (const PresetBank& bank, const SampleIndex& index, const int preset[NumParts],
+                       const int samplePick[NumParts], int dialect, int window, std::vector<std::string>& out);
+
+// Per-user cache files (kind "index" or "loudness"). Never inside the sample root.
+juce::File sampleCacheFor (const juce::File& sampleRoot, const char* kind);
+juce::File loudnessCacheFor (const juce::File& sampleRoot);
 
 // Unique relative paths named by the loaded presets, including drum voice pools.
 void collectReferencedSamples (const PresetBank& bank, std::vector<std::string>& out);

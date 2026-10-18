@@ -213,6 +213,13 @@ jobs:
           python3 -m pip install --user --break-system-packages numpy scipy soundfile pyloudnorm
           python3 tests/roll/renderer_smoke.py --rolls ./build/rolla-rolls
 
+      - name: Sample pack render checks (bar-1 kick, silent lanes, mutes, STAB)
+        run: |
+          set -euo pipefail
+          # Generated pack (no sample audio in git), bigger than the old load table.
+          python3 tests/roll/sample_pack_check.py --rolls ./build/rolla-rolls \
+            --seeds 1,2 --count 20 --full-count 6 --jobs 4 --stab-sweep
+
       - name: Roll tests
         run: |
           set -euo pipefail

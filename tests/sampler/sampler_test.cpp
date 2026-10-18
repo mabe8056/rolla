@@ -241,6 +241,10 @@ int main()
             "non-kick drums stay on C3");
 
     const auto rootDir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("rolla-sampler-test");
+    // Caches live outside the sample roots now, keyed by root path: clear this test's.
+    for (const char* sub : { "scan", "dual" })
+        for (const char* kind : { "index", "loudness" })
+            rolla::sampleCacheFor (rootDir.getChildFile (sub), kind).deleteFile();
     rootDir.deleteRecursively();
     const auto inside = rootDir.getChildFile ("BASS/tone.wav");
     writeTone (inside, 0.5, 0.4f, 440.f, false);
@@ -747,8 +751,9 @@ int main()
         }
         expect (scannedKick > 0.01f, "the scanned kick is audible");
 
-        const auto cache = scanRoot.getChildFile (".rolla-index.json");
-        expect (cache.existsAsFile(), "the index is cached beside the samples");
+        const auto cache = rolla::sampleCacheFor (scanRoot, "index");
+        expect (! scanRoot.getChildFile (".rolla-index.json").exists(), "nothing is written into the sample folder");
+        expect (cache.existsAsFile() && ! cache.isAChildOf (scanRoot), "the index is cached outside the samples");
         auto cachedText = cache.loadFileAsString();
         expect (cachedText.contains ("Phantom"), "cache keeps pack metadata");
         cachedText = cachedText.replace ("Phantom", "CachedPack");
@@ -878,10 +883,13 @@ int main()
                 boosted = std::max (boosted, std::fabs (s));
         expect (boosted > 0.04f, "load-time gain lifts a quiet raw copy");
         expect (checksum (quietFile) == quietSum, "loudness normalisation does not write the wav");
-        auto cacheText = dualRoot.getChildFile (".rolla-loudness.json").loadFileAsString();
+        const auto cacheFile = rolla::loudnessCacheFor (dualRoot);
+        expect (! dualRoot.getChildFile (".rolla-loudness.json").exists(), "nothing is written into the sample folder");
+        expect (! cacheFile.isAChildOf (dualRoot), "the loudness cache lives outside the sample folder");
+        auto cacheText = cacheFile.loadFileAsString();
         expect (cacheText.contains ("VOX/quiet.wav"), "the gain is cached");
         cacheText = cacheText.replace ("\"gainDb\":", "\"gainDb\": 0, \"was\":");
-        dualRoot.getChildFile (".rolla-loudness.json").replaceWithText (cacheText);
+        cacheFile.replaceWithText (cacheText);
         rolla::SampleLibrary cached;
         cached.setRoot (dualRoot);
         cached.request ("VOX/quiet.wav");

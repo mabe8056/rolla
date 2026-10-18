@@ -264,7 +264,8 @@ void Sampler::Voice::Env::start (float aMs, float dMs, float sGain, float rMs, f
     sustain = std::clamp (sGain, 0.f, 1.f);
     attInc = 1.f / std::max (1.f, aMs * 0.001f * sr);
     decC = coefFromMs (std::max (5.f, dMs) / 3.f, sr);
-    relC = coefFromMs (std::max (5.f, rMs) / 3.f, sr);
+    // At least a 4 ms time constant: a shorter release clicks on square or saw samples.
+    relC = coefFromMs (std::max (12.f, rMs) / 3.f, sr);
 }
 
 void Sampler::Voice::Env::release() noexcept
@@ -1098,10 +1099,13 @@ void Sampler::render (float* laneL, float* laneR, float prev16, float pos16, boo
                 if (remain < window)
                     v.noteEdge = 0.5f * (1.f - std::cos (kSincPi * remain / window));
             }
-            else if (! born && prev16 < stop && pos16 + 1.0e-3f < prev16)
+            else if (! born && prev16 < stop && pos16 + 1.0e-3f < prev16 && ! v.stopping)
             {
-                v.on = false;
-                return;
+                // Loop wrap or a host relocate cut the note: fade it over 4 ms, never a hard cut.
+                v.attackLeft = 0;
+                v.releaseN = std::max (8, (int) (0.004 * sr));
+                v.releaseLeft = v.releaseN;
+                v.stopping = true;
             }
         }
         else if (playing && v.end16 < 1.0e8f)

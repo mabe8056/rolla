@@ -174,6 +174,9 @@ private:
     void deferredStartup();
     void rememberSample (int voice, const float* mono, int n, double rate, const juce::String& name);
     void applyRememberedSamples();
+    // Message thread. Loads the files the current presets and picks will play, so a
+    // freshly rolled lane is ready before the downbeat instead of starting silent.
+    void prefetchPlayFiles();
 
     struct AsyncState
     {
@@ -231,6 +234,16 @@ private:
     std::atomic<float> lastBpm { 130.f };
     double previewPpq = 0.0;
     double preparedRate = 48000.0;
+
+    std::uint64_t prefetchedKey = 0;
+    struct PrefetchTimer : juce::Timer
+    {
+        explicit PrefetchTimer (RollaProcessor& p) : owner (p) {}
+        void timerCallback() override { owner.prefetchPlayFiles(); }
+        RollaProcessor& owner;
+    };
+    // Last member, so it stops first on destruction.
+    PrefetchTimer prefetchTimer { *this };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RollaProcessor)
 };
