@@ -1398,9 +1398,11 @@ void testBar8Pickup()
             }
             if (inWindow >= 1 && inWindow <= 3)
                 ++countOk;
-            if (lastPitch >= 0 && firstPitch >= 0)
+            (void) firstPitch;
+            if (inWindow > 0)
             {
-                const int iv = ((firstPitch - lastPitch) % 12 + 12) % 12;
+                // The pickup resolves to the key root (bass pitches are relative to it).
+                const int iv = ((0 - lastPitch) % 12 + 12) % 12;
                 if (iv == 1 || iv == 2 || iv == 10 || iv == 11 || iv == 5 || iv == 7)
                     ++approachOk;
             }

@@ -2835,6 +2835,13 @@ bool bassOnset (const Lane& lane, int slot)
 // Stab chord onsets per bar (a chord counts as one hit), every style.
 constexpr int kStabHitsMax = 3;
 
+// Composer's cap is 3 chord hits a bar at the default STAB (0.55). Turning
+// STAB up past 0.8 allows one more, so the knob still adds density at the top.
+int stabHitCap (const Settings& s) noexcept
+{
+    return s.stab > 0.8f ? kStabHitsMax + 1 : kStabHitsMax;
+}
+
 void writeStab (Lane& lane, const Lane& bass, const Settings& s, Rng& rng, float freedom, char* breaks, int breaksN)
 {
     const std::uint32_t seed = lane.seed ? lane.seed : 1u;
@@ -2951,7 +2958,7 @@ void writeStab (Lane& lane, const Lane& bass, const Settings& s, Rng& rng, float
     const bool skipOdd = (s.busy < 0.25f && per <= 2) || stabSparse;
     // At most kStabHitsMax chord hits a bar in every style. Low BUSY keeps one
     // fewer outside ROLLER, so BUSY still moves the density under the cap.
-    per = std::min (per, (s.busy < 0.25f && s.dialect != UkMin) ? kStabHitsMax - 1 : kStabHitsMax);
+    per = std::min (per, (s.busy < 0.25f && s.dialect != UkMin) ? stabHitCap (s) - 1 : stabHitCap (s));
     for (int bar = 0; bar < s.bars && bar < 8; ++bar)
     {
         if (skipOdd && (bar & 1) != 0)
@@ -4461,7 +4468,7 @@ void trimSamePitchOverlaps (Lane& lane)
 // At most kStabHitsMax chord onsets a bar. The beat-1 hit and the closing
 // answer of bars 4 and 8 stay; then louder, then more accented (8th offbeat,
 // then 8th), then earlier hits win.
-void capStabHits (Lane& lane, int bars)
+void capStabHits (Lane& lane, int bars, int cap)
 {
     for (int bar = 0; bar < bars && bar < kMaxBars; ++bar)
     {
@@ -4485,7 +4492,7 @@ void capStabHits (Lane& lane, int bars)
             }
             vel[k] = std::max (vel[k], (int) lane.notes[i].vel);
         }
-        if (n <= kStabHitsMax)
+        if (n <= cap)
             continue;
         int first = 16;
         int last = -1;
@@ -4506,7 +4513,7 @@ void capStabHits (Lane& lane, int bars)
             score[k] = sc;
         }
         bool keep[16] {};
-        for (int pick = 0; pick < kStabHitsMax; ++pick)
+        for (int pick = 0; pick < cap; ++pick)
         {
             int best = -1;
             for (int k = 0; k < n; ++k)
@@ -5460,7 +5467,7 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
         Rng rs (stabSeed);
         char stabBreaks[48] = "";
         writeStab (g.lane[Stab], g.lane[Bass], s, rs, freedom, stabBreaks, (int) sizeof stabBreaks);
-        capStabHits (g.lane[Stab], s.bars);
+        capStabHits (g.lane[Stab], s.bars, stabHitCap (s));
     }
     // IN STAB follows the stab that ships, so the hits are rewritten on it.
     if (s.hitsInStab && regen (Hits))
