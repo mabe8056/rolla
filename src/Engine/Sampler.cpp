@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 namespace rolla
 {
@@ -277,6 +278,12 @@ void Sampler::Voice::Env::start (float aMs, float dMs, float sGain, float rMs, f
     amp = 0.f;
     sustain = std::clamp (sGain, 0.f, 1.f);
     attInc = 1.f / std::max (1.f, aMs * 0.001f * sr);
+    // No attack: full level from the first sample (a sample's own attack is in the file).
+    if (aMs <= 0.f)
+    {
+        amp = 1.f;
+        stage = 2;
+    }
     decC = coefFromMs (std::max (5.f, dMs) / 3.f, sr);
     // At least a 4 ms time constant: a shorter release clicks on square or saw samples.
     relC = coefFromMs (std::max (12.f, rMs) / 3.f, sr);
@@ -343,7 +350,12 @@ void Sampler::reset() noexcept
 
 void Sampler::armAttack (Voice& v) noexcept
 {
-    v.attackN = std::max (8, (int) (0.003 * sr));
+    // A note that starts mid-file (slice, start offset, vox lead-in, reverse)
+    // fades in over 3 ms so the cut does not click. One that starts on the
+    // file's first sample keeps the file's own attack, so a kick or hat
+    // transient is not softened.
+    const bool fileStart = ! v.reverse && ! v.tempoSync && v.pos < 0.5;
+    v.attackN = fileStart ? 0 : std::max (8, (int) (0.003 * sr));
     v.attackLeft = v.attackN;
     v.fade = 1.f;
     v.fadeInc = 0.f;
@@ -534,18 +546,28 @@ void Sampler::readVoice (Voice& v, float& l, float& r) noexcept
     if (v.releaseN > 0 && v.releaseLeft <= 0 && v.stopping)
         v.on = false;
 
+    // The file as recorded unless TONE moved: no ladder, no HPF, and L and R
+    // always through the same path (the old path filtered L only and folded
+    // 15% of it into R, which made stereo samples lopsided and partly mono).
     const float srF = (float) sr;
-    if (v.fEnv > 0.f)
-        v.fEnv *= v.fCoef;
-    const float fc = std::clamp (v.cut * std::pow (2.f, v.envOct * v.fEnv), 40.f, srF * 0.45f);
-    ls = v.ladder.process (ls, fc, v.res, srF);
-    if (v.hpfHz > 25.f)
+    if (v.lowpass)
+    {
+        if (v.fEnv > 0.f)
+            v.fEnv *= v.fCoef;
+        const float fc = std::clamp (v.cut * std::pow (2.f, v.envOct * v.fEnv), 40.f, srF * 0.45f);
+        ls = v.ladder.process (ls, fc, v.res, srF);
+        rs = v.ladderR.process (rs, fc, v.res, srF);
+    }
+    if (v.hpfHz > 0.f)
     {
         const float c = std::exp (-2.f * kSincPi * v.hpfHz / srF);
         v.hpState = c * v.hpState + (1.f - c) * ls;
+        v.hpStateR = c * v.hpStateR + (1.f - c) * rs;
         ls -= v.hpState;
+        rs -= v.hpStateR;
     }
-    rs = ls + (rs - ls) * 0.85f;
+    if (v.gateLeft > 0 && --v.gateLeft == 0)
+        v.env.release();
 
     float edge = v.noteEdge;
     if (v.attackN > 0 && v.attackLeft > 0)
@@ -631,6 +653,59 @@ Amp ampFor (const PresetBank& bank, int part, int preset)
     return a;
 }
 
+// Samples play the file as recorded. TONE away from neutral (0.5) is the only
+// thing that filters them: darker sweeps a lowpass from 20 kHz down to the lane
+// preset's cutoff at 0 (with the preset's filter envelope), brighter raises a
+// highpass up to 320 Hz at 1.
+struct SampleFilter
+{
+    bool lowpass = false;
+    float cut = 20000.f;
+    float envOct = 0.f;
+    float hpf = 0.f;
+};
+
+SampleFilter sampleFilter (float tone, const Amp& amp) noexcept
+{
+    SampleFilter f;
+    const float t = tone - 0.5f;
+    if (t <= -0.01f)
+    {
+        const float k = std::min (1.f, -t * 2.f);
+        f.lowpass = true;
+        f.cut = 20000.f * std::pow (std::max (40.f, amp.cut) / 20000.f, k);
+        f.envOct = amp.envOct * k;
+    }
+    else if (t >= 0.01f)
+        f.hpf = 20.f * std::pow (2.f, 4.f * std::min (1.f, t * 2.f));
+    return f;
+}
+
+// A template so it can take the sampler's private Voice.
+template <typename VoiceT>
+void applyFilter (VoiceT& v, const SampleFilter& f) noexcept
+{
+    v.lowpass = f.lowpass;
+    v.cut = f.cut;
+    v.envOct = f.envOct;
+    v.hpfHz = f.hpf;
+    v.hpState = v.hpStateR = 0.f;
+    v.ladder.reset();
+    v.ladderR.reset();
+}
+
+// DECAY 0.5 (the default) and up plays a drum hit's whole length. Below 0.5 the
+// hit is cut at a fraction of what is left of the file (1/8 at 0) and released
+// over 12 ms. -1 means no gate.
+int drumGate (float decayKnob, const SampleAudio& audio, double startFrame, double ratio) noexcept
+{
+    const float d = std::clamp (decayKnob, 0.f, 1.f);
+    if (d >= 0.5f)
+        return -1;
+    const double left = std::max (8.0, ((double) audio.frames - startFrame) / std::max (1.0e-3, ratio));
+    return std::max (8, (int) (left * std::pow (2.0, (double) (d - 0.5f) * 6.0)));
+}
+
 } // namespace
 
 bool Sampler::playUserSlot (int part, int drumVoice, int midiNote, int velocity, float end16,
@@ -711,24 +786,18 @@ bool Sampler::playUserSlot (int part, int drumVoice, int midiNote, int velocity,
         trim *= ampDb (params.drumLevelDb[drumVoice]);
     fresh.gain = trim * decision.sampleMix * ampDb (decision.gainDb);
     fresh.pan = (part == Stab || part == Pad) ? 0.15f : 0.f;
-    fresh.cut = amp.cut;
     fresh.res = amp.res;
-    fresh.envOct = drumVoice >= 0 ? 0.f : amp.envOct;
     fresh.fEnv = 1.f;
     fresh.fCoef = expDecay (std::max (4.f, drumVoice >= 0 ? 30.f : amp.tau), srF);
-    fresh.hpfHz = drumVoice >= 0 ? 30.f : amp.hpf;
-    fresh.hpState = 0.f;
-    fresh.ladder.reset();
-    if (drumVoice >= 0)
-    {
-        const float decay = 80.f * std::pow (2.f, (params.drumDecay[drumVoice] - 0.5f) * 2.f);
-        fresh.env.start (0.5f, decay, 0.f, 12.f, srF);
-    }
-    else
-        fresh.env.start (amp.a, amp.d, amp.s, amp.r, srF);
+    applyFilter (fresh, sampleFilter (params.tone[voicePart], amp));
+    // Natural length: the file's own envelope, released at the note end (melodic)
+    // or by the DECAY gate (drums). The 3 ms raised-cosine attack is armAttack.
+    fresh.env.start (0.f, 5.f, 1.f, drumVoice >= 0 ? 12.f : amp.r, srF);
 
     const double startFrame = std::min (std::clamp ((double) decision.startSec, 0.0, 60.0) * pod.audio->rate,
                                          (double) pod.audio->frames - 1.0);
+    if (drumVoice >= 0)
+        fresh.gateLeft = drumGate (params.drumDecay[drumVoice], *pod.audio, startFrame, fresh.ratio);
     fresh.pos = startFrame;
     fresh.loop = decision.loop;
     SampleLoop loop;
@@ -870,17 +939,19 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     if (layered)
         fresh.gain *= std::clamp (played.layerMix, 0.f, 1.f);
     fresh.pan = (part == Stab || part == Pad) ? 0.15f : 0.f;
-    fresh.cut = amp.cut;
     fresh.res = amp.res;
-    fresh.envOct = amp.envOct;
     fresh.fEnv = 1.f;
     fresh.fCoef = expDecay (std::max (4.f, amp.tau), srF);
-    fresh.hpfHz = amp.hpf;
-    fresh.hpState = 0.f;
-    fresh.ladder.reset();
-    fresh.env.start (amp.a, amp.d, amp.s, amp.r, srF);
+    applyFilter (fresh, sampleFilter (params.tone[part], amp));
+    // Natural length: no synth ADSR on a sample. It sustains at full level and
+    // releases at the note end with the preset's release.
+    fresh.env.start (0.f, 5.f, 1.f, amp.r, srF);
 
-    double startFrame = fromPack ? 0.0 : std::clamp ((double) played.start, 0.0, 16.0) * audio->rate;
+    // A preset's start offset and loop points were set for its own file. A file
+    // drawn from a pool or a recipe plays from its first sample, once.
+    const bool ownFile = ! fromPack && choice.file != nullptr && played.file[0] != 0
+                         && std::strcmp (choice.file, played.file) == 0;
+    double startFrame = ownFile ? std::clamp ((double) played.start, 0.0, 16.0) * audio->rate : 0.0;
     if (choice.slice && audio->sliceCount > 1)
     {
         const int s = (choice.sliceIndex % audio->sliceCount + audio->sliceCount) % audio->sliceCount;
@@ -890,7 +961,7 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     if (part == Vox && startFrame < (double) audio->lead)
         startFrame = (double) audio->lead;
     fresh.pos = startFrame;
-    fresh.loop = ! fromPack && played.loop.on && part != Hits && part != Vox;
+    fresh.loop = ownFile && played.loop.on && part != Hits && part != Vox;
     const auto region = makeLoopRegion (played.loop, audio->rate, audio->frames, startFrame);
     fresh.loopA = region.a;
     fresh.loopB = region.b;
@@ -1067,16 +1138,17 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
     fresh.gain = amp.trim * std::clamp (velocity / 127.f, 0.05f, 1.f) * ampDb (params.drumLevelDb[voice]);
     if (spec.mode == SampleMode::Layer)
         fresh.gain *= std::clamp (spec.layerMix, 0.f, 1.f);
-    fresh.cut = amp.cut;
     fresh.res = amp.res;
-    fresh.envOct = 0.f;
     fresh.fEnv = 1.f;
     fresh.fCoef = expDecay (30.f, (float) sr);
-    fresh.hpfHz = 30.f;
-    fresh.ladder.reset();
-    const float decay = 80.f * std::pow (2.f, (params.drumDecay[voice] - 0.5f) * 2.f);
-    fresh.env.start (0.5f, decay, 0.f, 12.f, (float) sr);
+    SampleFilter filter = sampleFilter (params.tone[Drums], amp);
+    filter.envOct = 0.f;
+    applyFilter (fresh, filter);
+    // Natural length at DECAY 0.5: the hit's own tail (the old 80 ms decay with
+    // no sustain cut kick, clap and open-hat tails). Lower DECAY gates it shorter.
+    fresh.env.start (0.f, 5.f, 1.f, 12.f, (float) sr);
     fresh.pos = std::clamp ((double) spec.start, 0.0, 4.0) * audio->rate;
+    fresh.gateLeft = drumGate (params.drumDecay[voice], *audio, fresh.pos, fresh.ratio);
     fresh.loop = spec.loop.on;
     const auto region = makeLoopRegion (spec.loop, audio->rate, audio->frames, fresh.pos);
     fresh.loopA = region.a;
