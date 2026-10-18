@@ -369,10 +369,12 @@ void Sampler::armAttack (Voice& v) noexcept
 {
     // A note that starts mid-file (slice, start offset, vox lead-in, reverse)
     // fades in over 3 ms so the cut does not click. One that starts on the
-    // file's first sample keeps the file's own attack, so a kick or hat
-    // transient is not softened.
+    // file's first sample fades in over 0.5 ms: the transient stays, but a
+    // file trimmed onto a non-zero sample (most pack kicks, rims, bass stabs)
+    // no longer opens on a full-level step. With no fade at all every such
+    // hit was a click.
     const bool fileStart = ! v.reverse && ! v.tempoSync && v.pos < 0.5;
-    v.attackN = fileStart ? 0 : std::max (8, (int) (0.003 * sr));
+    v.attackN = std::max (8, (int) ((fileStart ? 0.0005 : 0.003) * sr));
     v.attackLeft = v.attackN;
     v.fade = 1.f;
     v.fadeInc = 0.f;
@@ -464,13 +466,16 @@ void Sampler::releaseAll() noexcept
             v.env.release();
 }
 
-Sampler::Voice* Sampler::allocate (int) noexcept
+Sampler::Voice* Sampler::allocate (int part) noexcept
 {
     Voice* free = nullptr;
     Voice* quiet = nullptr;
     float quietG = 1.0e8f;
-    for (auto& v : voices)
+    Voice* const first = part == Drums ? voices : voices + kDrumVoices;
+    Voice* const last = part == Drums ? voices + kDrumVoices : voices + kDrumVoices + kMelodicVoices;
+    for (Voice* p = first; p != last; ++p)
     {
+        Voice& v = *p;
         if (! v.on)
         {
             free = &v;

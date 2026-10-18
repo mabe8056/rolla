@@ -132,6 +132,7 @@ private:
         } env;
     };
 
+    // Drum hits steal only drum voices, melodic notes only melodic voices.
     Voice* allocate (int part) noexcept;
     void park (const Voice& dying) noexcept;
     // What a voice still puts out: env, release edge and gain. A voice born this
@@ -152,7 +153,12 @@ private:
     float drumGain = 1.f;
     int serial = 1;
     int sliceCursor[NumParts] {};
-    Voice voices[40];
+    // Two pools. With one shared pool a full drum kit stole bass notes (a bass
+    // voice's gain ranks below a drum tail's), and in a stem bounce the muted
+    // drums still played into the pool and cut the soloed bass.
+    static constexpr int kDrumVoices = 40;
+    static constexpr int kMelodicVoices = 32;
+    Voice voices[kDrumVoices + kMelodicVoices];
     // Stolen voices finish their release here. Evicting a tail is a cut, so keep plenty.
     Voice tails[32];
 };
