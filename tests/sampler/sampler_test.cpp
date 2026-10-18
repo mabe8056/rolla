@@ -984,21 +984,19 @@ int main()
         expect (std::string (rolla::sampleIndexAt (pools, rolla::Pad, pad, 0)->path) == "PAD/air_pad.wav",
                 "the pad pool keeps the pad");
         pad.dialect = -1;
-        expect (rolla::sampleIndexCount (pools, rolla::Pad, pad) == 2, "dialect -1 leaves the pad pool unfiltered");
+        expect (rolla::sampleIndexCount (pools, rolla::Pad, pad) == 1, "vinyl stays out when dialect is unset");
 
         rolla::PoolFilter hits;
         hits.on = true;
         hits.lane = rolla::Hits;
         hits.dialect = rolla::UkMin;
-        expect (rolla::sampleIndexCount (pools, rolla::Hits, hits) == 1, "UK MIN hits drop acid and risers");
-        expect (std::string (rolla::sampleIndexAt (pools, rolla::Hits, hits, 0)->path) == "HITS/warehouse_hit.wav",
-                "UK MIN hits keep the warehouse hit");
+        expect (rolla::sampleIndexCount (pools, rolla::Hits, hits) == 0, "UK MIN hits drop acid, fx and risers");
         hits.dialect = rolla::Long;
-        expect (rolla::sampleIndexCount (pools, rolla::Hits, hits) == 1, "LONG hits drop acid");
+        expect (rolla::sampleIndexCount (pools, rolla::Hits, hits) == 0, "LONG hits drop acid");
         hits.dialect = rolla::Pop;
-        expect (rolla::sampleIndexCount (pools, rolla::Hits, hits) == 3, "BOUNCY hits keep acid and drop risers");
+        expect (rolla::sampleIndexCount (pools, rolla::Hits, hits) == 0, "BOUNCY hits drop acid");
         hits.dialect = rolla::Gaskin;
-        expect (rolla::sampleIndexCount (pools, rolla::Hits, hits) == 3, "JACKIN hits keep acid and drop risers");
+        expect (rolla::sampleIndexCount (pools, rolla::Hits, hits) == 0, "JACKIN hits drop acid");
 
         rolla::PoolFilter bass;
         bass.on = true;
@@ -1009,6 +1007,163 @@ int main()
         expect (rolla::sampleIndexCount (pools, rolla::Bass, bass) == 2, "styles 0 still fits UK MIN");
         expect (rolla::sampleHasToken ("HITS/303fx_hat.wav", "303"), "303 matches 303fx");
         expect (! rolla::sampleHasToken ("HITS/1303_hat.wav", "303"), "303 does not match 1303");
+    }
+
+    {
+        auto add = [] (rolla::SampleIndex& index, int lane, const char* path, const char* category)
+        {
+            rolla::SampleEntry entry;
+            std::snprintf (entry.path, sizeof entry.path, "%s", path);
+            entry.lane = lane;
+            entry.onDisk = true;
+            if (category != nullptr)
+                std::snprintf (entry.category, sizeof entry.category, "%s", category);
+            index.entries.push_back (entry);
+        };
+        rolla::SampleIndex fake;
+        add (fake, rolla::Pad, "PAD/MTN_FX_Noise_Bed.wav", "pad");
+        add (fake, rolla::Pad, "PAD/VER_134_VinylNoise_FX.wav", "pad");
+        add (fake, rolla::Pad, "PAD/CD_SFX_Vinyl_Texture.wav", "pad");
+        add (fake, rolla::Pad, "PAD/JF_128_Best_Vinyl_Background.wav", "pad");
+        add (fake, rolla::Pad, "PAD/MTN_FX_Drone.wav", "pad");
+        add (fake, rolla::Pad, "PAD/JustNoize_Background.wav", "pad");
+        add (fake, rolla::Pad, "PAD/Effects_Wash.wav", "pad");
+        add (fake, rolla::Pad, "PAD/Vinyl/pretty_pad_Fm.wav", "pad");
+        add (fake, rolla::Pad, "PAD/prefix_warm_Fm.wav", "pad");
+        add (fake, rolla::Pad, "PAD/Air_Pad_Fm.wav", "pad");
+        add (fake, rolla::Pluck, "PLUCK/Telephone_Bell_C.wav", "pluck");
+        add (fake, rolla::Pluck, "PLUCK/Whoosh_Downlifter.wav", "pluck");
+        add (fake, rolla::Pluck, "PLUCK/Pluck_Chord_D5.wav", "pluck");
+        add (fake, rolla::Stab, "STAB/Uplifter_Sweep.wav", "stab");
+        add (fake, rolla::Stab, "STAB/Stab_Chord_Fm.wav", "stab");
+        add (fake, rolla::Hits, "HITS/MA_128_Lazer_Synth_FX.wav", "fx");
+        add (fake, rolla::Hits, "HITS/Cat_Synth_FX.wav", "fx");
+        add (fake, rolla::Hits, "HITS/CD_SFX_Razor.wav", "fx");
+        add (fake, rolla::Hits, "HITS/Telephone_Synth_FX.wav", "fx");
+        add (fake, rolla::Hits, "HITS/Acid_Hit_C.wav", "acid_hit");
+        add (fake, rolla::Hits, "HITS/303_Saw_D4.wav", "fx");
+        add (fake, rolla::Hits, "HITS/Noise_Riser_C.wav", "fx");
+        add (fake, rolla::Hits, "HITS/FX/Chord_Stab_C.wav", "chord");
+        add (fake, rolla::Hits, "HITS/hitch_ride_C.wav", "hit");
+        add (fake, rolla::Hits, "HITS/Chord_Stab_Cmin.wav", "chord");
+        add (fake, rolla::Hits, "HITS/Rave_Stabber_Dmin.wav", "stab");
+        add (fake, rolla::Hits, "HITS/Organ_Hit_Fm.wav", "organ");
+        add (fake, rolla::Hits, "HITS/Piano_Keys_A_Minor.wav", "keys");
+        add (fake, rolla::Hits, "HITS/VER_Synth_Hit_C.wav", "hit");
+        add (fake, rolla::Hits, "HITS/TAT_Synth_C.wav", "synth");
+        add (fake, rolla::Hits, "HITS/One_Shot_Hit_Cs.wav", "hit");
+
+        expect (rolla::sampleHasToken ("Effects_Wash", "effects"), "Effects is the fx word");
+        expect (rolla::sampleHasToken ("Cat_Synth_FX", "fx"), "a separated _FX matches");
+        expect (! rolla::sampleHasToken ("prefix_warm_Fm", "fx"), "prefix does not contain an fx token");
+        expect (! rolla::sampleHasToken ("hitch_ride_C", "hit"), "hitch is not the word hit");
+        expect (rolla::sampleRoleRejected ("PAD/Effects_Wash.wav", rolla::Pad), "effects is rejected");
+        expect (! rolla::sampleRoleRejected ("PAD/prefix_warm_Fm.wav", rolla::Pad), "prefix stays");
+
+        auto paths = [] (const rolla::SampleIndex& index, int lane, int dialect)
+        {
+            rolla::PoolFilter filter;
+            filter.on = true;
+            filter.lane = lane;
+            filter.dialect = dialect;
+            std::vector<std::string> out;
+            const int n = rolla::sampleIndexCount (index, lane, filter);
+            for (int i = 0; i < n; ++i)
+            {
+                const auto* entry = rolla::sampleIndexAt (index, lane, filter, i);
+                if (entry != nullptr)
+                    out.emplace_back (entry->path);
+            }
+            return out;
+        };
+        auto has = [] (const std::vector<std::string>& names, const char* path)
+        {
+            for (const auto& name : names)
+                if (name == path)
+                    return true;
+            return false;
+        };
+
+        const auto pads = paths (fake, rolla::Pad, rolla::UkMin);
+        expect (pads.size() == 2, "pad keeps the tonal names and drops fx noise vinyl");
+        expect (has (pads, "PAD/prefix_warm_Fm.wav") && has (pads, "PAD/Air_Pad_Fm.wav"), "pad tonal names stay");
+        expect (! has (pads, "PAD/MTN_FX_Noise_Bed.wav"), "pad drops noise fx");
+        expect (! has (pads, "PAD/VER_134_VinylNoise_FX.wav"), "pad drops vinyl noise");
+        expect (! has (pads, "PAD/CD_SFX_Vinyl_Texture.wav"), "pad drops sfx texture");
+        expect (! has (pads, "PAD/JF_128_Best_Vinyl_Background.wav"), "pad drops vinyl background");
+        expect (! has (pads, "PAD/MTN_FX_Drone.wav"), "pad drops drone");
+        expect (! has (pads, "PAD/JustNoize_Background.wav"), "pad drops background");
+        expect (! has (pads, "PAD/Effects_Wash.wav"), "pad drops Effects");
+        expect (! has (pads, "PAD/Vinyl/pretty_pad_Fm.wav"), "pad drops a vinyl folder");
+
+        const auto plucks = paths (fake, rolla::Pluck, rolla::Pop);
+        expect (plucks.size() == 1 && plucks[0] == "PLUCK/Pluck_Chord_D5.wav", "pluck drops telephone and whoosh");
+        const auto stabs = paths (fake, rolla::Stab, rolla::Gaskin);
+        expect (stabs.size() == 1 && stabs[0] == "STAB/Stab_Chord_Fm.wav", "stab drops the uplifter sweep");
+
+        for (int dialect : { rolla::UkMin, rolla::Long, rolla::Pop, rolla::Gaskin })
+        {
+            const auto hitPaths = paths (fake, rolla::Hits, dialect);
+            expect (has (hitPaths, "HITS/Chord_Stab_Cmin.wav"), "tonal chord stab stays");
+            expect (has (hitPaths, "HITS/Rave_Stabber_Dmin.wav"), "rave stabber stays");
+            expect (has (hitPaths, "HITS/Organ_Hit_Fm.wav"), "organ hit stays");
+            expect (has (hitPaths, "HITS/Piano_Keys_A_Minor.wav"), "piano keys stay");
+            expect (has (hitPaths, "HITS/VER_Synth_Hit_C.wav"), "VER synth hit stays");
+            expect (has (hitPaths, "HITS/TAT_Synth_C.wav"), "TAT synth stays");
+            expect (has (hitPaths, "HITS/One_Shot_Hit_Cs.wav"), "a hit with a key stays");
+            expect (! has (hitPaths, "HITS/MA_128_Lazer_Synth_FX.wav"), "lazer fx stays out");
+            expect (! has (hitPaths, "HITS/Cat_Synth_FX.wav"), "cat synth fx stays out");
+            expect (! has (hitPaths, "HITS/CD_SFX_Razor.wav"), "razor sfx stays out");
+            expect (! has (hitPaths, "HITS/Telephone_Synth_FX.wav"), "telephone fx stays out");
+            expect (! has (hitPaths, "HITS/Acid_Hit_C.wav"), "acid stays out of hits");
+            expect (! has (hitPaths, "HITS/303_Saw_D4.wav"), "303 stays out of hits");
+            expect (! has (hitPaths, "HITS/Noise_Riser_C.wav"), "noise riser stays out");
+            expect (! has (hitPaths, "HITS/FX/Chord_Stab_C.wav"), "an FX folder stays out");
+            expect (! has (hitPaths, "HITS/hitch_ride_C.wav"), "hitch is not a tonal hit");
+            expect (hitPaths.size() == 7, "hits keep the seven tonal names");
+        }
+
+        rolla::SampleIndex pitchedOnly;
+        add (pitchedOnly, rolla::Hits, "HITS/MA_128_Lazer_Synth_FX.wav", "fx");
+        add (pitchedOnly, rolla::Hits, "HITS/Synth_One_Shot_C.wav", "synth");
+        rolla::PoolFilter loose;
+        loose.on = true;
+        loose.lane = rolla::Hits;
+        loose.dialect = rolla::Gaskin;
+        expect (rolla::sampleIndexCount (pitchedOnly, rolla::Hits, loose) == 1, "a pitched same-lane file is the fallback");
+        expect (std::string (rolla::sampleIndexAt (pitchedOnly, rolla::Hits, loose, 0)->path) == "HITS/Synth_One_Shot_C.wav",
+                "the fallback stays in the hits lane");
+
+        rolla::SampleIndex emptyLane;
+        add (emptyLane, rolla::Hits, "HITS/Acid_Hit_C.wav", "acid_hit");
+        add (emptyLane, rolla::Hits, "HITS/CD_SFX_Razor.wav", "fx");
+        add (emptyLane, rolla::Hits, "HITS/Vinyl_Crackle.wav", "vinyl");
+        add (emptyLane, rolla::Pad, "PAD/MTN_FX_Noise_Bed.wav", "pad");
+        const auto emptyHits = rolla::pickLaneSample (emptyLane, rolla::Hits, loose, 0);
+        expect (emptyHits.mute && emptyHits.entry == nullptr, "an empty hits pool mutes");
+        rolla::PoolFilter emptyPad;
+        emptyPad.on = true;
+        emptyPad.lane = rolla::Pad;
+        emptyPad.dialect = rolla::UkMin;
+        const auto emptyPads = rolla::pickLaneSample (emptyLane, rolla::Pad, emptyPad, 3);
+        expect (emptyPads.mute && emptyPads.entry == nullptr, "an empty pad pool mutes");
+
+        rolla::SampleLibrary muteLib;
+        rolla::PresetBank muteBank;
+        muteBank.count[rolla::Hits] = 1;
+        muteBank.hits[0].sample.mode = rolla::SampleMode::Sample;
+        muteBank.hits[0].sample.filter.on = true;
+        muteBank.hits[0].sample.filter.lane = rolla::Hits;
+        rolla::Sampler muteSampler;
+        muteSampler.prepare (48000.0);
+        rolla::EngineParams muteParams;
+        muteParams.presets = &muteBank;
+        muteParams.library = &muteLib;
+        muteParams.sampleIndex = &emptyLane;
+        muteParams.dialect = rolla::Gaskin;
+        const auto muted = muteSampler.take (rolla::Hits, 64, 110, 4.f, muteBank, muteParams);
+        expect (muted.kind == 1 && std::fabs (muted.synthGain) < 1.0e-6f,
+                "an empty pool mutes instead of synthesising");
     }
 
     {
