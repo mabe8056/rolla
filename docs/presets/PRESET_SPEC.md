@@ -903,7 +903,7 @@ Rims sit inside "perc". Bare "hat" files were split into open or closed by decay
 
 ### 9.2 Kick tuning (both kits; Maestro: 40–70 Hz with KEY FOLLOW)
 - **Default A1 = 55.0 Hz in D minor** [R]. It is inside the measured kick-f0 IQR (50.1–55.9 Hz [M-melak]) and the reference window (49–55 Hz [M-ref]).
-- **KEY FOLLOW** (on by default): ROLLA picks the root / 4th / 5th nearest to 52.8 Hz (the measured median) inside 49–56 Hz. A tie goes to the 5th, and the tritone is never used [M-ref rule].
+- **KEY FOLLOW** (on by default): ROLLA picks the root / 4th / 5th nearest to 52.8 Hz (the measured median) inside 49–56 Hz. A tie goes to the 5th, and the tritone is never used [M-ref rule]. Keys F, F♯, A♯ and B have no root / 4th / 5th in that window, so ROLLA widens the search to 40–70 Hz and still takes the one nearest 52.8 Hz: F → B♭1 58.3 Hz, F♯ → F♯1 46.2 Hz, A♯ → A♯1 58.3 Hz, B → F♯1 46.2 Hz. It never falls back to an out-of-key 55 Hz.
 - **TUNE range:** 40–70 Hz continuous, fine in cents.
 - **Direction A** uses Melak's own kick, about 52.5 Hz ≈ A♭1 (the tritone of D) [L SR]. That's Melak's call; ROLLA doesn't override it.
 
