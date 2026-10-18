@@ -299,9 +299,9 @@ int pcOfNote (int semi)
     return pc;
 }
 
-// BOUNCY pulse mode is a steady held grid (Composer: 5-8 notes a bar). The
+// BOUNCY pulse mode is a steady held grid (Composer: 5-7 notes a bar). The
 // mode now ships on the groove (Groove::bassMode), so this only runs on pulse
-// rolls: at least 5 of the 7 body bars carry 5-8 onsets.
+// rolls: at least 5 of the 7 body bars carry 5-7 onsets.
 bool popPulseGrid (const rolla::Lane& lane, int bars)
 {
     int steady = 0;
@@ -312,7 +312,7 @@ bool popPulseGrid (const rolla::Lane& lane, int bars)
         for (int i = 0; i < lane.count; ++i)
             if ((int) std::lround (lane.notes[i].start) / 16 == b)
                 ++n;
-        if (n >= 5 && n <= 8)
+        if (n >= 5 && n <= 7)
             ++steady;
     }
     return body > 0 && steady * 7 >= body * 5;
@@ -1002,8 +1002,9 @@ double medianOf (std::vector<double> v)
 
 // Composer gate after A&R 423: BOUNCY is BOUNCE (75%) or PULSE (25%) from the
 // bass seed. BOUNCE: sounding 0.29-0.50, octave moves 10-30%, onsets-per-bar
-// sd >= 0.7. PULSE: sounding 0.85-0.975, 5-8 notes a bar. DEEP held bass:
-// median sounding >= 0.78, never over 0.88. The bass MIDI carries the mode.
+// sd >= 0.7, mean note length 0.8-1.6 sixteenths. PULSE: sounding 0.85-0.975,
+// 5-7 notes a bar, octave moves <= 8%. DEEP held bass: median sounding
+// >= 0.78, never over 0.88. The bass MIDI carries the mode.
 void testBouncyModes()
 {
     const std::uint32_t base = 0xB0C7u;
@@ -1068,26 +1069,6 @@ void testBouncyModes()
                 continue;
             }
             expect (g.bassMode == rolla::BassModeBounce || g.bassMode == rolla::BassModePulse, tag + " has a BOUNCY mode");
-            if (g.bassMode == rolla::BassModePulse)
-            {
-                ++pulseN;
-                const double npb = (double) bass.count / (double) g.bars;
-                expect (snd >= 0.85 - 1.0e-6 && snd <= 0.975 + 1.0e-6, tag + " pulse sounding " + std::to_string (snd) + " in 0.85-0.975");
-                expect (npb >= 5.0 && npb <= 8.0, tag + " pulse notes per bar " + std::to_string (npb) + " in 5-8");
-                expect (popPulseGrid (bass, g.bars), tag + " pulse is a steady grid");
-                continue;
-            }
-            ++bounceN;
-            expect (snd >= 0.29 - 1.0e-6 && snd <= 0.50 + 1.0e-6, tag + " bounce sounding " + std::to_string (snd) + " in 0.29-0.50");
-            double mean = 0.0;
-            for (int b = 0; b < 8; ++b)
-                mean += bar[b];
-            mean /= 8.0;
-            double var = 0.0;
-            for (int b = 0; b < 8; ++b)
-                var += (bar[b] - mean) * (bar[b] - mean);
-            const double sd = std::sqrt (var / 8.0);
-            expect (sd >= 0.7 - 1.0e-6, tag + " bounce density spread " + std::to_string (sd) + " >= 0.7");
             int moves = 0;
             int oct = 0;
             for (int i = 1; i < bass.count; ++i)
@@ -1097,8 +1078,36 @@ void testBouncyModes()
                 if (d == 12 || d == 24)
                     ++oct;
             }
+            const double octPct = moves > 0 ? 100.0 * oct / moves : 0.0;
+            if (g.bassMode == rolla::BassModePulse)
+            {
+                ++pulseN;
+                const double npb = (double) bass.count / (double) g.bars;
+                expect (snd >= 0.85 - 1.0e-6 && snd <= 0.975 + 1.0e-6, tag + " pulse sounding " + std::to_string (snd) + " in 0.85-0.975");
+                // Composer spec for #70: pulse is 5-7 notes a bar (was 5-8).
+                expect (npb >= 5.0 && npb <= 7.0, tag + " pulse notes per bar " + std::to_string (npb) + " in 5-7");
+                // Composer spec for #70: pulse octave moves at most 8%.
+                expect (octPct <= 8.0 + 1.0e-6, tag + " pulse octave moves " + std::to_string (octPct) + "% <= 8%");
+                expect (popPulseGrid (bass, g.bars), tag + " pulse is a steady grid");
+                continue;
+            }
+            ++bounceN;
+            expect (snd >= 0.29 - 1.0e-6 && snd <= 0.50 + 1.0e-6, tag + " bounce sounding " + std::to_string (snd) + " in 0.29-0.50");
+            // Composer spec for #70: bounce mean note length 0.8-1.6 sixteenths.
+            const double meanLen = bass.count > 0 ? held / (double) bass.count : 0.0;
+            expect (meanLen >= 0.8 - 1.0e-6 && meanLen <= 1.6 + 1.0e-6,
+                    tag + " bounce mean note length " + std::to_string (meanLen) + " in 0.8-1.6 sixteenths");
+            double mean = 0.0;
+            for (int b = 0; b < 8; ++b)
+                mean += bar[b];
+            mean /= 8.0;
+            double var = 0.0;
+            for (int b = 0; b < 8; ++b)
+                var += (bar[b] - mean) * (bar[b] - mean);
+            const double sd = std::sqrt (var / 8.0);
+            expect (sd >= 0.7 - 1.0e-6, tag + " bounce density spread " + std::to_string (sd) + " >= 0.7");
             if (moves > 0)
-                bounceOct.push_back (100.0 * oct / moves);
+                bounceOct.push_back (octPct);
         }
     }
     const double share = 100.0 * pulseN / 40.0;
@@ -1343,6 +1352,60 @@ void testLaneHygiene()
     expect (rate >= 0.20 && rate <= 0.40, "about 20-40% of rolls have a bar-8 pickup");
 }
 
+// Stab chord hits per bar (one chord = one hit) over 40 seeds x 8 bars.
+double stabHitsPerBar (int style, float stab, std::uint32_t base)
+{
+    long hits = 0;
+    long bars = 0;
+    for (int roll = 0; roll < 40; ++roll)
+    {
+        rolla::Settings s;
+        s.dialect = style;
+        s.bars = 8;
+        s.stab = stab;
+        s.busy = 0.40f;
+        std::uint32_t seeds[rolla::NumParts] {};
+        for (int p = 0; p < rolla::NumParts; ++p)
+            seeds[p] = base + (std::uint32_t) roll * 0x9E3779B9u + (std::uint32_t) p * 17u
+                     + (std::uint32_t) style * 101u;
+        rolla::Groove g {};
+        rolla::generate (g, s, seeds, 0x7fu);
+        std::set<long> onsets;
+        const auto& lane = g.lane[rolla::Stab];
+        for (int k = 0; k < lane.count; ++k)
+            onsets.insert (std::lround (lane.notes[k].start));
+        hits += (long) onsets.size();
+        bars += g.bars;
+    }
+    return bars > 0 ? (double) hits / (double) bars : 0.0;
+}
+
+// STAB density per style (main red: sample_pack_check --stab-sweep saturated
+// at 0.55 == 1 after #62's 3-hit cap). The default knob (0.55) has to land in
+// the style's stab_hpb range from data/genre/style_rules.json (ROLLER
+// 0.34-4.5, DEEP 0.05-2.76, BOUNCY 0.25-2.97, JACKIN 0.34-2.97), and
+// 0 -> 0.55 -> 1 has to raise the density strictly in every style.
+void testStabDensity()
+{
+    const std::uint32_t base = 5505u;
+    const char* names[] = { "ROLLER", "DEEP", "BOUNCY", "JACKIN" };
+    const double lo[] = { 0.34, 0.05, 0.25, 0.34 };
+    const double hi[] = { 4.5, 2.76, 2.97, 2.97 };
+    for (int style : { (int) rolla::UkMin, (int) rolla::Long, (int) rolla::Pop, (int) rolla::Gaskin })
+    {
+        const double at0 = stabHitsPerBar (style, 0.f, base);
+        const double atDefault = stabHitsPerBar (style, 0.55f, base);
+        const double at1 = stabHitsPerBar (style, 1.f, base);
+        std::cout << names[style] << " stab hits/bar " << at0 << " / " << atDefault << " / " << at1
+                  << " at STAB 0 / 0.55 / 1 (range " << lo[style] << "-" << hi[style] << ")\n";
+        expect (atDefault >= lo[style] - 1.0e-9 && atDefault <= hi[style] + 1.0e-9,
+                std::string (names[style]) + " default STAB stab hits/bar " + std::to_string (atDefault)
+                    + " inside the style range");
+        expect (at0 < atDefault && atDefault < at1,
+                std::string (names[style]) + " STAB 0 / 0.55 / 1 raises stab density strictly");
+    }
+}
+
 // Composer 409/466: a pickup roll has 1-3 bass notes on sixteenths 13-16 of the
 // last bar (0-based 12-15), and the last of them approaches bar 1's first bass
 // pitch by step (1-2 semitones) or by a fifth (5 or 7). 4 styles x 50 seeds.
@@ -1453,6 +1516,7 @@ int main()
     testAr423Swing();
     testHarmonyClashes();
     testLaneHygiene();
+    testStabDensity();
     testBar8Pickup();
     testRollSkipsMutedAndKept();
     testShuffleClearsAutoKeep();
