@@ -4304,7 +4304,11 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
         lockPhrase (g.lane[Bass], s.dialect, bassSeed, s.bars, s.dark, s.bounce, s.busy);
     if (regen (Bass))
     {
-        separateTwinRhythm (g.lane[Bass], s.dialect, bassSeed);
+        // JACKIN's loopify rebuilds all 8 bars from one bar pair, so its twin
+        // check runs on the looped line below, not on the pre-loop rhythm.
+        const bool jackinLoop = s.dialect == Gaskin && s.bars >= 4;
+        if (! jackinLoop)
+            separateTwinRhythm (g.lane[Bass], s.dialect, bassSeed);
         enforceMonophonic (g.lane[Bass]);
         avoidReaction (g.lane[Bass]);
         if (s.dialect == Long)
@@ -4323,6 +4327,8 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
             enforceMonophonic (g.lane[Bass]);
             contrastCallAnswer (g.lane[Bass], s.bars);
             jackin::loopify (g.lane[Bass], s.bars, bassSeed);
+            if (jackinLoop)
+                separateTwinRhythm (g.lane[Bass], s.dialect, bassSeed);
         }
         enforceMonophonic (g.lane[Bass]);
         avoidReaction (g.lane[Bass]);
@@ -4356,7 +4362,12 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
         }
     }
     if (s.dialect == UkMin && (regen (Bass) || regen (Stab)))
+    {
+        // matchStabColour turns a b2 into the root after the last avoidReaction,
+        // so a b2 on the 2nd or 4th 16th could complete the Reaction figure.
         roller::matchStabColour (g.lane[Bass], g.lane[Stab]);
+        avoidReaction (g.lane[Bass]);
+    }
     for (int part = 0; part < Drums; ++part)
         dedupeNoteOns (g.lane[part]);
     enforceMonophonic (g.lane[Bass]);

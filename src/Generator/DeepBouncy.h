@@ -519,10 +519,13 @@ inline bool inMinor (int semi) noexcept
 // BOUNCY has two modes (the scorer judges each roll by the one it fits): about
 // half the rolls are the legato pulse (notes run to the next onset), the rest
 // bounce (the same rhythm, notes held at most 1.4/16). Drawn from the lane seed,
-// so relegato() keeps the roll's mode.
+// so relegato() keeps the roll's mode. Same split as popIsPulse() in
+// Generator.cpp (seed * 0x27D4EB2D % 100 < 50): a single hash bit of mix() put
+// the 20 v2.3 test rolls outside the 6-14 band, while this split was measured at
+// 9/20 on the same seeds.
 inline bool bouncyPulse (std::uint32_t laneSeed) noexcept
 {
-    return ((mix (laneSeed, 0x9017u) >> 9) & 1u) != 0u;
+    return (((laneSeed ? laneSeed : 1u) * 0x27D4EB2Du) % 100u) < 50u;
 }
 
 inline float bouncyMaxLen (std::uint32_t laneSeed) noexcept
