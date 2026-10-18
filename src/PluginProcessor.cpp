@@ -281,9 +281,6 @@ RetuneTolerances loadRetuneTolerances (const char* data, int size)
     return t;
 }
 
-// Pool files the guard walks before it settles for the nearest workable one.
-constexpr int kRetuneWindow = 8;
-
 } // namespace
 
 RollaProcessor::RollaProcessor()
@@ -368,11 +365,13 @@ void RollaProcessor::prefetchPlayFiles()
 
 void RollaProcessor::guardRetunes()
 {
-    // Auto plays exactly as before. The guard is for a locked key or scale, where
-    // the #13 amendment says a retune must never wreck a sound.
+    // A retune must never wreck a sound (#13 amendment, Maestro 354). Key locked: a
+    // lane with no surviving file is muted. Key Auto: the key moves to the nearest
+    // one where every pitched lane has a surviving file; today's key when it passes,
+    // so a roll with nothing failing is untouched.
     const int scale = (int) raw (apvts, "scale");
-    const bool locked = raw (apvts, "keyLock") >= 0.5f || scale != ScaleAuto;
-    if (! locked || ! startupDone.load (std::memory_order_acquire) || restoring.load (std::memory_order_acquire)
+    const bool keyLocked = raw (apvts, "keyLock") >= 0.5f;
+    if (! startupDone.load (std::memory_order_acquire) || restoring.load (std::memory_order_acquire)
         || ! sourceReady.load (std::memory_order_relaxed))
         return;
     const auto index = library.index();
@@ -381,7 +380,7 @@ void RollaProcessor::guardRetunes()
         return;
 
     const Groove src = copySource();
-    const int key = ((int) raw (apvts, "key") % 12 + 12) % 12;
+    const int todayKey = ((int) raw (apvts, "key") % 12 + 12) % 12;
     const int dialect = (int) raw (apvts, "dialect");
     int preset[NumParts] {};
     std::uint64_t stamp = 1469598103934665603ull;
@@ -389,7 +388,8 @@ void RollaProcessor::guardRetunes()
     mix ((std::uint64_t) (std::uintptr_t) index.get());
     mix ((std::uint64_t) (std::uintptr_t) bank.get());
     mix ((std::uint64_t) src.generation);
-    mix ((std::uint64_t) key);
+    mix ((std::uint64_t) todayKey);
+    mix ((std::uint64_t) (keyLocked ? 1 : 0));
     mix ((std::uint64_t) dialect);
     mix ((std::uint64_t) scale);
     for (int i = 0; i < NumParts; ++i)
@@ -407,146 +407,245 @@ void RollaProcessor::guardRetunes()
 
     const double outRate = preparedRate > 1000.0 ? preparedRate : 48000.0;
     const StabPatch& sp = bank->stab[preset[Stab]];
-    const int bassBase = 12 * (std::clamp (bank->bass[preset[Bass]].octave, 0, 3) + 1) + key;
 
-    // Vox is never retuned (PR #40) and drums never are; every other lane is.
-    for (int part : { Bass, Stab, Hits, Pluck, Pad })
+    // One lane's guard result for a candidate key.
+    struct LaneGuard
     {
-        // A lane playing the user's own sample is their call, not the pool's.
-        if (slots.mode (part) != 0)
-            continue;
-        const SampleSpec& spec = specAt (*bank, part, preset[part]);
-        if (! spec.filter.on)
-            continue;
-        const PoolFilter filter = poolFilterFor (spec, part, -1, dialect);
-        const int n = sampleIndexCount (*index, part, filter);
-        const Lane& lane = src.lane[part];
-        if (n <= 1 || lane.count <= 0)
-            continue;
+        bool active = false; // the lane draws from a pool and has notes to judge
+        int n = 0;
+        int pick = 0;
+        RetunePick res;
+    };
 
-        // The notes Sampler::take is asked for, as Engine sends them: bass and hits
-        // one note, stab / pluck / pad every tone (chord memory expanded) with the
-        // chord's ask on the first.
-        struct Want
+    // Judges every pitched lane in `key`. loud logs each skip (only for the key
+    // that is applied, so Auto's search does not flood the log).
+    auto evalKey = [&] (int key, bool loud, LaneGuard (&out)[NumParts])
+    {
+        const int bassBase = 12 * (std::clamp (bank->bass[preset[Bass]].octave, 0, 3) + 1) + key;
+
+        // Vox is never retuned (PR #40) and drums never are; every other lane is.
+        for (int part : { Bass, Stab, Hits, Pluck, Pad })
         {
-            int midi = 60;
-            ChordAsk ask {};
-            bool first = true;
-        };
-        std::vector<Want> wants;
-        const int base = part == Bass ? bassBase : (part == Pluck ? 72 + key : 60 + key);
-        for (int i = 0; i < lane.count && i < kMaxNotes; ++i)
-        {
-            const Note& note = lane.notes[i];
-            if (note.vel <= 2)
+            out[part] = LaneGuard {};
+            // A lane playing the user's own sample is their call, not the pool's.
+            if (slots.mode (part) != 0)
                 continue;
-            int count = std::clamp ((int) note.nChord, 1, 4);
-            int iv[4] {};
-            for (int c = 0; c < count; ++c)
-                iv[c] = note.chord[c];
-            if (part == Stab && sp.chordOn && count <= 1 && sp.chordN > 1)
-            {
-                const int rootIv = iv[0];
-                count = std::min (4, sp.chordN);
-                for (int c = 0; c < count; ++c)
-                {
-                    iv[c] = std::clamp (rootIv + sp.chordIv[c], -48, 48);
-                    if (scale != ScaleAuto)
-                        iv[c] = quantizeToScale (scale, iv[c]);
-                }
-            }
-            if (part == Bass || part == Hits)
-                count = 1;
-            const ChordAsk ask = count > 1 ? chordAskOf (iv, count) : ChordAsk {};
-            for (int c = 0; c < count; ++c)
-                wants.push_back ({ std::clamp (base + iv[c], 0, 127), c == 0 ? ask : ChordAsk {}, c == 0 });
-        }
-        if (wants.empty())
-            continue;
+            const SampleSpec& spec = specAt (*bank, part, preset[part]);
+            if (! spec.filter.on)
+                continue;
+            const PoolFilter filter = poolFilterFor (spec, part, -1, dialect);
+            const int n = sampleIndexCount (*index, part, filter);
+            const Lane& lane = src.lane[part];
+            if (n <= 0 || lane.count <= 0)
+                continue;
 
-        auto judge = [&] (int at, double& worst) -> RetuneVerdict
-        {
-            RetuneVerdict verdict;
-            const SampleEntry* entry = sampleIndexAt (*index, part, filter, at);
-            if (entry == nullptr)
+            // The notes Sampler::take is asked for, as Engine sends them: bass and hits
+            // one note, stab / pluck / pad every tone (chord memory expanded) with the
+            // chord's ask on the first.
+            struct Want
             {
-                verdict.ok = false;
-                verdict.reason = "no pool entry";
-                return verdict;
-            }
-            const SampleAudio* audio = library.tryGet (entry->path);
-            if (audio == nullptr || audio->frames < 8)
+                int midi = 60;
+                ChordAsk ask {};
+                bool first = true;
+            };
+            std::vector<Want> wants;
+            const int base = part == Bass ? bassBase : (part == Pluck ? 72 + key : 60 + key);
+            for (int i = 0; i < lane.count && i < kMaxNotes; ++i)
             {
-                verdict.ok = false;
-                if (library.missing (entry->path))
+                const Note& note = lane.notes[i];
+                if (note.vel <= 2)
+                    continue;
+                int count = std::clamp ((int) note.nChord, 1, 4);
+                int iv[4] {};
+                for (int c = 0; c < count; ++c)
+                    iv[c] = note.chord[c];
+                if (part == Stab && sp.chordOn && count <= 1 && sp.chordN > 1)
                 {
-                    verdict.reason = "missing";
+                    const int rootIv = iv[0];
+                    count = std::min (4, sp.chordN);
+                    for (int c = 0; c < count; ++c)
+                    {
+                        iv[c] = std::clamp (rootIv + sp.chordIv[c], -48, 48);
+                        if (scale != ScaleAuto)
+                            iv[c] = quantizeToScale (scale, iv[c]);
+                    }
+                }
+                if (part == Bass || part == Hits)
+                    count = 1;
+                const ChordAsk ask = count > 1 ? chordAskOf (iv, count) : ChordAsk {};
+                for (int c = 0; c < count; ++c)
+                    wants.push_back ({ std::clamp (base + iv[c], 0, 127), c == 0 ? ask : ChordAsk {}, c == 0 });
+            }
+            if (wants.empty())
+                continue;
+
+            auto judge = [&] (int at, double& worst) -> RetuneVerdict
+            {
+                RetuneVerdict verdict;
+                const SampleEntry* entry = sampleIndexAt (*index, part, filter, at);
+                if (entry == nullptr)
+                {
+                    verdict.ok = false;
+                    verdict.reason = "no pool entry";
                     return verdict;
                 }
-                library.preload ({ std::string (entry->path) });
-                verdict.known = false;
+                const SampleAudio* audio = library.tryGet (entry->path);
+                if (audio == nullptr || audio->frames < 8)
+                {
+                    verdict.ok = false;
+                    if (library.missing (entry->path))
+                    {
+                        verdict.reason = "missing";
+                        return verdict;
+                    }
+                    library.preload ({ std::string (entry->path) });
+                    verdict.known = false;
+                    return verdict;
+                }
+                const PitchInfo& pitch = audio->pitch;
+                const double root = retuneRoot (pitch, audio->namedRoot);
+                if (root < 0.0)
+                {
+                    // Below the confidence threshold the file is not retuned; that
+                    // means a different file, not an off-key one.
+                    verdict.ok = false;
+                    verdict.reason = "unpitched or under the pitch confidence threshold";
+                    if (loud)
+                        juce::Logger::writeToLog (juce::String ("ROLLA retune guard: skip ") + entry->path + " ("
+                                                  + juce::String (verdict.reason) + ")");
+                    return verdict;
+                }
+                const bool chordFile = pitch.isChord && pitch.conf >= kPitchConfMin && part != Bass;
+                const double seconds = (double) audio->frames / std::max (1.0, audio->rate);
+                const RetuneKind kind = retuneKindFor (part, seconds, chordFile);
+                ShiftRule rule; // Sampler.cpp shiftRuleFor: bass keeps a full octave.
+                if (part == Bass)
+                    rule.cap = 12.0;
+                worst = 0.0;
+                std::set<long long> judged;
+                for (const auto& w : wants)
+                {
+                    // A recorded chord sounds every tone from its root.
+                    if (chordFile && ! w.first)
+                        continue;
+                    const int toward = w.midi + (chordFile ? w.ask.rootDelta + chordFileOffset (pitch.quality, w.ask.quality) : 0);
+                    const double semis = tonalShift (pitch, audio->namedRoot, (double) toward, rule);
+                    worst = std::max (worst, std::fabs (semis));
+                    if (! verdict.ok || ! judged.insert (RetuneCache::tenths (semis)).second)
+                        continue;
+                    RetuneRequest req;
+                    req.left = audio->left.data();
+                    req.right = audio->right.size() == audio->left.size() ? audio->right.data() : nullptr;
+                    req.frames = std::min (audio->frames, (int) audio->left.size());
+                    req.rate = audio->rate;
+                    req.outRate = outRate;
+                    req.semis = semis;
+                    req.rootMidi = root;
+                    req.kind = kind;
+                    const RetuneVerdict got = retuneCache.get (entry->path, kind, semis,
+                                                               [&] { return judgeRetune (req, retuneTol); });
+                    if (! got.ok)
+                        verdict = got;
+                }
+                // Every skip is logged with its reason, so a degraded retune is never
+                // silent and the scorer can count them.
+                if (! verdict.ok && loud)
+                    juce::Logger::writeToLog (juce::String ("ROLLA retune guard: skip ") + entry->path + " ("
+                                              + juce::String (verdict.reason) + ", up to "
+                                              + juce::String (worst, 1) + " st)");
                 return verdict;
-            }
-            const PitchInfo& pitch = audio->pitch;
-            const double root = retuneRoot (pitch, audio->namedRoot);
-            if (root < 0.0)
-            {
-                // Below the confidence threshold the file is not retuned; in a
-                // locked key that means a different file, not an off-key one.
-                verdict.ok = false;
-                verdict.reason = "unpitched or under the pitch confidence threshold";
-                return verdict;
-            }
-            const bool chordFile = pitch.isChord && pitch.conf >= kPitchConfMin && part != Bass;
-            const double seconds = (double) audio->frames / std::max (1.0, audio->rate);
-            const RetuneKind kind = retuneKindFor (part, seconds, chordFile);
-            ShiftRule rule; // Sampler.cpp shiftRuleFor: bass keeps a full octave.
-            if (part == Bass)
-                rule.cap = 12.0;
-            worst = 0.0;
-            std::set<long long> judged;
-            for (const auto& w : wants)
-            {
-                // A recorded chord sounds every tone from its root.
-                if (chordFile && ! w.first)
-                    continue;
-                const int toward = w.midi + (chordFile ? w.ask.rootDelta + chordFileOffset (pitch.quality, w.ask.quality) : 0);
-                const double semis = tonalShift (pitch, audio->namedRoot, (double) toward, rule);
-                worst = std::max (worst, std::fabs (semis));
-                if (! verdict.ok || ! judged.insert (RetuneCache::tenths (semis)).second)
-                    continue;
-                RetuneRequest req;
-                req.left = audio->left.data();
-                req.right = audio->right.size() == audio->left.size() ? audio->right.data() : nullptr;
-                req.frames = std::min (audio->frames, (int) audio->left.size());
-                req.rate = audio->rate;
-                req.outRate = outRate;
-                req.semis = semis;
-                req.rootMidi = root;
-                req.kind = kind;
-                const RetuneVerdict got = retuneCache.get (entry->path, kind, semis,
-                                                           [&] { return judgeRetune (req, retuneTol); });
-                if (! got.ok)
-                    verdict = got;
-            }
-            return verdict;
-        };
+            };
 
-        const int pick = std::max (0, samplePick[part].load (std::memory_order_relaxed));
-        const RetunePick res = pickRetuneSafe (n, pick, kRetuneWindow, judge);
-        if (res.pending)
+            // The whole pool is walked: a degraded retune is never played while another
+            // file in the lane survives this key.
+            out[part].active = true;
+            out[part].n = n;
+            out[part].pick = std::max (0, samplePick[part].load (std::memory_order_relaxed));
+            out[part].res = pickRetuneSafe (n, out[part].pick, n, judge);
+        }
+    };
+
+    LaneGuard lanes[NumParts];
+    int playKey = todayKey;
+    if (! keyLocked)
+    {
+        // Auto: the pass counts pick the key. Candidate keys are judged quietly;
+        // the cache keeps the search cheap after the first roll.
+        const AutoKeyPick choice = pickAutoKey (todayKey, [&] (int k)
+        {
+            LaneGuard trial[NumParts];
+            evalKey (k, false, trial);
+            for (const auto& g : trial)
+                if (g.active && g.res.pending)
+                    return -1;
+            for (const auto& g : trial)
+                if (g.active && ! g.res.safe)
+                    return 0;
+            return 1;
+        });
+        if (choice.pending)
         {
             guardPending = true;
-            continue;
+            return;
         }
-        const int at = pick % n;
-        if (res.index >= 0 && res.index != at)
-            samplePick[part].store (pick + (res.index - at + n) % n, std::memory_order_relaxed);
-        if (! res.safe)
-            juce::Logger::writeToLog (juce::String ("ROLLA retune guard: no ") + partName (part)
-                                      + " file in the next " + juce::String (res.judged)
-                                      + " survives this key; playing the nearest workable one");
+        playKey = choice.key;
+        if (! choice.found)
+            juce::Logger::writeToLog (juce::String ("ROLLA retune guard: Auto found no key where every lane survives; keeping ")
+                                      + keyName (todayKey));
     }
+    evalKey (playKey, true, lanes);
+
+    std::vector<std::string> mutedNames;
+    for (int part = 0; part < Drums; ++part)
+    {
+        bool mute = false;
+        const LaneGuard& g = lanes[part];
+        if (g.active)
+        {
+            if (g.res.pending)
+                guardPending = true;
+            else
+            {
+                const int at = g.pick % g.n;
+                mute = retuneMuteFor (keyLocked, g.res);
+                if (! mute && g.res.index >= 0 && g.res.index != at)
+                    samplePick[part].store (g.pick + (g.res.index - at + g.n) % g.n, std::memory_order_relaxed);
+                if (mute)
+                {
+                    mutedNames.push_back (partName (part));
+                    juce::Logger::writeToLog (juce::String ("ROLLA retune guard: NO SAFE FILE ") + partName (part) + " in "
+                                              + keyName (playKey) + " " + scaleName (scale));
+                }
+                else if (! g.res.safe)
+                    juce::Logger::writeToLog (juce::String ("ROLLA retune guard: no ") + partName (part)
+                                              + " file survives in Auto; playing the least-shifted one");
+            }
+        }
+        retuneMuted[part].store (mute, std::memory_order_relaxed);
+    }
+    setRetuneNotice (juce::String (retuneNoticeText (mutedNames, keyName (playKey), scaleName (scale))));
+
+    // Auto moves the key last, so the stamp changes and the next tick re-judges
+    // (from the cache) in the key that now plays.
+    if (playKey != todayKey)
+        if (auto* p = apvts.getParameter ("key"))
+        {
+            p->beginChangeGesture();
+            p->setValueNotifyingHost (p->convertTo0to1 ((float) playKey));
+            p->endChangeGesture();
+        }
+}
+
+// The retune guard's notice is the editor's UI notice (one slot, one display).
+juce::String RollaProcessor::retuneNotice() const
+{
+    return getUiNotice();
+}
+
+void RollaProcessor::setRetuneNotice (const juce::String& text)
+{
+    if (text != getUiNotice())
+        setUiNotice (text);
 }
 
 std::shared_ptr<const PresetBank> RollaProcessor::sharePresets() const
@@ -872,6 +971,9 @@ void RollaProcessor::regenerate (int onlyPart)
 
     reshapeLanes (next, s, seeds, mask);
     storeSource (next);
+    // A new roll clears the notice; the guard sets it again on its next tick if
+    // a lane still has no surviving file.
+    setRetuneNotice ({});
     publishDerived();
 }
 
@@ -1017,6 +1119,7 @@ EngineParams RollaProcessor::readParams (std::shared_ptr<const PresetBank>& hold
         params.mute[i] = raw (apvts, (id + "Mute").toRawUTF8()) >= 0.5f;
         params.preset[i] = (int) raw (apvts, (id + "Preset").toRawUTF8());
         params.samplePick[i] = samplePick[i].load (std::memory_order_relaxed);
+        params.retuneMute[i] = retuneMuted[i].load (std::memory_order_relaxed);
     }
     for (int v = 0; v < NumDrumVoices; ++v)
     {

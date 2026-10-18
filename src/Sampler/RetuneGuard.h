@@ -747,4 +747,69 @@ RetunePick pickRetuneSafe (int count, int start, int window, Judge&& judge)
     return pick;
 }
 
+// Melak's rule (Maestro 354): with the key locked, a lane whose whole pool fails
+// the guard is muted for the pattern, never played mangled. In Auto the key moves
+// instead (pickAutoKey), and a lane with no pass anywhere keeps its least-shifted file.
+inline bool retuneMuteFor (bool keyLocked, const RetunePick& pick) noexcept
+{
+    return keyLocked && ! pick.pending && ! pick.safe && pick.index >= 0;
+}
+
+// Header notice for the muted lanes: "NO SAFE FILE: BASS, PAD in F# DORIAN".
+inline std::string retuneNoticeText (const std::vector<std::string>& lanes, const char* key, const char* scale)
+{
+    if (lanes.empty())
+        return {};
+    std::string text = "NO SAFE FILE: ";
+    for (std::size_t i = 0; i < lanes.size(); ++i)
+        text += (i > 0 ? ", " : "") + lanes[i];
+    text += std::string (" in ") + (key != nullptr ? key : "") + " " + (scale != nullptr ? scale : "");
+    return text;
+}
+
+struct AutoKeyPick
+{
+    int key = 0;          // the key to play
+    bool found = false;   // some key lets every pitched lane pass
+    bool pending = false; // a file was still loading: decide on a later tick
+    int tried = 0;
+};
+
+// Auto key. passes (key) is 1 when every pitched lane has at least one file that
+// survives the guard in that key, 0 when some lane has none, -1 when a file is still
+// loading. Today's key wins if it passes (so a roll with nothing failing is
+// untouched); else the nearest key that does, +1 before -1 at equal distance, so
+// the choice is deterministic. Nothing passes: today's key stays.
+template <typename Passes>
+AutoKeyPick pickAutoKey (int today, Passes&& passes)
+{
+    AutoKeyPick pick;
+    today = ((today % 12) + 12) % 12;
+    pick.key = today;
+    for (int d = 0; d <= 6; ++d)
+    {
+        for (int sign : { 1, -1 })
+        {
+            if ((d == 0 || d == 6) && sign < 0)
+                continue;
+            const int k = ((today + sign * d) % 12 + 12) % 12;
+            ++pick.tried;
+            const int got = passes (k);
+            if (got < 0)
+            {
+                pick.pending = true;
+                pick.key = today;
+                return pick;
+            }
+            if (got > 0)
+            {
+                pick.key = k;
+                pick.found = true;
+                return pick;
+            }
+        }
+    }
+    return pick;
+}
+
 } // namespace rolla
