@@ -307,6 +307,10 @@ void testSoundControls()
     expect (proc.copyGroove().lane[rolla::Pluck].count == 0, "roller leaves pluck out");
     expect (reshapeTo (proc, "dialect", (float) rolla::Long), "deep for pluck");
     expect (pumpUntil ([&] { return proc.copyGroove().lane[rolla::Pluck].count > 0; }), "deep brings pluck in");
+    // DEEP's INTENSITY ladder (Intensity.h, since 8821a4f) brings HITS in last,
+    // at 90: at the default 75 the lane is meant to be empty.
+    expect ((int) rawOf (proc, "intensity") == 75, "default intensity is 75");
+    expect (proc.copyGroove().lane[rolla::Hits].count == 0, "deep at intensity 75 leaves hits out");
 
     // Factory presets play the sample pack and do not fall back to the synth.
     // A runner without ~/Music/ROLLA/Samples stays silent, same as the loudness gate.
