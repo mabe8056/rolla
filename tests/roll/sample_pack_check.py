@@ -244,8 +244,8 @@ def render_set(rolls, pack, out, cache, seed, count, stem_lanes, jobs):
             st = pending.pop(0)
             args = [rolls, "--samples", str(pack), "--style", st, "--count", str(count), "--seed", str(seed),
                     "--out", str(out), "--stem-lanes", stem_lanes, "--knob", "BUSY=0.40"]
-            log = open(out.parent / f"{out.name}_{st}.log", "w")
             out.mkdir(parents=True, exist_ok=True)
+            log = open(out.parent / f"{out.name}_{st}.log", "w")
             running.append((st, subprocess.Popen(args, env=env, stdout=log, stderr=subprocess.STDOUT), log))
         for item in list(running):
             st, proc, log = item
