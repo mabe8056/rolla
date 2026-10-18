@@ -112,9 +112,16 @@ private:
         float envOct = 0.f;
         float fEnv = 1.f;
         float fCoef = 0.99f;
-        float hpfHz = 20.f;
+        // Sample voices run unfiltered unless TONE is off neutral (sampleFilter).
+        // When they are filtered, L and R take the same path.
+        bool lowpass = false;
+        float hpfHz = 0.f;
         float hpState = 0.f;
+        float hpStateR = 0.f;
         Ladder ladder;
+        Ladder ladderR;
+        // Output samples until a drum hit releases (DECAY below 0.5); -1 plays the whole file.
+        int gateLeft = -1;
         struct Env
         {
             int stage = 0;

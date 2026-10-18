@@ -77,6 +77,8 @@ The editor is the locked D-simple dark layout. Seven lane rows (colour, pattern 
 
 The plugin plays samples only. No preset, saved state or missing file brings back a synth, an arp or a test tone: a lane with nothing loaded is silent, and a red banner reads `Samples not loaded: <path> (<n> files)`. The logo menu shows the active folder and its file count. Audio is never committed.
 
+Samples play as recorded. At the default knobs (TONE 0.5, drum DECAY 0.5) there is no filter, no synth envelope and no saturation: each hit or note runs its file's natural length, L and R take the same path, and a note that starts on the file's first sample keeps the file's own attack. TONE below 0.5 sweeps a lowpass down to the lane preset's cutoff, above 0.5 raises a highpass to 320 Hz. Drum DECAY below 0.5 cuts the hit short (an eighth of its length at 0). A preset's start offset and loop points apply only to its own file; a file drawn from a pool plays from its first sample, once.
+
 Where ROLLA looks, in order:
 
 1. The pack built into the plugin: `ROLLA.vst3/Contents/Resources/Samples` (or `ROLLA.component/…`). Nothing is ever written there.
