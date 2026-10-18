@@ -92,7 +92,7 @@ tools/inject_pack.sh build/ROLLA_artefacts/Release/VST3/ROLLA.vst3 /path/to/pack
 
 On macOS both re-sign the bundle ad hoc. `Samples/.rolla-pack.json` records the file count and the manifest hash. A `SAMPLE_MANIFEST_v2.json` at the pack root replaces the embedded manifest.
 
-Tests never touch a real profile: `tests/common/ScratchProfile.h` points `ROLLA_SETTINGS_DIR`, `ROLLA_CACHE_DIR`, `ROLLA_DEFAULT_ROOT` and `ROLLA_BUNDLE_ROOT` at a temp folder (on macOS `$HOME` alone does not move JUCE's files). The last two are ignored by plugin builds.
+Tests never touch a real profile: `tests/common/ScratchProfile.h` points `ROLLA_SETTINGS_DIR`, `ROLLA_CACHE_DIR`, `ROLLA_DEFAULT_ROOT` and `ROLLA_BUNDLE_ROOT` at a temp folder (on macOS `$HOME` alone does not move JUCE's files). The last two are ignored by plugin builds. It also sets `ROLLA_TEST_MODE=1`: in that mode `src/Engine/RollaSettings.h` moves any settings, cache or default-root path that would land in a real `Music/ROLLA`, `Application Support/ROLLA`, `Library/Caches/ROLLA`, `~/.cache/ROLLA` (and so on) into the scratch folder, with a log line (`rolla-profile-test` checks this). Every CI binary runs on a scratch profile, including `rolla-render`, `rolla-mix-render` and `rolla-rolls`. To render with an installed pack, pass it explicitly: `rolla-render --samples DIR renders` (the pack is read only, and caches stay in the scratch folder). Python scripts launch binaries with `tests/common/scratch_env.py`.
 
 Folder layout:
 

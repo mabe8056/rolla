@@ -5,6 +5,7 @@
 #include "Generator/Presets.h"
 #include "Mix/MixProgram.h"
 #include "Mix/MixRuntime.h"
+#include "../tests/common/ScratchProfile.h"
 
 #include <juce_dsp/juce_dsp.h>
 
@@ -546,6 +547,10 @@ int dialectIndex (const std::string& name)
 
 int main (int argc, char** argv)
 {
+    // Never the real user profile: settings, caches and ~/Music/ROLLA/Samples go
+    // to a scratch folder. `--samples DIR` renders with that pack, read only.
+    if (rolla::test::useScratchProfile ("mix", true).empty() || ! rolla::test::useSamplesArg (argc, argv))
+        return fail ("could not set up a scratch profile");
     juce::ScopedJuceInitialiser_GUI juceInit;
     bool doSelf = false;
     bool solosOnly = false;
@@ -580,6 +585,8 @@ int main (int argc, char** argv)
             if (switchLane < 0)
                 return fail ("unknown lane");
         }
+        else if (a == "--samples" && i + 1 < argc)
+            ++i; // read by useSamplesArg above
         else if (a == "--makeup" && i + 1 < argc)
             makeup = juce::File (argv[++i]);
         else if (a == "--dialect" && i + 1 < argc)
@@ -590,7 +597,7 @@ int main (int argc, char** argv)
         }
         else if (a == "--help")
         {
-            std::cout << "rolla-mix-render [--self-test] [--solos] [--bypass-sum] [--makeup file] [--dialect NAME] <outDir>\n"
+            std::cout << "rolla-mix-render [--self-test] [--solos] [--bypass-sum] [--makeup file] [--dialect NAME] [--samples DIR] <outDir>\n"
                       << "rolla-mix-render --switch --stim in.wav --from UKMIN --to LONG --at 1.0 --lane STAB <out.wav>\n";
             return 0;
         }

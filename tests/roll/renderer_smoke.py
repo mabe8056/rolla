@@ -22,6 +22,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 sys.path.insert(0, os.path.join(REPO, "tests", "mix"))
 from mix_check import measure  # noqa: E402
+sys.path.insert(0, os.path.join(REPO, "tests", "common"))
+from scratch_env import scratch_env  # noqa: E402
 
 
 SR = 48000
@@ -140,6 +142,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix="rolla-smoke-") as tmp:
         pack = os.path.join(tmp, "pack")
         out = os.path.join(tmp, "out")
+        # rolla-rolls runs on this scratch profile, never the real one.
+        env = scratch_env(os.path.join(tmp, "profile"))
         build_pack(pack)
         cmd = [
             args.rolls,
@@ -152,7 +156,7 @@ def main():
             "--knob", "INTENSITY=75",
         ]
         print(" ", " ".join(cmd))
-        run = subprocess.run(cmd, cwd=REPO)
+        run = subprocess.run(cmd, cwd=REPO, env=env)
         if run.returncode != 0:
             return fail(f"rolla-rolls exited {run.returncode}")
 
@@ -227,7 +231,7 @@ def main():
             "--knob", "INTENSITY=100",
         ]
         print(" ", " ".join(stem_cmd))
-        stem_run = subprocess.run(stem_cmd, cwd=REPO)
+        stem_run = subprocess.run(stem_cmd, cwd=REPO, env=env)
         if stem_run.returncode != 0:
             return fail(f"stem render exited {stem_run.returncode}")
         stem_dir = os.path.join(stem_out, "ukmin", "roll_00")
@@ -246,7 +250,7 @@ def main():
             "--seed", "1", "--out", quiet_out, "--knob", "INTENSITY=0",
         ]
         print(" ", " ".join(quiet_cmd))
-        quiet_run = subprocess.run(quiet_cmd, cwd=REPO)
+        quiet_run = subprocess.run(quiet_cmd, cwd=REPO, env=env)
         if quiet_run.returncode != 0:
             return fail(f"intensity 0 render exited {quiet_run.returncode}")
         quiet_dir = os.path.join(quiet_out, "ukmin", "roll_00")

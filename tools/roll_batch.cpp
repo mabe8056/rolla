@@ -5,6 +5,7 @@
 #include "Generator/MidiFile.h"
 #include "Generator/Presets.h"
 #include "Mix/MixProgram.h"
+#include "../tests/common/ScratchProfile.h"
 
 #include <BinaryData.h>
 
@@ -622,6 +623,13 @@ const char* usageText()
 
 int main (int argc, char** argv)
 {
+    // Never the real user profile: settings and caches go to a scratch folder
+    // (or the one a calling script set up). --samples DIR is still read in place.
+    if (rolla::test::useScratchProfile ("rolls", true).empty())
+    {
+        std::cerr << "could not set up a scratch profile\n";
+        return 1;
+    }
     juce::ScopedJuceInitialiser_GUI juce;
 
     std::string samples, style = "all", out = "rolls";

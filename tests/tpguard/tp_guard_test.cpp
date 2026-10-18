@@ -18,6 +18,7 @@
 #include "Generator/Presets.h"
 #include "Mix/MixProgram.h"
 #include "Mix/TruePeakGuard.h"
+#include "../common/ScratchProfile.h"
 
 #include <BinaryData.h>
 #include <juce_core/juce_core.h>
@@ -427,6 +428,12 @@ void partB()
 
 int main()
 {
+    // Links the sample library and user slots: run on a scratch profile like every test.
+    if (rolla::test::useScratchProfile ("tp").empty())
+    {
+        std::printf ("could not set up a scratch profile\n");
+        return 1;
+    }
     partA();
     partB();
     std::printf ("%s: %d failure(s)\n", failures == 0 ? "OK" : "FAILED", failures);

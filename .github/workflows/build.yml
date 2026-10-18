@@ -70,6 +70,10 @@ jobs:
           echo "$AU" > /tmp/rolla_au_path
 
       - name: pluginval strictness 5
+        env:
+          # The plugin honours these two; keeps settings and caches off the runner's profile.
+          ROLLA_SETTINGS_DIR: ${{ runner.temp }}/rolla-profile/settings
+          ROLLA_CACHE_DIR: ${{ runner.temp }}/rolla-profile/cache
         run: |
           set -euo pipefail
           curl -fsSL -o /tmp/pluginval.zip \
@@ -206,7 +210,12 @@ jobs:
       - name: Configure and build
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --target ROLLA_VST3 rolla-render rolla-rolls rolla-sampler-test rolla-sample-check rolla-roll-test rolla-knob-test rolla-phrase-test rolla-arrange-test rolla-tp-test rolla-export-test
+          cmake --build build --target ROLLA_VST3 rolla-render rolla-rolls rolla-sampler-test rolla-sample-check rolla-roll-test rolla-knob-test rolla-phrase-test rolla-arrange-test rolla-tp-test rolla-export-test rolla-profile-test
+
+      - name: Profile isolation (no test touches a real ROLLA profile)
+        run: |
+          set -euo pipefail
+          ./build/rolla-profile-test
 
       - name: Sampler tests
         run: |
@@ -285,6 +294,10 @@ jobs:
           test -n "$(find "$GITHUB_WORKSPACE/renders" -name '*.wav' -print -quit)"
 
       - name: pluginval strictness 5
+        env:
+          # The plugin honours these two; keeps settings and caches off the runner's profile.
+          ROLLA_SETTINGS_DIR: ${{ runner.temp }}/rolla-profile/settings
+          ROLLA_CACHE_DIR: ${{ runner.temp }}/rolla-profile/cache
         run: |
           set -euo pipefail
           curl -fsSL -o /tmp/pluginval.zip \

@@ -4,6 +4,7 @@
 #include "Sampler/SamplePrep.h"
 #include "Sampler/UserSlots.h"
 #include "Generator/Presets.h"
+#include "../common/ScratchProfile.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_events/juce_events.h>
@@ -148,6 +149,13 @@ rolla::SlotQuery slotQuery (int mode, bool ready, bool missing, bool loading)
 
 int main()
 {
+    // Index and loudness caches (sampleCacheFor) and UserSlots' default root go to
+    // a scratch profile, never the real one.
+    if (rolla::test::useScratchProfile ("sampler").empty())
+    {
+        std::cerr << "could not set up a scratch profile\n";
+        return 1;
+    }
     juce::ScopedJuceInitialiser_GUI juce;
 
     static_assert (rolla::kUserSlotCount == 14, "14 user slots");
