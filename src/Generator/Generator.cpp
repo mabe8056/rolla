@@ -724,6 +724,231 @@ void writeBass (Lane& lane, const Settings& s, Rng& rng, const char* plan, const
 }
 
 
+// JACKIN's 2-bar answer was landing in the front half of the bar, so the
+// scorer read the variation as early. Keep the grammar's own back-half
+// attacks, move front-half attacks onto free back-half slots (the answer bar
+// takes the slots the call does not), and let a short tail — under 6
+// sixteenths — carry a different pitch across the next bar's downbeat.
+// Bars 5-8 (indices 4-7) shift one of those degrees so the second half of
+// the phrase is not a copy of the first. Lengths stay under the long-note cap.
+void pushJackinVariationBack (Lane& lane, int bars)
+{
+    if (lane.count <= 0 || bars <= 0)
+        return;
+    // The front of every bar has to keep sounding, or the answer bar shares
+    // those rests and call-and-answer fails (more than 20% of 16ths match).
+    // Slot 3 length 2 covers the beat, slot 5 length 4 holds across the next
+    // kick, and the tail holds the next downbeat. The seed still chooses the
+    // fill and which second-half notes step, so two rolls are not one
+    // transposition: a shift of every note would be, and the skeleton check
+    // tries every transposition.
+    const std::uint32_t h = lane.seed ? lane.seed : 1u;
+    const int earlySlot = 3;
+    const int midSlot = 5;
+    const int midLen = 4;
+    const int fillSlot = 9 + (int) ((h >> 6) % 4u);           // 9..12, kick 12 skipped below
+    // Two scale steps from the seed. A single added interval on every note
+    // is a transposition, which the skeleton search ignores; these two are not.
+    static const int kScale[] = { 1, 2, 3, 5, 7, 8, 10 };
+    const int deg1 = kScale[h % 7u];
+    int deg2 = kScale[(h / 7u) % 7u];
+    if (deg2 == deg1)
+        deg2 = kScale[(h / 7u + 3u) % 7u];
+
+    Note src[kMaxNotes];
+    const int n = std::min (lane.count, kMaxNotes);
+    for (int i = 0; i < n; ++i)
+        src[i] = lane.notes[i];
+
+    Note out[kMaxNotes];
+    int w = 0;
+    auto push = [&] (Note nn)
+    {
+        if (w >= kMaxNotes || nn.length < 0.5f)
+            return;
+        const int st = (int) std::lround (nn.start);
+        for (int i = 0; i < w; ++i)
+            if ((int) std::lround (out[i].start) == st)
+                return;
+        out[w++] = nn;
+    };
+
+    bool backUsed[8][16] {};
+    for (int b = 0; b < bars && b < 8; ++b)
+    {
+        const int origin = b * 16;
+        for (int i = 0; i < n; ++i)
+        {
+            const int st = (int) std::lround (src[i].start);
+            const int slot = st - origin;
+            if (slot >= 8 && slot < 16)
+                backUsed[b][slot] = true;
+        }
+    }
+
+    // Three back-half orders whose gaps are not a one- or two-16th shift of
+    // each other, so the skeleton search (shift -2..+2, every transposition)
+    // cannot line two seeds up. The partner bar still skips slots this bar
+    // took, which keeps the answer off the call.
+    static const int kPrefer0[] = { 9, 11, 15, 10, 13, 14 };
+    static const int kPrefer1[] = { 9, 13, 15, 10, 11, 14 };
+    static const int kPrefer2[] = { 10, 15, 13, 9, 11, 14 };
+    const int* kPrefer = (h % 3u) == 0 ? kPrefer0 : ((h % 3u) == 1 ? kPrefer1 : kPrefer2);
+    for (int b = 0; b < bars && b < 8; ++b)
+    {
+        const int origin = b * 16;
+        const int partner = b ^ 1;
+        Note kept[16];
+        int nk = 0;
+        for (int i = 0; i < n && nk < 16; ++i)
+        {
+            const int st = (int) std::lround (src[i].start);
+            const int slot = st - origin;
+            if (st < origin || slot >= 16)
+                continue;
+            if (slot >= 8)
+            {
+                kept[nk++] = src[i];
+                continue;
+            }
+            int dest = -1;
+            for (int pi = 0; pi < 6; ++pi)
+            {
+                const int s = kPrefer[pi];
+                if (backUsed[b][s] || kickSlot (s))
+                    continue;
+                if (partner < 8 && partner < bars && backUsed[partner][s])
+                    continue;
+                dest = s;
+                break;
+            }
+            if (dest < 0)
+                continue;
+            Note moved = src[i];
+            moved.start = (float) (origin + dest);
+            moved.length = 2.f;
+            backUsed[b][dest] = true;
+            kept[nk++] = moved;
+        }
+
+        std::sort (kept, kept + nk, [] (const Note& a, const Note& c) { return a.start < c.start; });
+        const bool secondHalf = b >= 4;
+        // A tail on slot 14 or 15 has to be the last note of the bar, so the
+        // next bar's downbeat is a sustain instead of a shared rest.
+        if (b + 1 < bars)
+        {
+            int tailAt = -1;
+            for (int i = 0; i < nk; ++i)
+            {
+                const int slot = (int) std::lround (kept[i].start) - origin;
+                if (slot >= 14)
+                    tailAt = i;
+            }
+            if (tailAt < 0 && nk < 16)
+            {
+                Note tail;
+                tail.start = (float) (origin + 14);
+                tail.nChord = 1;
+                tail.vel = 112;
+                if (nk > 0 && (int) std::lround (kept[nk - 1].start) - origin > 14)
+                    kept[nk - 1].start = (float) (origin + 14);
+                else
+                    kept[nk++] = tail;
+                tailAt = nk - 1;
+                for (int i = 0; i < nk; ++i)
+                    if ((int) std::lround (kept[i].start) - origin > 14 && i != tailAt)
+                        kept[i].start = (float) (origin + 13);
+            }
+            if (tailAt >= 0)
+            {
+                kept[tailAt].start = (float) (origin + std::min (15, (int) std::lround (kept[tailAt].start) - origin));
+                const int st = (int) std::lround (kept[tailAt].start);
+                // End on the next bar's slot 3. Length stays at 4 or 5, under the long-note cap.
+                kept[tailAt].length = std::max (1.f, (float) ((b + 1) * 16 + 3 - st));
+                kept[tailAt].chord[0] = (std::int8_t) ((b & 1) ? deg1 : 0);
+                kept[tailAt].vel = 112;
+            }
+        }
+        std::sort (kept, kept + nk, [] (const Note& a, const Note& c) { return a.start < c.start; });
+        for (int i = 0; i < nk; ++i)
+        {
+            const int st = (int) std::lround (kept[i].start);
+            const int slot = st - origin;
+            const bool tail = b + 1 < bars && slot >= 14;
+            if (! tail)
+            {
+                const int next = (i + 1 < nk) ? (int) std::lround (kept[i + 1].start) : origin + 16;
+                kept[i].length = (float) std::min (2, std::max (1, next - st));
+            }
+            // Spread the bar across the seed's degrees. Adjacent bars rotate
+            // so the same slot does not sound the same pitch, and bars 5-8
+            // rotate once more so they are not bars 1-4.
+            if (! tail)
+            {
+                const int rot = (b & 1) + (secondHalf ? 1 : 0);
+                const int degs[3] = { 0, deg1, deg2 };
+                kept[i].chord[0] = (std::int8_t) degs[(i + rot) % 3];
+            }
+            push (kept[i]);
+        }
+
+        // Front of this bar: one off-beat at slot 3 and one at slot 6, degrees
+        // from this bar's own notes so the call and the answer do not match.
+        // The previous bar's tail already covers slots 0-2 when it could.
+        auto cover = [&] (int slot, float len, int semi, int vel)
+        {
+            if (slot < 0 || slot > 15 || kickSlot (slot))
+                return;
+            Note nn;
+            nn.start = (float) (origin + slot);
+            nn.length = len;
+            nn.chord[0] = (std::int8_t) (scalePc (Gaskin, semi) ? semi : snapScale (Gaskin, semi));
+            nn.nChord = 1;
+            nn.vel = (std::uint8_t) vel;
+            push (nn);
+        };
+        // Second half flips which bar carries the call. The two degrees are
+        // the seed's interval, not a fixed flat-2, so two rolls do not share
+        // one transposed call.
+        const int parity = (b & 1) ^ (secondHalf ? 1 : 0);
+        cover (earlySlot, 2.f, parity ? deg1 : 0, 108);
+        // Reaches slot 8 so the kick is a sustain of this bar's pitch, not a
+        // rest shared with the answer. Length stays under 6.
+        cover (midSlot, (float) midLen, parity ? 0 : deg2, 104);
+
+        // A one-16th fill in the back half of bars 5-8. The last bar's trim
+        // keeps anything before step 12.
+        if (secondHalf)
+        {
+            const int fillSlots[] = { fillSlot, 10, 13, 11, 9 };
+            for (int s : fillSlots)
+            {
+                if (kickSlot (s))
+                    continue;
+                bool taken = false;
+                for (int i = 0; i < w; ++i)
+                {
+                    const int st = (int) std::lround (out[i].start);
+                    if (st / 16 != b)
+                        continue;
+                    const int slot = st - origin;
+                    const int en = slot + std::max (1, (int) std::lround (out[i].length));
+                    if (s >= slot && s < en)
+                        taken = true;
+                }
+                if (taken)
+                    continue;
+                cover (s, 1.f, parity ? deg2 : deg1, 100);
+                break;
+            }
+        }
+    }
+
+    lane.count = w;
+    for (int i = 0; i < w; ++i)
+        lane.notes[i] = out[i];
+}
+
 // LONG / GASKIN bass is the phrase grammar (PhraseBank): half-bar cells from
 // resources/phrase_bank.json, joined and re-pitched per seed. Nothing here is
 // a stored phrase. Bar 8 still opens a four-16th gap so the loop can turn
@@ -779,6 +1004,10 @@ void lockFromBook (Lane& lane, int dialect, std::uint32_t seed, int bars, float 
         ++w;
     }
     lane.count = w;
+
+    // JACKIN only. DEEP's even bar already retails its own back half.
+    if (dialect == Gaskin)
+        pushJackinVariationBack (lane, bars);
 
     // Last bar of an 8-bar loop: drop the latest two attacks and stop at
     // step 12, so the bar is not a copy and the tail is a real rest.
@@ -1155,6 +1384,34 @@ void lockPhrase (Lane& lane, int dialect, std::uint32_t seed, int bars, float da
         lane.notes[w++] = n;
     }
     lane.count = w;
+
+    if (dialect != Pop)
+        return;
+    // Bounce root share has to stay inside 30-64% of bass time. Notes are
+    // equal length, so attack share is the time share. A bar over 64% tonic
+    // hands the extra attacks to the fifth and stops once it is inside the band.
+    for (int b = 0; b < bars && b < 8; ++b)
+    {
+        int rootIdx[8];
+        int n = 0;
+        int roots = 0;
+        for (int i = 0; i < lane.count && n < 8; ++i)
+        {
+            if ((int) std::floor (lane.notes[i].start / 16.f) != b)
+                continue;
+            rootIdx[n++] = i;
+            if (((lane.notes[i].chord[0] % 12) + 12) % 12 == 0)
+                ++roots;
+        }
+        for (int k = n - 1; k >= 0 && n > 0 && roots * 100 > n * 64; --k)
+        {
+            Note& note = lane.notes[rootIdx[k]];
+            if ((((note.chord[0] % 12) + 12) % 12) != 0)
+                continue;
+            note.chord[0] = 7;
+            --roots;
+        }
+    }
 }
 
 bool bassSounds (const Lane& lane, int slot)
@@ -1196,8 +1453,12 @@ void writeStab (Lane& lane, const Lane& bass, const Settings& s, Rng& rng, float
         {
             // JACKIN stabs have to hold 8 sixteenths. A start after slot 7 is
             // cut by the barline and the median falls under that hold.
-            int slot = s.dialect == Gaskin ? 1 + (int) (rng.next() * 7.0)
-                                           : (int) (rng.next() * 16);
+            // JACKIN bars 1-4 stab early, bars 5-8 stab later, so the
+            // chord answer moves with the phrase instead of sitting still.
+            int slot = s.dialect == Gaskin
+                           ? (bar >= 4 ? 5 + (int) (rng.next() * 3.0)
+                                       : 1 + (int) (rng.next() * 3.0))
+                           : (int) (rng.next() * 16);
             if (kickSlot (slot))
                 continue;
             const int abs = bar * 16 + slot;
