@@ -49,6 +49,20 @@ int presetOf (const EngineParams& params, int part) noexcept
 
 enum class FileState { Ready, Pending, Absent };
 
+// Plugin builds play samples only: no preset or saved state can hand a lane
+// (or a drum voice) to the synth, and a LAYER preset drops its synth half.
+// Tools and tests keep SYNTH presets so they can render without a sample pack.
+#if ROLLA_PLUGIN_BUILD
+constexpr bool kSamplesOnly = true;
+#else
+constexpr bool kSamplesOnly = false;
+#endif
+
+inline bool synthMode (const SampleSpec& spec) noexcept
+{
+    return ! kSamplesOnly && spec.mode == SampleMode::Synth;
+}
+
 FileState probeFile (const SampleLibrary* library, const char* file, const SampleAudio*& audio) noexcept
 {
     audio = nullptr;
@@ -96,7 +110,7 @@ bool readyFromIndex (const SampleLibrary* library, const SampleIndex* index, int
     if (voice < 0 && ! spec.filter.on)
         return false;
     const int queryVoice = voice >= 0 ? voice : spec.filter.voice;
-    const PoolFilter filter = poolFilterFor (spec, part, queryVoice, dialect);
+    const PoolFilter filter = poolFilterWithFiles (*index, spec, part, queryVoice, dialect);
     const int n = sampleIndexCount (*index, part, filter);
     if (n <= 0)
         return false;
@@ -174,7 +188,7 @@ bool readyFromIndex (const SampleLibrary* library, const SampleIndex* index, int
 bool readyChoice (const SampleLibrary* library, const SampleSpec& spec, int midiNote,
                   int pick, int sliceIndex, LaneHit& hit) noexcept
 {
-    if (spec.mode == SampleMode::Synth)
+    if (synthMode (spec))
         return false;
     const SampleAudio* audio = nullptr;
     const auto choice = chooseSample (spec, midiNote, pick, sliceIndex);
@@ -227,7 +241,7 @@ LaneHit resolveLane (const PresetBank& bank, const EngineParams& params, int par
     LaneHit hit;
     const int current = presetOf (params, part);
     const auto& currentSpec = specAt (bank, part, current);
-    if (currentSpec.mode == SampleMode::Synth)
+    if (synthMode (currentSpec))
         return hit;
     const int pick = params.samplePick[part];
     if (readyChoice (params.library, currentSpec, midiNote, pick, sliceIndex, hit))
@@ -690,6 +704,7 @@ bool Sampler::playUserSlot (int part, int drumVoice, int midiNote, int velocity,
     fresh.midiNote = midiNote;
     fresh.age = serial++;
     fresh.audio = pod.audio;
+    notePicked (voicePart, drumVoice, pod.audio);
     fresh.reverse = decision.reverse;
     fresh.ratio = std::clamp (std::pow (2.0, semis / 12.0) * (pod.audio->rate / sr), ratioMin, ratioMax);
     fresh.end16 = end16;
@@ -756,7 +771,7 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     if (playUserSlot (part, -1, midiNote, velocity, end16, bank, params, result, drumKeep))
         return result;
     const auto& spec = sampleSpecFor (bank, part, presetOf (params, part));
-    if (spec.mode == SampleMode::Synth)
+    if (synthMode (spec))
         return result;
     // No library: the factory file cannot load. Same-pool swap needs a library,
     // and a missing sample never falls through to the lane synth.
@@ -873,6 +888,7 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     fresh.midiNote = midiNote;
     fresh.age = serial++;
     fresh.audio = audio;
+    notePicked (part, -1, audio);
     fresh.reverse = played.reverse;
     fresh.ratio = std::clamp ((midiHz (midiNote) / std::max (20.f, midiHz (choice.root))) * (audio->rate / sr), 0.05, 16.0);
     fresh.end16 = end16;
@@ -880,7 +896,8 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     fresh.fadeInc = 1.f / 64.f;
     fresh.stopping = false;
     fresh.gain = amp.trim * std::clamp (velocity / 127.f, 0.05f, 1.f);
-    const bool layered = &played == &spec && played.mode == SampleMode::Layer;
+    // A factory LAYER preset keeps its synth half only outside the plugin.
+    const bool layered = &played == &spec && played.mode == SampleMode::Layer && ! kSamplesOnly;
     if (layered)
         fresh.gain *= std::clamp (played.layerMix, 0.f, 1.f);
     fresh.pan = (part == Stab || part == Pad) ? 0.15f : 0.f;
@@ -980,7 +997,7 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
         return keep;
     const int preset = presetOf (params, Drums);
     const auto& spec = sampleSpecFor (bank, Drums, preset);
-    if (spec.mode == SampleMode::Synth)
+    if (synthMode (spec))
         return 1.f;
     // No library: there is no pool to swap from, and the 909 is not a fallback.
     if (params.library == nullptr)
@@ -1098,6 +1115,7 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
     fresh.drumVoice = voice;
     fresh.age = serial++;
     fresh.audio = audio;
+    notePicked (Drums, voice, audio);
     fresh.reverse = spec.reverse;
     fresh.ratio = std::clamp (tune * (audio->rate / sr), 0.25, 4.0);
     fresh.end16 = 1.0e9f;
@@ -1195,6 +1213,16 @@ void Sampler::render (float* laneL, float* laneR, float prev16, float pos16, boo
         renderOne (v);
     for (auto& v : tails)
         renderOne (v);
+}
+
+std::string Sampler::lastPickedFile (int part, int drumVoice) const
+{
+    const SampleAudio* a = nullptr;
+    if (drumVoice >= 0 && drumVoice < NumDrumVoices)
+        a = lastDrumAudio[drumVoice].load (std::memory_order_relaxed);
+    else if (part >= 0 && part < NumParts)
+        a = lastAudio[part].load (std::memory_order_relaxed);
+    return a != nullptr ? a->path : std::string();
 }
 
 } // namespace rolla

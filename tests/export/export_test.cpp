@@ -16,7 +16,9 @@
 // Then the same at LENGTH 2 bars for one style.
 
 #include "PluginProcessor.h"
+#include "Engine/RollaSettings.h"
 #include "Export/RollExport.h"
+#include "../common/ScratchProfile.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_events/juce_events.h>
@@ -29,8 +31,6 @@
 #include <string>
 #include <vector>
 
-#include <stdlib.h>
-#include <unistd.h>
 
 #if JUCE_LINUX
 namespace juce::detail
@@ -81,36 +81,6 @@ bool reshapeTo (rolla::RollaProcessor& proc, const char* id, float value)
     setDenorm (proc, id, value);
     return pumpUntil ([&] { return proc.copyGroove().generation != before; });
 }
-
-// Belt and braces for platforms where JUCE ignores $HOME (macOS reads
-// NSHomeDirectory): put the user's ROLLA.settings back exactly as it was.
-struct SettingsGuard
-{
-    juce::File file;
-    juce::MemoryBlock bytes;
-    bool existed = false;
-
-    SettingsGuard()
-    {
-        juce::PropertiesFile::Options o;
-        o.applicationName = "ROLLA";
-        o.filenameSuffix = "settings";
-        o.osxLibrarySubFolder = "Application Support";
-        o.folderName = "ROLLA";
-        file = o.getDefaultFile();
-        existed = file.existsAsFile();
-        if (existed)
-            file.loadFileAsData (bytes);
-    }
-
-    ~SettingsGuard()
-    {
-        if (existed)
-            file.replaceWithData (bytes.getData(), bytes.getSize());
-        else
-            file.deleteFile();
-    }
-};
 
 struct Head : juce::AudioPlayHead
 {
@@ -436,19 +406,17 @@ void testStyle (rolla::RollaProcessor& proc, int style, bool pack, const juce::F
 int main (int argc, char** argv)
 {
     // setSamplesRoot saves ROLLA.settings, and drags write to the export cache.
-    // Point HOME at a throwaway folder first, so no run (even a killed one)
-    // touches the real settings or cache.
-    const char* tmp = getenv ("TMPDIR");
-    std::string homeTemplate = std::string (tmp != nullptr && *tmp != 0 ? tmp : "/tmp") + "/rolla-export-home-XXXXXX";
-    const char* home = mkdtemp (homeTemplate.data());
-    if (home == nullptr || setenv ("HOME", home, 1) != 0)
+    // Everything goes to a scratch profile, never the real one.
+    const auto home = rolla::test::useScratchProfile ("export");
+    if (home.empty())
     {
-        std::cerr << "could not set up a temporary HOME\n";
+        std::cerr << "could not set up a scratch profile\n";
         return 1;
     }
     juce::ScopedJuceInitialiser_GUI juceInit;
-    const SettingsGuard settingsGuard;
-    std::cout << "settings file for this run: " << settingsGuard.file.getFullPathName() << "\n";
+    const auto settingsFile = rolla::settings::file();
+    std::cout << "settings file for this run: " << settingsFile.getFullPathName() << "\n";
+    expect (settingsFile.isAChildOf (juce::File (home)), "settings live in the scratch profile");
     juce::File pack;
     for (int i = 1; i < argc; ++i)
         if (juce::String (argv[i]) == "--samples" && i + 1 < argc)
@@ -474,6 +442,29 @@ int main (int argc, char** argv)
         for (int style = 0; style < rolla::NumDialects; ++style)
             testStyle (proc, style, havePack, scratch);
 
+        // Every vox preset, right after its pick: each recipe has to find a file
+        // in the library (the "loops" recipe has no tempo-locked loop in the tone
+        // pack and used to leave the lane silent, a different style each CI run).
+        if (havePack)
+        {
+            auto* voxPreset = proc.apvts.getParameter ("voxPreset");
+            const int n = voxPreset != nullptr ? (int) voxPreset->getNormalisableRange().end + 1 : 0;
+            for (int i = 0; i < n; ++i)
+            {
+                setDenorm (proc, "voxPreset", (float) i);
+                pumpUntil ([&] { return (int) proc.apvts.getRawParameterValue ("voxPreset")->load() == i; }, 2000);
+                if (proc.copyGroove().lane[rolla::Vox].count <= 0)
+                {
+                    std::cout << "vox preset " << i << ": no vox notes in this groove, skipped\n";
+                    continue;
+                }
+                const auto lane = proc.writeLaneAudio (rolla::Vox);
+                const auto w = lane.isEmpty() ? Wav {} : readWav (juce::File (lane[0]));
+                expect (w.peak > 1.0e-4f, "vox preset " + std::to_string (i) + " sounds right after it is picked (peak "
+                                              + std::to_string (w.peak) + ")");
+            }
+        }
+
         // LENGTH 2 bars without a re-roll: the engine loops the first 2 bars of
         // the 8-bar groove, and the export has to follow it.
         setDenorm (proc, "length", 0.f);
@@ -491,7 +482,7 @@ int main (int argc, char** argv)
         testStyle (proc, rolla::Pop, havePack, scratch);
     }
     scratch.deleteRecursively();
-    juce::File (home).deleteRecursively();
+    juce::File (juce::String (home)).deleteRecursively();
     std::cout << (fails == 0 ? "export tests passed\n" : std::to_string (fails) + " export test failure(s)\n");
     return fails == 0 ? 0 : 1;
 }

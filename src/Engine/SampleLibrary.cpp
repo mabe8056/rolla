@@ -1,4 +1,5 @@
 #include "SampleLibrary.h"
+#include "RollaSettings.h"
 
 #include <iostream>
 #include "../Generator/Presets.h"
@@ -107,11 +108,8 @@ void gatherReferenced (std::vector<std::string>& paths, const PresetBank& bank)
 // ROLLA_CACHE_DIR overrides the folder (tests, headless renders).
 juce::File sampleCacheFor (const juce::File& sampleRoot, const char* kind)
 {
-    juce::File dir;
-    const auto env = juce::SystemStats::getEnvironmentVariable ("ROLLA_CACHE_DIR", {});
-    if (env.isNotEmpty() && juce::File::isAbsolutePath (env))
-        dir = juce::File (env);
-    else
+    juce::File dir = settings::cacheOverride();
+    if (dir == juce::File())
         dir = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
                   .getChildFile ("ROLLA")
                   .getChildFile ("Cache");
@@ -127,13 +125,64 @@ juce::File loudnessCacheFor (const juce::File& sampleRoot)
 
 juce::File SampleLibrary::defaultRoot()
 {
+    if (const auto over = settings::testFolder ("ROLLA_DEFAULT_ROOT"); over != juce::File())
+        return over;
     return juce::File::getSpecialLocation (juce::File::userMusicDirectory)
         .getChildFile ("ROLLA")
         .getChildFile ("Samples");
 }
 
+juce::File SampleLibrary::bundledRoot()
+{
+    if (const auto over = settings::testFolder ("ROLLA_BUNDLE_ROOT"); over != juce::File())
+        return over;
+    // .../ROLLA.vst3/Contents/<arch>/ROLLA(.so|.vst3), .../ROLLA.component/Contents/MacOS/ROLLA,
+    // .../ROLLA.app/Contents/MacOS/ROLLA: Contents is two levels up from the binary.
+    const auto binary = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
+    return binary.getParentDirectory().getParentDirectory().getChildFile ("Resources").getChildFile ("Samples");
+}
+
+static bool directoryHasAudio (const juce::File& dir)
+{
+    if (! dir.isDirectory())
+        return false;
+    for (const auto& entry : juce::RangedDirectoryIterator (dir, true, "*.wav;*.aif;*.aiff;*.flac", juce::File::findFiles))
+    {
+        juce::ignoreUnused (entry);
+        return true;
+    }
+    return false;
+}
+
+juce::File SampleLibrary::resolveSampleRoot (const juce::String& savedRoot)
+{
+    const auto bundle = bundledRoot();
+    if (directoryHasAudio (bundle))
+        return bundle;
+    if (savedRoot.isNotEmpty())
+    {
+        const juce::File saved (savedRoot);
+        if (! settings::isTempLocation (saved) && directoryHasAudio (saved))
+            return saved;
+    }
+    return defaultRoot();
+}
+
+bool SampleLibrary::isBundledRoot (const juce::File& root)
+{
+    const auto bundle = bundledRoot();
+    return root.getFullPathName().isNotEmpty() && (root == bundle || root.isAChildOf (bundle));
+}
+
+juce::File SampleLibrary::userSlotRootFor (const juce::File& sampleRoot)
+{
+    return isBundledRoot (sampleRoot) ? defaultRoot() : sampleRoot;
+}
+
 void ensureSampleFolders (const juce::File& root)
 {
+    if (SampleLibrary::isBundledRoot (root))
+        return;
     const char* parts[] = { "BASS", "STAB", "HITS", "PLUCK", "PAD", "VOX" };
     const char* drums[] = { "KICK", "CLAP", "SNARE", "RIM", "CH", "OH", "RIDE", "PERC" };
     root.createDirectory();
@@ -219,7 +268,7 @@ void collectPlayFiles (const PresetBank& bank, const SampleIndex& index, const i
         if (voice < 0 && ! spec.filter.on)
             return;
         const int queryVoice = voice >= 0 ? voice : spec.filter.voice;
-        const PoolFilter filter = poolFilterFor (spec, part, queryVoice, dialect);
+        const PoolFilter filter = poolFilterWithFiles (index, spec, part, queryVoice, dialect);
         const int n = sampleIndexCount (index, part, filter);
         if (n <= 0)
             return;
@@ -501,6 +550,7 @@ void SampleLibrary::loadOne (const std::string& relative)
     }
 
     auto audio = std::make_unique<SampleAudio>();
+    audio->path = relative;
     audio->frames = cap;
     audio->rate = reader->sampleRate;
     audio->left.resize ((size_t) cap);
@@ -1227,18 +1277,6 @@ void SampleLibrary::buildIndex()
 namespace
 {
 
-bool directoryHasAudio (const juce::File& dir)
-{
-    if (! dir.isDirectory())
-        return false;
-    for (const auto& entry : juce::RangedDirectoryIterator (dir, true, "*.wav;*.aif;*.aiff;*.flac", juce::File::findFiles))
-    {
-        juce::ignoreUnused (entry);
-        return true;
-    }
-    return false;
-}
-
 void requestOrdinal (SampleLibrary& library, const SampleIndex& index, int part, int voice, std::vector<std::string>& paths)
 {
     PoolFilter filter;
@@ -1257,7 +1295,7 @@ void requestOrdinal (SampleLibrary& library, const SampleIndex& index, int part,
 InstalledPack openInstalledPack (const char* manifestJson, int manifestSize)
 {
     InstalledPack pack;
-    const auto root = SampleLibrary::defaultRoot();
+    const auto root = SampleLibrary::resolveSampleRoot ({});
     if (! directoryHasAudio (root) || manifestJson == nullptr || manifestSize <= 0)
         return pack;
     pack.library = std::make_unique<SampleLibrary>();

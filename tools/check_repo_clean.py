@@ -13,6 +13,8 @@ tree holds anything the public repo must not carry:
                   $ROLLA_REFERENCE_NAMES. The list is never stored in the repo.
                   A hit in code or data fails; a hit in Markdown prose is a warning.
   large       data files over 512 KB (.json .h .hpp .inc .csv) unless allowlisted
+  audio, hard cap: an allowlisted audio fixture still fails over 64 KB. Real packs
+              go into a built bundle (tools/inject_pack.sh), never the repo.
 
 Only `git ls-files` counts, so ignored build output never trips it.
 Exceptions live in tools/repo_guard_allow.txt, one per line:
@@ -39,6 +41,7 @@ DATA_EXT = {".json", ".h", ".hpp", ".inc", ".csv", ".tsv"}
 CODE_EXT = {".h", ".hpp", ".c", ".cc", ".cpp", ".inc", ".py", ".js", ".ts", ".json", ".csv", ".tsv", ".txt", ".yml", ".yaml", ".xml"}
 TEXT_EXT = CODE_EXT | {".md", ".cmake", ".sh", ".mm", ".rst", ".ini", ".cfg", ".toml", ".gitignore"}
 LARGE_BYTES = 512 * 1024
+AUDIO_FIXTURE_BYTES = 64 * 1024
 
 # Generated dumps that were removed from the tree (#12) and must not come back.
 DUMP_GLOBS = [
@@ -178,8 +181,16 @@ def scan(root, names, allow_rules):
         ext = os.path.splitext(base)[1].lower()
         low = rel.lower()
 
-        if ext in AUDIO and not allowed(allow_rules, "audio", rel):
-            fails["audio"].append(rel)
+        if ext in AUDIO:
+            if not allowed(allow_rules, "audio", rel):
+                fails["audio"].append(rel)
+                continue
+            try:
+                audio_size = os.path.getsize(full)
+            except OSError:
+                audio_size = 0
+            if audio_size > AUDIO_FIXTURE_BYTES:
+                fails["audio"].append(f"{rel}: {audio_size // 1024} KB audio (allowlisted fixtures are capped at 64 KB)")
             continue
         if ext in MIDI and not allowed(allow_rules, "midi", rel):
             fails["midi"].append(rel)

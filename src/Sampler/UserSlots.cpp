@@ -615,6 +615,7 @@ void UserSlots::loadSlot (int slot)
         const int detected = chooseSlotRoot (slot, mono.data(), prepared.frames, prepared.rate, relative.c_str());
 
         auto audio = std::make_unique<SampleAudio>();
+        audio->path = relative;
         audio->frames = prepared.frames;
         audio->rate = prepared.rate;
         audio->left = std::move (prepared.left);

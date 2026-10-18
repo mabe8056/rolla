@@ -714,6 +714,35 @@ int main()
         chop.lane = rolla::Vox;
         std::snprintf (chop.category, sizeof chop.category, "chop");
         expect (rolla::sampleIndexCount (*snap, rolla::Vox, chop) == 1, "chop filter");
+        // A recipe whose category the library lacks still draws from its own lane:
+        // the vox "loops" recipe (tempo-locked phrase loops) with none on disk.
+        {
+            rolla::SampleSpec loops;
+            loops.mode = rolla::SampleMode::Sample;
+            loops.filter.on = true;
+            loops.filter.lane = rolla::Vox;
+            loops.filter.loop = 1;
+            std::snprintf (loops.filter.category, sizeof loops.filter.category, "phrase");
+            const auto exact = rolla::poolFilterFor (loops, rolla::Vox, -1, rolla::Pop);
+            const auto widened = rolla::poolFilterWithFiles (*snap, loops, rolla::Vox, -1, rolla::Pop);
+            const int widenedCount = rolla::sampleIndexCount (*snap, rolla::Vox, widened);
+            bool allVox = widenedCount > 0;
+            for (int i = 0; i < widenedCount; ++i)
+                if (const auto* e = rolla::sampleIndexAt (*snap, rolla::Vox, widened, i))
+                    allVox = allVox && juce::String (e->path).startsWith ("VOX/");
+            expect (rolla::sampleIndexCount (*snap, rolla::Vox, exact) == 0 && widenedCount > 0 && allVox,
+                    "a vox recipe with no matching files on disk widens within VOX instead of going silent ("
+                        + std::to_string (widenedCount) + " files)");
+            rolla::PoolFilter chopOnly;
+            chopOnly.on = true;
+            chopOnly.lane = rolla::Vox;
+            std::snprintf (chopOnly.category, sizeof chopOnly.category, "chop");
+            rolla::SampleSpec chops;
+            chops.filter = chopOnly;
+            const auto same = rolla::poolFilterWithFiles (*snap, chops, rolla::Vox, -1, rolla::Pop);
+            expect (std::string (same.category) == "chop" && rolla::sampleIndexCount (*snap, rolla::Vox, same) == 1,
+                    "a recipe that has files keeps its exact filter");
+        }
         rolla::PoolFilter atmosphere;
         atmosphere.on = true;
         atmosphere.lane = rolla::Pad;

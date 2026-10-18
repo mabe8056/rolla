@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include "Engine/RollaSettings.h"
 
 #include "DspUtil.h"
 #include "Generator/Intensity.h"
@@ -2456,7 +2457,8 @@ struct RollaEditor::Content : Component
         menu.addItem (6, "Reduce motion", true, paramRaw (proc.apvts, "reduceMotion") >= 0.5f);
         menu.addSeparator();
         menu.addItem (7, utf8 ("Samples folder…"));
-        menu.addItem (8, proc.samplesRoot().getFullPathName(), false, false);
+        const auto status = proc.samplesStatus();
+        menu.addItem (8, status.root.getFullPathName() + (status.bundled ? "  (built in)" : "  (not built in)"), false, false);
         menu.addItem (9, proc.sampleInventoryText(), false, false);
         menu.showMenuAsync (PopupMenu::Options().withTargetComponent (target != nullptr ? target : &logo),
                             [this] (int result)
@@ -3167,17 +3169,6 @@ namespace
 constexpr int kEditorBaseW = 1024;
 constexpr int kEditorBaseH = 640;
 
-juce::PropertiesFile::Options editorSettingsOptions()
-{
-    juce::PropertiesFile::Options options;
-    options.applicationName = "ROLLA";
-    options.filenameSuffix = ".settings";
-    options.osxLibrarySubFolder = "Application Support";
-    options.folderName = "ROLLA";
-    options.storageFormat = juce::PropertiesFile::storeAsXML;
-    return options;
-}
-
 juce::Point<int> fittedEditorSize (int width, int height)
 {
     width = juce::jlimit (768, 2048, width);
@@ -3195,7 +3186,7 @@ RollaEditor::RollaEditor (RollaProcessor& p)
 {
     look = std::make_unique<Look>();
     setLookAndFeel (look.get());
-    editorSettings = std::make_unique<juce::PropertiesFile> (editorSettingsOptions());
+    editorSettings = settings::open();
     constrainer = std::make_unique<SizeConstrainer>();
     constrainer->setFixedAspectRatio ((double) kEditorBaseW / (double) kEditorBaseH);
     constrainer->setSizeLimits (768, 480, 2048, 1280);
@@ -3203,12 +3194,19 @@ RollaEditor::RollaEditor (RollaProcessor& p)
     setResizable (true, true);
     content = std::make_unique<Content> (proc, static_cast<Look&> (*look), *this);
     addAndMakeVisible (content.get());
+    samplesBanner = std::make_unique<Label>();
+    samplesBanner->setColour (Label::backgroundColourId, col (kWarn));
+    samplesBanner->setColour (Label::textColourId, col (kPaper));
+    samplesBanner->setJustificationType (Justification::centred);
+    samplesBanner->setInterceptsMouseClicks (false, false);
+    addChildComponent (samplesBanner.get());
     setOpaque (true);
     appliedProjectSerial = proc.getProjectEditorSerial();
     const auto size = initialSize();
     setSize (size.x, size.y);
     rememberSize();
     sizeDirty = false;
+    refreshSamplesBanner();
     if (resizableCorner != nullptr)
         resizableCorner->toFront (false);
     setWantsKeyboardFocus (true);
@@ -3294,6 +3292,12 @@ void RollaEditor::resized()
     // glyph outlines rasterise at the window size instead of a stretched bitmap.
     content->setBounds (0, 0, kEditorBaseW, kEditorBaseH);
     content->setTransform (AffineTransform::scale ((float) getWidth() / (float) kEditorBaseW));
+    if (samplesBanner != nullptr)
+    {
+        const float scale = (float) getWidth() / (float) kEditorBaseW;
+        samplesBanner->setBounds (0, 0, getWidth(), roundToInt (22.f * scale));
+        samplesBanner->setFont (Theme::font (Theme::Role::meta).withHeight (12.f * scale));
+    }
     if (getWidth() >= 768)
         sizeDirty = true;
 }
@@ -3395,6 +3399,28 @@ void RollaEditor::timerCallback()
     if (rollPulse.exchange (false))
         content->notifyRoll();
     content->sync();
+
+    if (++samplesBannerTick >= 15)
+    {
+        samplesBannerTick = 0;
+        refreshSamplesBanner();
+    }
+}
+
+void RollaEditor::refreshSamplesBanner()
+{
+    if (samplesBanner == nullptr)
+        return;
+    const auto status = proc.samplesStatus();
+    if (status.message != samplesBanner->getText())
+        samplesBanner->setText (status.message, dontSendNotification);
+    const bool show = status.message.isNotEmpty();
+    if (show != samplesBanner->isVisible())
+    {
+        samplesBanner->setVisible (show);
+        if (show)
+            samplesBanner->toFront (false);
+    }
 }
 
 } // namespace rolla
