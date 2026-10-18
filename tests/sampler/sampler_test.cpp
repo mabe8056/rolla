@@ -160,6 +160,26 @@ std::vector<float> sawNotes (std::initializer_list<double> midis)
     return out;
 }
 
+void writeWave (const juce::File& file, const std::vector<float>& samples)
+{
+    file.getParentDirectory().createDirectory();
+    juce::WavAudioFormat wav;
+    auto fileStream = std::make_unique<juce::FileOutputStream> (file);
+    if (fileStream == nullptr || ! fileStream->openedOk())
+        return;
+    std::unique_ptr<juce::OutputStream> stream (fileStream.release());
+    const auto options = juce::AudioFormatWriterOptions().withSampleRate (48000.0)
+                                                          .withNumChannels (1)
+                                                          .withBitsPerSample (24);
+    auto writer = wav.createWriterFor (stream, options);
+    if (writer == nullptr)
+        return;
+    juce::AudioBuffer<float> buf (1, (int) samples.size());
+    for (int i = 0; i < (int) samples.size(); ++i)
+        buf.setSample (0, i, samples[(size_t) i]);
+    writer->writeFromAudioSampleBuffer (buf, 0, buf.getNumSamples());
+}
+
 void testPitchProbe()
 {
     using rolla::ChordQuality;
@@ -748,6 +768,76 @@ int main()
             lanePack = std::max (lanePack, std::fabs (laneL[rolla::Bass]));
         }
         expect (lanePack > 0.01f, "the drum-pack substitute is audible on the lane");
+    }
+
+    {
+        // Neutral CI versions of the A&R pitch checks: play library files through
+        // the sampler and measure what comes out.
+        const auto pitchRoot = rootDir.getChildFile ("pitch");
+        pitchRoot.deleteRecursively();
+        writeWave (pitchRoot.getChildFile ("STAB/saw_C4.wav"), sawNotes ({ 60.0 }));
+        // A factory-style wrong label: the voice is A4, the filename says B0.
+        writeWave (pitchRoot.getChildFile ("VOX/chops/yeah_B0.wav"), sawNotes ({ 69.0 }));
+        writeWave (pitchRoot.getChildFile ("PAD/chord_Cmin.wav"), sawNotes ({ 60.0, 63.0, 67.0 }));
+
+        rolla::PresetBank bank;
+        rolla::loadDefaultPresets (bank);
+        auto useFile = [] (rolla::SampleSpec& spec, const char* file)
+        {
+            spec.mode = rolla::SampleMode::Sample;
+            spec.filter.on = false;
+            std::snprintf (spec.file, sizeof spec.file, "%s", file);
+        };
+        bank.count[rolla::Stab] = 1;
+        useFile (bank.stab[0].sample, "STAB/saw_C4.wav");
+        bank.count[rolla::Vox] = 1;
+        useFile (bank.vox[0].sample, "VOX/chops/yeah_B0.wav");
+        bank.count[rolla::Pad] = 1;
+        useFile (bank.pad[0].sample, "PAD/chord_Cmin.wav");
+
+        rolla::SampleLibrary lib;
+        lib.setRoot (pitchRoot);
+        lib.watch (bank);
+        expect (waitUntil ([&] { return lib.ready ("STAB/saw_C4.wav") && lib.ready ("VOX/chops/yeah_B0.wav")
+                                        && lib.ready ("PAD/chord_Cmin.wav"); }),
+                "pitch-check files load");
+        rolla::EngineParams params;
+        params.presets = &bank;
+        params.library = &lib;
+
+        auto played = [&] (int part, int note, rolla::ChordAsk ask, bool& chordFile)
+        {
+            rolla::Sampler s;
+            s.prepare (48000.0);
+            chordFile = s.take (part, note, 110, 1.0e9f, bank, params, ask).chordFile;
+            std::vector<float> out (36000);
+            for (auto& x : out)
+            {
+                float laneL[rolla::NumParts] {};
+                float laneR[rolla::NumParts] {};
+                s.render (laneL, laneR, 0.f, 0.f, false);
+                x = laneL[part];
+            }
+            return rolla::probePitch (out.data(), nullptr, (int) out.size(), 48000.0);
+        };
+
+        bool chord = false;
+        const auto stab = played (rolla::Stab, 62, {}, chord);
+        expect (stab.pitched() && rolla::pitchprobe::pcDistance (stab.rootPitch, 62.0) < 0.3,
+                "SAMPLE_OUT_OF_KEY: a C4 stab asked for D sounds D (got " + std::to_string (stab.rootPitch) + ")");
+        expect (! chord, "a single-note file is not a chord file");
+
+        const auto vox = played (rolla::Vox, 64, {}, chord);
+        expect (vox.pitched() && std::fabs (vox.rootPitch - 69.f) < 1.f,
+                "VOX_PITCH_SHIFTED: a vox chop keeps its voice, whatever the label (got " + std::to_string (vox.rootPitch) + ")");
+
+        rolla::ChordAsk cMajor;
+        cMajor.quality = rolla::ChordQuality::Major;
+        const auto pad = played (rolla::Pad, 60, cMajor, chord);
+        expect (chord, "CHORD_STACK: a recorded chord reports itself, so the engine plays it once per chord");
+        expect (pad.isChord && rolla::pitchprobe::pcDistance (pad.rootPitch, 64.0) < 0.3 && pad.quality == rolla::ChordQuality::Minor,
+                "a C minor file on a C major chord plays from the third (E minor, got root " + std::to_string (pad.rootPitch) + ")");
+        pitchRoot.deleteRecursively();
     }
 
     {
