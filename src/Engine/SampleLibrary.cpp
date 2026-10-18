@@ -385,6 +385,9 @@ void SampleLibrary::loadOne (const std::string& relative)
     findSlices (*audio);
     audio->flatness = spectralFlatness (audio->left.data(), audio->frames);
     audio->loudStart = loudestRegionStart (audio->left.data(), audio->frames, audio->rate);
+    audio->voicedCount = voicedOnsets (audio->left.data(), audio->right.empty() ? nullptr : audio->right.data(),
+                                       audio->frames, audio->rate, audio->slices, audio->sliceCount, audio->loudStart,
+                                       audio->voiced, 24, audio->voicedFloor);
 
     {
         std::lock_guard<std::mutex> lock (slotMu);

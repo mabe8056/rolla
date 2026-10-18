@@ -183,6 +183,106 @@ inline int loudestRegionStart (const float* x, int frames, double rate) noexcept
     return at;
 }
 
+// ---------------------------------------------------------------- VOX starts
+// Vox chops started on near-silence (a file's lead-in, a breath, a fading
+// tail). A "voiced" start is an onset whose next 150 ms is within 15 dB of the
+// file's loudest 150 ms window and above -45 dBFS. Measured on the in-memory
+// buffer at load; the source file is never written.
+inline constexpr double kVoicedWindowSeconds = 0.15;
+inline constexpr float kVoicedBelowLoudestDb = 15.f;
+inline constexpr float kVoicedFloorDbfs = -45.f;
+
+inline float windowRms (const float* l, const float* r, int frames, int start, int win) noexcept
+{
+    if (l == nullptr || frames <= 0 || win <= 0)
+        return 0.f;
+    start = std::clamp (start, 0, std::max (0, frames - 1));
+    const int end = std::min (frames, start + win);
+    double sum = 0.0;
+    for (int i = start; i < end; ++i)
+    {
+        const double a = l[i];
+        const double b = r != nullptr ? r[i] : a;
+        sum += 0.5 * (a * a + b * b);
+    }
+    return end > start ? (float) std::sqrt (sum / (double) (end - start)) : 0.f;
+}
+
+// Fills `out` with voiced starts (sorted, >= 40 ms apart), drawn from the
+// onset candidates and the loudest-region start. A candidate that opens on
+// near-silence slides forward (in quarter-window steps, up to 300 ms) to where
+// the voice comes in. Always returns at least one start. `floorOut` is the
+// RMS floor used, for voxStart.
+inline int voicedOnsets (const float* l, const float* r, int frames, double rate, const int* cand, int nCand,
+                         int loudStart, int* out, int cap, float& floorOut) noexcept
+{
+    floorOut = 0.f;
+    if (l == nullptr || frames <= 0 || cap <= 0)
+        return 0;
+    const int win = std::max (16, (int) (rate * kVoicedWindowSeconds));
+    const int hop = std::max (4, win / 4);
+    float loudest = 0.f;
+    for (int i = 0; i < frames; i += hop)
+        loudest = std::max (loudest, windowRms (l, r, frames, i, win));
+    const float floorAbs = std::pow (10.f, kVoicedFloorDbfs / 20.f);
+    const float floorRel = loudest * std::pow (10.f, -kVoicedBelowLoudestDb / 20.f);
+    floorOut = std::max (floorAbs, floorRel);
+    const int slideMax = (int) (rate * 0.30);
+    const int minGap = std::max (1, (int) (rate * 0.04));
+    int n = 0;
+    auto add = [&] (int at)
+    {
+        for (int k = 0; k < n; ++k)
+            if (std::abs (out[k] - at) < minGap)
+                return;
+        if (n < cap)
+            out[n++] = at;
+    };
+    for (int c = 0; c <= nCand; ++c)
+    {
+        const int at0 = c < nCand ? (cand != nullptr ? cand[c] : 0) : loudStart;
+        if (at0 < 0 || at0 >= frames)
+            continue;
+        for (int at = at0; at <= at0 + slideMax && at < frames; at += hop)
+            if (windowRms (l, r, frames, at, win) >= floorOut)
+            {
+                // The window holds the voice; start where it actually comes in
+                // (a 5 ms window within 6 dB of the floor), not on the silence before it.
+                const int fine = std::max (4, (int) (rate * 0.0025));
+                const int shortWin = std::max (8, (int) (rate * 0.005));
+                int onset = at;
+                while (onset + fine < std::min (frames, at + win)
+                       && windowRms (l, r, frames, onset, shortWin) < 0.5f * floorOut)
+                    onset += fine;
+                add (onset);
+                break;
+            }
+    }
+    if (n == 0)
+        out[n++] = std::clamp (loudStart, 0, frames - 1);
+    std::sort (out, out + n);
+    return n;
+}
+
+// Where a vox note starts. Sliced vox rotates through the voiced starts; an
+// unsliced note keeps its own start unless that opens on near-silence, then it
+// moves to the next voiced start (or the first one).
+inline int voxStart (int startFrame, bool slice, int sliceIndex, const int* voiced, int nVoiced, float floorRms,
+                     const float* l, const float* r, int frames, double rate) noexcept
+{
+    if (voiced == nullptr || nVoiced <= 0)
+        return startFrame;
+    if (slice)
+        return voiced[((sliceIndex % nVoiced) + nVoiced) % nVoiced];
+    const int win = std::max (16, (int) (rate * kVoicedWindowSeconds));
+    if (windowRms (l, r, frames, startFrame, win) >= floorRms)
+        return startFrame;
+    for (int i = 0; i < nVoiced; ++i)
+        if (voiced[i] >= startFrame)
+            return voiced[i];
+    return voiced[0];
+}
+
 // HITS and STAB: a short faded slice of a longer tonal file, started on an onset.
 // PAD: a held loop of the loudest region when `padBed` is set.
 // `flatness` < 0 means unmeasured (the name table already decided).
