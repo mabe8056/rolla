@@ -438,6 +438,80 @@ void testRetuneGuard()
     expect (wait.pending && wait.index == 2, "guard: a loading file keeps the pick");
 }
 
+// Melak's rule (Maestro 354): key locked and nothing survives -> mute the lane and
+// say so; key Auto -> the guard's passes choose the key.
+void testRetuneKeyRule()
+{
+    using rolla::RetuneKind;
+
+    // A one-file bass pool rooted on D1 (26). The bass plays the key root in
+    // octave 1 (MIDI 24 + key), as the engine sends it.
+    const auto bassD1 = harmonicTone (26.0, 8, 1.0, 0.005);
+    rolla::RetuneCache cache;
+    auto bassJudge = [&] (int key)
+    {
+        return [&, key] (int, double& worst)
+        {
+            rolla::PitchInfo info;
+            info.rootPitch = 26.f;
+            info.conf = 0.9f;
+            rolla::ShiftRule rule;
+            rule.cap = 12.0;
+            const double semis = rolla::tonalShift (info, -1, 24.0 + key, rule);
+            worst = std::fabs (semis);
+            const auto req = retuneAsk (bassD1, 26.0, semis, RetuneKind::Bass);
+            return cache.get ("BASS/d1", RetuneKind::Bass, semis, [&] { return rolla::judgeRetune (req); });
+        };
+    };
+    auto passes = [&] (int key)
+    {
+        return rolla::pickRetuneSafe (1, 0, 1, bassJudge (key)).safe ? 1 : 0;
+    };
+
+    // Key locked on A: D1 -> A1 is +7 st, past the bass cap, and the pool has no
+    // other file. The lane is muted, never played mangled, and the notice names it.
+    const auto lockedA = rolla::pickRetuneSafe (1, 0, 1, bassJudge (9));
+    expect (! lockedA.safe && rolla::retuneMuteFor (true, lockedA), "rule: key locked with no safe file mutes the lane");
+    expect (! rolla::retuneMuteFor (false, lockedA), "rule: key Auto never mutes; the key moves instead");
+    expect (rolla::retuneNoticeText ({ "BASS" }, "A", "Dorian") == "NO SAFE FILE: BASS in A Dorian",
+            "rule: the notice names the lane and the key");
+    expect (rolla::retuneNoticeText ({}, "A", "Dorian").empty(), "rule: no muted lane, no notice");
+    const auto lockedD = rolla::pickRetuneSafe (1, 0, 1, bassJudge (2));
+    expect (lockedD.safe && ! rolla::retuneMuteFor (true, lockedD), "rule: a surviving file is never muted");
+    rolla::RetunePick loadingPick;
+    loadingPick.pending = true;
+    loadingPick.index = 0;
+    expect (! rolla::retuneMuteFor (true, loadingPick), "rule: a file still loading is not a reason to mute");
+
+    // Key Auto from A: +-1 and +-2 still fail (+8, +6, +9, +5 st); C (+3 away, the
+    // + side first) is -2 st and passes.
+    const auto autoA = rolla::pickAutoKey (9, passes);
+    expect (autoA.found && autoA.key == 0, "rule: Auto moves to the nearest key where the lane survives (got "
+                                               + std::to_string (autoA.key) + ")");
+    // Today's key passing is kept and judged alone: nothing failing stays identical.
+    const auto autoD = rolla::pickAutoKey (2, passes);
+    expect (autoD.found && autoD.key == 2 && autoD.tried == 1, "rule: Auto keeps today's key when it passes");
+
+    // Ordering, fallback and pending, on a scripted pass table.
+    auto only = [] (std::vector<int> ok)
+    {
+        return [ok] (int k)
+        {
+            for (int v : ok)
+                if (v == k)
+                    return 1;
+            return 0;
+        };
+    };
+    expect (rolla::pickAutoKey (5, only ({ 4, 6 })).key == 6, "rule: at equal distance the key above wins");
+    expect (rolla::pickAutoKey (5, only ({ 3 })).key == 3, "rule: two below beats nothing");
+    expect (rolla::pickAutoKey (0, only ({ 11 })).key == 11, "rule: the search wraps round the octave");
+    const auto none = rolla::pickAutoKey (5, only ({}));
+    expect (! none.found && none.key == 5 && none.tried == 12, "rule: no key passes, today's key stays");
+    const auto later = rolla::pickAutoKey (5, [] (int k) { return k == 5 ? 0 : -1; });
+    expect (later.pending && later.key == 5, "rule: a loading file defers the key choice");
+}
+
 } // namespace
 
 int main()
@@ -446,6 +520,7 @@ int main()
 
     testPitchProbe();
     testRetuneGuard();
+    testRetuneKeyRule();
 
     static_assert (rolla::kUserSlotCount == 14, "14 user slots");
     expect (rolla::userSlotForPart (rolla::Bass) == rolla::SlotBass, "bass slot");

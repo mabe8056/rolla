@@ -2269,10 +2269,27 @@ struct StatusStrip : Component
         repaint();
     }
 
+    // Retune guard notice ("NO SAFE FILE: BASS in F# Dorian"), right-aligned in the
+    // warning colour so it stays up while hover help changes on the left.
+    String notice;
+
+    void setNotice (const String& next)
+    {
+        if (next == notice)
+            return;
+        notice = next;
+        repaint();
+    }
+
     void paint (Graphics& g) override
     {
-        g.setColour (col (kInk2));
         g.setFont (Theme::font (Theme::Role::meta));
+        if (notice.isNotEmpty())
+        {
+            g.setColour (col (kWarn));
+            g.drawText (notice, getLocalBounds(), Justification::centredRight, false);
+        }
+        g.setColour (col (kInk2));
         g.drawText (text, getLocalBounds(), Justification::centredLeft, false);
     }
 };
@@ -3046,6 +3063,7 @@ struct RollaEditor::Content : Component
                 scaleDrop.sub = scaleSub;
                 scaleDrop.repaint();
             }
+            status.setNotice (proc.retuneNotice());
         }
 
         const bool canUndo = proc.undo.canUndo();

@@ -766,6 +766,15 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     float drumKeep = 1.f;
     if (playUserSlot (part, -1, midiNote, velocity, end16, bank, params, result, drumKeep))
         return result;
+    // Key locked and no pool file survives the retune guard: never play a mangled
+    // one. The sample owns the note (kind 1, no synth), so the lane is silent and
+    // the engine still emits its MIDI.
+    if (params.retuneMute[part])
+    {
+        result.kind = 1;
+        result.synthGain = 0.f;
+        return result;
+    }
     const auto& spec = sampleSpecFor (bank, part, presetOf (params, part));
     if (synthMode (spec))
         return result;
