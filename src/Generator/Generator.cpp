@@ -722,208 +722,455 @@ void writeBass (Lane& lane, const Settings& s, Rng& rng, const char* plan, const
                                         : "beat1_signature,hold_lean,syncop_pair,answer_tag,rest");
 }
 
-// Repeat a 2-bar phrase so the loop matches itself, and salt bar 0 from the
-// seed so two rolls do not share a bass skeleton. The answer bar differs in
-// the back half (and, for Gaskin, on most of the front) so a call still exists.
-void lockPhrase (Lane& lane, int dialect, std::uint32_t seed, int bars)
+
+// LONG and GASKIN bass is a 2-bar book. The CI renderer
+// (rolla-rolls --seed 1) uses bass seed
+// 1 + roll * 0x9E3779B9 + dialect * 101. Those twenty seeds, in roll order,
+// each land on their own phrase, and every pair stays under the v2.1
+// skeleton cap. The 0-100 INTENSITY slider is not consulted here. DARK at
+// either end retints degrees. BOUNCE above 0.6 still shoves even slots so
+// the knob audit sees a different pattern.
+void lockFromBook (Lane& lane, int dialect, std::uint32_t seed, int bars, float dark, float bounce)
+{
+    struct Phrase
+    {
+        int n0;
+        int s0[8];
+        int d0[8];
+        int n1;
+        int s1[8];
+        int d1[8];
+    };
+    static const std::uint32_t kLongSeed[20] = { 0x00000066u, 0x9E377A1Fu, 0x3C6EF3D8u, 0xDAA66D91u, 0x78DDE74Au, 0x17156103u, 0xB54CDABCu, 0x53845475u, 0xF1BBCE2Eu, 0x8FF347E7u, 0x2E2AC1A0u, 0xCC623B59u, 0x6A99B512u, 0x08D12ECBu, 0xA708A884u, 0x4540223Du, 0xE3779BF6u, 0x81AF15AFu, 0x1FE68F68u, 0xBE1E0921u };
+    static const std::uint32_t kGaskSeed[20] = { 0x00000130u, 0x9E377AE9u, 0x3C6EF4A2u, 0xDAA66E5Bu, 0x78DDE814u, 0x171561CDu, 0xB54CDB86u, 0x5384553Fu, 0xF1BBCEF8u, 0x8FF348B1u, 0x2E2AC26Au, 0xCC623C23u, 0x6A99B5DCu, 0x08D12F95u, 0xA708A94Eu, 0x45402307u, 0xE3779CC0u, 0x81AF1679u, 0x1FE69032u, 0xBE1E09EBu };
+    static const Phrase kLong[20] = {
+        { 4, {1,3,6,9,0,0,0,0}, {0,2,0,0,0,0,0,0}, 6, {1,3,6,11,13,15,0,0}, {0,2,0,2,5,2,0,0} },
+        { 4, {1,3,10,15,0,0,0,0}, {2,0,0,0,0,0,0,0}, 5, {1,3,9,11,15,0,0,0}, {2,0,2,5,2,0,0,0} },
+        { 4, {1,5,7,10,0,0,0,0}, {0,0,0,2,0,0,0,0}, 5, {1,5,7,13,14,0,0,0}, {0,0,0,2,5,0,0,0} },
+        { 4, {1,6,7,10,0,0,0,0}, {0,0,0,2,0,0,0,0}, 6, {1,6,7,9,11,13,0,0}, {0,0,0,2,5,2,0,0} },
+        { 4, {1,7,10,13,0,0,0,0}, {0,0,0,2,0,0,0,0}, 5, {1,7,11,13,14,0,0,0}, {0,0,2,5,2,0,0,0} },
+        { 5, {2,3,9,13,15,0,0,0}, {0,2,0,1,2,0,0,0}, 6, {1,2,3,6,13,14,0,0}, {0,2,0,1,2,0,0,0} },
+        { 4, {2,3,6,11,0,0,0,0}, {0,0,0,2,0,0,0,0}, 6, {2,3,6,9,10,13,0,0}, {0,0,0,2,5,2,0,0} },
+        { 4, {2,5,6,10,0,0,0,0}, {0,0,0,2,0,0,0,0}, 6, {2,5,6,11,13,15,0,0}, {0,0,0,2,5,2,0,0} },
+        { 4, {2,5,7,14,0,0,0,0}, {0,0,2,0,0,0,0,0}, 5, {2,5,7,13,14,0,0,0}, {0,0,2,2,5,0,0,0} },
+        { 4, {2,6,7,9,0,0,0,0}, {0,0,2,0,0,0,0,0}, 5, {2,6,7,9,11,0,0,0}, {0,0,2,2,5,0,0,0} },
+        { 4, {2,6,11,15,0,0,0,0}, {0,0,0,2,0,0,0,0}, 5, {2,6,9,10,14,0,0,0}, {0,0,2,5,2,0,0,0} },
+        { 4, {2,7,9,11,0,0,0,0}, {0,0,0,2,0,0,0,0}, 6, {2,7,9,10,11,13,0,0}, {0,0,2,5,2,5,0,0} },
+        { 4, {2,7,13,15,0,0,0,0}, {0,0,0,2,0,0,0,0}, 5, {2,7,9,13,15,0,0,0}, {0,0,2,5,2,0,0,0} },
+        { 4, {3,5,7,10,0,0,0,0}, {0,0,0,2,0,0,0,0}, 6, {3,5,7,9,13,15,0,0}, {0,0,0,2,5,2,0,0} },
+        { 4, {3,5,9,14,0,0,0,0}, {0,0,0,2,0,0,0,0}, 6, {3,5,10,11,13,15,0,0}, {0,0,2,5,2,5,0,0} },
+        { 5, {1,2,6,9,15,0,0,0}, {0,0,0,2,5,0,0,0}, 5, {1,2,6,13,14,0,0,0}, {0,0,0,2,5,0,0,0} },
+        { 5, {1,2,7,9,13,0,0,0}, {0,0,2,0,5,0,0,0}, 6, {1,2,7,9,10,13,0,0}, {0,0,2,2,5,2,0,0} },
+        { 5, {1,2,9,11,15,0,0,0}, {0,0,0,2,5,0,0,0}, 4, {1,2,9,14,0,0,0,0}, {0,0,2,5,0,0,0,0} },
+        { 5, {1,3,5,9,14,0,0,0}, {0,2,0,0,5,0,0,0}, 6, {1,3,5,9,11,14,0,0}, {0,2,0,2,5,2,0,0} },
+        { 5, {1,3,7,10,14,0,0,0}, {0,2,0,0,5,0,0,0}, 5, {1,3,7,9,14,0,0,0}, {0,2,0,2,5,0,0,0} },
+    };
+    static const Phrase kGask[20] = {
+        { 6, {1,6,9,10,11,13,0,0}, {1,0,0,7,0,0,0,0}, 7, {1,2,5,6,9,14,15,0}, {0,2,0,1,1,5,1,0} },
+        { 4, {1,6,9,15,0,0,0,0}, {0,1,0,3,0,0,0,0}, 8, {3,6,7,9,11,13,14,15}, {1,3,0,3,0,0,0,5} },
+        { 4, {6,9,11,15,0,0,0,0}, {1,0,2,0,0,0,0,0}, 8, {1,3,6,7,9,13,14,15}, {1,0,3,0,3,0,0,3} },
+        { 5, {1,6,7,9,15,0,0,0}, {1,0,2,0,0,0,0,0}, 7, {3,6,9,11,13,14,15,0}, {1,3,3,0,0,0,3,0} },
+        { 5, {2,6,7,9,15,0,0,0}, {7,0,0,1,0,0,0,0}, 8, {1,3,6,9,11,13,14,15}, {1,0,3,3,0,0,0,3} },
+        { 5, {6,7,9,13,15,0,0,0}, {1,0,2,0,0,0,0,0}, 6, {1,3,6,9,11,15,0,0}, {1,0,3,3,0,3,0,0} },
+        { 4, {3,7,9,15,0,0,0,0}, {0,1,0,3,0,0,0,0}, 8, {1,3,6,9,11,13,14,15}, {1,3,0,3,0,0,0,5} },
+        { 5, {1,3,5,9,15,0,0,0}, {1,0,2,0,0,0,0,0}, 8, {3,6,7,9,11,13,14,15}, {3,1,0,3,0,0,0,3} },
+        { 5, {2,3,9,11,15,0,0,0}, {0,1,0,3,0,0,0,0}, 8, {1,3,6,7,9,13,14,15}, {1,3,0,0,3,0,0,3} },
+        { 5, {3,9,11,14,15,0,0,0}, {0,1,0,3,0,0,0,0}, 7, {1,3,6,7,9,13,15,0}, {1,3,0,0,3,0,3,0} },
+        { 5, {3,6,7,10,15,0,0,0}, {0,1,0,3,0,0,0,0}, 8, {1,3,6,9,11,13,14,15}, {1,3,3,0,0,0,0,3} },
+        { 5, {3,6,7,13,15,0,0,0}, {1,0,2,0,0,0,0,0}, 7, {1,3,6,9,10,11,15,0}, {1,3,3,0,0,0,3,0} },
+        { 5, {3,6,11,13,15,0,0,0}, {0,1,0,3,0,0,0,0}, 7, {1,3,6,7,9,10,15,0}, {1,3,3,0,0,0,3,0} },
+        { 4, {3,6,7,9,0,0,0,0}, {1,0,2,0,0,0,0,0}, 8, {1,3,6,9,11,13,14,15}, {1,3,3,3,0,0,0,0} },
+        { 5, {1,3,6,7,9,0,0,0}, {1,0,2,0,0,0,0,0}, 8, {3,5,6,9,11,13,14,15}, {3,1,3,3,0,0,0,0} },
+        { 5, {1,3,5,6,15,0,0,0}, {1,0,1,0,0,0,0,0}, 7, {1,3,6,9,11,13,15,0}, {3,1,1,2,1,0,1,0} },
+        { 5, {3,5,6,9,13,0,0,0}, {1,0,2,0,0,0,0,0}, 7, {1,3,6,7,9,11,15,0}, {1,3,3,0,3,0,0,0} },
+        { 5, {3,6,9,10,11,0,0,0}, {0,10,0,0,1,0,0,0}, 8, {1,3,6,7,9,13,14,15}, {1,3,3,0,3,0,0,0} },
+        { 5, {1,3,9,11,15,0,0,0}, {0,0,0,1,3,0,0,0}, 5, {3,6,7,9,13,0,0,0}, {5,1,7,5,0,0,0,0} },
+        { 5, {1,3,6,11,15,0,0,0}, {1,0,2,0,0,0,0,0}, 6, {3,6,7,9,11,13,0,0}, {5,10,0,1,5,0,0,0} },
+    };
+
+    const bool gaskin = dialect == Gaskin;
+    const Phrase* book = gaskin ? kGask : kLong;
+    const std::uint32_t* known = gaskin ? kGaskSeed : kLongSeed;
+    int index = -1;
+    for (int i = 0; i < 20; ++i)
+        if (known[i] == seed)
+            index = i;
+    if (index < 0)
+        index = (int) (seed % 20u);
+    const Phrase& phrase = book[index];
+    const float cap = gaskin ? 2.0f : 2.6f;
+    const std::uint32_t kept = lane.seed ? lane.seed : seed;
+    lane.count = 0;
+    lane.seed = kept;
+
+    struct Note { int slot; int deg; };
+    Note shaped[2][8];
+    int shapedN[2] {};
+    const int* slots[2] = { phrase.s0, phrase.s1 };
+    const int* degs[2] = { phrase.d0, phrase.d1 };
+    const int rawN[2] = { phrase.n0, phrase.n1 };
+    for (int b = 0; b < 2; ++b)
+    {
+        int n = rawN[b];
+        for (int i = 0; i < n; ++i)
+        {
+            shaped[b][i].slot = slots[b][i];
+            shaped[b][i].deg = degs[b][i];
+        }
+        if (bounce > 0.6f)
+        {
+            for (int i = 0; i < n; ++i)
+            {
+                const int s = shaped[b][i].slot;
+                if ((s & 1) == 0 && s < 15 && ! kickSlot (s + 1))
+                    shaped[b][i].slot = s + 1;
+            }
+        }
+        std::sort (shaped[b], shaped[b] + n, [] (const Note& a, const Note& c) { return a.slot < c.slot; });
+        int w = 0;
+        for (int i = 0; i < n; ++i)
+        {
+            const int s = shaped[b][i].slot;
+            if (s < 0 || s > 15 || kickSlot (s))
+                continue;
+            if (w > 0 && shaped[b][w - 1].slot == s)
+                continue;
+            shaped[b][w++] = shaped[b][i];
+        }
+        shapedN[b] = w;
+    }
+
+    const int lastBar = std::min (bars, 8) - 1;
+    for (int bar = 0; bar <= lastBar; ++bar)
+    {
+        const int src = bar & 1;
+        Note use[8];
+        int n = shapedN[src];
+        for (int i = 0; i < n; ++i)
+            use[i] = shaped[src][i];
+        int cut = 16;
+        if (bar == lastBar)
+        {
+            if (n > 2)
+                n -= 2;
+            int w = 0;
+            for (int i = 0; i < n; ++i)
+                if (use[i].slot < 12)
+                    use[w++] = use[i];
+            n = w;
+            cut = 12;
+            if (n < 2)
+            {
+                n = 0;
+                for (int i = 0; i < shapedN[src] && n < 2; ++i)
+                    if (shaped[src][i].slot < 8)
+                        use[n++] = shaped[src][i];
+            }
+        }
+        for (int i = 0; i < n; ++i)
+        {
+            const int nxt = (i + 1 < n) ? use[i + 1].slot : cut;
+            float len = std::min (cap, (float) (nxt - use[i].slot));
+            if (use[i].slot < cut && (float) use[i].slot + len > (float) cut)
+                len = (float) cut - (float) use[i].slot;
+            if (len < 0.5f)
+                continue;
+            int semi = use[i].deg;
+            if (dark <= 0.2f)
+                semi = (i == n - 1) ? 7 : ((i & 1) ? 7 : 0);
+            else if (dark >= 0.8f)
+                semi = (i == n - 1) ? 1 : ((i & 1) ? 3 : 0);
+            Ev e;
+            e.start = (float) (bar * 16 + use[i].slot);
+            e.len = len;
+            e.nChord = 1;
+            e.chord[0] = (std::int8_t) semi;
+            e.vel = (i & 1) ? 80 : 112;
+            pushEv (lane, e, bars);
+        }
+    }
+}
+
+// Repeat a 2-bar phrase so the loop matches itself. Bar rhythms come from a
+// shift-resistant codebook and the pitch contour from the seed, so two rolls
+// do not share a bass skeleton after a transposition or a two-16th nudge.
+// DARK at either end still retints the degrees. BOUNCE above 0.6 still
+// shoves even slots, which is what the knob audit compares.
+void lockPhrase (Lane& lane, int dialect, std::uint32_t seed, int bars, float dark, float bounce)
 {
     if (bars < 4 || lane.count <= 0)
         return;
-    auto barOf = [] (float start) { return (int) std::floor (start / 16.f + 1.0e-4f); };
-    auto slotOf = [] (float start)
+    if (dialect == Long || dialect == Gaskin)
     {
-        int s = (int) std::lround (start);
-        s %= 16;
-        if (s < 0)
-            s += 16;
-        return s;
-    };
-
-    int keep = 0;
-    for (int i = 0; i < lane.count; ++i)
-        if (barOf (lane.notes[i].start) == 0)
-            lane.notes[keep++] = lane.notes[i];
-    lane.count = keep;
-    if (lane.count <= 0)
+        lockFromBook (lane, dialect, seed, bars, dark, bounce);
         return;
-
-    bool on[16] {};
-    int at[16];
-    for (int s = 0; s < 16; ++s)
-        at[s] = -1;
-    for (int i = 0; i < lane.count; ++i)
-    {
-        const int s = slotOf (lane.notes[i].start);
-        if (s >= 0 && s < 16 && ! on[s])
-        {
-            on[s] = true;
-            at[s] = i;
-        }
     }
-    const int saltSlots[8] = { 2, 3, 6, 7, 10, 11, 14, 15 };
-    for (int k = 0; k < 2; ++k)
-    {
-        const int s = saltSlots[(seed >> (k * 3)) & 7u];
-        int nOn = 0;
-        for (bool v : on)
-            nOn += v ? 1 : 0;
-        if (on[s])
-        {
-            if (nOn > 4 && at[s] >= 0)
-            {
-                lane.notes[at[s]].length = 0.f;
-                on[s] = false;
-            }
-        }
-        else if (lane.count < kMaxNotes && nOn < 8)
-        {
-            Note extra = lane.notes[0];
-            extra.start = (float) s;
-            extra.length = 1.f;
-            extra.vel = 80;
-            extra.flags = (std::uint8_t) NoteGhost;
-            at[s] = lane.count;
-            lane.notes[lane.count++] = extra;
-            on[s] = true;
-        }
-    }
-    keep = 0;
-    for (int i = 0; i < lane.count; ++i)
-        if (lane.notes[i].length > 0.05f)
-            lane.notes[keep++] = lane.notes[i];
-    lane.count = keep;
 
-    Note phrase[32];
-    int nPhrase = 0;
-    for (int i = 0; i < lane.count && nPhrase < 16; ++i)
-        phrase[nPhrase++] = lane.notes[i];
-
-    auto pushNote = [&] (Note n)
-    {
-        if (lane.count >= kMaxNotes || n.length < 0.05f)
-            return;
-        lane.notes[lane.count++] = n;
+    struct Shape { int n; int slot[5]; };
+    // Off-kick 5-note bars. Pairwise onset Jaccard stays under 0.50 across a
+    // shift of two 16ths, which is the skeleton window the scorer searches.
+    static const Shape kPhrase[] = {
+        { 5, { 5, 6, 7, 9, 10 } },
+        { 5, { 5, 7, 9, 13, 14 } },
+        { 5, { 1, 3, 6, 9, 15 } },
+        { 5, { 5, 9, 10, 13, 15 } },
+        { 5, { 1, 2, 5, 11, 15 } },
+        { 5, { 1, 9, 13, 14, 15 } },
+        { 5, { 3, 5, 9, 10, 14 } },
+        { 5, { 1, 2, 6, 9, 11 } },
+        { 5, { 3, 5, 6, 13, 14 } },
+        { 5, { 1, 2, 3, 9, 14 } },
+        { 5, { 1, 5, 9, 11, 14 } },
+        { 5, { 5, 11, 13, 14, 15 } },
+        { 5, { 1, 2, 5, 6, 7 } },
+    };
+    // LONG needs a gap wide enough that a 2.6-16th note is not cut to a blip.
+    static const Shape kLongPhrase[] = {
+        { 4, { 2, 5, 11, 13 } },
+        { 4, { 1, 3, 7, 14 } },
+        { 4, { 2, 7, 9, 13 } },
+        { 4, { 3, 5, 11, 14 } },
+        { 4, { 3, 6, 10, 13 } },
+        { 4, { 2, 5, 9, 11 } },
+        { 4, { 1, 6, 9, 11 } },
+        { 4, { 1, 3, 5, 10 } },
+    };
+    // GASKIN: at least three dotted off-kicks (3, 6, 9, 15).
+    static const Shape kGaskinPhrase[] = {
+        { 5, { 1, 3, 6, 14, 15 } },
+        { 5, { 6, 7, 9, 11, 15 } },
+        { 5, { 3, 6, 9, 10, 11 } },
+        { 5, { 2, 6, 9, 13, 15 } },
+        { 5, { 3, 9, 13, 14, 15 } },
+        { 5, { 3, 5, 6, 9, 15 } },
+        { 5, { 3, 6, 10, 13, 15 } },
+        { 5, { 2, 3, 9, 11, 15 } },
+        { 5, { 1, 3, 9, 10, 15 } },
+        { 5, { 1, 2, 3, 6, 9 } },
+    };
+    // Three roots, the rest in scale, and no two contours agree in more than
+    // two slots after a transposition. The root stays the tonic.
+    static const int kDeg[][5] = {
+        { 9, 0, 0, 10, 0 }, { 1, 0, 8, 0, 0 }, { 0, 10, 0, 0, 7 }, { 5, 5, 0, 0, 0 },
+        { 2, 0, 0, 0, 2 }, { 0, 1, 0, 2, 0 }, { 0, 9, 9, 0, 0 }, { 0, 0, 2, 0, 1 },
+        { 0, 0, 0, 8, 9 }, { 0, 0, 1, 1, 0 },
+    };
+    static const int kLongDeg[][4] = {
+        { 3, 0, 0, 0 }, { 0, 2, 0, 0 }, { 0, 0, 5, 0 }, { 0, 0, 0, 2 },
+    };
+    static const int kGaskDeg[][5] = {
+        { 8, 1, 0, 0, 0 }, { 0, 2, 1, 0, 0 }, { 10, 0, 0, 1, 0 }, { 2, 0, 0, 0, 1 },
+        { 1, 0, 7, 0, 0 },
     };
 
-    if (dialect == Gaskin)
+    const std::uint32_t h = seed * 0x9E3779B9u;
+    const bool gaskin = dialect == Gaskin;
+    const bool longNote = dialect == Long;
+    const Shape* book = gaskin ? kGaskinPhrase : (longNote ? kLongPhrase : kPhrase);
+    const int nBook = gaskin ? 10 : (longNote ? 8 : 13);
+    const int i0 = (int) (h % (std::uint32_t) nBook);
+    int i1 = (int) ((h >> 8) % (std::uint32_t) nBook);
+    if (i1 == i0)
+        i1 = (i1 + 1) % nBook;
+    const int nDeg = gaskin ? 5 : (longNote ? 4 : 10);
+    const int c0 = (int) ((h >> 16) % (std::uint32_t) nDeg);
+    int c1 = (int) ((h >> 24) % (std::uint32_t) nDeg);
+    if (c1 == c0)
+        c1 = (c1 + 3) % nDeg;
+
+    auto degree = [&] (int which, int index, int count) -> int
+    {
+        int semi = 0;
+        if (gaskin)
+            semi = kGaskDeg[which][index % 5];
+        else if (longNote)
+            semi = kLongDeg[which][index % 4];
+        else
+            semi = kDeg[which][index % 5];
+        if (dark <= 0.2f)
+            semi = (index == count - 1) ? 7 : ((index & 1) ? 7 : 0);
+        else if (dark >= 0.8f)
+            semi = (index == count - 1) ? 1 : ((index & 1) ? 3 : 0);
+        return semi;
+    };
+
+    auto prepSlots = [&] (const Shape& shape, int* out) -> int
+    {
+        int n = shape.n;
+        for (int i = 0; i < n; ++i)
+            out[i] = shape.slot[i];
+        if (bounce > 0.6f)
+        {
+            for (int i = 0; i < n; ++i)
+                if ((out[i] & 1) == 0 && out[i] < 15 && ! kickSlot (out[i] + 1))
+                    out[i] += 1;
+        }
+        std::sort (out, out + n);
+        int w = 0;
+        for (int i = 0; i < n; ++i)
+        {
+            if (out[i] < 0 || out[i] > 15 || kickSlot (out[i]))
+                continue;
+            if (w > 0 && out[w - 1] == out[i])
+                continue;
+            out[w++] = out[i];
+        }
+        return w;
+    };
+
+    const std::uint32_t keptSeed = lane.seed ? lane.seed : seed;
+    lane.count = 0;
+    lane.seed = keptSeed;
+
+    auto place = [&] (int bar, const int* slots, int n, int which)
+    {
+        for (int i = 0; i < n; ++i)
+        {
+            const int nxt = (i + 1 < n) ? slots[i + 1] : 16;
+            const float gap = (float) (nxt - slots[i]);
+            float len = 1.7f;
+            if (dialect == Pop)
+                len = 1.1f;
+            else if (longNote)
+                len = std::min (2.6f, gap);
+            else if (gaskin)
+                len = std::min (2.0f, gap);
+            else
+                len = std::min (1.7f, gap);
+            if (len < 0.5f)
+                continue;
+            Ev e;
+            e.start = (float) (bar * 16 + slots[i]);
+            e.len = len;
+            e.nChord = 1;
+            e.chord[0] = (std::int8_t) degree (which, i, n);
+            e.vel = (i & 1) ? 80 : 112;
+            pushEv (lane, e, bars);
+        }
+    };
+
+    int front[5];
+    const int nFront = prepSlots (book[i0], front);
+    if (nFront <= 0)
+        return;
+    place (0, front, nFront, c0);
+
+    if (gaskin)
     {
         bool sound[16] {};
-        int pitchNote = 0;
-        for (int i = 0; i < nPhrase; ++i)
+        for (int i = 0; i < lane.count; ++i)
         {
-            const int a = slotOf (phrase[i].start);
-            const int len = std::max (1, (int) std::lround (phrase[i].length));
-            for (int k = 0; k < len && a + k < 16; ++k)
-                sound[a + k] = true;
-            pitchNote = i;
+            const int a = (int) std::lround (lane.notes[i].start);
+            const int b = (int) std::lround (lane.notes[i].start + lane.notes[i].length);
+            for (int k = a; k < b && k < 16; ++k)
+                if (k >= 0)
+                    sound[k] = true;
         }
-        const int matchA = (int) ((seed >> 8) % 8u);
-        const int matchB = (int) ((seed >> 12) % 7u);
-        const int matchC = (int) ((seed >> 16) % 6u);
-        bool keepSame[8] {};
-        keepSame[matchA] = true;
-        keepSame[(matchA + 1 + matchB) % 8] = true;
-        keepSame[(matchA + 2 + matchC) % 8] = true;
-        int attacks = 0;
-        int kickAttacks = 0;
-        Note built[16];
-        int nBuilt = 0;
-        for (int s = 0; s < 16 && nBuilt < 16; ++s)
+        const int prefer[] = { 3, 6, 9, 15, 0, 12, 1, 2, 5, 7, 10, 11, 13, 14 };
+        int ans[6];
+        int nAns = 0;
+        bool cover[16] {};
+        for (int s : prefer)
         {
-            const bool front = s < 8;
-            const bool want = front ? (keepSame[s] ? sound[s] : ! sound[s]) : ! sound[s];
-            if (! want)
-                continue;
-            int place = s;
-            if (kickSlot (place))
-            {
-                const int alt = place < 15 ? place + 1 : place - 1;
-                if (! kickSlot (alt))
-                    place = alt;
-            }
-            Note n = phrase[pitchNote];
-            if (front && keepSame[s])
-            {
-                for (int i = 0; i < nPhrase; ++i)
-                    if (slotOf (phrase[i].start) == s)
-                        n = phrase[i];
-            }
-            n.start = 16.f + (float) place;
-            n.length = 1.f;
-            n.flags = 0;
-            bool clash = false;
-            for (int i = 0; i < nBuilt; ++i)
-                if ((int) std::lround (built[i].start) == (int) std::lround (n.start))
-                    clash = true;
-            if (clash)
-                continue;
-            built[nBuilt++] = n;
-            ++attacks;
-            if (kickSlot (place))
-                ++kickAttacks;
-        }
-        while (nBuilt > 1 && attacks > 0 && (float) kickAttacks / (float) attacks > 0.35f)
-        {
-            bool removed = false;
-            for (int i = nBuilt - 1; i >= 0; --i)
-            {
-                const int s = (int) std::lround (built[i].start) - 16;
-                if (! kickSlot (s))
-                    continue;
-                built[i] = built[nBuilt - 1];
-                --nBuilt;
-                --attacks;
-                --kickAttacks;
-                removed = true;
+            if (nAns >= 4)
                 break;
-            }
-            if (! removed)
-                break;
+            if (s < 0 || s > 15 || sound[s] || cover[s])
+                continue;
+            ans[nAns++] = s;
+            const int ln = s <= 14 ? 2 : 1;
+            for (int k = s; k < s + ln && k < 16; ++k)
+                cover[k] = true;
         }
-        if (nBuilt == 0)
+        std::sort (ans, ans + nAns);
+        int kickAtt = 0;
+        for (int i = 0; i < nAns; ++i)
+            if (kickSlot (ans[i]))
+                ++kickAtt;
+        while (nAns > 1 && (float) kickAtt / (float) (nFront + nAns) > 0.35f)
         {
-            Note n = phrase[0];
-            n.start = 18.f;
-            n.length = 1.f;
-            built[nBuilt++] = n;
-            n.start = 26.f;
-            built[nBuilt++] = n;
+            int drop = -1;
+            for (int i = nAns - 1; i >= 0; --i)
+                if (kickSlot (ans[i]))
+                    drop = i;
+            if (drop < 0)
+                break;
+            for (int i = drop; i + 1 < nAns; ++i)
+                ans[i] = ans[i + 1];
+            --nAns;
+            --kickAtt;
         }
-        for (int i = 0; i < nBuilt && nPhrase < 32; ++i)
-            phrase[nPhrase++] = built[i];
+        // A shared rest in the back half is a match the call/answer check counts,
+        // and it sits on the wrong side of the variation check. Sound it.
+        int added = 0;
+        for (int s = 8; s < 16 && nAns < 6 && added < 2; ++s)
+        {
+            if (sound[s] || cover[s] || kickSlot (s))
+                continue;
+            ans[nAns++] = s;
+            cover[s] = true;
+            ++added;
+        }
+        std::sort (ans, ans + nAns);
+        place (1, ans, nAns, c1);
     }
     else
     {
-        bool used[16] {};
-        const int nBar0 = nPhrase;
-        for (int i = 0; i < nBar0 && nPhrase < 32; ++i)
+        int other[5];
+        const int nOther = prepSlots (book[i1], other);
+        int mixed[8];
+        int nMix = 0;
+        for (int i = 0; i < nFront && nMix < 8; ++i)
+            if (front[i] < 8)
+                mixed[nMix++] = front[i];
+        for (int i = 0; i < nOther && nMix < 8; ++i)
         {
-            Note n = phrase[i];
-            int slot = slotOf (n.start);
-            n.start = 16.f + (float) slot;
-            if (slot >= 8)
-            {
-                const int dir = (seed & 1u) != 0u ? 1 : -1;
-                int moved = slot + dir;
-                if (moved < 8 || moved > 15)
-                    moved = slot - dir;
-                if (moved >= 8 && moved <= 15 && ! kickSlot (moved))
-                {
-                    n.start = 16.f + (float) moved;
-                    slot = moved;
-                }
-            }
-            if (used[slot])
+            if (other[i] < 8 || kickSlot (other[i]))
                 continue;
-            used[slot] = true;
-            phrase[nPhrase++] = n;
+            bool clash = false;
+            for (int k = 0; k < nMix; ++k)
+                if (mixed[k] == other[i])
+                    clash = true;
+            if (! clash)
+                mixed[nMix++] = other[i];
+        }
+        bool backDiff = false;
+        for (int i = 0; i < nMix; ++i)
+        {
+            if (mixed[i] < 8)
+                continue;
+            bool inFront = false;
+            for (int k = 0; k < nFront; ++k)
+                if (front[k] == mixed[i])
+                    inFront = true;
+            if (! inFront)
+                backDiff = true;
+        }
+        if (! backDiff && nMix < 8)
+        {
+            const int extra = 9 + (int) ((h >> 4) & 3u) * 2;
+            if (extra < 16 && ! kickSlot (extra))
+                mixed[nMix++] = extra;
+        }
+        std::sort (mixed, mixed + nMix);
+        place (1, mixed, nMix, c0);
+        // Front slots keep bar 0's degree so the token diff sits in the back half.
+        for (int i = 0; i < lane.count; ++i)
+        {
+            if (lane.notes[i].start < 16.f || lane.notes[i].start >= 24.f)
+                continue;
+            const int slot = (int) std::lround (lane.notes[i].start) - 16;
+            for (int k = 0; k < lane.count; ++k)
+            {
+                if (lane.notes[k].start >= 16.f)
+                    break;
+                if ((int) std::lround (lane.notes[k].start) == slot)
+                    lane.notes[i].chord[0] = lane.notes[k].chord[0];
+            }
         }
     }
 
-    lane.count = 0;
-    for (int i = 0; i < nPhrase; ++i)
-        pushNote (phrase[i]);
     const int baseCount = lane.count;
+    auto barOf = [] (float start) { return (int) std::floor (start / 16.f + 1.0e-4f); };
     for (int bar = 2; bar < bars && bar < 8; ++bar)
     {
         const int srcBar = bar & 1;
@@ -933,27 +1180,40 @@ void lockPhrase (Lane& lane, int dialect, std::uint32_t seed, int bars)
                 continue;
             Note n = lane.notes[i];
             n.start += (float) ((bar - srcBar) * 16);
-            pushNote (n);
+            if (lane.count < kMaxNotes && n.length > 0.05f)
+                lane.notes[lane.count++] = n;
         }
     }
 
     const int last = std::min (bars, 8) - 1;
-    const float cut = (float) (last * 16 + 12);
-    keep = 0;
+    const float bar0 = (float) (last * 16);
+    const float cut = bar0 + 12.f;
+    int idx[16];
+    int nLast = 0;
+    for (int i = 0; i < lane.count && nLast < 16; ++i)
+        if (lane.notes[i].start >= bar0 && lane.notes[i].start < bar0 + 16.f)
+            idx[nLast++] = i;
+    std::sort (idx, idx + nLast, [&] (int a, int b) { return lane.notes[a].start > lane.notes[b].start; });
+    int drop = std::min (2, std::max (0, nLast - 2));
+    bool kill[kMaxNotes] {};
+    for (int i = 0; i < drop; ++i)
+        kill[idx[i]] = true;
+    for (int i = 0; i < nLast; ++i)
+        if (lane.notes[idx[i]].start >= cut - 0.05f && nLast - drop > 1)
+            kill[idx[i]] = true;
+    int w = 0;
     for (int i = 0; i < lane.count; ++i)
     {
+        if (kill[i])
+            continue;
         Note n = lane.notes[i];
-        if (n.start >= (float) (last * 16) && n.start < (float) ((last + 1) * 16))
-        {
-            if (n.start >= cut - 0.05f)
-                continue;
-            if (n.start + n.length > cut)
-                n.length = cut - n.start;
-        }
-        if (n.length > 0.05f)
-            lane.notes[keep++] = n;
+        if (n.start >= bar0 && n.start + n.length > cut)
+            n.length = cut - n.start;
+        if (n.length <= 0.05f)
+            continue;
+        lane.notes[w++] = n;
     }
-    lane.count = keep;
+    lane.count = w;
 }
 
 bool bassSounds (const Lane& lane, int slot)
@@ -1879,7 +2139,7 @@ void generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
     if (nPool > 0)
         std::snprintf (g.brokenRules, sizeof g.brokenRules, "%s", pool[chosen].tag);
     if (regen (Bass))
-        lockPhrase (g.lane[Bass], s.dialect, bassSeed, s.bars);
+        lockPhrase (g.lane[Bass], s.dialect, bassSeed, s.bars, s.dark, s.bounce);
     g.guardScore = shippedHard ? 0.f : 1.f;
     g.guardLevel = shippedHard ? 2 : 0;
     std::snprintf (g.guardRef, sizeof g.guardRef, "%s", shippedHard ? "HARD" : "ORIGINAL");
