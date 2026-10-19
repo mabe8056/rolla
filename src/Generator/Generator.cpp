@@ -1727,7 +1727,10 @@ void finishPhrase (Lane& lane, const Settings& s, std::uint32_t seed, bool pulse
         styleJackinBass (lane, bars, seed, mode);
     else if (dialect == Long && deepIsDark (s.dark, seed))
         densifyDeepDark (lane, bars, seed, mode);
-    applyBusyDensity (lane, dialect, bars, s.busy, seed);
+    // BOUNCY bounce sets its own density (the 2-bar cell's contrast, its kick cap);
+    // low BUSY thinning on top took it under the A&R density band (3.9 a bar).
+    if (! (dialect == Pop && ! pulse && s.busy < 0.40f))
+        applyBusyDensity (lane, dialect, bars, s.busy, seed);
     if (dialect == Long)
         fitRootShare (lane, 0.42f, 0.68f, seed, dialect, mode);
     if (dialect == Pop)
