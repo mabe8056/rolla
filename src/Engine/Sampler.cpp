@@ -839,8 +839,13 @@ Amp ampFor (const PresetBank& bank, int part, int preset)
     }
     else if (part == Vox)
     {
-        const auto& p = bank.vox[i];
-        a = { 3.f, p.decayMs, 0.f, 30.f, 4000.f * p.brightness, 0.05f, 0.2f, 40.f, 200.f, ampDb (p.trimDb) * 0.25f };
+        // A vox sample plays as recorded. The preset's decayMs / brightness / trimDb
+        // shape the formant synth (Engine.cpp), not a file the loader already set to
+        // -24 LUFS: sustain 0 with a 140 ms decay faded a 278 ms shot out (~-11 dB,
+        // shape lost), the 4-pole at 4.6 kHz is -3 dB near 2 kHz, the 200 Hz HPF ate
+        // the fundamental and ampDb (-8) * 0.25 was another -20 dB (issue #68).
+        // TONE still darkens it (cut / 4 at 0); PUNCH still moves the attack.
+        a = { 3.f, 200.f, 1.f, 30.f, 20000.f, 0.f, 0.f, 40.f, 40.f, 1.f };
     }
     else
     {
