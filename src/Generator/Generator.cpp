@@ -5,6 +5,7 @@
 #include "RuleTables.h"
 
 #include <algorithm>
+#include <bitset>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -1928,7 +1929,7 @@ void writeHits (Lane& lane, const Groove& g, const Settings& s, Rng& rng, int mo
             const unsigned both = c.mask & chords[j].mask;
             const unsigned either = c.mask | chords[j].mask;
             // Jaccard under 0.75: not the same set give or take one note.
-            distinct = (float) __builtin_popcount (both) < 0.75f * (float) __builtin_popcount (either);
+            distinct = (float) std::bitset<12> (both).count() < 0.75f * (float) std::bitset<12> (either).count();
         }
         if (distinct || tries == 23)
             chords[nChords++] = c;
