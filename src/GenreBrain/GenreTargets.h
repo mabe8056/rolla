@@ -123,6 +123,8 @@ struct SampleFeatures
     float subRatio = 0.f;      // energy share under 120 Hz
     float loudnessDb = -120.f; // RMS over the first 300 ms, before load gain
     float lowCorr = 1.f;       // L/R correlation under 150 Hz (1 mono); 1 when unknown
+    float lt200 = -1.f;        // power share under 200 Hz (mono, first 20 s); -1 unknown
+    float gt1k = -1.f;         // power share over 1 kHz; -1 unknown
     float lengthMs = 0.f;
     PitchInfo pitch;
 

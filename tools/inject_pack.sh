@@ -10,7 +10,8 @@
 #
 # The optional third argument (or $ROLLA_GENRE_DATA_DIR) is the private genre
 # data folder: orig_builtin.json (the originality backstop's banned figures,
-# hashed) and genre_targets.json go into <bundle>/Contents/Resources/Genre.
+# hashed), genre_targets.json, sample_features.json (the genre brain's library
+# measurements) and mesh_rules.json go into <bundle>/Contents/Resources/Genre.
 # They are private and never committed; the plugin reads them from the bundle.
 #
 # The pack stays out of the repo: this only writes inside the bundle.
@@ -89,7 +90,7 @@ if [ -n "$genre" ]; then
     gdest="$bundle/Contents/Resources/Genre"
     rm -rf "$gdest"
     mkdir -p "$gdest"
-    for f in orig_builtin.json genre_targets.json; do
+    for f in orig_builtin.json genre_targets.json sample_features.json mesh_rules.json; do
         if [ -f "$genre/$f" ]; then
             cp "$genre/$f" "$gdest/$f"
             genre_files=$((genre_files + 1))

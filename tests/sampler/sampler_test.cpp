@@ -2,8 +2,12 @@
 #include "Engine/Engine.h"
 #include "Engine/SampleChop.h"
 #include "Engine/Sampler.h"
+#include "Drums/DrumMachine.h"
 #include "GenreBrain/GenreTargetsJson.h"
 #include "GenreBrain/KitMeshJson.h"
+#include "GenreBrain/LanePools.h"
+#include "GenreBrain/SampleFeaturesJson.h"
+#include "GenreBrain/SoundSelector.h"
 #include "Mix/TruePeakGuard.h"
 #include "Sampler/Fingerprint.h"
 #include "Sampler/PitchProbe.h"
@@ -17,6 +21,7 @@
 #include <juce_events/juce_events.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstring>
 #include <chrono>
@@ -27,6 +32,7 @@
 #include <memory>
 #include <random>
 #include <iostream>
+#include <iterator>
 #include <string>
 #include <thread>
 #include <vector>
@@ -1355,6 +1361,96 @@ std::vector<float> hatHit (std::uint32_t seed, double seconds = 0.15)
     return x;
 }
 
+// A synthetic kick whose body settles on `bodyHz`: a 10 ms pitch drop, then a long tail.
+std::vector<float> tunedKick (double bodyHz, double seconds = 0.6)
+{
+    std::vector<float> x ((size_t) (seconds * 48000.0));
+    double phase = 0.0;
+    for (size_t i = 0; i < x.size(); ++i)
+    {
+        const double t = (double) i / 48000.0;
+        phase += 2.0 * 3.14159265358979 * (bodyHz + 60.0 * std::exp (-t / 0.01)) / 48000.0;
+        x[i] = (float) (0.8 * std::exp (-t / 0.25) * std::sin (phase));
+    }
+    return x;
+}
+
+// A kick with no fundamental: a decaying white-noise thump.
+std::vector<float> noiseKick (double seconds = 0.6)
+{
+    std::vector<float> x ((size_t) (seconds * 48000.0));
+    std::uint32_t s = 12345u;
+    for (size_t i = 0; i < x.size(); ++i)
+    {
+        s = s * 1664525u + 1013904223u;
+        x[i] = (float) (0.6 * std::exp (-(double) i / 48000.0 / 0.25)) * ((float) (s >> 8) / 8388608.f - 1.f);
+    }
+    return x;
+}
+
+double hzOfMidi (double midi)
+{
+    return 440.0 * std::pow (2.0, (midi - 69.0) / 12.0);
+}
+
+// Upward zero crossings of x[from..to): the mean frequency in Hz, 0 with too few.
+double zeroCrossHz (const std::vector<float>& x, size_t from, size_t to, double rate)
+{
+    double first = -1.0, last = -1.0;
+    int count = 0;
+    for (size_t i = std::max<size_t> (from, 1); i < to && i < x.size(); ++i)
+        if (x[i - 1] < 0.f && x[i] >= 0.f)
+        {
+            const double at = (double) (i - 1) + (double) (-x[i - 1]) / (double) (x[i] - x[i - 1]);
+            if (first < 0.0)
+                first = at;
+            last = at;
+            ++count;
+        }
+    return count >= 3 && last > first ? (double) (count - 1) * rate / (last - first) : 0.0;
+}
+
+void testKickKeyFollow()
+{
+    using rolla::DrumMachine;
+    // Key C: root, fourth and fifth in the kick window give G1, about 49 Hz. Key D gives A1, 55 Hz.
+    expect (std::fabs (DrumMachine::kickHzForKey (0) - 49.0f) < 0.1f, "key follow: key C targets ~49 Hz");
+
+    const auto body = tunedKick (55.0);
+    const auto p = rolla::probePitch (body.data(), nullptr, (int) body.size(), 48000.0);
+    const auto got = " (root " + std::to_string (p.rootPitch) + ", conf " + std::to_string (p.conf) + ")";
+    expect (p.pitched() && ! p.isChord && p.conf >= rolla::kKickFollowConfMin
+                && std::fabs (hzOfMidi (p.rootPitch) - 55.0) < 1.5,
+            "key follow: the synthetic kick reads ~55 Hz with confidence" + got);
+
+    const double toC = rolla::kickKeyFollowRatio (p, 0);
+    const double semisC = 12.0 * std::log2 (toC);
+    expect (semisC < -1.6 && semisC > -2.4 && std::fabs (semisC) <= rolla::kKickFollowMaxSt,
+            "key follow: a 55 Hz kick in C is tuned down about 2 st (got " + std::to_string (semisC) + ")" + got);
+    expect (std::fabs (hzOfMidi (p.rootPitch) * toC - (double) DrumMachine::kickHzForKey (0)) < 1.0,
+            "key follow: the retuned kick lands on the key's kick note");
+    expect (std::fabs (12.0 * std::log2 (rolla::kickKeyFollowRatio (p, 2))) < 0.4,
+            "key follow: a 55 Hz kick in D stays about where it is");
+
+    rolla::PitchInfo high;
+    high.rootPitch = (float) (69.0 + 12.0 * std::log2 (70.0 / 440.0));
+    high.conf = 0.9f;
+    expect (std::fabs (12.0 * std::log2 (rolla::kickKeyFollowRatio (high, 0)) + 3.0) < 1.0e-9,
+            "key follow: a 70 Hz kick in C clamps at -3 st, keeping its body");
+    rolla::PitchInfo octave = high;
+    octave.rootPitch = (float) (69.0 + 12.0 * std::log2 (110.0 / 440.0));
+    expect (std::fabs (12.0 * std::log2 (rolla::kickKeyFollowRatio (octave, 0)) + 2.0) < 0.05,
+            "key follow: a 110 Hz reading folds to 55 Hz before tuning");
+
+    const auto thump = noiseKick();
+    const auto unpitched = rolla::probePitch (thump.data(), nullptr, (int) thump.size(), 48000.0);
+    expect (rolla::kickKeyFollowRatio (unpitched, 0) == 1.0, "key follow: an unpitched kick is not retuned");
+    expect (rolla::kickKeyFollowRatio (rolla::PitchInfo {}, 0) == 1.0, "key follow: no measurement, no retune");
+    rolla::PitchInfo weak = p;
+    weak.conf = 0.29f;
+    expect (rolla::kickKeyFollowRatio (weak, 0) == 1.0, "key follow: confidence under 0.3 is not retuned");
+}
+
 void testFingerprint()
 {
     const auto kick = kickHit();
@@ -1582,6 +1678,260 @@ void testGenreTargets()
     expect (std::fabs (box.style (Style::Jackin).groove.swing.hi - 0.646f) < 1.0e-4f, "genre json: ext swing percent becomes a ratio band");
 }
 
+// Made-up samples with numbers typical of the mock bands; never real files or a profile.
+rolla::genre::SampleFeatures mockSample (rolla::genre::Lane lane, const std::string& id, const std::string& pack, bool onTarget)
+{
+    using namespace rolla::genre;
+    SampleFeatures s;
+    s.id = id;
+    s.lane = lane;
+    s.pack = pack;
+    s.tiltDbPerOct = -5.f;
+    s.attackMs = 2.f;
+    if (lane == Lane::Kick)
+    {
+        // Off target: too bright and too long for a ROLLER kick, but only mildly.
+        s.centroidHz = onTarget ? 150.f : 800.f;
+        s.decay20Ms = onTarget ? 200.f : 600.f;
+        s.subRatio = 0.6f;
+    }
+    else if (lane == Lane::Bass)
+    {
+        s.centroidHz = 200.f;
+        s.decay20Ms = 300.f;
+        s.subRatio = 0.5f;
+        s.pitch.rootPitch = 36.f;
+        s.pitch.conf = onTarget ? 0.9f : 0.1f;
+    }
+    else
+    {
+        s.centroidHz = 7000.f;
+        s.decay20Ms = 60.f;
+        s.subRatio = 0.01f;
+    }
+    return s;
+}
+
+std::string mockFeatureBlock (float centroid, float decay, float sub, float root, float conf)
+{
+    const std::string zeros = "[0,0,0,0,0,0,0,0,0,0,0,0,0]", ones = "[1,1,1,1,1,1,1,1,1,1,1,1,1]";
+    return "{\"mfcc_mean\":" + zeros + ",\"mfcc_std\":" + ones + ",\"centroid_hz\":" + std::to_string (centroid)
+         + ",\"rolloff85_hz\":4000,\"flatness\":0.1,\"attack_ms\":2,\"decay20_ms\":" + std::to_string (decay)
+         + ",\"decay40_ms\":null,\"truncated\":false,\"sub_ratio\":" + std::to_string (sub)
+         + ",\"rms_db\":-12,\"tilt_db_oct\":-5,\"root_pitch\":" + std::to_string (root) + ",\"root_conf\":" + std::to_string (conf)
+         + ",\"is_chord\":false,\"quality\":\"\"}";
+}
+
+void testSoundSelector()
+{
+    using namespace rolla::genre;
+    using Pools = std::array<std::vector<SampleFeatures>, kLanes>;
+    const auto targets = GenreTargets::mock();
+    auto at = [] (Pools& pools, Lane lane) -> std::vector<SampleFeatures>& { return pools[(size_t) lane]; };
+    auto tag = [] (const char* prefix, int i) { return std::string (prefix) + std::to_string (i); };
+
+    // On target is drawn far more often; off target still sometimes (no hard filter).
+    {
+        Pools pools;
+        for (int i = 0; i < 4; ++i)
+            at (pools, Lane::Kick).push_back (mockSample (Lane::Kick, tag ("on", i), "", true));
+        for (int i = 0; i < 4; ++i)
+            at (pools, Lane::Kick).push_back (mockSample (Lane::Kick, tag ("off", i), "", false));
+        // A soft temperature shows the weighting; the default (0.35) is sharper but
+        // still never filters an off-target file out.
+        SelectorOptions soft;
+        soft.temperature = 1.f;
+        int on = 0, off = 0;
+        for (std::uint64_t seed = 1; seed <= 400; ++seed)
+            (drawKit (pools, Style::Roller, targets, seed, nullptr, soft).at (Lane::Kick) < 4 ? on : off) += 1;
+        expect (on > 3 * off, "selector: on-target kicks win most draws (" + std::to_string (on) + " vs " + std::to_string (off) + ")");
+        expect (off > 10, "selector: off-target kicks are still drawn sometimes (" + std::to_string (off) + ")");
+        int sharpOn = 0, sharpOff = 0;
+        for (std::uint64_t seed = 1; seed <= 4000; ++seed)
+            (drawKit (pools, Style::Roller, targets, seed).at (Lane::Kick) < 4 ? sharpOn : sharpOff) += 1;
+        expect (sharpOff >= 1 && sharpOn > 20 * sharpOff,
+                "selector: the default temperature is sharp but never a hard filter (" + std::to_string (sharpOn) + " vs "
+                    + std::to_string (sharpOff) + ")");
+    }
+
+    Pools full;
+    for (int i = 0; i < 8; ++i)
+    {
+        at (full, Lane::Kick).push_back (mockSample (Lane::Kick, tag ("k", i), i % 2 == 0 ? "PA" : "PB", i < 5));
+        at (full, Lane::HatC).push_back (mockSample (Lane::HatC, tag ("h", i), i % 2 == 0 ? "PA" : "PB", true));
+    }
+    for (int i = 0; i < 6; ++i)
+        at (full, Lane::Bass).push_back (mockSample (Lane::Bass, tag ("b", i), "PC", i != 2));
+    at (full, Lane::Pad).push_back (mockSample (Lane::Pad, "only-pad", "PC", true));
+
+    // Same seed, same kit; different seeds spread over the pool.
+    {
+        const Kit a = drawKit (full, Style::Deep, targets, 42u);
+        const Kit b = drawKit (full, Style::Deep, targets, 42u);
+        expect (a == b, "selector: the same seed draws the same kit");
+        std::vector<int> seen;
+        for (std::uint64_t seed = 1; seed <= 100; ++seed)
+        {
+            const int k = drawKit (full, Style::Deep, targets, seed).at (Lane::Kick);
+            if (std::find (seen.begin(), seen.end(), k) == seen.end())
+                seen.push_back (k);
+        }
+        expect (seen.size() >= 4, "selector: seeds spread over the pool, not a fixed best pick");
+    }
+
+    // A re-roll never repeats the last kit; each lane with alternatives moves.
+    {
+        bool moved = true, kept = true;
+        for (std::uint64_t seed = 1; seed <= 200; ++seed)
+        {
+            const Kit last = drawKit (full, Style::Roller, targets, seed);
+            const Kit next = drawKit (full, Style::Roller, targets, seed + 7919u, &last);
+            moved = moved && next != last && next.at (Lane::Kick) != last.at (Lane::Kick)
+                 && next.at (Lane::HatC) != last.at (Lane::HatC) && next.at (Lane::Bass) != last.at (Lane::Bass);
+            kept = kept && next.at (Lane::Pad) == 0;
+        }
+        expect (moved, "selector: a re-roll changes every lane that has another file");
+        expect (kept, "selector: a one-file pool still plays its file");
+    }
+
+    // Pitched lanes: a confident pitch scores better than a doubtful one.
+    expect (fitScore (targets, Style::Roller, Lane::Bass, mockSample (Lane::Bass, "a", "", true))
+                < fitScore (targets, Style::Roller, Lane::Bass, mockSample (Lane::Bass, "b", "", false)),
+            "selector: low pitch confidence costs on a pitched lane");
+    {
+        auto mono = mockSample (Lane::Bass, "m", "", true), wide = mono;
+        wide.lowCorr = 0.6f;
+        expect (fitScore (targets, Style::Roller, Lane::Bass, wide) > fitScore (targets, Style::Roller, Lane::Bass, mono) + 2.5f,
+                "selector: a stereo bass (low L/R correlation under 150 Hz) costs, since BASS is summed to mono");
+    }
+
+    // Pack tendency: the hat leans to the kick's pack.
+    {
+        SelectorOptions neutral;
+        neutral.packBoost = neutral.drumPackBoost = neutral.familyBoost = 1.f;
+        int same = 0, sameNeutral = 0;
+        const int runs = 400;
+        for (std::uint64_t seed = 1; seed <= (std::uint64_t) runs; ++seed)
+        {
+            const Kit a = drawKit (full, Style::Roller, targets, seed);
+            const Kit b = drawKit (full, Style::Roller, targets, seed, nullptr, neutral);
+            same += full[(size_t) Lane::HatC][(size_t) a.at (Lane::HatC)].pack == full[(size_t) Lane::Kick][(size_t) a.at (Lane::Kick)].pack ? 1 : 0;
+            sameNeutral += full[(size_t) Lane::HatC][(size_t) b.at (Lane::HatC)].pack == full[(size_t) Lane::Kick][(size_t) b.at (Lane::Kick)].pack ? 1 : 0;
+        }
+        expect (same > sameNeutral + runs / 5 && same < runs,
+                "selector: same-pack share rises with the pack tendency, and stays a tendency (" + std::to_string (same) + " vs "
+                    + std::to_string (sameNeutral) + " of " + std::to_string (runs) + ")");
+    }
+
+    // Stream B's hook: a clashing draw is re-drawn; with no clean option the least-bad stays.
+    {
+        Pools pools;
+        for (int i = 0; i < 4; ++i)
+            at (pools, Lane::Kick).push_back (mockSample (Lane::Kick, tag ("k", i), "K", true));
+        for (int i = 0; i < 8; ++i)
+            at (pools, Lane::HatC).push_back (mockSample (Lane::HatC, tag ("h", i), i < 4 ? "BAD" : "OK", true));
+        int calls = 0;
+        SelectorOptions mesh;
+        mesh.pairPenalty = [&calls] (const SampleFeatures& candidate, const SampleFeatures&)
+        {
+            ++calls;
+            return candidate.pack == "BAD" ? 5.f : 0.f;
+        };
+        mesh.maxPenalty = 1.f;
+        mesh.maxTries = 8;
+        int badFree = 0, badMeshed = 0;
+        for (std::uint64_t seed = 1; seed <= 200; ++seed)
+        {
+            badFree += drawKit (pools, Style::Roller, targets, seed).at (Lane::HatC) < 4 ? 1 : 0;
+            badMeshed += drawKit (pools, Style::Roller, targets, seed, nullptr, mesh).at (Lane::HatC) < 4 ? 1 : 0;
+        }
+        expect (badFree > 0 && badMeshed == 0 && calls > 0, "selector: the pair penalty re-draws a clashing hat");
+        at (pools, Lane::HatC).resize (4); // every hat clashes now
+        expect (drawKit (pools, Style::Roller, targets, 5u, nullptr, mesh).at (Lane::HatC) >= 0,
+                "selector: with no clean hat the least-bad one stays (no empty lane)");
+    }
+
+    // Empty pool: no pick, and the other lanes are unaffected.
+    {
+        const Kit kit = drawKit (full, Style::Bouncy, targets, 9u);
+        expect (kit.at (Lane::Stab) == -1 && kit.at (Lane::Kick) >= 0, "selector: an empty pool is no pick");
+        expect (drawKit (Pools {}, Style::Bouncy, targets, 9u) == Kit(), "selector: no pools, no picks");
+    }
+
+    // sample_features.json: object keyed by path, and the fp.json array form.
+    {
+        const std::string text = "{\"version\":1,\"files\":{"
+                                 "\"BASS/b1.wav\":{\"lane\":\"BASS\",\"pack\":\"PX\",\"family\":\"fx\",\"tier\":2,\"f\":"
+                               + mockFeatureBlock (200.f, 300.f, 0.5f, 36.f, 0.8f) + "},"
+                                 "\"DRUMS/KICK/k1.wav\":{\"lane\":\"KICK\",\"f\":" + mockFeatureBlock (150.f, 200.f, 0.6f, -1.f, 0.f) + "},"
+                                 "\"MISC/x.wav\":{\"lane\":\"NOPE\",\"f\":" + mockFeatureBlock (150.f, 200.f, 0.6f, -1.f, 0.f) + "},"
+                                 "\"BASS/short.wav\":{\"lane\":\"BASS\",\"f\":{\"mfcc_mean\":[1,2]}}}}";
+        const auto index = parseSampleFeatures (juce::JSON::parse (juce::String (text)));
+        const auto* b1 = index.find ("BASS/b1.wav");
+        expect (index.fromData && index.size() == 2 && index.pools[(size_t) Lane::Bass].size() == 1
+                    && index.pools[(size_t) Lane::Kick].size() == 1,
+                "features json: known lanes with MFCCs load, the rest is skipped");
+        expect (b1 != nullptr && b1->pack == "PX" && b1->family == "fx" && b1->tier == 2 && b1->lane == Lane::Bass
+                    && std::fabs (b1->pitch.conf - 0.8f) < 1.0e-4f && b1->truncated
+                    && b1->vector.size() == (size_t) rolla::kFingerprintDims && std::isnan (b1->vector[(size_t) rolla::kDecay40Dim]),
+                "features json: pack, family, tier and pitch read; a null decay40 is unknown");
+        const std::string arrayText = "{\"version\":1,\"files\":[{\"path\":\"BASS/b2.wav\",\"lane\":\"BASS\",\"f\":"
+                                    + mockFeatureBlock (200.f, 300.f, 0.5f, 36.f, 0.8f) + "}]}";
+        expect (parseSampleFeatures (juce::JSON::parse (juce::String (arrayText))).find ("BASS/b2.wav") != nullptr,
+                "features json: the fp.json array form loads too");
+        const auto none = loadSampleFeatures (juce::File ("/nonexistent/sample_features.json"));
+        expect (! none.fromData && none.size() == 0, "features json: no file, no index");
+    }
+
+    // The seam: a fully covered pool maps the selector's choice back to the index ordinal.
+    {
+        rolla::SampleIndex idx;
+        auto addEntry = [&idx] (const char* path, int lane)
+        {
+            rolla::SampleEntry e;
+            std::strncpy (e.path, path, sizeof (e.path) - 1);
+            e.lane = lane;
+            e.onDisk = true;
+            idx.entries.push_back (e);
+        };
+        addEntry ("BASS/a.wav", rolla::Bass);
+        addEntry ("STAB/c.wav", rolla::Stab);
+        addEntry ("BASS/b.wav", rolla::Bass);
+        rolla::PoolFilter filter;
+        filter.on = true;
+        filter.lane = rolla::Bass;
+        const std::string text = "{\"version\":1,\"files\":{"
+                                 "\"BASS/a.wav\":{\"lane\":\"BASS\",\"f\":" + mockFeatureBlock (200.f, 300.f, 0.5f, 36.f, 0.9f) + "},"
+                                 "\"BASS/b.wav\":{\"lane\":\"BASS\",\"f\":" + mockFeatureBlock (200.f, 300.f, 0.5f, 38.f, 0.9f) + "}}}";
+        const auto features = parseSampleFeatures (juce::JSON::parse (juce::String (text)));
+        expect (laneForPart (rolla::Bass, -1) == Lane::Bass && laneForPart (rolla::Drums, rolla::Rim) == Lane::Perc
+                    && laneForPart (rolla::Drums, rolla::HatO) == Lane::HatO,
+                "seam: parts and drum voices map to genre lanes");
+        Pools pools;
+        at (pools, Lane::Bass) = featurePool (idx, rolla::Bass, filter, features, Lane::Bass);
+        expect (at (pools, Lane::Bass).size() == 2 && at (pools, Lane::Bass)[0].id == "BASS/a.wav"
+                    && at (pools, Lane::Bass)[1].id == "BASS/b.wav",
+                "seam: the feature pool follows the index pool order");
+        bool mapped = true;
+        for (std::uint64_t seed = 1; seed <= 20; ++seed)
+        {
+            const int j = drawKit (pools, Style::Roller, targets, seed).at (Lane::Bass);
+            const auto* entry = rolla::sampleIndexAt (idx, rolla::Bass, filter, j);
+            mapped = mapped && entry != nullptr && at (pools, Lane::Bass)[(size_t) j].id == entry->path;
+        }
+        expect (mapped, "seam: the selector's pick is the index ordinal of the same file");
+        addEntry ("BASS/new.wav", rolla::Bass);
+        at (pools, Lane::Bass) = featurePool (idx, rolla::Bass, filter, features, Lane::Bass);
+        const auto& withMissing = at (pools, Lane::Bass);
+        expect (withMissing.size() == 3 && withMissing[2].excluded && ! withMissing[0].excluded,
+                "seam: a file the index lacks keeps its place in the pool, excluded");
+        bool neverMissing = true;
+        for (std::uint64_t seed = 1; seed <= 200; ++seed)
+            neverMissing = neverMissing && drawKit (pools, Style::Roller, GenreTargets::mock(), seed, nullptr).pick[(size_t) Lane::Bass] != 2;
+        expect (neverMissing, "seam: an excluded file is never drawn");
+    }
+}
+
 // Kit meshing rules (KitMesh.h) on mock features: no audio, no library.
 void testKitMesh()
 {
@@ -1698,7 +2048,9 @@ int main()
     testFingerprint();
     testFingerprintTool();
     testGenreTargets();
+    testSoundSelector();
     testKitMesh();
+    testKickKeyFollow();
 
     static_assert (rolla::kUserSlotCount == 14, "14 user slots");
     expect (rolla::userSlotForPart (rolla::Bass) == rolla::SlotBass, "bass slot");
@@ -2590,6 +2942,51 @@ int main()
         }
         expect (scannedKick > 0.01f, "the scanned kick is audible");
 
+        // Per-voice drum picks. Unset (-1) keeps the shared samplePick[Drums] file; a
+        // set pick selects that ordinal of the voice's own scanned pool.
+        {
+            const auto kickFilter = rolla::poolFilterFor (recipes.drums[0].sample, rolla::Drums, rolla::Kick, recipeParams.dialect);
+            const int kicks = rolla::sampleIndexCount (*snap, rolla::Drums, kickFilter);
+            const auto* kick0 = rolla::sampleIndexAt (*snap, rolla::Drums, kickFilter, 0);
+            const auto* kick1 = rolla::sampleIndexAt (*snap, rolla::Drums, kickFilter, 1);
+            expect (kicks == 2 && kick0 != nullptr && kick1 != nullptr, "drum pick: two scanned kicks");
+            expect (recipeParams.drumPick[rolla::Kick] == -1 && recipeParams.drumPick[rolla::TomLow] == -1,
+                    "drum pick: EngineParams defaults every voice to unset");
+            if (kicks == 2 && kick0 != nullptr && kick1 != nullptr)
+            {
+                expect (recipeSampler.lastPickedFile (rolla::Drums, rolla::Kick) == kick0->path,
+                        "drum pick: unset plays today's shared-pick file");
+
+                recipeSampler.reset();
+                recipeParams.drumPick[rolla::Kick] = 1;
+                recipeSampler.takeDrum (rolla::Kick, 100, recipes, recipeParams);
+                expect (waitUntil ([&] { return scan.ready (kick1->path); }), "drum pick: the voice's own pick loads");
+                recipeSampler.takeDrum (rolla::Kick, 100, recipes, recipeParams);
+                expect (recipeSampler.lastPickedFile (rolla::Drums, rolla::Kick) == kick1->path,
+                        "drum pick: a set pick plays that voice's file, not the shared pick's");
+
+                // The prefetch list follows the same rule.
+                int presetOf[rolla::NumParts] {};
+                int picks[rolla::NumParts] {};
+                int voicePicks[rolla::NumDrumVoices];
+                std::fill (std::begin (voicePicks), std::end (voicePicks), -1);
+                std::vector<std::string> shared, unset, voiced;
+                rolla::collectPlayFiles (recipes, *snap, presetOf, picks, recipeParams.dialect, 1, shared);
+                rolla::collectPlayFiles (recipes, *snap, presetOf, picks, recipeParams.dialect, 1, unset, voicePicks);
+                voicePicks[rolla::Kick] = 1;
+                rolla::collectPlayFiles (recipes, *snap, presetOf, picks, recipeParams.dialect, 1, voiced, voicePicks);
+                expect (unset == shared, "drum pick: unset picks prefetch exactly today's files");
+                expect (std::find (voiced.begin(), voiced.end(), std::string (kick1->path)) != voiced.end(),
+                        "drum pick: the prefetch loads the voice's own pick");
+
+                recipeSampler.reset();
+                recipeParams.drumPick[rolla::Kick] = -1;
+                recipeSampler.takeDrum (rolla::Kick, 100, recipes, recipeParams);
+                expect (recipeSampler.lastPickedFile (rolla::Drums, rolla::Kick) == kick0->path,
+                        "drum pick: clearing the pick goes back to the shared file");
+            }
+        }
+
         const auto cache = rolla::sampleCacheFor (scanRoot, "index");
         expect (! scanRoot.getChildFile (".rolla-index.json").exists(), "nothing is written into the sample folder");
         expect (cache.existsAsFile() && ! cache.isAChildOf (scanRoot), "the index is cached outside the samples");
@@ -2625,6 +3022,68 @@ int main()
                     && std::string (entry.category) == "phrase")
                     overridden = true;
         expect (overridden, "SAMPLE_MANIFEST_v2.json overrides the embedded manifest");
+    }
+
+    {
+        // Kick key follow through takeDrum: a scanned 55 Hz kick in key C plays near
+        // 49 Hz with the gate on, and exactly as recorded with it off (the default).
+        const auto followRoot = rootDir.getChildFile ("keyfollow");
+        followRoot.deleteRecursively();
+        for (const char* kind : { "index", "loudness" })
+            rolla::sampleCacheFor (followRoot, kind).deleteFile();
+        writeWave (followRoot.getChildFile ("DRUMS/KICK/k55.wav"), tunedKick (55.0));
+        const char* empty = R"JSON({"count":0,"files":[]})JSON";
+        rolla::SampleLibrary follow;
+        follow.setRoot (followRoot);
+        follow.startIndex (empty, (int) std::strlen (empty));
+        expect (waitUntil ([&] { return follow.indexedFound() >= 0; }), "key follow: index publishes");
+        const auto followSnap = follow.index();
+
+        rolla::PresetBank kit;
+        rolla::loadDefaultPresets (kit);
+        kit.count[rolla::Drums] = 1;
+        kit.drums[0].sample.mode = rolla::SampleMode::Sample;
+        kit.drums[0].sample.filter.on = true;
+        kit.drums[0].sample.filter.lane = rolla::Drums;
+        for (auto& pool : kit.drums[0].voicePool)
+            pool.clear();
+        rolla::EngineParams kp;
+        kp.presets = &kit;
+        kp.library = &follow;
+        kp.sampleIndex = followSnap.get();
+        kp.key = 0;
+        kp.drumDecay[rolla::Kick] = 1.f;
+
+        auto playedHz = [&] (bool on)
+        {
+            kp.kickKeyFollow = on;
+            rolla::Sampler s;
+            s.prepare (48000.0);
+            s.takeDrum (rolla::Kick, 110, kit, kp);
+            if (! waitUntil ([&] { return follow.ready ("DRUMS/KICK/k55.wav"); }))
+                return 0.0;
+            s.reset();
+            s.takeDrum (rolla::Kick, 110, kit, kp);
+            std::vector<float> out (9600);
+            for (auto& x : out)
+            {
+                float laneL[rolla::NumParts] {};
+                float laneR[rolla::NumParts] {};
+                s.render (laneL, laneR, 0.f, 0.f, false);
+                x = laneL[rolla::Drums];
+            }
+            // 30-150 ms: past the pitch drop, before the envelope runs out.
+            return zeroCrossHz (out, 1440, 7200, 48000.0);
+        };
+        const double off = playedHz (false);
+        const double on = playedHz (true);
+        const auto* loaded = follow.tryGet ("DRUMS/KICK/k55.wav");
+        expect (loaded != nullptr && loaded->pitch.pitched(), "key follow: the scanned kick has a measured pitch");
+        expect (std::fabs (off - 55.0) < 2.0, "key follow: off by default, the kick plays as recorded (got "
+                                                  + std::to_string (off) + " Hz)");
+        expect (std::fabs (on - 49.0) < 2.0, "key follow: on, a 55 Hz kick in C plays near 49 Hz (got "
+                                                 + std::to_string (on) + " Hz)");
+        followRoot.deleteRecursively();
     }
 
     expect (std::fabs (rolla::phraseTempoStretch (120, 60.f) - 0.5f) < 1.0e-4f, "half tempo stretches to 0.5");
