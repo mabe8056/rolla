@@ -186,7 +186,7 @@ public:
     void setUiNotice (const juce::String& text)
     {
         {
-            const std::lock_guard<std::mutex> lock (noticeMu);
+            const std::lock_guard<std::mutex> lock (uiNoticeMu);
             uiNotice = text;
         }
         uiNoticeSerial.fetch_add (1, std::memory_order_release);
@@ -194,7 +194,7 @@ public:
     void clearUiNotice() { setUiNotice ({}); }
     juce::String getUiNotice() const
     {
-        const std::lock_guard<std::mutex> lock (noticeMu);
+        const std::lock_guard<std::mutex> lock (uiNoticeMu);
         return uiNotice;
     }
     // Bumps on every set; lets the editor skip the lock when nothing changed.
@@ -241,7 +241,7 @@ public:
     std::uint32_t getProjectEditorSerial() const noexcept { return projectEditorSerial.load (std::memory_order_relaxed); }
 
 private:
-    mutable std::mutex noticeMu;
+    mutable std::mutex uiNoticeMu;
     juce::String uiNotice;
     std::atomic<std::uint32_t> uiNoticeSerial { 0 };
 

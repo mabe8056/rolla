@@ -1118,6 +1118,8 @@ void testTextFit()
     rolla::textAudit() = nullptr;
     base.reset();
     pumpUntil ([] { return false; }, 50);
+}
+
 std::string soloId (int part)
 {
     return std::string (rolla::partId (part)) + "Solo";
