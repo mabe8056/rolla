@@ -356,13 +356,13 @@ inline double attackMs (const std::vector<float>& x, double rate) noexcept
     }
     if (peak <= 1.0e-9)
         return 0.0;
-    size_t t10 = 0, t90 = 0;
-    while (t10 < env.size() && env[t10] < 0.1 * peak)
-        ++t10;
-    t90 = t10;
-    while (t90 < env.size() && env[t90] < 0.9 * peak)
-        ++t90;
-    return 1000.0 * (double) (t90 - t10) / rate;
+    size_t rise10 = 0, rise90 = 0;
+    while (rise10 < env.size() && env[rise10] < 0.1 * peak)
+        ++rise10;
+    rise90 = rise10;
+    while (rise90 < env.size() && env[rise90] < 0.9 * peak)
+        ++rise90;
+    return 1000.0 * (double) (rise90 - rise10) / rate;
 }
 
 inline double crestDb (const std::vector<float>& x) noexcept
