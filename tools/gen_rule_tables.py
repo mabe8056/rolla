@@ -283,6 +283,22 @@ def build(M):
         o.append("    },\n")
     o.append("};\n")
 
+    sw = M["songwriting"]
+    ph = sw["melodic_phrase"]
+    cyc = sw["repeat_cycle_bars_share"]
+    o.append("\n// ============================================================= songwriting\n")
+    o.append("// Pooled over every style (no source above the single-source cap): a melodic\n")
+    o.append("// phrase's length in beats and its note and distinct-pitch counts (p10, median,\n")
+    o.append("// p90), how often a lane's figure repeats (1, 2 or 4 bars), and how often a\n")
+    o.append("// phrase changes on bar 8 against bars 2-7.\n")
+    o.append("inline constexpr float kPhraseBeats[3] = %s;\n" % arr([ph["beats"][k] for k in ("p10", "median", "p90")]))
+    o.append("inline constexpr int kPhraseNotes[3] = { %s };\n" % ", ".join(str(int(ph["notes"][k])) for k in ("p10", "median", "p90")))
+    o.append("inline constexpr int kPhraseDistinct[3] = { %s };\n" % ", ".join(str(int(ph["distinct_pitches"][k])) for k in ("p10", "median", "p90")))
+    o.append("inline constexpr int kRepeatCycleBars[3] = { 1, 2, 4 };\n")
+    o.append("inline constexpr float kRepeatCycleShare[3] = %s;\n" % arr([cyc[k] for k in ("1", "2", "4")]))
+    o.append("inline constexpr float kBar8ChangeRate = %s;\n" % f(sw["bar8_change_rate"]))
+    o.append("inline constexpr float kBar2to7ChangeRate = %s;\n" % f(sw["bar2to7_change_rate"]))
+
     o.append("\n// ================================================================== groove\n")
     o.append(per_style("kHatSwingTarget", [s["drums"]["hat_swing_pct"]["target"] / 100.0 for s in S], comment="16th swing, inside [kHatSwingLo, kHatSwingHi]"))
     o.append(COMPOSER_RULES)

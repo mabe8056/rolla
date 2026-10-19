@@ -1,7 +1,7 @@
 {
  "schema": "rolla.genre_writing_model/1",
- "version": "1.2",
- "based_on": "1.1 with the review fixes (density, sounding, key safety, BOUNCY quota, stab caps, JACKIN loop, kick, back half, swing, originality)",
+ "version": "1.3",
+ "based_on": "1.2 plus the songwriting layer (melodic phrase shape, repeat cycle, bar-8 change rate) pooled over the reference set",
  "privacy": "Pooled, smoothed aggregate statistics only. No note sequences, motifs, rhythm cells, n-grams above first order, per-source tables, source counts or names.",
  "conventions": {
   "grid": "16 slots per bar, 0-15 (0 = beat 1); kick steps 0/4/8/12",
@@ -93,6 +93,33 @@
    0
   ],
   "bass_swing_floor_pct": 51
+ },
+ "songwriting": {
+  "scope": "pooled over every style; no single source above 35% of any statistic (largest 13.4%)",
+  "melodic_phrase": {
+   "beats": {
+    "p10": 1.25,
+    "median": 2.23,
+    "p90": 6.54
+   },
+   "notes": {
+    "p10": 3,
+    "median": 4,
+    "p90": 12
+   },
+   "distinct_pitches": {
+    "p10": 2,
+    "median": 3,
+    "p90": 6
+   }
+  },
+  "repeat_cycle_bars_share": {
+   "1": 0.412,
+   "2": 0.294,
+   "4": 0.294
+  },
+  "bar8_change_rate": 0.625,
+  "bar2to7_change_rate": 0.229
  },
  "styles": {
   "ROLLER": {

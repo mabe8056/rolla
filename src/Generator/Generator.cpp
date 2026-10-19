@@ -1903,12 +1903,52 @@ void writeHits (Lane& lane, const Groove& g, const Settings& s, Rng& rng, int mo
     }
 }
 
+// How many bars a lane's figure runs before it repeats (1, 2 or 4), drawn
+// from the pooled repeat-cycle shares and capped at the loop.
+int drawCycleBars (Rng& rng, int bars, bool allowOne)
+{
+    namespace rt = rules::tables;
+    float w[3];
+    float sum = 0.f;
+    for (int i = 0; i < 3; ++i)
+    {
+        w[i] = (allowOne || rt::kRepeatCycleBars[i] > 1) ? rt::kRepeatCycleShare[i] : 0.f;
+        sum += w[i];
+    }
+    float x = (float) rng.next() * sum;
+    int cyc = rt::kRepeatCycleBars[2];
+    for (int i = 0; i < 3; ++i)
+    {
+        if (w[i] <= 0.f)
+            continue;
+        x -= w[i];
+        if (x <= 0.f)
+        {
+            cyc = rt::kRepeatCycleBars[i];
+            break;
+        }
+    }
+    return clampi (cyc, 1, std::max (1, std::min (bars, 8)));
+}
+
+// A count around the pooled median: p10..median half the time, median..cap otherwise.
+int drawAround (Rng& rng, const int* q, int cap)
+{
+    const int lo = std::min (q[0], cap);
+    const int mid = std::min (q[1], cap);
+    const int hi = std::min (q[2], cap);
+    if (rng.next() < 0.5)
+        return lo + (int) (rng.next() * (double) (mid - lo + 1));
+    return mid + (int) (rng.next() * (double) (hi - mid + 1));
+}
+
 void writePluck (Lane& lane, const Settings& s, Rng& rng, int mode)
 {
     clearLane (lane, lane.seed);
     // Pluck belongs to DEEP and BOUNCY. ROLLER and JACKIN leave the lane empty.
     if (s.dialect != Long && s.dialect != Pop)
         return;
+    namespace rt = rules::tables;
     int per = s.dialect == Pop ? 6 : 3;
     if (s.styleIntensity <= 0.25f)
         per = 1;
@@ -1921,28 +1961,100 @@ void writePluck (Lane& lane, const Settings& s, Rng& rng, int mode)
         prevDeg = rules::sampleDegreeSemis (s.dialect, mode, prevDeg, rng.nextU() | 1u);
         return prevDeg;
     };
-    for (int bar = 0; bar < s.bars && bar < 8; ++bar)
+    // The figure is written fresh as short phrases with the pooled shape:
+    // about two beats long, a few notes on two or three pitches. It runs for a
+    // drawn cycle (1, 2 or 4 bars) and repeats; a repeat changes a note at the
+    // pooled bar 2-7 rate, and bar 8 rewrites its last phrase at the bar-8 rate.
+    const int loopBars = std::min (s.bars, 8);
+    if (loopBars <= 0)
+        return;
+    const int cyc = drawCycleBars (rng, loopBars, true);
+    struct PNote { int slot; int deg; float len; };
+    struct Notes
     {
-        int placed = 0;
-        for (int pass = 0; pass < 16 && placed < per; ++pass)
+        PNote v[64];
+        int n = 0;
+        void add (const PNote& x) noexcept { if (n < 64) v[n++] = x; }
+    };
+    Notes cell;
+    auto writePhrases = [&] (int bar, Notes& out)
+    {
+        const int phrases = std::max (1, (per + 2) / 4);
+        int left = per;
+        for (int p = 0; p < phrases && left > 0; ++p)
         {
-            const int slot = 1 + (int) (rng.next() * 14);
+            const int n = p + 1 == phrases ? left : std::max (1, std::min (left, drawAround (rng, rt::kPhraseNotes, per)));
+            left -= n;
+            const float beats = rt::kPhraseBeats[0] + (float) rng.next() * (rt::kPhraseBeats[1] * 1.5f - rt::kPhraseBeats[0]);
+            const int span = clampi ((int) std::lround (beats * 4.f), n, 15);
+            const int zone = 16 / phrases;
+            const int start = clampi (p * zone + 1 + (int) (rng.next() * (double) std::max (1, zone - span)), 1, 15);
+            // The phrase's own few pitches, from the chain.
+            const int distinct = clampi (drawAround (rng, rt::kPhraseDistinct, n), 1, std::min (n, 6));
+            int pcs[6] {};
+            for (int k = 0; k < distinct; ++k)
+                pcs[k] = nextDeg();
+            bool used[16] {};
+            int last = -1;
+            for (int k = 0, guard = 0; k < n && guard < 64; ++guard)
+            {
+                const int slot = start + (int) (rng.next() * (double) span);
+                if (slot < 1 || slot > 15 || used[slot])
+                    continue;
+                used[slot] = true;
+                int pick = (int) (rng.next() * (double) distinct) % distinct;
+                if (distinct > 1 && pick == last && rng.next() < 0.7)
+                    pick = (pick + 1) % distinct;
+                last = pick;
+                out.add ({ bar * 16 + slot, pcs[pick], std::min (1.5f, 0.5f + (float) rng.next()) });
+                ++k;
+            }
+        }
+    };
+    for (int bar = 0; bar < cyc; ++bar)
+        writePhrases (bar, cell);
+    for (int bar = 0; bar < loopBars; ++bar)
+    {
+        const int src = bar % cyc;
+        const bool repeat = bar >= cyc;
+        const bool bar8 = loopBars >= 8 && bar == loopBars - 1 && rng.next() < (double) rt::kBar8ChangeRate;
+        Notes notes;
+        for (int i = 0; i < cell.n; ++i)
+            if (cell.v[i].slot / 16 == src)
+            {
+                // The back half of bar 8 is written again below.
+                if (bar8 && cell.v[i].slot % 16 >= 8)
+                    continue;
+                notes.add ({ bar * 16 + cell.v[i].slot % 16, cell.v[i].deg, cell.v[i].len });
+            }
+        if (bar8)
+        {
+            Notes fresh;
+            writePhrases (bar, fresh);
+            for (int i = 0; i < fresh.n; ++i)
+                if (fresh.v[i].slot % 16 >= 8)
+                    notes.add (fresh.v[i]);
+        }
+        else if (repeat && notes.n > 0 && rng.next() < (double) rt::kBar2to7ChangeRate)
+            notes.v[(int) (rng.next() * (double) notes.n) % notes.n].deg = nextDeg();
+        for (int i = 0; i < notes.n; ++i)
+        {
             Ev e;
-            e.start = (float) (bar * 16 + slot);
-            e.len = 0.5f + (float) rng.next();
-            if (e.len > 1.5f)
-                e.len = 1.5f;
+            e.start = (float) notes.v[i].slot;
+            e.len = notes.v[i].len;
             e.nChord = 1;
-            e.chord[0] = (std::int8_t) nextDeg();
+            e.chord[0] = (std::int8_t) notes.v[i].deg;
             e.vel = 84;
-            if (pushEv (lane, e, s.bars))
-                ++placed;
+            pushEv (lane, e, s.bars);
         }
     }
     if (s.styleIntensity >= 0.75f)
     {
-        const int step = s.dialect == Long ? 5 : (s.dialect == Jackin ? 7 : 3);
-        for (int t = 2; t < s.bars * 16; t += step)
+        // An odd-length line over the bar (period and phase drawn per roll).
+        static constexpr int kPeriods[3] = { 3, 5, 7 };
+        const int step = kPeriods[(int) (rng.next() * 3.0) % 3];
+        const int phase = 1 + (int) (rng.next() * (double) step);
+        for (int t = phase; t < s.bars * 16; t += step)
         {
             Ev e;
             e.start = (float) t;
@@ -1956,7 +2068,7 @@ void writePluck (Lane& lane, const Settings& s, Rng& rng, int mode)
     }
 }
 
-void writePad (Lane& lane, const Settings& s, Rng& rng)
+void writePad (Lane& lane, const Settings& s, Rng& rng, int mode)
 {
     clearLane (lane, lane.seed);
     if (s.styleIntensity <= 0.25f)
@@ -1983,16 +2095,15 @@ void writePad (Lane& lane, const Settings& s, Rng& rng)
         Ev e;
         e.start = start;
         e.len = len;
-        e.nChord = 3;
         e.vel = 70;
-        int bag[8] = { 3, 7, 10, 14, 15, 17, 2, 8 };
-        for (int i = 7; i > 0; --i)
-        {
-            const int j = (int) (rng.next() * (double) (i + 1));
-            std::swap (bag[i], bag[std::clamp (j, 0, i)]);
-        }
+        // Each swell draws its chord from the style's chord-quality palette.
+        int tones[4] {};
+        int n = 0;
+        rules::stabVoicing (s.dialect, mode, rng.nextU() | 1u, tones, n);
+        n = clampi (n, 1, 3);
+        e.nChord = 3;
         for (int c = 0; c < 3; ++c)
-            e.chord[c] = (std::int8_t) bag[c];
+            e.chord[c] = (std::int8_t) (c < n ? tones[c] : tones[0] + 12 * (c - n + 1));
         pushEv (lane, e, s.bars);
     }
 }
@@ -2000,16 +2111,23 @@ void writePad (Lane& lane, const Settings& s, Rng& rng)
 void writeVox (Lane& lane, const Settings& s, Rng& rng)
 {
     clearLane (lane, lane.seed);
+    namespace rt = rules::tables;
+    // One to three cuts open every figure; the figure's cycle (2 or 4 bars,
+    // from the pooled repeat cycle) sets which bars the cuts come back on, and
+    // the last cycle rewrites its cut slots at the pooled bar-8 rate.
     const int nCuts = 1 + (int) (rng.next() * 3);
     int slots[3];
     for (int i = 0; i < nCuts; ++i)
         slots[i] = (int) (2 + rng.next() * 12);
     const int shift = (int) (rng.next() * 11) - 5;
     const bool ghost = rng.next() < 0.3;
-    for (int bar : { 0, 2, 4, 6 })
+    const int loopBars = std::min (s.bars, 8);
+    const int cyc = drawCycleBars (rng, std::max (2, loopBars), false);
+    for (int bar = 0; bar < loopBars; bar += cyc)
     {
-        if (bar >= s.bars)
-            continue;
+        if (bar + cyc >= loopBars && bar > 0 && loopBars >= 8 && rng.next() < (double) rt::kBar8ChangeRate)
+            for (int i = 0; i < nCuts; ++i)
+                slots[i] = (int) (2 + rng.next() * 12);
         for (int i = 0; i < nCuts; ++i)
         {
             Ev e;
@@ -4370,7 +4488,7 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
         {
             Rng rpad (seeds[Pad] ? seeds[Pad] : 1u);
             g.lane[Pad].seed = rpad.s;
-            writePad (g.lane[Pad], s, rpad);
+            writePad (g.lane[Pad], s, rpad, mode);
         }
         else
             clampLane (g.lane[Pad], s.bars);
@@ -4698,8 +4816,9 @@ static bool composeOriginal (Groove& g, const Groove& input, const Settings& set
         // one pitch class on four or fewer attacks in two or more bars is
         // composed again (the composer avoids it; the post passes can still
         // produce it).
-        if ((pitched & (1u << Bass)) != 0 && g.dialect == Jackin && ! jackinRepeatOk (g.lane[Bass], g.bars)
-            && k + 1 < kOrigAttempts)
+        // The JACKIN repeat caps hold on every attempt, the last one included:
+        // a bass over them is never shipped (the round fails, as for a copy).
+        if ((pitched & (1u << Bass)) != 0 && g.dialect == Jackin && ! jackinRepeatOk (g.lane[Bass], g.bars))
         {
             ++bump[Bass];
             ++tally.guard;
