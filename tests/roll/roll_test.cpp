@@ -2510,8 +2510,14 @@ void pumpFor (int ms)
 {
     const auto start = juce::Time::getMillisecondCounter();
     while ((int) (juce::Time::getMillisecondCounter() - start) < ms)
+    {
+#if JUCE_LINUX
         if (! juce::detail::dispatchNextMessageOnSystemQueue (true))
             juce::Thread::sleep (1);
+#else
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (2);
+#endif
+    }
 }
 
 // No refused roll ever reaches output: generate() hands back the groove it was
