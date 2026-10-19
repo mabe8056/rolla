@@ -152,6 +152,8 @@ private:
     // takeDrum's gainScale, seen by playUserSlot for a drum voice. Audio thread only.
     float drumGain = 1.f;
     int serial = 1;
+    // The playhead's 16ths per sample, smoothed (render). Audio thread only.
+    float stepEst = 0.f;
     int sliceCursor[NumParts] {};
     // Two pools. With one shared pool a full drum kit stole bass notes (a bass
     // voice's gain ranks below a drum tail's), and in a stem bounce the muted

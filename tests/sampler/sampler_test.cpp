@@ -1020,7 +1020,27 @@ void checkBassCutsAsRecorded (rolla::PresetBank& bank, const rolla::SampleLibrar
     rolla::copySamplePath (spec.file, (int) sizeof spec.file, bassPath.c_str());
     constexpr int notes = 12;
     constexpr int midi = 40;
-    const int gap = (int) std::lround (60.0 / 130.0 / 4.0 * 1.1 * sr); // 1.1 sixteenths
+    // The ratio the sampler plays this note at (Sampler::take, bass shift rule).
+    rolla::ShiftRule rule;
+    rule.cap = 12.0;
+    const double semis = rolla::tonalShift (audio->pitch, audio->namedRoot, (double) midi, rule);
+    const double ratio = std::clamp (std::pow (2.0, semis / 12.0) * (audio->rate / sr), 0.05, 16.0);
+    // About 1.1 sixteenths, moved to where the note is loudest. Every cut lands on
+    // the same phase, and a cut near a zero crossing is no step at all, so the
+    // hard-cut control below could not see the click this test guards against.
+    const int gap0 = (int) std::lround (60.0 / 130.0 / 4.0 * 1.1 * sr);
+    int gap = gap0;
+    {
+        std::vector<float> one ((size_t) gap0 + 1024, 0.f);
+        addTile (one, src.l, src.rate, 0, ratio, (int) one.size(), false);
+        float best = -1.f;
+        for (int c = gap0 - 512; c < gap0 + 512; ++c)
+            if (std::fabs (one[(size_t) c]) > best)
+            {
+                best = std::fabs (one[(size_t) c]);
+                gap = c;
+            }
+    }
     const int total = notes * gap + (int) (0.3 * sr);
     std::vector<float> l ((size_t) total, 0.f), r ((size_t) total, 0.f);
     std::vector<int> onsets;
@@ -1037,11 +1057,6 @@ void checkBassCutsAsRecorded (rolla::PresetBank& bank, const rolla::SampleLibrar
         l[(size_t) n] = laneL[rolla::Bass];
         r[(size_t) n] = laneR[rolla::Bass];
     }
-    // The ratio the sampler plays this note at (Sampler::take, bass shift rule).
-    rolla::ShiftRule rule;
-    rule.cap = 12.0;
-    const double semis = rolla::tonalShift (audio->pitch, audio->namedRoot, (double) midi, rule);
-    const double ratio = std::clamp (std::pow (2.0, semis / 12.0) * (audio->rate / sr), 0.05, 16.0);
     std::vector<float> rawL ((size_t) total, 0.f), rawR ((size_t) total, 0.f), cutL ((size_t) total, 0.f);
     for (size_t k = 0; k < onsets.size(); ++k)
     {

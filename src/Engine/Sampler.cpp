@@ -461,6 +461,7 @@ void Sampler::reset() noexcept
         v = {};
     for (int& c : sliceCursor)
         c = 0;
+    stepEst = 0.f;
 }
 
 void Sampler::armAttack (Voice& v) noexcept
@@ -1452,6 +1453,19 @@ void Sampler::render (float* laneL, float* laneR, float prev16, float pos16, boo
     for (int v = 0; v < NumDrumVoices; ++v)
         drumOutL[v] = drumOutR[v] = 0.f;
 
+    // The loop-end edge's length comes from the playhead step. pos16 is a float,
+    // so near 16th 128 its sample-to-sample step jitters by a few percent; a
+    // window built from the raw step moved every voice's edge by that much each
+    // sample, a click just before the wrap. A tempo change resets the estimate.
+    const float rawStep = pos16 - prev16;
+    if (playing && rawStep > 0.f)
+    {
+        if (stepEst <= 0.f || std::fabs (rawStep - stepEst) > 0.25f * stepEst)
+            stepEst = rawStep;
+        else
+            stepEst += (1.f / 64.f) * (rawStep - stepEst);
+    }
+
     auto renderOne = [&] (Voice& v)
     {
         if (! v.on)
@@ -1468,7 +1482,8 @@ void Sampler::render (float* laneL, float* laneR, float prev16, float pos16, boo
             const float step = pos16 - prev16;
             if (step > 0.f)
             {
-                const float window = std::max (step, step * (float) (0.010 * sr));
+                const float est = stepEst > 0.f ? stepEst : step;
+                const float window = std::max (est, est * (float) (0.010 * sr));
                 const float remain = stop - pos16;
                 if (remain <= 0.f)
                 {
@@ -1478,15 +1493,20 @@ void Sampler::render (float* laneL, float* laneR, float prev16, float pos16, boo
                 if (remain < window)
                     v.noteEdge = 0.5f * (1.f - std::cos (kSincPi * remain / window));
             }
-            else if (! born && prev16 < stop && pos16 + 1.0e-3f < prev16 && ! v.stopping)
+            else if (! born && prev16 < stop && pos16 + 1.0e-3f < prev16)
             {
                 // Loop wrap or a host relocate cut the note: fade it over 4 ms, never a hard cut.
                 // A voice still in its attack keeps that edge (zeroing it stepped up to full).
-                v.releaseN = std::max (8, (int) (0.004 * sr));
-                v.releaseLeft = v.releaseN;
-                v.stopping = true;
+                // One already fading (stolen, choked) keeps its own release.
+                if (! v.stopping)
+                {
+                    v.releaseN = std::max (8, (int) (0.004 * sr));
+                    v.releaseLeft = v.releaseN;
+                    v.stopping = true;
+                }
                 // The loop-end edge already faded this voice. Release from that
-                // level: snapping back to 1 stepped every tail still ringing on beat 1.
+                // level: snapping back to 1 stepped every tail still ringing on beat 1,
+                // stolen voices parked inside the loop-end fade included.
                 v.gain *= std::clamp (prevEdge, 0.f, 1.f);
             }
         }
