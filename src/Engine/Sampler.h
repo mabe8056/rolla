@@ -169,8 +169,14 @@ private:
     void holdNote (int part, int midiNote, int velocity, float end16, ChordAsk ask, const char* file) noexcept;
     void dropHeld (Held& h) noexcept;
 
+    // Drum hits steal only drum voices, melodic notes only melodic voices.
     Voice* allocate (int part) noexcept;
     void park (const Voice& dying) noexcept;
+    // What a voice still puts out: env, release edge and gain. A voice born this
+    // sample (env still 0) is never the quietest: stealing it chopped the new kick.
+    static float audibleLevel (const Voice& v) noexcept;
+    // Closed hat chokes the open hat: a 5 ms raised-cosine release, never a hard cut.
+    void chokeDrum (int drumVoice) noexcept;
     void armAttack (Voice& voice) noexcept;
     float readSinc (const std::vector<float>& src, double index) const noexcept;
     void readVoice (Voice& v, float& l, float& r) noexcept;
@@ -183,9 +189,17 @@ private:
     // takeDrum's gainScale, seen by playUserSlot for a drum voice. Audio thread only.
     float drumGain = 1.f;
     int serial = 1;
+    // The playhead's 16ths per sample, smoothed (render). Audio thread only.
+    float stepEst = 0.f;
     int sliceCursor[NumParts] {};
-    Voice voices[40];
-    Voice tails[16];
+    // Two pools. With one shared pool a full drum kit stole bass notes (a bass
+    // voice's gain ranks below a drum tail's), and in a stem bounce the muted
+    // drums still played into the pool and cut the soloed bass.
+    static constexpr int kDrumVoices = 40;
+    static constexpr int kMelodicVoices = 32;
+    Voice voices[kDrumVoices + kMelodicVoices];
+    // Stolen voices finish their release here. Evicting a tail is a cut, so keep plenty.
+    Voice tails[32];
 };
 
 const SampleSpec& sampleSpecFor (const PresetBank& bank, int part, int preset) noexcept;
