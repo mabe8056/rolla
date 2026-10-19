@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
 """
-score_rolls.py -- A&R per-roll scorer for ROLLA generator output (Melak's Music team).
+score_rolls.py -- A&R per-roll scorer for ROLLA generator output.
 
-v2.2 (2026-10-17 ~10:30 PM ET, Maestro): BOUNCY (pop) has two modes, 'bounce' (M-High) and 'pulse' (In The Zone); a pop roll is
-measured in both and keeps the mode it fits (CSV lane_mode); DEEP (long) likewise has 'sparse' (ref3) and 'dark' (Closer, LIGHTLEAK). DEEP held-note cap (held_ge4_pct <= 30, held = >= 4 sixteenths) and
+v2.2: BOUNCY (pop) has two modes, 'bounce' (REF_B1) and 'pulse' (REF_B2); a pop roll is
+measured in both and keeps the mode it fits (CSV lane_mode); DEEP (long) likewise has 'sparse' (ref3) and 'dark' (REF_D1, REF_D2). DEEP held-note cap (held_ge4_pct <= 30, held = >= 4 sixteenths) and
 root share 40-70 (soft ROOT_SHARE_OUT; v2.2.1 also BOUNCY bounce 30-64); JACKIN swing 50-57 (--swing-heavy 50-68), top2 >= 45, flavour = one of dotted / flat-2nd / sustained stabs /
 short off-beat counter. On-kick is counted on the nearest 16th slot (|attack - kick| <= 0.49 16th), so ducked/late notes count.
-Banned skeleton: transcriptions/_banned_skeletons (ITZ/ref2/LIGHTLEAK dotted pulse) -> COPY_OF_REF:_banned_skeletons.
-Lane refs live in LANE_REFS (one config spot); re-derive bands with derive_lane_bands.py. History: SCORER_CHANGELOG.md.
+Banned skeleton: <refs>/_banned_skeletons (shared dotted pulse of REF_B2/ref2/REF_D2) -> COPY_OF_REF:_banned_skeletons.
+Lane refs live in LANE_REFS (one config spot); re-derive bands with derive_lane_bands.py.
+
+Reference MIDI is private and never in the repo. Point the scorer at it with --refs DIR or the ROLLA_REFS
+environment variable: one sub-folder per generic ref id (REF_R1, REF_D1, ref2, ...). Without either, the
+originality check is skipped (same as --no-orig).
 
 Usage:
   python3 score_rolls.py <dir_of_rolls> --style ukmin|long|pop|gaskin [--out DIR] [--bars N] [--bpm 130]
-                         [--refs /workspace/music-team/transcriptions] [--no-orig] [--exclude-self]
+                         [--refs DIR | env ROLLA_REFS] [--no-orig] [--exclude-self]
                          [--hard-profile maestro|gr_v2]
 
 GENERATOR_RULES v2 (2026-10-17): a roll FAILS only on the hard codes of the chosen profile. Default `maestro`:
@@ -50,53 +54,53 @@ import originality_check as OC
 
 SCORER_VERSION = "v2.2.1"
 # ---------------------------------------------------------------- v2.2: ONE config spot for the refs behind every lane
-# Each lane band below is re-derivable from these refs: add a ref (folder under transcriptions/ holding bass/drums/stabs
-# MIDI), then run  python3 derive_lane_bands.py <lane>  and paste the suggested min/max (+margin) into LANE / STYLES.
-# 'pending' = named by Maestro/Melak, not transcribed yet (no MIDI) -> not used until it lands; placement by measurement.
+# Each lane band below is re-derivable from these refs: add a ref (folder under the private refs dir, $ROLLA_REFS,
+# holding bass/drums/stabs MIDI), then run  python3 derive_lane_bands.py <lane>  and paste the suggested min/max (+margin)
+# into LANE / STYLES. Ref ids are generic folder names; the id -> track mapping stays private, outside the repo.
+# 'pending' = named, no MIDI yet -> not used until it lands; placement by measurement.
 LANE_REFS = {
-    "ukmin":  dict(name="ROLLER", refs=["laidlaw_house_of_dub", "stef_davidse_way_back", "josh_baker_something_to_me",
-                   "local_dub_v_line_cruiza", "localdub_reaction", "ellia_jaya_lovers_in_the_dance"],
-                   support=["melak_clips/refs_2026-10-17_2149/ref2"],          # support-only: on-kick 34.7-39.2% (see changelog)
+    "ukmin":  dict(name="ROLLER", refs=["REF_R1", "REF_R2", "REF_R3", "REF_R4", "REF_R5", "REF_R6"],
+                   support=["ref2"],          # support-only: on-kick 34.7-39.2%
                    pending=[]),
-    "long":   dict(name="DEEP", modes={"sparse": ["melak_clips/refs_2026-10-17_2149/ref3"],          # space + sparseness lead
-                                       "dark": ["gaskin_closer", "lightleak_memphis"]},                 # darkness/sub/pad lead = Closer
-                   comparison=["stef_davidse_way_back"],   # sparse-DEEP-like per Transcriber, but stays ROLLER in the scorer (no churn)
-                   spectral_refs=["gaskin_closer", "lightleak_memphis", "stef_davidse_way_back", "melak_clips/refs_2026-10-17_2149/ref2"],
+    "long":   dict(name="DEEP", modes={"sparse": ["ref3"],                       # space + sparseness lead
+                                       "dark": ["REF_D1", "REF_D2"]},             # darkness/sub/pad lead = REF_D1
+                   comparison=["REF_R2"],   # sparse-DEEP-like, but stays ROLLER in the scorer (no churn)
+                   spectral_refs=["REF_D1", "REF_D2", "REF_R2", "ref2"],
                    pending=[]),
-    "pop":    dict(name="BOUNCY", modes={"bounce": ["m_high_guess_you_know"], "pulse": ["ellia_jaya_in_the_zone"]}, pending=[]),
-    "gaskin": dict(name="JACKIN", refs=["gaskin_a_fresh_energy", "gaskin_wax_master", "melak_clips/refs_2026-10-17_2149/ref1"],
-                   support=["ranger_trucco_kyle_walker_the_bridge"],   # radio edit; 4-bar sparse loop: groove/production support, not in bands
+    "pop":    dict(name="BOUNCY", modes={"bounce": ["REF_B1"], "pulse": ["REF_B2"]}, pending=[]),
+    "gaskin": dict(name="JACKIN", refs=["REF_J1", "REF_J2", "ref1"],
+                   support=["REF_J3"],   # radio edit; 4-bar sparse loop: groove/production support, not in bands
                    pending=[]),
 }
-BANNED_SKELETON_DIR = "_banned_skeletons"   # transcriptions/_banned_skeletons: synthesized MIDI of the shared ITZ/ref2/LIGHTLEAK
+BANNED_SKELETON_DIR = "_banned_skeletons"   # <refs>/_banned_skeletons: synthesized MIDI of the shared REF_B2/ref2/REF_D2
                                             # dotted pulse (v2.2); a roll matching it fails COPY_OF_REF:_banned_skeletons
-# v2.2.1 (Maestro 11:11 PM): originality refs switched OFF until confirmed. Each entry = path under transcriptions/ (suffix match)
+# v2.2.1: originality refs switched OFF until confirmed. Each entry = path under the refs dir (suffix match)
 # + why. Re-enable by deleting the entry (or commenting it out). originality_check.py's own CLI still scans every file.
 ORIG_EXCLUDE = {
-    "gaskin_a_fresh_energy/stabs.mid": "low-confidence CQT stab transcription; off until the Composer confirms it by ear",
-    "gaskin_a_fresh_energy/stabs_b73-88.mid": "low-confidence CQT stab transcription; off until the Composer confirms it by ear",
+    "REF_J1/stabs.mid": "low-confidence CQT stab transcription; off until the Composer confirms it by ear",
+    "REF_J1/stabs_b73-88.mid": "low-confidence CQT stab transcription; off until the Composer confirms it by ear",
 }
 KICK_TOL16 = 0.49   # v2.2: a bass attack is ON the kick when it sits within 0.49 16th of a kick hit (= same nearest 16th slot).
                     # v2.1 used 0.3: a ducked/late (40-50 ms) or transcription-jittered note escaped the 35% hard rule.
 HELD_MIN16 = 4      # v2.2: a 'held note' = a bass note sounding >= 4 sixteenths (count share of bass notes) -> held_ge4_pct
 # ---------------------------------------------------------------- style profiles (sources in ROLLA_ROLL_SCORING.md §3)
 BASE = dict(
-    offkick_min=65.0,          # CTR A2/E1 72-98% off kick; GR AV16 hard cap on-kick 35%; refs 68.4-98.8 (Stef 2nd drop 68.4)
-    top2_min=55.0,             # CTR A3/E2: top-2 pitch classes 63-98% (main drops); Josh 2nd drop 58.6 here -> 55
+    offkick_min=65.0,          # CTR A2/E1 72-98% off kick; GR AV16 hard cap on-kick 35%; refs 68.4-98.8 (REF_R2 2nd drop 68.4)
+    top2_min=55.0,             # CTR A3/E2: top-2 pitch classes 63-98% (main drops); REF_R3 2nd drop 58.6 here -> 55
     len_med=(1.0, 2.5),        # CTR A4/E3: median 1.1-2.3 sixteenths; +-0.1/0.2 tolerance
     pcs_bar=(1.3, 5.2),        # CTR A3: 1.9-4.8 distinct pitches/bar; this scorer: 1.94-5.0 on refs -> 1.3-5.2
-    roll_pcs_max=6,            # TOO_MANY_PCS: pcs holding >=5% of bass time; refs 2-6 (Local Dub 6); DESIGN cap 4 + 2
-    notes_bar=(1.5, 9.0),      # density: refs 2.2-8.6 attacks/bar (CTR C Laidlaw 8.25, validation table)
-    sounding_max=0.975,        # NO_GAPS: refs UK 0.36-0.97 (LIGHTLEAK 0.97); Ellia 0.99-1.00 = CTR outlier
-    run_max=7,                 # NOTE_RUN: >=8 consecutive 16th attacks (CM 2a.11 'no continuous 16ths'); Laidlaw max 7
-    oct_max=26.0,              # OCTAVE_PUMP: AR_REVIEW §0.3 octaves 0-25% (bimodal 0-8 / 15-25), flag >26; M-High 25.6
-    reg_med=(20, 45),          # BASS_REGISTER: median MIDI pitch A0..A2 (CTR C: Josh A0-F#1; M-High octave-2 mid-bass)
-    swing_max=58.5,            # BASS_SWUNG: bass timing 46-58% (CTR A8); Stef 57.5
+    roll_pcs_max=6,            # TOO_MANY_PCS: pcs holding >=5% of bass time; refs 2-6 (REF_R4 6); DESIGN cap 4 + 2
+    notes_bar=(1.5, 9.0),      # density: refs 2.2-8.6 attacks/bar (CTR C REF_R1 8.25, validation table)
+    sounding_max=0.975,        # NO_GAPS: refs UK 0.36-0.97 (REF_D2 0.97); REF_R6 0.99-1.00 = CTR outlier
+    run_max=7,                 # NOTE_RUN: >=8 consecutive 16th attacks (CM 2a.11 'no continuous 16ths'); REF_R1 max 7
+    oct_max=26.0,              # OCTAVE_PUMP: A&R review §0.3 octaves 0-25% (bimodal 0-8 / 15-25), flag >26; REF_B1 25.6
+    reg_med=(20, 45),          # BASS_REGISTER: median MIDI pitch A0..A2 (CTR C: REF_R3 A0-F#1; REF_B1 octave-2 mid-bass)
+    swing_max=58.5,            # BASS_SWUNG: bass timing 46-58% (CTR A8); REF_R2 57.5
     rep_min=0.50,              # LOOP_NO_REPEAT = GR AV09: gr_match@2 < 0.50 AND gr_match@4 < 0.47 (refs 0.536-0.863 / 0.469-0.917)
     static_max=0.90,           # STATIC_LOOP: 1-bar match; CTR A7 1-bar 0.05-0.75, this scorer 0.0-0.67 on refs
     stab_onbeat_max=33.0,      # STAB_ON_BEAT: CTR A9/E7 <=30% on the beat; +3 tolerance
     stab_pcs_max=4,            # STAB_TOO_THICK: median pcs per hit >4 (CTR A9 1-3; QUARTAL 4 allowed, DESIGN rule 17)
-    stab_clash_max=80.0,       # STAB_CLASH: >80% of stab hits double a bass attack; refs 24-75% (Local Dub counter-riff)
+    stab_clash_max=80.0,       # STAB_CLASH: >80% of stab hits double a bass attack; refs 24-75% (REF_R4 counter-riff)
     kick4_min=0.80,            # KICK_NOT_4x4: CTR A11 >=94% of quarters; transcribed refs read 0.83-0.98 -> 0.80
     bpm=(128.0, 134.0),        # TEMPO_OUT (soft): CTR A1 130-132
     # GR §6 AVOID checks, re-calibrated on the references (see ROLLA_ROLL_SCORING.md §6)
@@ -104,25 +108,25 @@ BASE = dict(
     npb_sd_min=0.5, npb_range_min=2,   # CONSTANT_DENSITY = GR AV04 (sd<0.5 OR range<2); refs sd 0.66-2.33, range 2-7
     rest_min16=1,              # NO_HOLES: no silent 16th at all; GR AV05 >=4 fails 8/17 ref sections (refs 1-37)
     root_max=80.0,             # ROOT_DRONE: GR AV06 root share >80%
-    leap_max=19,               # LEAP_TOO_BIG: GR AV07 says 15; refs leap up to 17 (LIGHTLEAK) and 19 (M-High) -> 19
+    leap_max=19,               # LEAP_TOO_BIG: GR AV07 says 15; refs leap up to 17 (REF_D2) and 19 (REF_B1) -> 19
     step_run_max=5,            # SCALE_RUN: GR AV01 >5 same-direction steps (refs max 1-5)
 )
 STYLES = {
     "ukmin":  dict(BASE),
-    "long":   dict(BASE, len_med=(1.8, 8.0), notes_bar=(1.0, 7.5), allow_long=True),            # LIGHTLEAK anchor: DESIGN §4 LONG 2-8/16; measured 6.9-7.1 attacks/bar
-    "pop":    dict(BASE, offkick_min=65.0, len_med=(0.8, 1.6)),        # GR v2 H2: on-kick > 35% fails in every style                # M-High 98% off kick, 1.12/16
+    "long":   dict(BASE, len_med=(1.8, 8.0), notes_bar=(1.0, 7.5), allow_long=True),            # REF_D2 anchor: DESIGN §4 LONG 2-8/16; measured 6.9-7.1 attacks/bar
+    "pop":    dict(BASE, offkick_min=65.0, len_med=(0.8, 1.6)),        # GR v2 H2: on-kick > 35% fails in every style                # REF_B1 98% off kick, 1.12/16
     "gaskin": dict(BASE, offkick_min=65.0, gr_match1_max=0.20, swing_mode=True, len_med=(1.5, 2.6), stab_onbeat_max=50.0, stab_clash_max=100.0,
-                   sounding_max=0.97, kick4_min=0.85, swing_max=60.0, top2_min=45.0),   # CTR D1-D6; v2.2 top2 45 (ref1 49.3, Gaskin 56-66)
+                   sounding_max=0.97, kick4_min=0.85, swing_max=60.0, top2_min=45.0),   # CTR D1-D6; v2.2 top2 45 (ref1 49.3, REF_J1/J2 56-66)
 }
 STYLES["long"]["root_band"] = (40.0, 70.0)
-STYLES["pop"]["root_band"] = (30.0, 64.0)       # v2.2.1 BOUNCY bounce root share: GR 30-42 widened to the derived M-High band 57.4-63.1 -> 30-64      # v2.2 DEEP root share (time): ref3 62.8, LIGHTLEAK 43.8-48.1 -> soft ROOT_SHARE_OUT
-# v2.2 BOUNCY 'pulse' mode (Ellia Jaya 'In The Zone', bars 65-96): steady dotted pulse, longer notes, higher register.
+STYLES["pop"]["root_band"] = (30.0, 64.0)       # v2.2.1 BOUNCY bounce root share: GR 30-42 widened to the derived REF_B1 band 57.4-63.1 -> 30-64      # v2.2 DEEP root share (time): ref3 62.8, REF_D2 43.8-48.1 -> soft ROOT_SHARE_OUT
+# v2.2 BOUNCY 'pulse' mode (REF_B2, bars 65-96): steady dotted pulse, longer notes, higher register.
 STYLES["pop_pulse"] = dict(BASE, offkick_min=65.0, len_med=(1.8, 3.2), static_max=0.95, pulse=True, reg_med=(20, 45))
-# v2.2 DEEP 'dark' flavour (Gaskin "Closer" + LIGHTLEAK; Maestro 10:42 PM): deep through darkness and a constant pad, not sparseness.
-# Busier, shorter bass allowed (Closer 8.0-8.6 attacks/bar, median 1.68/16); pad re-attacks may sit on the beat (Closer 52-57%).
+# v2.2 DEEP 'dark' flavour (REF_D1 + REF_D2): deep through darkness and a constant pad, not sparseness.
+# Busier, shorter bass allowed (REF_D1 8.0-8.6 attacks/bar, median 1.68/16); pad re-attacks may sit on the beat (REF_D1 52-57%).
 STYLES["long_dark"] = dict(STYLES["long"], len_med=(1.4, 8.0), notes_bar=(1.0, 9.5), stab_onbeat_max=60.0)
 STYLE_CHOICES = ["gaskin", "long", "pop", "ukmin"]          # *_pulse / *_dark are modes, chosen per roll inside score_dir
-# AR_REVIEW §8 lane-fit envelopes (UK reference ranges; LONG/POP = their anchors; GASKIN its own). Range membership,
+# A&R review §8 lane-fit envelopes (UK reference ranges; LONG/POP = their anchors; GASKIN its own). Range membership,
 # never similarity to a reference. A roll fits the lane when <= 2 of the measurable features miss (">= 10 of 12").
 LANE_UK = dict(offkick=(70, 100), top2=58, pcs=(2, 6), len=(1.0, 2.4), long6=8, npb=(3.9, 8.7), run=7, eaa=20,
                reg=(25, 36), rep=0.50, rep1=0.70, oct_ok=((0, 8.5), (15, 26)), stab_beat=30, signpost=50,
@@ -131,22 +135,22 @@ LANE_UK = dict(offkick=(70, 100), top2=58, pcs=(2, 6), len=(1.0, 2.4), long6=8, 
 # (ar_vocab_measure.json uk_ranges): top-2 58.6, pcs>=5% up to 6, len 1.07-2.31, npb 3.94-8.62, hat swing 49.1-59.1,
 # stab pcs/hit up to 4 (DESIGN rule 17 quartal); kick 0.85 = transcription tolerance (CTR A11 94% is audio-measured).
 LANE = {"ukmin": LANE_UK,
-        "long": dict(LANE_UK, len=(1.8, 4.0)),                                   # LIGHTLEAK 2.25-2.31 (+DESIGN LONG 2-8)
-        "pop": dict(LANE_UK, offkick=(85, 100), len=(0.9, 1.4)),                 # M-High 97.7-98.8 off kick, 1.07-1.11
+        "long": dict(LANE_UK, len=(1.8, 4.0)),                                   # REF_D2 2.25-2.31 (+DESIGN LONG 2-8)
+        "pop": dict(LANE_UK, offkick=(85, 100), len=(0.9, 1.4)),                 # REF_B1 97.7-98.8 off kick, 1.07-1.11
         "gaskin": dict(LANE_UK, offkick=(65, 100), top2=45, pcs=(2, 5), len=(1.5, 2.6), dotted=55, rep1=0.10, rep2g=0.60,
                        b2=10, stab_sus=6, duck=(3, 36), hat_sw=(50, 57), stab_beat=50, clash=100)}
 HEAVY_SWING_BAND = (50, 68)   # --swing-heavy (soft, optional 90s switch): JACKIN hats may swing up to 68%
-# v2.2 (Maestro 10:12 + 10:42 PM): JACKIN = Gaskin Wax Master + A Fresh Energy (lead) + ref1; The Bridge = support (not in bands).
+# v2.2: JACKIN = REF_J2 + REF_J1 (lead) + ref1; REF_J3 = support (not in bands).
 # Hat swing 50-57 (Transcriber hat swing 50.6-55.3 across the JACKIN refs; our MIDI 51.8-53.6), --swing-heavy widens to 50-68.
-# top2 >= 45 (ref1 49.3), rep2 >= 0.60 (A Fresh Energy 0.62-0.66), duck 3-36 dB wide (Gaskin 3.6 .. ref1 33), stab on-beat <= 50,
+# top2 >= 45 (ref1 49.3), rep2 >= 0.60 (REF_J1 0.62-0.66), duck 3-36 dB wide (REF_J2 3.6 .. ref1 33), stab on-beat <= 50,
 # stab/bass clash unbounded (= STYLES gaskin). Flavour (F6) needs ONE of: dotted >= 55% / flat-2nd >= 10% / sustained stabs
-# (median >= 6/16; A Fresh Energy organ-pad stabs 6.4-8.1) / short off-beat counter-stab.
-# DEEP (long): held_ge4 cap 30 (ref3 23.1-ish, LIGHTLEAK 0-6) replaces long6 in F3.
+# (median >= 6/16; REF_J1 organ-pad stabs 6.4-8.1) / short off-beat counter-stab.
+# DEEP (long): held_ge4 cap 30 (ref3 23.1-ish, REF_D2 0-6) replaces long6 in F3.
 LANE["long"]["held4"] = 30.0
-# BOUNCY pulse lane (ITZ): off-kick 65-100 (ITZ 72.4), len 1.8-3.2 (2.7), register 25-42 (median 39), 1-bar repeat allowed to 0.95
+# BOUNCY pulse lane (REF_B2): off-kick 65-100 (REF_B2 72.4), len 1.8-3.2 (2.7), register 25-42 (median 39), 1-bar repeat allowed to 0.95
 LANE["pop_pulse"] = dict(LANE_UK, offkick=(65, 100), len=(1.8, 3.2), reg=(25, 42), rep1=0.95)
-# DEEP dark lane (Closer + LIGHTLEAK): length 1.4-4.0 (Closer 1.68), density up to 9.5 (Closer 8.0-8.6), bar repeat >= 0.42
-# (Closer grid rep 0.43-0.53), a continuous pad (stab median >= 16/16) satisfies F8. DEEP sparse = LANE["long"] (ref3 + LIGHTLEAK).
+# DEEP dark lane (REF_D1 + REF_D2): length 1.4-4.0 (REF_D1 1.68), density up to 9.5 (REF_D1 8.0-8.6), bar repeat >= 0.42
+# (REF_D1 grid rep 0.43-0.53), a continuous pad (stab median >= 16/16) satisfies F8. DEEP sparse = LANE["long"] (ref3 + REF_D2).
 LANE["long_dark"] = dict(LANE["long"], len=(1.4, 4.0), npb=(3.9, 9.5), rep=0.42, pad_ok=True)
 ALL_CODES = {"NO_BASS", "BASS_ON_KICK", "TOP2_LOW", "TOO_MANY_PCS", "PCS_PER_BAR", "BASS_NOTES_TOO_SHORT",
         "BASS_NOTES_TOO_LONG", "NO_GAPS", "NOTE_RUN", "OCTAVE_PUMP", "BASS_REGISTER", "BASS_SWUNG", "DENSITY_LOW",
@@ -174,13 +178,13 @@ FX_RE = re.compile(r"riser|sweep|uplift|downlift|crash|whoosh|impact|noise ?fx|\
 LATIN_RE = re.compile(r"clave|conga|bongo|timbal|latin", re.I)
 
 def lane_fit(m, style, winfo):
-    """12 range-membership features (AR_REVIEW §8). Returns (in_range, measurable, misses list)."""
+    """12 range-membership features (A&R review §8). Returns (in_range, measurable, misses list)."""
     E = LANE[style]; res = {}
     g = lambda k: m.get(k)
     def rng(v, lo, hi): return None if v is None else ((lo is None or v >= lo) and (hi is None or v <= hi))
     res["F1_offkick"] = rng(g("offkick_pct"), *E["offkick"])
     res["F2_pitch"] = None if g("top2_pct") is None else (g("top2_pct") >= E["top2"] and E["pcs"][0] <= g("pcs_ge5") <= E["pcs"][1])
-    if "held4" in E:   # v2.2 DEEP: held notes (>= HELD_MIN16) are a trait; cap from ref3 + LIGHTLEAK
+    if "held4" in E:   # v2.2 DEEP: held notes (>= HELD_MIN16) are a trait; cap from ref3 + REF_D2
         res["F3_length"] = None if g("len_med16") is None else (rng(g("len_med16"), *E["len"]) and g("held_ge4_pct") <= E["held4"])
     else:
         res["F3_length"] = None if g("len_med16") is None else (rng(g("len_med16"), *E["len"]) and g("long_ge6_pct") <= E["long6"])
@@ -492,7 +496,7 @@ def measure(bass, stab, kick, hats, drums, bars, tempo, S):
     f2 = sum(1 for n in bn if int(round(n[0])) % 16 == 14 and (n[2] - tonic) % 12 == 3 and n[1] > (int(round(n[0])) // 16 + 1) * 16)
     m["banned_2and4_bars"], m["banned_b3_tie_bars"] = f1, f2
     if f1 > bars / 2 or f2 > bars / 2: codes.append("BANNED_FIGURE")
-    # ---- AR_REVIEW §8 (genre_wide review) lane features + generic-house flags: bass part
+    # ---- A&R review §8 lane features + generic-house flags: bass part
     lens_all = [n[4] for n in bn]; S_att = {int(round(t)) for t in att}; beats = range(0, L, 4)
     m["long_ge6_pct"] = round(100 * sum(1 for x in lens_all if x >= 6) / len(lens_all), 1)
     m["held_ge4_pct"] = round(100 * sum(1 for x in lens_all if x >= HELD_MIN16) / len(lens_all), 1)
@@ -539,8 +543,8 @@ def measure(bass, stab, kick, hats, drums, bars, tempo, S):
             pres = sum(1 for b in range(bars) if any(b * 16 + sl in by for sl in (14, 3, 7, 9)))
             m["stab_signpost_bars_pct"] = round(100 * pres / bars, 1)
             hpb = m["stab_hits_per_bar"]
-            # density modes (AR_REVIEW §0.2): dub 0.5-3/bar, riff 4-10/bar (+0.5 tol: M-High 10.38). The review's
-            # ">=70% of riff hits on e/a" is reported (stab_ea_pct) but not required: refs read 27.8-75% (only M-High >=70).
+            # density modes (A&R review §0.2): dub 0.5-3/bar, riff 4-10/bar (+0.5 tol: REF_B1 10.38). The review's
+            # ">=70% of riff hits on e/a" is reported (stab_ea_pct) but not required: refs read 27.8-75% (only REF_B1 >=70).
             m["stab_mode"] = "dub" if 0.5 <= hpb <= 3 else ("riff" if 4 <= hpb <= 10.5 else "generic")
             pob = [sum(1 for k, ns in hits if b * 16 <= k < b * 16 + 16 and k % 4 == 2 and len({p % 12 for _, _, p in ns}) >= 4) for b in range(bars)]
             if sum(1 for x in pob if x >= 3) > bars / 2: codes.append("PIANO_OFFBEAT_CHORDS")
@@ -607,7 +611,7 @@ def wav_technical(path, bars, bpm):
         info["tail_note"] = "no tail rendered past the loop end: wrap not measurable"
         info["seam_step"] = round(float(abs(m[min(end, len(m)) - 1] - m[off])), 4)
         if info["seam_step"] > 0.05: codes.append("CLICKS")
-    # bass ducking proxy (AR_REVIEW F12): <150 Hz level in the 40 ms after each beat vs the loudest 40 ms of that beat
+    # bass ducking proxy (A&R review F12): <150 Hz level in the 40 ms after each beat vs the loudest 40 ms of that beat
     try:
         F = np.fft.rfft(loop.astype(np.float64)); fr = np.fft.rfftfreq(len(loop), 1 / sr); F[fr > 150] = 0
         lb = np.fft.irfft(F, len(loop)); del F
@@ -650,7 +654,7 @@ def originality(st, refs_dir, exclude):
                 lv, why = OC.verdict(OC.compare(ce, re_))
                 # A rhythm-skeleton-only FAIL against a LOW-confidence reference stream (stem CQT peaks, merged
                 # parts) is transcription noise, not a copy: downgrade it to FLAG (REF_FLAG, listen). Validation:
-                # Gaskin's stabs "failed" vs LIGHTLEAK's CQT chops at skel_win 0.60 (two unrelated records).
+                # one JACKIN ref's stabs "failed" vs a DEEP ref's CQT chops at skel_win 0.60 (two unrelated records).
                 low = "LOW" in rn.upper() or cn == "MERGED_LOW"
                 if lv == "FAIL" and low and all(w.startswith("skel") for w in why if "FAIL" in w):
                     lv, why = "FLAG", [w + " (LOW-confidence ref, downgraded)" for w in why]
@@ -694,6 +698,8 @@ def find_rolls(d):
 
 def score_dir(d, style, out=None, bars=None, bpm=None, refs=OC.DEFAULT_REFS, no_orig=False, exclude_self=False, quiet=False):
     S = STYLES[style]; rows = []
+    if not refs: no_orig = True          # no private refs dir given: originality is skipped, never guessed
+    refs = refs or ""
     ref_folders = sorted({os.path.relpath(r, refs).split(os.sep)[0] for r, _, fs in os.walk(refs) if any(f.endswith(".mid") for f in fs)}) if os.path.isdir(refs) else []
     for name, mids, wav in find_rolls(d):
         groups, stuck, tempo, end_beats = parse_roll(mids)
@@ -953,12 +959,16 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("dir"); ap.add_argument("--style", required=True, choices=STYLE_CHOICES)
     ap.add_argument("--out"); ap.add_argument("--bars", type=int); ap.add_argument("--bpm", type=float, default=130.0)
-    ap.add_argument("--refs", default=OC.DEFAULT_REFS); ap.add_argument("--no-orig", action="store_true")
+    ap.add_argument("--refs", default=OC.DEFAULT_REFS,
+                    help="private reference MIDI dir (default: $ROLLA_REFS); required unless --no-orig")
+    ap.add_argument("--no-orig", action="store_true")
     ap.add_argument("--hard-profile", default="maestro", choices=sorted(HARD_PROFILES),
                     help="maestro (default) = GR v2 four hard rules + LANE_FIT_LOW + duplicates; gr_v2 = also the GR v2 §5 technical list")
-    ap.add_argument("--exclude-self", action="store_true", help="skip refs whose transcriptions/ folder name prefixes the roll name (validation)")
+    ap.add_argument("--exclude-self", action="store_true", help="skip refs whose folder name (under --refs) prefixes the roll name (validation)")
     ap.add_argument("--swing-heavy", action="store_true", help="v2.2 optional JACKIN heavier-swing switch: gaskin hat swing band 50-68 instead of 50-57")
     a = ap.parse_args()
+    if not a.no_orig and not a.refs:
+        ap.error("the originality check needs --refs DIR or ROLLA_REFS=DIR (private reference MIDI); or pass --no-orig")
     if a.swing_heavy: LANE["gaskin"]["hat_sw"] = HEAVY_SWING_BAND
     HARD.clear(); HARD.update(HARD_PROFILES[a.hard_profile]); HARD_PROFILE_NAME[0] = a.hard_profile
     rows, s = score_dir(a.dir, a.style, a.out, a.bars, a.bpm, a.refs, a.no_orig, a.exclude_self)

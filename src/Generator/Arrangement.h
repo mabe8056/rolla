@@ -1,7 +1,7 @@
 #pragma once
 
-// Arrangement helpers taken from the BOUNCY lead reference ("In The Zone",
-// Ellia Jaya, extended mix). Only tendencies are encoded, never the riff:
+// Arrangement helpers taken from the BOUNCY pulse lead reference (REF_B2).
+// Only tendencies are encoded, never the riff:
 //
 //  - Bar-8 turnaround. On the last bar of an 8-bar phrase the kick and sub
 //    step out and the bass holds long notes (an approach degree, then the

@@ -297,8 +297,8 @@
       "knee_db": 6,
       "target_gr_db": 4,
       "src": {
-       "attack_ms": "M(borrowed Gaskin stab)",
-       "release_ms": "M(borrowed Gaskin stab)",
+       "attack_ms": "M(borrowed REF_J1/J2 stab)",
+       "release_ms": "M(borrowed REF_J1/J2 stab)",
        "threshold_dbfs": "N",
        "ratio": "N",
        "knee_db": "N",
@@ -1178,8 +1178,8 @@
       "knee_db": 6,
       "target_gr_db": 4,
       "src": {
-       "attack_ms": "M(borrowed Gaskin stab)",
-       "release_ms": "M(borrowed Gaskin stab)",
+       "attack_ms": "M(borrowed REF_J1/J2 stab)",
+       "release_ms": "M(borrowed REF_J1/J2 stab)",
        "threshold_dbfs": "N",
        "ratio": "N",
        "knee_db": "N",
@@ -2059,8 +2059,8 @@
       "knee_db": 6,
       "target_gr_db": 4,
       "src": {
-       "attack_ms": "M(borrowed Gaskin stab)",
-       "release_ms": "M(borrowed Gaskin stab)",
+       "attack_ms": "M(borrowed REF_J1/J2 stab)",
+       "release_ms": "M(borrowed REF_J1/J2 stab)",
        "threshold_dbfs": "N",
        "ratio": "N",
        "knee_db": "N",
@@ -2940,8 +2940,8 @@
       "knee_db": 6,
       "target_gr_db": 4,
       "src": {
-       "attack_ms": "M(borrowed Gaskin stab)",
-       "release_ms": "M(borrowed Gaskin stab)",
+       "attack_ms": "M(borrowed REF_J1/J2 stab)",
+       "release_ms": "M(borrowed REF_J1/J2 stab)",
        "threshold_dbfs": "N",
        "ratio": "N",
        "knee_db": "N",
@@ -3636,16 +3636,16 @@
    },
    "STAB:DUB": {
     "comp.release_ms": 110,
-    "src": "M LIGHTLEAK decay 106"
+    "src": "M REF_D2 decay 106"
    },
    "STAB:CHORD": {
     "comp.release_ms": 180,
-    "src": "M V-Line 180.5 / Ellia 180"
+    "src": "M REF_R4 180.5 / REF_R6 180"
    },
    "STAB:GASKIN_RAVE": {
     "comp.release_ms": 250,
     "comp.target_gr_db": 7,
-    "src": "M Gaskin decay 254, crest 16.8"
+    "src": "M REF_J1/J2 decay 254, crest 16.8"
    },
    "STAB:POP_CLICK": {
     "comp.release_ms": 125,

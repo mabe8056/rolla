@@ -26,10 +26,10 @@ Written by the Composer on 2026-10-17 ET. v1 is kept in `GENERATOR_RULES_v1.md`;
 | Consecutive 16ths | 3 | band ≤ 7 |
 | Rest of 4+ sixteenths | required | soft (refs 1–37); "≥ 1 silent 16th" is part of the hard broken-bar rule |
 | Leap cap | 15 | band ≤ 19 |
-| Octave share | UK MIN 10% | band 0–26% (Stef 16–21%) |
+| Octave share | UK MIN 10% | band 0–26% (REF_R2 16–21%) |
 | 4-bar repeat floor | 0.77 | band ≥ 0.47 |
 | 2-bar repeat floor | — | band ≥ 0.50 |
-| LONG sounding fraction | — | band 0.75–0.975 (LIGHTLEAK 0.93–0.97) |
+| LONG sounding fraction | — | band 0.75–0.975 (REF_D2 0.93–0.97) |
 | Notes per bar | — | band 3.9–8.7 |
 
 **Diversity.**
@@ -45,16 +45,16 @@ Written by the Composer on 2026-10-17 ET. v1 is kept in `GENERATOR_RULES_v1.md`;
 - New surprise-that-grooves tags with a set-level quota (§5).
 
 **Sources**, as in v1:
-- MD = `generator_rules_data/measured_drops.json` (16 windows)
-- CTR = `transcriptions/CROSS_TRACK_RULES.md`
-- SA = `/workspace/house-music/style-analysis.md`
+- MD = private measured-drop table (16 windows)
+- CTR = private cross-track rules (CTR)
+- SA = private style analysis
 - PB = `rulebook/house-master-playbook.md`
 - DES = `plugin-design/DESIGN.md`
 - OC = `tools/originality_check.py`
 - CM = `writing/COMPOSER_METHOD.md`
 - DA = Direction A
 - **ARS = A&R's scorer measurements, `tools/ROLLA_ROLL_SCORING.md` §2/§5.1 (17 drop sections, 72 MIDI)**
-- ARV = `tools/score_rolls_validation.md`
+- ARV = (private A&R notes)
 
 ESTIMATE means not measured.
 
@@ -77,7 +77,7 @@ hard:
       POP:    [1, b2, 2, b3, 4, 5, b6, 6, b7]
       GASKIN_90S: [1, b2, 2, b3, 4, 5, b6, b7]   # CTR D (phrygian colour, b2 = 17-26% [MD])
     checks:
-      - "bass: time share on degrees outside scale_set <= 5%"       # MD max 4.4% (Josh b49: 7 + 3 + b5); one 1/16 passing note per 2 bars = 3.1%
+      - "bass: time share on degrees outside scale_set <= 5%"       # MD max 4.4% (REF_R3 b49: 7 + 3 + b5); one 1/16 passing note per 2 bars = 3.1%
       - "every out-of-set bass note is a chromatic neighbour (|interval| = 1 to an in-set note before or after)"   # SA habit 4
       - "tonic is one of the two most-sounding bass pitch classes"  # CTR E (root always in top-2), MD 16/16 windows
       - "stab/pad/pluck: pitch classes outside scale_set <= 5% of note-ons; never on a downbeat hit"   # ESTIMATE (no measured outliers)
@@ -98,7 +98,7 @@ hard:
     checks:
       - "OC vs every transcription: no FAIL (skel_win >= 0.55, skel_ngram >= 0.45, voicing >= 0.75, or int_ngram >= 0.60 AND rhythm_cov >= 0.70)"   # OC TH; ARS downgrades skeleton-only FAIL vs LOW-confidence CQT streams to FLAG
       - "Composer metric: NOT (onset Jaccard >= 0.50 OR degree-seq sim >= 0.70) and NOT both >= 0.40 / 0.60"   # CM §5
-      - "banned figures: root on slots 2 AND 4 in > 4 of 8 bars; b3 on slot 15 tied over the barline in > 4 of 8 bars"   # CM 5.7, DES (Reaction signature)
+      - "banned figures: root on slots 2 AND 4 in > 4 of 8 bars; b3 on slot 15 tied over the barline in > 4 of 8 bars"   # CM 5.7, DES (REF_R5 2&4 root figure)
       - "triviality guard: streams < 6 onsets or < 2 pcs are exempt from OC"   # OC
 ```
 
@@ -155,7 +155,7 @@ freedom:
 
 ```yaml
 soft_global:
-  - {id: S_match2,      metric: gr_match2, target: [0.50, 0.93], tol: 0.10, w: 1.5, stick: 0.6}   # ARS refs 0.536-0.863 (Gaskin 0.92)
+  - {id: S_match2,      metric: gr_match2, target: [0.50, 0.93], tol: 0.10, w: 1.5, stick: 0.6}   # ARS refs 0.536-0.863 (REF_J1/J2 0.92)
   - {id: S_match4,      metric: gr_match4, target: [0.47, 0.95], tol: 0.10, w: 1.0, stick: 0.3}   # ARS refs 0.469-0.917 (v1 floor 0.77 dropped)
   - {id: S_too_random,  metric: "match2<0.50 AND match4<0.47", target: false, tol: 0.10, w: 3, stick: 0.7}   # ARS AV09 (agreed); d = distance of the closer of the two below its floor
   - {id: S_identical_bars, metric: gr_match1, target: [0.0, 0.95], tol: 0.03, w: 3, stick: 0.7, also: "distinct_bass_bars >= 2"}   # ARS refs <= 0.75 (agreed)
@@ -174,7 +174,7 @@ bass_soft:
   - {id: B_const_density, metric: "npb_sd, npb_range", target: "sd >= 0.5 and range >= 2", tol: 0.3, w: 2.5, stick: 0.7}   # ARS refs sd 0.66-2.33, range 2-7 (agreed)
   - {id: B_len_med, metric: len_med16, target: {UK_MIN: [1.0, 2.4], LONG: [1.8, 4.0], POP: [0.9, 1.4], GASKIN_90S: [1.5, 2.6]}, tol: 0.4, w: 1, stick: 0.3}   # ARS lane bands
   - {id: B_long_notes, metric: long_ge6_pct, target: {default: [0, 15], LONG: [0, 40]}, tol: 10, w: 0.7, stick: 0.3}   # ARS BASS_REESE_LONG
-  - {id: B_run, metric: max_16th_run, target: [0, 7], tol: 2, w: 1, stick: 0.3}   # ARS refs max 7 (Laidlaw)
+  - {id: B_run, metric: max_16th_run, target: [0, 7], tol: 2, w: 1, stick: 0.3}   # ARS refs max 7 (REF_R1)
   - {id: B_grid_locked, metric: "inbeat_pos_ge10 >= 3 AND generic_bars <= 4", tol: 1, w: 3, stick: 0.7}   # ARS AV02 refs 3-4 positions (agreed)
   - {id: B_sounding, metric: sounding_frac, target: {UK_MIN: [0.36, 0.95], LONG: [0.75, 0.975], POP: [0.28, 0.45], GASKIN_90S: [0.70, 0.95]}, tol: 0.1, w: 1, stick: 0.3}   # ARS refs 0.36-0.97; MD per dialect; >0.975 is H3
   - {id: B_rest4, metric: longest_rest16, target: [4, 64], tol: 2, w: 0.5, stick: 0.1}   # PB14.1#8 taste; refs 1-37 so light only
@@ -183,7 +183,7 @@ bass_soft:
   - {id: B_top2, metric: top2_pct, target: {default: [57, 99], GASKIN_90S: [55, 70]}, tol: 8, w: 1.5, stick: 0.3}   # ARS refs 57.3-98.4
   - {id: B_pcs, metric: "pitch classes >= 5% time", target: [2, 6], tol: 1, w: 1, stick: 0.3}   # ARS refs 2-6
   - {id: B_pitches_bar, metric: pitches_per_bar, target: {default: [1.3, 5.2], POP: [1.5, 2.5]}, tol: 0.8, w: 1, stick: 0.3}   # ARS, MD
-  - {id: B_octave, metric: octave_move_pct, target: {UK_MIN: [0, 26], LONG: [0, 8], POP: [15, 30], GASKIN_90S: [0, 26]}, tol: 6, w: 0.7, stick: 0.3}   # ARS refs 0-25.6 (Stef 16-21); MD LIGHTLEAK 0, M-High 20-26
+  - {id: B_octave, metric: octave_move_pct, target: {UK_MIN: [0, 26], LONG: [0, 8], POP: [15, 30], GASKIN_90S: [0, 26]}, tol: 6, w: 0.7, stick: 0.3}   # ARS refs 0-25.6 (REF_R2 16-21); MD REF_D2 0, REF_B1 20-26
   - {id: B_leap, metric: max_leap, target: [0, 19], tol: 5, w: 0.7, stick: 0.3}   # ARS refs 17/19
   - {id: B_scale_run, metric: step_run_moves, target: [0, 5], tol: 2, w: 1.5, stick: 0.5}   # MD/ARS refs <= 5 ("theory-generic")
   - {id: B_swing, metric: bass_swing_pct, target: [46, 58.5], tol: 3, w: 1, stick: 0.3}   # ARS
