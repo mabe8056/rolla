@@ -2598,6 +2598,27 @@ float bandPenalty (float x, float lo, float hi, float tol, float w, float stick,
     return std::max (0.f, wE) * c;
 }
 
+// DARK at its ends also steers which candidate ships. The composer's tilt is
+// per note, so a root-heavy line can come out the same at DARK 0 and DARK 1;
+// this adds the dark share (b2 b3 b5 b6 b7 of the non-root pitches, the
+// roll_batch measure) to the candidate's penalty. 0.2 < DARK < 0.8 adds nothing.
+static float darkPull (const Lane& bass, float dark) noexcept
+{
+    if (dark > 0.2f && dark < 0.8f)
+        return 0.f;
+    int darkPcs = 0, pitches = 0;
+    for (int i = 0; i < bass.count; ++i)
+    {
+        const int pc = ((int) bass.notes[i].chord[0] % 12 + 12) % 12;
+        if (pc == 0)
+            continue;
+        ++pitches;
+        darkPcs += pc == 1 || pc == 3 || pc == 6 || pc == 8 || pc == 10;
+    }
+    const float share = pitches > 0 ? (float) darkPcs / (float) pitches : 0.f;
+    return dark >= 0.8f ? 2.f * std::max (0.f, 0.6f - share) : 2.f * share;
+}
+
 float softPenalty (const Groove& g, float freedom, const char* plan, bool offPlan, bool offContour) noexcept
 {
     const int bars = std::max (1, g.bars);
@@ -5093,7 +5114,8 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
         ++draws;
         std::snprintf (g.brokenRules, sizeof g.brokenRules, "%s|%s|%s|%s", planName, contour, cells, breaks);
         last.g = g;
-        last.penalty = softPenalty (g, freedom, planName, offPlan, offContour);
+        last.penalty = softPenalty (g, freedom, planName, offPlan, offContour)
+                     + (regen (Bass) ? darkPull (g.lane[Bass], s.dark) : 0.f);
         std::snprintf (last.tag, sizeof last.tag, "%s", g.brokenRules);
         haveLast = true;
         if (hardFail (g))
