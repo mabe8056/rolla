@@ -49,8 +49,9 @@ struct Event
     {
         if (tick != o.tick)
             return tick < o.tick;
-        // note-offs before note-ons at the same tick
-        return status > o.status;
+        // note-offs (0x8n) before note-ons (0x9n) at the same tick, so a note that
+        // ends where the same pitch starts again does not read as zero length
+        return status < o.status;
     }
 };
 
