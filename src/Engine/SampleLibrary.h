@@ -655,8 +655,10 @@ void ensureSampleFolders (const juce::File& root);
 
 // The files the sampler will reach for first with these presets and picks:
 // each lane's preferred pool entry and its next neighbours (window), and every drum voice.
+// drumPick: NumDrumVoices per-voice picks (-1 unset), or null for the shared drum pick.
 void collectPlayFiles (const PresetBank& bank, const SampleIndex& index, const int preset[NumParts],
-                       const int samplePick[NumParts], int dialect, int window, std::vector<std::string>& out);
+                       const int samplePick[NumParts], int dialect, int window, std::vector<std::string>& out,
+                       const int* drumPick = nullptr);
 
 // Per-user cache files (kind "index" or "loudness"). Never inside the sample root.
 juce::File sampleCacheFor (const juce::File& sampleRoot, const char* kind);

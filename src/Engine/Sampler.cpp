@@ -1,5 +1,6 @@
 #include "Sampler.h"
 #include "Engine.h"
+#include "../Drums/DrumMachine.h"
 #include "../Sampler/PlayDecision.h"
 #include "../Sampler/UserSlots.h"
 
@@ -375,6 +376,24 @@ LaneHit resolveLane (const PresetBank& bank, const EngineParams& params, int par
 const SampleSpec& sampleSpecFor (const PresetBank& bank, int part, int preset) noexcept
 {
     return specAt (bank, part, preset);
+}
+
+double kickKeyFollowRatio (const PitchInfo& pitch, int key) noexcept
+{
+    // A chord reading on a kick is noise, not a fundamental.
+    if (! pitch.pitched() || pitch.isChord || ! (pitch.conf >= kKickFollowConfMin))
+        return 1.0;
+    double f0 = 440.0 * std::pow (2.0, ((double) pitch.rootPitch - 69.0) / 12.0);
+    if (! std::isfinite (f0) || f0 <= 1.0)
+        return 1.0;
+    // The probe may read the body's octave or a harmonic: fold into the kick register.
+    while (f0 >= 80.0)
+        f0 *= 0.5;
+    while (f0 < 40.0)
+        f0 *= 2.0;
+    const double target = (double) DrumMachine::kickHzForKey (key);
+    const double semis = std::clamp (12.0 * std::log2 (target / f0), -kKickFollowMaxSt, kKickFollowMaxSt);
+    return std::pow (2.0, semis / 12.0);
 }
 
 void Sampler::Voice::Env::start (float aMs, float dMs, float sGain, float rMs, float sr) noexcept
@@ -1368,13 +1387,16 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
     int pick = params.samplePick[Drums];
     if (pick < 0)
         pick = 0;
+    // A genre-drawn voice pick is an ordinal in this voice's scanned pool, so it only
+    // applies there. An explicit voice pool and the pack fallback keep the shared pick.
+    const int indexPick = params.drumPick[voice] >= 0 ? params.drumPick[voice] : pick + shift;
     const auto& own = drum.voicePool[voice];
     if (! own.empty())
         scanPool (own, pick + shift, true);
     else if (params.sampleIndex != nullptr)
     {
         LaneHit indexed;
-        if (readyFromIndex (params.library, params.sampleIndex, Drums, spec, pick + shift, voice, params.dialect, indexed))
+        if (readyFromIndex (params.library, params.sampleIndex, Drums, spec, indexPick, voice, params.dialect, indexed))
             audio = indexed.audio;
         else if (indexed.pending)
             pending = true;
@@ -1392,6 +1414,8 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
             pending = true;
         }
     }
+    // Key follow only trusts the kick's own file, not a hit borrowed from the pack.
+    const bool ownFile = audio != nullptr;
     if (audio == nullptr && ! pending)
     {
         // Crash, tom, shaker, noise, or a missing folder: PERC, then OH, then RIDE.
@@ -1430,6 +1454,10 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
 
     const auto amp = ampFor (bank, Drums, presetOf (params, Drums));
     const float tune = std::pow (2.f, params.drumTuneSt[voice] / 12.f);
+    // Multiplies the TUNE knob; exactly 1 when off, so the ratio is bit-identical.
+    const double keyFollow = voice == Kick && params.kickKeyFollow && ownFile
+                                 ? kickKeyFollowRatio (audio->pitch, params.key)
+                                 : 1.0;
     Voice fresh;
     fresh.on = true;
     fresh.part = Drums;
@@ -1438,7 +1466,7 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
     fresh.audio = audio;
     notePicked (Drums, voice, audio);
     fresh.reverse = spec.reverse;
-    fresh.ratio = std::clamp (tune * (audio->rate / sr), 0.25, 4.0);
+    fresh.ratio = std::clamp (tune * (audio->rate / sr) * keyFollow, 0.25, 4.0);
     fresh.end16 = 1.0e9f;
     fresh.fade = 0.f;
     fresh.fadeInc = 1.f / std::max (8.f, 0.002f * (float) sr);

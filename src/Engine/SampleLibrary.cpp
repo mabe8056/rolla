@@ -261,7 +261,8 @@ void SampleLibrary::preload (const std::vector<std::string>& relativePaths)
 }
 
 void collectPlayFiles (const PresetBank& bank, const SampleIndex& index, const int preset[NumParts],
-                       const int samplePick[NumParts], int dialect, int window, std::vector<std::string>& out)
+                       const int samplePick[NumParts], int dialect, int window, std::vector<std::string>& out,
+                       const int* drumPick)
 {
     auto addIndexed = [&] (const SampleSpec& spec, int part, int voice, int pick)
     {
@@ -299,6 +300,8 @@ void collectPlayFiles (const PresetBank& bank, const SampleIndex& index, const i
         const auto& own = bank.drums[kit].voicePool[voice];
         if (! own.empty())
             out.push_back (own[(size_t) (pick % (int) own.size())]);
+        else if (drumPick != nullptr && drumPick[voice] >= 0)
+            addIndexed (drums, Drums, voice, drumPick[voice]); // as takeDrum: the voice's own pick
         else
             addIndexed (drums, Drums, voice, pick);
     }
