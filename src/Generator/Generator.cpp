@@ -695,14 +695,14 @@ int adiff (int a, int b) noexcept
 // About a fifth of the melodic moves are octaves, inside the 15-26% lane.
 // A lift keeps its pitch class. When the line has no same-class pair, the
 // note takes the previous colour first so the jump is a real octave.
-void paintOctaveShare (Lane& lane, std::uint32_t seed)
+void paintOctaveShare (Lane& lane, std::uint32_t seed, float share = 0.20f)
 {
     if (lane.count < 2)
         return;
     std::sort (lane.notes, lane.notes + lane.count,
                [] (const Note& a, const Note& b) { return a.start < b.start; });
     const int moves = std::max (1, lane.count - 1);
-    const int want = std::clamp ((int) std::lround ((float) moves * 0.20f), 1, moves);
+    const int want = std::clamp ((int) std::lround ((float) moves * share), 1, moves);
     const std::uint32_t h = seed ? seed : 1u;
 
     auto tryLift = [&] (int i) -> bool
@@ -807,10 +807,11 @@ bool pickPulseSlots (int* out, std::uint32_t h, bool turn, int want)
 }
 
 // Pulse is a steady off-kick grid: six attacks a bar (five in the closing bar,
-// which keeps its four-16th rest), so the held line lands at 5-8 notes a bar
-// with lengths in the 1.8-3.2 band. The grid comes from the seed, not a
-// shape book, so a batch does not reprint one onset set. Neighbours never
-// repeat a pitch, so holdBassNotes can tie every note into the next one.
+// which keeps its four-16th rest), so the held line lands at 5-7 notes a bar
+// (47 attacks plus at most 3 pickup notes over 8 bars: 5.9-6.3) with lengths
+// in the 1.8-3.2 band. The grid comes from the seed, not a shape book, so a
+// batch does not reprint one onset set. Neighbours never share a pitch class
+// (so no octave moves, and holdBassNotes can tie every note into the next).
 void makePulse (Lane& lane, int bars, std::uint32_t seed)
 {
     constexpr int kBody = 6;
@@ -869,9 +870,23 @@ void makePulse (Lane& lane, int bars, std::uint32_t seed)
             nte.nChord = 1;
             if (nte.chord[0] > 14)
                 nte.chord[0] = (std::int8_t) pcOf (nte.chord[0]);
-            // A bar of one pitch class answers itself an octave away.
-            if (havePrev && nte.chord[0] == prevPitch)
-                nte.chord[0] = (std::int8_t) (nte.chord[0] <= 7 ? nte.chord[0] + 12 : nte.chord[0] - 12);
+            // A bar of one pitch class answers itself with a colour, not an
+            // octave: pulse keeps octave moves at or under 8% (Composer).
+            if (havePrev && pcOf (nte.chord[0]) == pcOf (prevPitch))
+            {
+                static const int kAnswer[] = { 7, 3, 10, 5 };
+                const int prevPc = pcOf (prevPitch);
+                const int pick = (int) ((h + (std::uint32_t) (bar * 8 + k)) % 4u);
+                for (int a = 0; a < 4; ++a)
+                {
+                    const int c = kAnswer[(pick + a) % 4];
+                    if (c != prevPc)
+                    {
+                        nte.chord[0] = (std::int8_t) c;
+                        break;
+                    }
+                }
+            }
             prevPitch = nte.chord[0];
             havePrev = true;
             out[w++] = nte;
@@ -1398,7 +1413,10 @@ void softenFifths (Lane& lane, std::uint32_t seed)
 // ROLLER and BOUNCY share a small shape book, so thousands of seeds reprint
 // one bass line. A ghost on later hits, and an octave on about a fifth of the
 // moves, splits those reprints. The octave keeps the pitch class.
-void paintPhraseVariety (Lane& lane, int dialect, std::uint32_t seed)
+// octaveShare 0 skips the octaves (BOUNCY pulse: at most 8% octave moves).
+// BOUNCY bounce asks for 0.24 so the style average across both modes stays
+// inside the 15-30% octave lane with pulse near zero.
+void paintPhraseVariety (Lane& lane, int dialect, std::uint32_t seed, float octaveShare = 0.20f)
 {
     if ((dialect != UkMin && dialect != Pop) || lane.count <= 0)
         return;
@@ -1419,7 +1437,8 @@ void paintPhraseVariety (Lane& lane, int dialect, std::uint32_t seed)
             lane.notes[i].flags = (std::uint8_t) (lane.notes[i].flags | NoteGhost);
         ++idxInBar;
     }
-    paintOctaveShare (lane, seed);
+    if (octaveShare > 0.f)
+        paintOctaveShare (lane, seed, octaveShare);
 }
 
 // Bar 4 answers bar 2 on about three fifths of rolls. The back half of bar 4
@@ -1692,7 +1711,7 @@ void finishPhrase (Lane& lane, const Settings& s, std::uint32_t seed, bool pulse
             applyBusyDensity (lane, dialect, bars, s.busy, seed);
         }
     }
-    paintPhraseVariety (lane, dialect, seed);
+    paintPhraseVariety (lane, dialect, seed, pulse ? 0.f : 0.24f);
     differBar4 (lane, bars, seed);
     finishBass (lane);
     if (dialect == Pop)
@@ -1715,9 +1734,19 @@ bool bassOnset (const Lane& lane, int slot)
 constexpr int kStabHitsMax = rules::tables::kStabHitsCap;
 static_assert (kStabHitsMax <= 3, "the stab cap is 3 hits a bar at every knob value");
 
-int stabHitCap (const Settings&) noexcept
+// Chord hits allowed in one bar. Composer's cap is 3 at the default STAB
+// (0.55), but a full 3 in every bar is 3.0 hits a bar, over the stab_hpb
+// ceilings in data/genre/style_rules.json (DEEP 2.76, BOUNCY / JACKIN 2.97).
+// So up to 0.8, bars 2, 4 and 6 (0-based 1, 3, 5) take one fewer: a style
+// that fills the cap lands at 2.625 hits a bar. Over 0.8 every bar takes the
+// full kStabHitsMax (3.0 a bar), never more: no knob value makes a 4-hit riff
+// (0 / 0.55 / 1 still rises strictly; roll_test testStabDensity checks it).
+int stabHitCap (const Settings& s, int bar) noexcept
 {
-    return kStabHitsMax;
+    if (s.stab > 0.8f)
+        return kStabHitsMax;
+    const int b = bar & 7;
+    return (b == 1 || b == 3 || b == 5) ? kStabHitsMax - 1 : kStabHitsMax;
 }
 
 // The top of the STAB knob adds density through more full bars, not a 4th
@@ -1770,9 +1799,9 @@ void writeStab (Lane& lane, const Lane& bass, const Settings& s, int mode)
         len = flavour == 2 ? 6.5f : (flavour == 3 ? 1.f : 1.9f);
 
     const bool skipOdd = (s.busy < 0.25f && per <= 2) || stabSparse;
-    // At most kStabHitsMax chord hits a bar in every style. Low BUSY keeps one
+    // At most stabHitCap chord hits a bar in every style. Low BUSY keeps one
     // fewer outside ROLLER, so BUSY still moves the density under the cap.
-    per = std::min (per, (s.busy < 0.25f && s.dialect != UkMin) ? stabHitCap (s) - 1 : stabHitCap (s));
+    per = std::min (per, (s.busy < 0.25f && s.dialect != UkMin) ? kStabHitsMax - 1 : kStabHitsMax);
 
     rules::StabParams sp;
     sp.dialect = s.dialect;
@@ -3154,13 +3183,14 @@ void trimSamePitchOverlaps (Lane& lane)
     }
 }
 
-// At most kStabHitsMax chord onsets a bar. The beat-1 hit and the closing
-// answer of bars 4 and 8 stay; then louder, then more accented (8th offbeat,
-// then 8th), then earlier hits win.
-void capStabHits (Lane& lane, int bars, int cap)
+// At most stabHitCap (s, bar) chord onsets a bar. The beat-1 hit and the
+// closing answer of bars 4 and 8 stay; then louder, then more accented (8th
+// offbeat, then 8th), then earlier hits win.
+void capStabHits (Lane& lane, const Settings& s)
 {
-    for (int bar = 0; bar < bars && bar < kMaxBars; ++bar)
+    for (int bar = 0; bar < s.bars && bar < kMaxBars; ++bar)
     {
+        const int cap = stabHitCap (s, bar);
         int slots[16];
         int vel[16];
         int n = 0;
@@ -4163,6 +4193,99 @@ void holdBassNotes (Lane& lane, int dialect, int bars, std::uint32_t seed)
         capBassSounding (lane, bars, ceilFrac, 1.0f);
 }
 
+// BOUNCY pulse: octave moves stay at or under maxShare of the moves (Composer:
+// 8%). makePulse writes none, but the late passes can (the clash fixer keeps
+// the register, so 10 -> root lands on 12 next to a 0; the pickup). Such a
+// note takes its neighbour's register instead: same pitch class, so no new
+// clash, b2 or mode change. A same-pitch neighbour ends one tick before it.
+void capPulseOctaves (Lane& lane, float maxShare)
+{
+    sortByStart (lane);
+    const int moves = lane.count - 1;
+    if (moves <= 0)
+        return;
+    const float tick = 1.f / 120.f;
+    auto isOct = [&] (int i)
+    {
+        const int d = adiff (lane.notes[i].chord[0], lane.notes[i - 1].chord[0]);
+        return d == 12 || d == 24;
+    };
+    auto breathe = [&] (int a, int b)
+    {
+        Note& p = lane.notes[a];
+        if (p.chord[0] == lane.notes[b].chord[0] && p.start + p.length > lane.notes[b].start - tick)
+            p.length = std::max (tick, lane.notes[b].start - p.start - tick);
+    };
+    int oct = 0;
+    for (int i = 1; i < lane.count; ++i)
+        if (isOct (i))
+            ++oct;
+    for (int i = 1; i < lane.count && (float) oct > maxShare * (float) moves + 1.0e-4f; ++i)
+    {
+        if (! isOct (i))
+            continue;
+        const bool nextWas = i + 1 < lane.count && isOct (i + 1);
+        lane.notes[i].chord[0] = lane.notes[i - 1].chord[0];
+        const bool nextNow = i + 1 < lane.count && isOct (i + 1);
+        oct += -1 - (nextWas ? 1 : 0) + (nextNow ? 1 : 0);
+        breathe (i - 1, i);
+        if (i + 1 < lane.count)
+            breathe (i, i + 1);
+    }
+}
+
+// BOUNCE mean note length stays inside lo-hi sixteenths (Composer: 0.8-1.6).
+// Too long: the longest notes shorten (never under 0.9, never under 0.30 of
+// the loop sounding). Too short: notes grow toward the next onset (at most
+// 1.5, never into the turn rest, never past 0.49 sounding), and only where
+// the longer note meets no stab/pad semitone. No clash or overlap comes back.
+void fitBounceMeanLength (Groove& g, int bars, float lo, float hi, std::uint32_t seed)
+{
+    Lane& lane = g.lane[Bass];
+    const int n = std::min (lane.count, kMaxNotes);
+    const float loopEnd = (float) (std::min (bars, kMaxBars) * 16);
+    if (n <= 0 || loopEnd <= 0.f)
+        return;
+    sortByStart (lane);
+    float total = bassSoundingTotal (lane);
+    if (total > hi * (float) n)
+    {
+        capBassSounding (lane, bars, std::max (0.30f, hi * (float) n / loopEnd), 0.9f);
+        return;
+    }
+    const float want = lo * (float) n;
+    const float ceiling = 0.49f * loopEnd;
+    if (total >= want)
+        return;
+    const float tailCut = bassTailCut (bars);
+    int order[kMaxNotes];
+    std::uint32_t prio[kMaxNotes] {};
+    for (int i = 0; i < n; ++i)
+    {
+        order[i] = i;
+        prio[i] = postHash (seed ^ 0xB0C5u, (std::uint32_t) i);
+    }
+    std::sort (order, order + n, [&] (int a, int b) { return prio[a] < prio[b]; });
+    for (int k = 0; k < n && total < want; ++k)
+    {
+        const int i = order[k];
+        Note& note = lane.notes[i];
+        float next = i + 1 < n ? lane.notes[i + 1].start : loopEnd;
+        if (note.start < tailCut)
+            next = std::min (next, tailCut);
+        const float room = std::min (next, loopEnd) - note.start - 1.0f / 120.f;
+        const float add = std::min ({ std::min (1.5f, room) - note.length, want - total, ceiling - total });
+        if (add <= 0.f)
+            continue;
+        Note longer = note;
+        longer.length += add;
+        if ((clashMask (upperPcsOver (g, longer)) & (1u << pcOf (note.chord[0]))) != 0)
+            continue;
+        note.length = longer.length;
+        total += add;
+    }
+}
+
 // 0 not BOUNCY, 1 bounce, 2 pulse. `modeSeed` is the caller's drums seed (the
 // roll's batch position), so the pulse share is a quota over a batch.
 int bouncyModeOf (const Settings& s, std::uint32_t modeSeed) noexcept
@@ -4482,7 +4605,7 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
         const std::uint32_t stabSeed = g.lane[Stab].seed ? g.lane[Stab].seed : 1u;
         g.lane[Stab].seed = stabSeed;
         writeStab (g.lane[Stab], g.lane[Bass], s, mode);
-        capStabHits (g.lane[Stab], s.bars, stabHitCap (s));
+        capStabHits (g.lane[Stab], s);
     }
     // IN STAB follows the stab that ships, so the hits are rewritten on it.
     if (s.hitsInStab && regen (Hits))
@@ -4503,9 +4626,15 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
         {
             spreadBounceDensity (g.lane[Bass], s.bars, 0.7f, bassSeed);
             capBassSounding (g.lane[Bass], s.bars, 0.49f, 0.9f);
+            // Composer: bounce mean note length 0.8-1.6 sixteenths.
+            fitBounceMeanLength (g, s.bars, 0.85f, 1.55f, bassSeed);
         }
         else if (popMode == BassModePulse)
+        {
+            // Composer: pulse octave moves at most 8%.
+            capPulseOctaves (g.lane[Bass], 0.08f);
             capBassSounding (g.lane[Bass], s.bars, 0.975f, 1.0f);
+        }
         else if (s.dialect == Long)
             capBassSounding (g.lane[Bass], s.bars, 0.88f, 1.0f);
     }
