@@ -236,11 +236,15 @@ bool popIsPulse (float bounce, std::uint32_t seed) noexcept
 {
     if (bounce >= 0.80f || bounce <= 0.15f)
         return false;
-    // A quarter of mid-bounce rolls (Composer: BOUNCE 75%, PULSE 25%). The
-    // knob's extremes stay on the bounce grid. The seed's own position in
-    // [0, 2^32) is the draw: a golden-ratio seed walk gets an even 25% share.
+    // Genre model v1.2: pulse is a batch quota of 30-40% (kPulseQuota 0.35),
+    // not an independent 25% draw. The knob's extremes stay on the bounce
+    // grid. The seed's own position in [0, 2^32) is the draw, so a batch's
+    // golden-ratio seed walk (seed + roll * 0x9E3779B9) gets an even 35% share:
+    // 6-8 pulse rolls in any 20. The seed is the roll's drums seed, which the
+    // originality and skeleton redraws never move, so a redraw keeps its mode.
     const std::uint32_t s = seed ? seed : 1u;
-    return (std::uint32_t) (((std::uint64_t) s * 100u) >> 32) < 25u;
+    const auto quota = (std::uint32_t) std::lround (rules::tables::kPulseQuota * 100.f);
+    return (std::uint32_t) (((std::uint64_t) s * 100u) >> 32) < quota;
 }
 
 float rootShareOf (const Lane& lane) noexcept
@@ -587,9 +591,13 @@ void paintFlat2 (Lane& lane)
     }
 }
 
-void styleJackinBass (Lane& lane, int bars, std::uint32_t seed)
+void styleJackinBass (Lane& lane, int bars, std::uint32_t seed, int mode)
 {
-    const int flavour = jackinFlavour (seed);
+    // The flat-2nd flavour needs phrygian (the b2 cap is 6% elsewhere): outside
+    // it the roll takes the dotted grid, so every roll still carries a flavour.
+    int flavour = jackinFlavour (seed);
+    if (flavour == 1 && mode != phrase::Phrygian)
+        flavour = 0;
     diversifyJackin (lane, bars, seed);
     if (flavour == 0)
         leanJackinDotted (lane, bars, seed);
@@ -1637,7 +1645,7 @@ void finishPhrase (Lane& lane, const Settings& s, std::uint32_t seed, bool pulse
     }
 
     if (dialect == Gaskin)
-        styleJackinBass (lane, bars, seed);
+        styleJackinBass (lane, bars, seed, mode);
     else if (dialect == Long && deepIsDark (s.dark, seed))
         densifyDeepDark (lane, bars, seed, mode);
     applyBusyDensity (lane, dialect, bars, s.busy, seed);
@@ -1702,14 +1710,24 @@ bool bassOnset (const Lane& lane, int slot)
     return false;
 }
 
-// Stab chord onsets per bar (a chord counts as one hit), every style.
-constexpr int kStabHitsMax = 3;
+// Stab chord onsets per bar (a chord counts as one hit), every style and every
+// STAB value (genre model v1.2: cap 3, no riff mode above it).
+constexpr int kStabHitsMax = rules::tables::kStabHitsCap;
+static_assert (kStabHitsMax <= 3, "the stab cap is 3 hits a bar at every knob value");
 
-// Composer's cap is 3 chord hits a bar at the default STAB (0.55). Turning
-// STAB up past 0.8 allows one more, so the knob still adds density at the top.
-int stabHitCap (const Settings& s) noexcept
+int stabHitCap (const Settings&) noexcept
 {
-    return s.stab > 0.8f ? kStabHitsMax + 1 : kStabHitsMax;
+    return kStabHitsMax;
+}
+
+// The top of the STAB knob adds density through more full bars, not a 4th
+// hit: up to STAB 0.8 a capped style plays bars 2, 4 and 6 one hit lighter
+// (2.625 hits a bar at the cap), above it every bar is full.
+std::uint8_t stabLighterMask (const Settings& s, int per) noexcept
+{
+    if (per < kStabHitsMax || s.stab > 0.8f)
+        return 0;
+    return (std::uint8_t) ((1u << 1) | (1u << 3) | (1u << 5));
 }
 
 // Stab density follows the STAB / BUSY / STYLE knobs exactly as before; the
@@ -1761,6 +1779,7 @@ void writeStab (Lane& lane, const Lane& bass, const Settings& s, int mode)
     sp.bars = std::min (s.bars, kMaxBars);
     sp.mode = mode;
     sp.perBar = per;
+    sp.lighterMask = s.dialect == UkMin ? (std::uint8_t) 0 : stabLighterMask (s, per);
     sp.skipOdd = skipOdd;
     sp.length = len;
     sp.varyLength = s.dialect == UkMin;
@@ -2777,16 +2796,10 @@ constexpr int kClashTries = 8;
 // JACKIN (Gaskin) 6%, BOUNCY (Pop) 3%.
 float b2Cap (int dialect, int mode) noexcept
 {
+    // Genre model v1.2: ROLLER 6% (was 12), DEEP 6, JACKIN 6, BOUNCY 3; phrygian 30.
     if (mode == phrase::Phrygian)
-        return 0.30f;
-    switch (dialect)
-    {
-        case UkMin: return 0.12f;
-        case Long: return 0.06f;
-        case Gaskin: return 0.06f;
-        case Pop: return 0.03f;
-        default: return 0.06f;
-    }
+        return rules::tables::kPhrygianB2Cap;
+    return rules::tables::kB2Cap[clampi (dialect, 0, rules::tables::kStyles - 1)];
 }
 
 // Out-of-mode pitch class -> the in-mode neighbour. Works for all three modes:
@@ -3393,13 +3406,8 @@ void harmonizeRoll (Groove& g, const Settings& s, std::uint32_t bassSeed, std::u
 // The 35% hard cap (hardFail, and the composer's own kick cap) always wins.
 float bassKickTarget (int dialect) noexcept
 {
-    switch (dialect)
-    {
-        case Long:   return 0.07f;
-        case Pop:    return 0.32f;
-        case Gaskin: return 0.19f;
-        default:     return 0.17f;
-    }
+    // Genre model v1.2 per-style medians (ROLLER 17, DEEP 7, BOUNCY 30, JACKIN 19).
+    return rules::tables::kKickTarget[clampi (dialect, 0, rules::tables::kStyles - 1)];
 }
 
 // A&R msg 423 #2: how often a held bass note leaves a one-16th breath before
@@ -3440,12 +3448,14 @@ float bassTailCut (int bars) noexcept
 // JACKIN (reference 4.44) and BOUNCY pulse (its own 5-8 grid) are left alone.
 float bassDensityTarget (int dialect) noexcept
 {
+    // Genre model v1.2 density medians (ROLLER 5.0, DEEP 5.2, BOUNCY 5.0).
+    namespace rt = rules::tables;
     switch (dialect)
     {
-        case UkMin: return 5.0f;
-        case Long:  return 4.9f;
-        case Pop:   return 5.0f;
-        default:    return 0.f;
+        case UkMin: return rt::kBassDensityMedian[UkMin];
+        case Long:  return rt::kBassDensityMedian[Long] - 0.3f; // the back-half contour adds the rest
+        case Pop:   return rt::kBassDensityMedian[Pop];
+        default:    return 0.f; // JACKIN: the composer's density curve already sits at 4.4
     }
 }
 
@@ -4153,30 +4163,40 @@ void holdBassNotes (Lane& lane, int dialect, int bars, std::uint32_t seed)
         capBassSounding (lane, bars, ceilFrac, 1.0f);
 }
 
-// 0 not BOUNCY, 1 bounce, 2 pulse: the bass seed's draw, as finishPhrase plays it.
-int bouncyModeOf (const Settings& s, std::uint32_t bassSeed) noexcept
+// 0 not BOUNCY, 1 bounce, 2 pulse. `modeSeed` is the caller's drums seed (the
+// roll's batch position), so the pulse share is a quota over a batch.
+int bouncyModeOf (const Settings& s, std::uint32_t modeSeed) noexcept
 {
     if (s.dialect != Pop)
         return BassModeNone;
-    return popIsPulse (s.bounce, bassSeed ? bassSeed : 1u) ? BassModePulse : BassModeBounce;
+    return popIsPulse (s.bounce, modeSeed ? modeSeed : 1u) ? BassModePulse : BassModeBounce;
 }
 
 } // namespace
 
+// Genre model v1.2: P 0.25 per roll and at least 15% of any batch. The draw is
+// the position of 3 x the bass seed in [0, 2^32): over a batch's golden-ratio
+// seed walk that position is spread evenly (step 3 x 0.618 mod 1), so every
+// 20-roll batch carries 5 +- 1 pickups instead of a binomial count. The window
+// [0.60, 0.85) keeps it apart from the BOUNCY pulse window.
 bool rollWantsPickup (std::uint32_t bassSeed) noexcept
 {
-    Rng r ((bassSeed ? bassSeed : 1u) ^ 0x91C4B8u);
-    return r.next() < 0.30;
+    const std::uint32_t s = (bassSeed ? bassSeed : 1u) * 3u;
+    const auto pos = (std::uint32_t) (((std::uint64_t) s * 100u) >> 32);
+    const auto width = (std::uint32_t) std::lround (rules::tables::kPickupProb * 100.f);
+    return pos >= 60u && pos < 60u + width;
 }
 
 int rollMode (const Settings& settings, std::uint32_t bassSeed) noexcept
 {
-    // JACKIN's lane is phrygian; the others draw from DARK and the bass seed.
+    // One mode per roll from the style's model weights (JACKIN aeolian or phrygian).
     return rules::drawMode (clampi (settings.dialect, 0, NumDialects - 1), settings.dark, bassSeed);
 }
 
 // One roll from these exact seeds, no originality check (generate() wraps it).
-static void generateOnce (Groove& g, const Settings& settings, const std::uint32_t seeds[NumParts], std::uint32_t partMask)
+// modeSeed: the caller's drums seed, for the batch-quota BOUNCY mode.
+static void generateOnce (Groove& g, const Settings& settings, const std::uint32_t seeds[NumParts], std::uint32_t partMask,
+                          std::uint32_t modeSeed)
 {
     Settings s = settings;
     s.bars = clampi (s.bars, 2, kMaxBars);
@@ -4205,6 +4225,12 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
     const std::uint32_t bassSeed = seeds[Bass] ? seeds[Bass] : 1u;
     // One mode per roll for every pitched lane (harmonizeRoll snaps to it again).
     const int mode = rollMode (s, bassSeed);
+    // BOUNCY plays one of two modes per roll: bounce, or pulse on a 35% batch quota.
+    const int popMode = bouncyModeOf (s, modeSeed);
+    // The composer's submode: density and length targets of the roll.
+    const int bassSub = s.dialect == Pop ? (popMode == BassModePulse ? rules::SubPulse : rules::SubBounce)
+                      : s.dialect == Long ? (deepIsDark (s.dark, bassSeed) ? rules::SubDeepDark : rules::SubDeepSparse)
+                                          : rules::SubNone;
     Rng freedomRng (bassSeed ^ 0xC0FFEEu);
     const float freedom = effectiveFreedom (s, freedomRng);
     Rng pickRng (bassSeed ^ 0xA11CEu);
@@ -4249,6 +4275,7 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
             bp.bars = s.bars;
             bp.mode = mode;
             bp.dark = s.dark;
+            bp.sub = bassSub;
             const int arc = rules::composeBass (g.lane[Bass], bp, composeSeed);
             planName = rules::tables::kArcNames[clampi (arc, 0, rules::tables::kArcShapes - 1)];
             g.lane[Bass].seed = bassSeed;
@@ -4369,8 +4396,6 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
     g.penalty = nPool > 0 ? pool[chosen].penalty : 0.f;
     if (nPool > 0)
         std::snprintf (g.brokenRules, sizeof g.brokenRules, "%s", pool[chosen].tag);
-    // BOUNCY plays one of two modes per roll: bounce (75%) or pulse (25%).
-    const int popMode = bouncyModeOf (s, bassSeed);
     if (regen (Bass))
         g.bassMode = popMode;
     else if (s.dialect != Pop)
@@ -4395,6 +4420,7 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
                 bp.bars = s.bars;
                 bp.mode = mode;
                 bp.dark = s.dark;
+                bp.sub = bassSub;
                 rules::composeBass (g.lane[Bass], bp, phraseSeed);
                 g.lane[Bass].seed = bassSeed;
             }
@@ -4493,9 +4519,40 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
 // originality check is redrawn from its base seed + k, k counting that lane's
 // redraws; a lane other than the bass that hits three times also gets a new
 // bass (it sits in the bass's holes). True when a roll clears; g then holds it.
+// Redraw bookkeeping across the compositions of one generate() call.
+struct RedrawTally
+{
+    int orig = 0;
+    int guard = 0;
+    int logCount = 0;
+    Groove::RedrawEntry log[Groove::kMaxRedrawLog] {};
+
+    int total() const noexcept { return orig + guard; }
+
+    void add (int lane, int metric, float score, const char* ref) noexcept
+    {
+        if (logCount >= Groove::kMaxRedrawLog)
+            return;
+        auto& e = log[logCount++];
+        e.lane = (std::int8_t) clampi (lane, -2, NumParts - 1);
+        e.metric = (std::int8_t) clampi (metric, 0, 127);
+        e.score = score;
+        std::snprintf (e.ref, sizeof e.ref, "%s", ref != nullptr ? ref : "");
+    }
+
+    void writeTo (Groove& g) const noexcept
+    {
+        g.origRedraws = orig;
+        g.guardRedraws = guard;
+        g.redrawLogCount = logCount;
+        for (int i = 0; i < Groove::kMaxRedrawLog; ++i)
+            g.redrawLog[i] = log[i];
+    }
+};
+
 static bool composeOriginal (Groove& g, const Groove& input, const Settings& settings,
                              const std::uint32_t base[NumParts], std::uint32_t partMask,
-                             const orig::Index* external, int& redraws)
+                             const orig::Index* external, RedrawTally& tally, std::uint32_t modeSeed)
 {
     const std::uint32_t pitched = partMask & ((1u << Drums) - 1u);
     std::uint32_t bump[NumParts] {};
@@ -4505,21 +4562,25 @@ static bool composeOriginal (Groove& g, const Groove& input, const Settings& set
         for (int p = 0; p < NumParts; ++p)
             tried[p] = base[p] + bump[p];
         g = input;
-        generateOnce (g, settings, tried, partMask);
+        generateOnce (g, settings, tried, partMask, modeSeed);
         if (pitched == 0)
             return true;
-        // A&R back-half guard: a shipped bass whose back half repeats one pitch
-        // class on three or fewer attacks in two or more bars is composed again
-        // (the composer avoids it; the post passes can still produce it).
+        // A&R thin-cell guard (bars 5-8): a shipped bass whose back half plays
+        // one pitch class on four or fewer attacks in two or more bars is
+        // composed again (the composer avoids it; the post passes can still
+        // produce it).
         if ((pitched & (1u << Bass)) != 0 && rules::thinRepeatedBackHalf (g.lane[Bass], g.bars))
         {
             ++bump[Bass];
-            ++redraws;
+            ++tally.guard;
+            tally.add (Bass, 0, 1.f, "guard:thin_back_half");
             continue;
         }
         const auto rep = orig::check (g, pitched, external);
         if (rep.pass)
             return true;
+        ++tally.orig;
+        tally.add (rep.worst.stream, rep.worst.metric, rep.worst.score, rep.worst.refId.c_str());
         std::uint32_t lanes = rep.bumpMask & pitched;
         if (lanes == 0)
             lanes = pitched;
@@ -4530,7 +4591,6 @@ static bool composeOriginal (Groove& g, const Groove& input, const Settings& set
         for (int p = 0; p < Drums; ++p)
             if (((lanes >> p) & 1u) != 0)
                 ++bump[p];
-        ++redraws;
     }
     return false;
 }
@@ -4558,13 +4618,17 @@ bool generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
     const auto external = orig::currentIndex();
     const auto input = std::make_unique<Groove> (g);
     std::uint32_t base[NumParts] {};
-    int redraws = 0;
+    auto tally = std::make_unique<RedrawTally>();
+    // The roll's batch position for the BOUNCY pulse quota: the caller's drums seed.
+    const std::uint32_t modeSeed = seeds[Drums] ? seeds[Drums] : 1u;
     for (int round = 0; round < kOrigRounds; ++round)
     {
         for (int p = 0; p < NumParts; ++p)
             base[p] = (round == 0 || ((partMask >> p) & 1u) == 0) ? seeds[p] : originalityRecomposeSeed (seeds[p], p, round);
-        if (! composeOriginal (g, *input, settings, base, partMask, external.get(), redraws))
+        if (! composeOriginal (g, *input, settings, base, partMask, external.get(), *tally, modeSeed))
             continue;
+        const int redraws = tally->total();
+        tally->writeTo (g);
         for (int p = 0; p < Drums; ++p)
             if (((partMask >> p) & 1u) != 0)
                 g.lane[p].seed = seeds[p] ? seeds[p] : 1u;
@@ -4587,7 +4651,7 @@ bool generate (Groove& g, const Settings& settings, const std::uint32_t seeds[Nu
     std::fprintf (stderr,
                   "ROLLA originality: roll REFUSED (style %d, bass seed %u, mask 0x%x): %d redraws over %d compositions "
                   "all matched a reference or a banned figure; nothing returned\n",
-                  settings.dialect, (unsigned) seeds[Bass], (unsigned) partMask, redraws, kOrigRounds);
+                  settings.dialect, (unsigned) seeds[Bass], (unsigned) partMask, tally->total(), kOrigRounds);
     g = *input;
     return false;
 }

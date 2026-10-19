@@ -17,6 +17,9 @@ tree holds anything the public repo must not carry:
               identifiers must not reappear in src/ or resources/, and no
               reference-named cell may sit there. The names are stored shifted by
               one character, so the plain names never live in the repo.
+              The public genre model (resources/genre/*) also may not carry
+              provenance, source ids / counts, names, files or raw grids as JSON
+              keys, nor a reference name or reference id anywhere.
   large       data files over 512 KB (.json .h .hpp .inc .csv) unless allowlisted
   audio, hard cap: an allowlisted audio fixture still fails over 64 KB. Real packs
               go into a built bundle (tools/inject_pack.sh), never the repo.
@@ -85,6 +88,51 @@ def word_re(word):
 
 GENERATOR_TOKEN_RES = [(t, word_re(t)) for t in GENERATOR_BANNED_TOKENS]
 GENERATOR_NAME_RES = [word_re(unshift(n)) for n in GENERATOR_SHIFTED_NAMES]
+
+# The public genre model (resources/genre/*): pooled numbers only. No key may
+# carry provenance, source ids or counts, names or raw grids, and no value or
+# prose may name a reference or use a reference id. The reference names are
+# stored shifted by one character (as above) and matched case-insensitively.
+GENRE_SCOPE = "resources/genre/"
+GENRE_SHIFTED_NAMES = GENERATOR_SHIFTED_NAMES + ["Kpti!Cblfs", "Xby!Nbtufs", "MJHIUMFBL", "JU[", "Gsfti!Fofshz"]
+GENRE_NAME_RES = [re.compile(r"(?<![A-Za-z0-9_])" + re.escape(unshift(n)) + r"(?![A-Za-z0-9_])", re.IGNORECASE)
+                  for n in GENRE_SHIFTED_NAMES]
+GENRE_FORBIDDEN_KEY = re.compile(
+    r"(?:^|_)(?:provenance|refs?|ref_?ids?|ref_?counts?|n_refs|artists?|tracks?|titles?|songs?|packs?|names?|raw|"
+    r"raw_?grids?|ids?|files?|paths?)(?:_|$)", re.IGNORECASE)
+GENRE_ID_RES = [("reference id", re.compile(r"(?<![A-Za-z0-9_])(?:t\d{1,2}|ref\d{1,2})(?![A-Za-z0-9_])")),
+                ("review content", re.compile(r"AR_REVIEW|A&R review", re.IGNORECASE))]
+
+
+def genre_key_hits(doc, path, out, where=""):
+    if isinstance(doc, dict):
+        for k, v in doc.items():
+            if GENRE_FORBIDDEN_KEY.search(str(k)):
+                out.append(f"{path}: forbidden key '{where}{k}' in the public genre model")
+            genre_key_hits(v, path, out, f"{where}{k}.")
+    elif isinstance(doc, list):
+        for v in doc:
+            genre_key_hits(v, path, out, where)
+
+
+def genre_hits(rel, text):
+    """Leak findings for one file under resources/genre/."""
+    out = []
+    if rel.endswith(".json"):
+        try:
+            genre_key_hits(json.loads(text), rel, out)
+        except ValueError:
+            out.append(f"{rel}: genre model is not valid JSON")
+    for rx in GENRE_NAME_RES:
+        m = rx.search(text)
+        if m:
+            out.append(f"{rel}:{text.count(chr(10), 0, m.start()) + 1}: names a reference in the public genre model")
+            break
+    for what, rx in GENRE_ID_RES:
+        m = rx.search(text)
+        if m:
+            out.append(f"{rel}:{text.count(chr(10), 0, m.start()) + 1}: {what} in the public genre model")
+    return out
 
 SECRETS = [
     ("private key block", r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY(?: BLOCK)?-----"),
@@ -277,6 +325,8 @@ def scan(root, names, allow_rules):
                         line = text.count("\n", 0, m.start()) + 1
                         fails["generator"].append(f"{rel}:{line}: reference-named cell")
                         break
+            if rel.startswith(GENRE_SCOPE):
+                fails["generator"].extend(genre_hits(rel, text))
 
         if not allowed(allow_rules, "reference", rel):
             hits = []

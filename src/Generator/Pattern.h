@@ -96,6 +96,24 @@ struct Groove
     // BOUNCY bass mode of the last bass roll: 0 not BOUNCY, 1 bounce, 2 pulse.
     // MidiExport writes it into the bass track ("mode:bounce" / "mode:pulse").
     int bassMode = 0;
+    // Redraws behind the last generate(): orig = the originality check (#76
+    // guard: built-in banned figures and the reference index) refused the
+    // roll, guard = the thin-cell guard (bars 5-8) refused it. One log entry
+    // per redraw (up to kMaxRedrawLog): the lane that hit (-1 merged, -2 none),
+    // the opaque reference stream id (or "banned:..." / "guard:..."), metric
+    // and score as orig::check reported them.
+    int origRedraws = 0;
+    int guardRedraws = 0;
+    struct RedrawEntry
+    {
+        std::int8_t lane = -2;
+        std::int8_t metric = 0;
+        float score = 0.f;
+        char ref[32] = "";
+    };
+    static constexpr int kMaxRedrawLog = 16;
+    RedrawEntry redrawLog[kMaxRedrawLog] {};
+    int redrawLogCount = 0;
     Lane lane[NumParts] {};
     DrumLane drums {};
 };
@@ -177,7 +195,7 @@ inline const StyleCopy& styleCopy (int d) noexcept
 {
     static const StyleCopy rows[] = {
         { kStyleLabels[UkMin],
-          "Groove\tswing 52%\n"
+          "Groove\tswing 53.7%\n"
           "Notes\t1-4.5 sixteenths\n"
           "Bass\tpluck\n"
           "Stab\tdub\n"

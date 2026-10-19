@@ -911,7 +911,8 @@ void testScorerV23()
             expect (medLen >= 1.2f, "ROLLER bass mixes in 2-3/16 notes");
         if (style == rolla::Pop)
         {
-            expect (pulse >= 3 && pulse <= 8, "BOUNCY pulse mode is about a quarter of the rolls");
+            // Genre model v1.2: pulse is a 30-40% batch quota (6-8 of 20).
+            expect (pulse >= 6 && pulse <= 8, "BOUNCY pulse mode is 30-40% of the batch (6-8 of 20), got " + std::to_string (pulse));
             expect (turn >= 14, "BOUNCY bar 8 turns around");
         }
         if (style == rolla::Gaskin)
@@ -1006,8 +1007,8 @@ double medianOf (std::vector<double> v)
     return v[v.size() / 2];
 }
 
-// Composer gate after A&R 423: BOUNCY is BOUNCE (75%) or PULSE (25%) from the
-// bass seed. BOUNCE: sounding 0.29-0.50, octave moves 10-30%, onsets-per-bar
+// Composer gate after A&R 423: BOUNCY is BOUNCE or PULSE, pulse on a 30-40%
+// batch quota (genre model v1.2) from the roll's drums seed. BOUNCE: sounding 0.29-0.50, octave moves 10-30%, onsets-per-bar
 // sd >= 0.7. PULSE: sounding 0.85-0.975, 5-8 notes a bar. DEEP held bass:
 // median sounding >= 0.78, never over 0.88. The bass MIDI carries the mode.
 void testBouncyModes()
@@ -1112,7 +1113,8 @@ void testBouncyModes()
     const double deepMed = medianOf (deepSnd);
     std::cout << "BOUNCY modes: pulse " << pulseN << "/40 (" << share << "%) bounce " << bounceN
               << "/40 octave-move median " << octMed << "%; DEEP sounding median " << deepMed << "\n";
-    expect (share >= 15.0 && share <= 35.0, "BOUNCY pulse share lands in 15-35%");
+    // Genre model v1.2: pulse is a 30-40% batch quota through the seed index.
+    expect (share >= 30.0 && share <= 40.0, "BOUNCY pulse share lands in 30-40%");
     expect (octMed >= 10.0 && octMed <= 30.0, "BOUNCY bounce octave moves land in 10-30%");
     expect (deepMed >= 0.78, "DEEP held bass median sounding >= 0.78");
 }
@@ -1120,7 +1122,8 @@ void testBouncyModes()
 // A&R msg 423 #3: 16th swing defaults per style; the knob still moves freely.
 void testAr423Swing()
 {
-    const float want[] = { 0.52f, 0.54f, 0.567f, 0.565f };
+    // Genre model v1.2: every style default inside the 53-57% hat band (ROLLER 52 -> 53.7).
+    const float want[] = { 0.537f, 0.54f, 0.567f, 0.565f };
     auto defaults = std::make_unique<rolla::PresetBank>();
     rolla::loadDefaultPresets (*defaults);
     auto json = std::make_unique<rolla::PresetBank>();
@@ -1350,6 +1353,87 @@ void testLaneHygiene()
     const double rate = rolls > 0 ? (double) pickups / rolls : 0.0;
     std::cout << "bar-8 pickups " << pickups << "/" << rolls << "\n";
     expect (rate >= 0.20 && rate <= 0.40, "about 20-40% of rolls have a bar-8 pickup");
+}
+
+// Genre model v1.2 / Maestro E2: at most 3 stab hits a bar at EVERY STAB
+// value (no 4th hit above 0.8); the top of the knob adds density through more
+// full bars instead, so the stab count still rises strictly 0 -> 0.55 -> 1 in
+// every style, and the default stays inside the style's range (<= 3 a bar).
+void testStabDensity()
+{
+    const char* names[] = { "ROLLER", "DEEP", "BOUNCY", "JACKIN" };
+    const float knob[3] = { 0.f, 0.55f, 1.f };
+    for (int style = 0; style < 4; ++style)
+    {
+        int hits[3] {};
+        int overCap[3] {};
+        for (int k = 0; k < 3; ++k)
+        {
+            for (int roll = 0; roll < 12; ++roll)
+            {
+                rolla::Settings s;
+                s.dialect = style;
+                s.bars = 8;
+                s.stab = knob[k];
+                std::uint32_t seeds[rolla::NumParts] {};
+                for (int p = 0; p < rolla::NumParts; ++p)
+                    seeds[p] = 7u + (std::uint32_t) roll * 0x9E3779B9u + (std::uint32_t) p * 17u + (std::uint32_t) style * 101u;
+                rolla::Groove g {};
+                rolla::generate (g, s, seeds, 0x7fu);
+                const auto& stab = g.lane[rolla::Stab];
+                for (int bar = 0; bar < g.bars; ++bar)
+                {
+                    std::set<long> on;
+                    for (int i = 0; i < stab.count; ++i)
+                        if (std::lround (stab.notes[i].start) / 16 == bar)
+                            on.insert (std::lround (stab.notes[i].start));
+                    hits[k] += (int) on.size();
+                    if (on.size() > 3)
+                        ++overCap[k];
+                }
+            }
+        }
+        std::cout << names[style] << " STAB sweep: stab hits " << hits[0] << " / " << hits[1] << " / " << hits[2]
+                  << " at 0 / 0.55 / 1 (12 rolls), bars over 3: " << overCap[0] << " / " << overCap[1] << " / " << overCap[2] << "\n";
+        expect (overCap[0] + overCap[1] + overCap[2] == 0, std::string (names[style]) + " at most 3 stab hits a bar at every STAB value");
+        expect (hits[0] < hits[1] && hits[1] < hits[2], std::string (names[style]) + " STAB raises stab density strictly 0 -> 0.55 -> 1");
+        expect (hits[1] <= 3 * 8 * 12, std::string (names[style]) + " default STAB stays inside the 3-a-bar range");
+    }
+}
+
+// The originality redraw log (Groove::origRedraws / guardRedraws / redrawLog)
+// agrees with the "|orig:N" tag, and every entry names a lane and a source.
+void testRedrawLog()
+{
+    int rolls = 0;
+    int bad = 0;
+    int total = 0;
+    for (int style = 0; style < 4; ++style)
+        for (int roll = 0; roll < 10; ++roll)
+        {
+            rolla::Settings s;
+            s.dialect = style;
+            s.bars = 8;
+            std::uint32_t seeds[rolla::NumParts] {};
+            for (int p = 0; p < rolla::NumParts; ++p)
+                seeds[p] = 31u + (std::uint32_t) roll * 0x9E3779B9u + (std::uint32_t) p * 17u + (std::uint32_t) style * 101u;
+            rolla::Groove g {};
+            if (! rolla::generate (g, s, seeds, 0x7fu))
+                continue;
+            ++rolls;
+            const int n = g.origRedraws + g.guardRedraws;
+            total += n;
+            int tagged = 0;
+            if (const char* at = std::strstr (g.brokenRules, "|orig:"))
+                tagged = std::atoi (at + 6);
+            if (tagged != n || g.redrawLogCount != std::min (n, (int) rolla::Groove::kMaxRedrawLog))
+                ++bad;
+            for (int i = 0; i < g.redrawLogCount; ++i)
+                if (g.redrawLog[i].ref[0] == '\0')
+                    ++bad;
+        }
+    std::cout << "redraw log: " << total << " redraws over " << rolls << " rolls\n";
+    expect (rolls > 0 && bad == 0, "the redraw log matches the |orig: tag and names a source for every redraw");
 }
 
 // Composer 409/466: a pickup roll has 1-3 bass notes on sixteenths 13-16 of the
@@ -1676,8 +1760,10 @@ void testBatchRollerKey()
     expect (rootRank <= 1, "ROLLER roll_04: the root is one of the two most-sounding bass pitch classes");
 }
 
-// A&R 490 #4: the gate's BOUNCY rolls were all pulse. #70 plays BOUNCE on
-// about three quarters of rolls; batch 2026101852 should land near 15 / 5.
+// A&R 490 #4: the gate's BOUNCY rolls were all pulse. Genre model v1.2 makes
+// pulse a 30-40% batch quota through the seed index (the roll's drums seed),
+// so batch 2026101852 plays 6-8 pulse rolls of 20, and pulse holds the A&R
+// mode-coverage gate (MODE_MIN_SHARE pop pulse >= 25%).
 void testBatchBouncyModes()
 {
     const std::uint32_t batch = 2026101852u;
@@ -1702,8 +1788,9 @@ void testBatchBouncyModes()
     }
     std::cout << "BOUNCY batch " << batch << ": bounce " << bounce << " pulse " << pulse << " (" << order << ")\n";
     expect (bounce + pulse == 20, "every BOUNCY batch roll carries a mode");
-    expect (bounce >= 11 && bounce <= 19, "BOUNCY batch " + std::to_string (batch) + " is mostly bounce (11-19 of 20), got "
-                                              + std::to_string (bounce));
+    expect (pulse >= 6 && pulse <= 8, "BOUNCY batch " + std::to_string (batch) + " plays pulse on 6-8 of 20 (30-40%), got "
+                                          + std::to_string (pulse));
+    expect (pulse * 4 >= 20, "BOUNCY batch " + std::to_string (batch) + ": pulse covers >= 25% of the batch (A&R mode coverage)");
 }
 
 // tools/score_rolls.py v2.2.1, read on the exported MIDI the way the A&R gate
@@ -2128,6 +2215,8 @@ void testBatchJackinLoop()
     double stabRepeat = 0.0;
     int stabPairs = 0;
     double gm2Sum = 0.0;
+    double rep2Sum = 0.0;
+    int rep1Ok = 0;
     for (int roll = 0; roll < (int) rolls.size(); ++roll)
     {
         const auto& g = rolls[(std::size_t) roll].arranged;
@@ -2158,6 +2247,9 @@ void testBatchJackinLoop()
         const auto& stabPart = hits.size() >= 4 && hits.size() >= stab.size() ? hits : stab;
         const auto sc = scoreJackin (bass, stabPart, drums, g.bars);
         gm2Sum += sc.gm2;
+        rep2Sum += sc.rep2;
+        if (sc.rep1 >= 0.0 && sc.rep1 <= 0.10)
+            ++rep1Ok;
         if (sc.loopNoRepeat)
             ++noRepeat;
         if (sc.misses > 2)
@@ -2200,6 +2292,10 @@ void testBatchJackinLoop()
     // the shared one, so with the loop fixed at most one roll may still miss.
     expect (laneLow <= 1, "JACKIN batch: LANE_FIT_LOW on at most 1 of 20 (was 4), got " + std::to_string (laneLow));
     expect (stabMean >= 0.80, "JACKIN batch: stab bars repeat on the 2-bar grid (Jaccard " + std::to_string (stabMean) + ")");
+    // Genre model v1.2 JACKIN loop: 1-bar repeat <= 0.10, 2-bar repeat >= 0.70.
+    std::cout << "JACKIN batch v1.2 loop: rep1 <= 0.10 on " << rep1Ok << "/20, rep2 mean " << (rep2Sum / 20.0) << "\n";
+    expect (rep1Ok >= 18, "JACKIN batch: 1-bar repeat <= 0.10 on >= 18 of 20 rolls (v1.2), got " + std::to_string (rep1Ok));
+    expect (rep2Sum / 20.0 >= 0.70, "JACKIN batch: mean 2-bar repeat >= 0.70 (v1.2), got " + std::to_string (rep2Sum / 20.0));
 }
 
 // ---- originality floor (Generator/Originality.h) ----
@@ -2875,6 +2971,8 @@ int main()
     testAr423Swing();
     testHarmonyClashes();
     testLaneHygiene();
+    testStabDensity();
+    testRedrawLog();
     testBar8Pickup();
     testArGateBass();
     testOriginalityBuiltin();

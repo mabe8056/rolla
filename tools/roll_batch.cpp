@@ -33,14 +33,76 @@ const char* usageText();
 namespace
 {
 
+// Fallback 16th swing when the preset bank has none: the genre model v1.2
+// style targets, clamped to its 53-57% hat band.
 float swingFor (int dialect)
 {
     switch (dialect)
     {
-        case rolla::UkMin: return 0.52f;
-        case rolla::Long: return 0.51f;
-        default: return 0.50f;
+        case rolla::UkMin: return 0.537f;
+        case rolla::Long: return 0.54f;
+        case rolla::Pop: return 0.567f;
+        default: return 0.565f;
     }
+}
+
+// Redraws behind one written roll: the originality / thin-cell redraws of
+// every generate() call that roll took, plus the batch skeleton redraws.
+struct RollRedraws
+{
+    int orig = 0;
+    int guard = 0;
+    int skeleton = 0;
+    std::vector<rolla::Groove::RedrawEntry> log;
+
+    int total() const { return orig + guard + skeleton; }
+
+    void take (const rolla::Groove& g)
+    {
+        orig += g.origRedraws;
+        guard += g.guardRedraws;
+        for (int i = 0; i < g.redrawLogCount && i < rolla::Groove::kMaxRedrawLog; ++i)
+            log.push_back (g.redrawLog[i]);
+    }
+};
+
+const char* laneName (int lane)
+{
+    if (lane >= 0 && lane < rolla::NumParts)
+        return rolla::partId (lane);
+    return lane == -1 ? "merged_low" : "none";
+}
+
+const char* metricText (int metric)
+{
+    return metric >= rolla::orig::MetricNone && metric <= rolla::orig::MetricBannedFigure ? rolla::orig::metricName (metric) : "other";
+}
+
+std::string redrawJson (const RollRedraws& r)
+{
+    std::ostringstream out;
+    out << std::fixed << std::setprecision (3);
+    out << "\"redraws\": " << r.total() << ",\n  \"redraws_orig\": " << r.orig << ",\n  \"redraws_guard\": " << r.guard
+        << ",\n  \"redraws_skeleton\": " << r.skeleton << ",\n  \"redraw_log\": [";
+    for (size_t i = 0; i < r.log.size(); ++i)
+    {
+        const auto& e = r.log[i];
+        out << (i ? ", " : "") << "{\"lane\": \"" << laneName (e.lane) << "\", \"ref\": \"" << e.ref
+            << "\", \"metric\": \"" << metricText (e.metric) << "\", \"score\": " << e.score << "}";
+    }
+    out << "]";
+    return out.str();
+}
+
+// Always written, also when the WAV is skipped (no sample energy deletes the sidecar).
+void writeRollJson (const std::filesystem::path& dir, int style, const std::string& name,
+                    const std::uint32_t seeds[rolla::NumParts], const RollRedraws& r)
+{
+    std::ofstream out (dir / "roll.json");
+    out << "{\n  \"style\": \"" << rolla::dialectId (style) << "\",\n  \"roll\": \"" << name << "\",\n  \"seeds\": [";
+    for (int p = 0; p < rolla::NumParts; ++p)
+        out << (p ? ", " : "") << seeds[p];
+    out << "],\n  " << redrawJson (r) << "\n}\n";
 }
 
 struct Knobs
@@ -349,7 +411,8 @@ void writeStats (const std::filesystem::path& path,
     row ("STAB 0→1", stab);
     out << "\nTwenty rolls per style are under tools/out/<style>/roll_XX/ as type-0 lane MIDIs, "
            "one type-1 combined MIDI, and a 48 kHz 24-bit WAV at 130 BPM. "
-           "Swing is 52% UK MIN, 51% LONG, 50% POP and GASKIN 90s. WAV files are gitignored.\n";
+           "Swing is 53.7% UK MIN, 54% LONG, 56.7% POP and 56.5% GASKIN (genre model v1.2 band 53-57%). "
+           "Each roll folder has a roll.json with its seeds and originality redraws. WAV files are gitignored.\n";
 }
 
 int styleId (const std::string& name)
@@ -424,11 +487,12 @@ void waitReady (rolla::SampleLibrary& library, const std::vector<std::string>& p
 void writeSidecar (const juce::File& wav, int style, const Knobs& knobs, bool hitsMute, float swing,
                    const rolla::PresetBank& bank, const int preset[rolla::NumParts],
                    const int samplePick[rolla::NumParts], const std::string fileOf[rolla::NumParts],
-                   const std::string drumOf[rolla::NumDrumVoices], int kickMidi)
+                   const std::string drumOf[rolla::NumDrumVoices], int kickMidi, const RollRedraws& redraws)
 {
     std::ostringstream out;
     out << std::fixed << std::setprecision (3);
     out << "{\n  \"style\": \"" << rolla::dialectId (style) << "\",\n";
+    out << "  " << redrawJson (redraws) << ",\n";
     out << "  \"intensity\": " << knobs.intensity << ",\n";
     out << "  \"hitsMute\": " << (hitsMute ? "true" : "false") << ",\n";
     out << "  \"swing\": " << swing << ",\n";
@@ -520,6 +584,7 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
             for (int p = 0; p < rolla::NumParts; ++p)
                 seeds[p] = seed + (std::uint32_t) roll * 0x9E3779B9u + (std::uint32_t) p * 17u + (std::uint32_t) style * 101u;
             rolla::Groove groove {};
+            RollRedraws redraws;
             // The originality floor refuses a roll it cannot clear (generate() returns
             // false and leaves the groove alone). A refused roll is never written.
             if (! rolla::generate (groove, settings, seeds, 0x7fu))
@@ -529,6 +594,7 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
                           << ": no composition cleared the originality floor; roll not written\n";
                 continue;
             }
+            redraws.take (groove);
             // v2.1 skeleton cap is a runtime redraw, not a constant fitted to the gate seeds.
             for (int guard = 0; guard < 8; ++guard)
             {
@@ -539,6 +605,7 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
                 if (! close)
                     break;
                 seeds[rolla::Bass] ^= 0x6D2B79F5u * (std::uint32_t) (guard + 1);
+                ++redraws.skeleton;
                 if (! rolla::generate (groove, settings, seeds, 0x7fu))
                 {
                     // Refused: groove still holds the last roll that cleared.
@@ -547,7 +614,9 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
                               << " (skeleton redraw " << guard << "): kept the last original draw\n";
                     break;
                 }
+                redraws.take (groove);
             }
+            writeRollJson (dir, style, name.str(), seeds, redraws);
             seen.push_back (groove);
             rolla::Groove arranged;
             const auto plan = rolla::planIntensity (style, knobs.intensity, settings.stab);
@@ -597,11 +666,12 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
                 wav.withFileExtension (".json").deleteFile();
                 ++silent;
                 std::cout << "SKIPPED clicks tails loudness " << rolla::dialectId (style) << " " << name.str()
-                          << " (no sample energy)\n";
+                          << " redraws=" << redraws.total() << " (no sample energy)\n";
             }
             else
             {
-                writeSidecar (wav, style, knobs, row.hitsMute, swing, bank, preset, samplePick, fileOf, drumOf, rendered.kickMidiSample);
+                writeSidecar (wav, style, knobs, row.hitsMute, swing, bank, preset, samplePick, fileOf, drumOf, rendered.kickMidiSample,
+                              redraws);
                 if (knobs.stems)
                 {
                     for (int part = 0; part < rolla::NumParts; ++part)
@@ -615,6 +685,7 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
                 }
                 ++wavs;
                 std::cout << rolla::dialectId (style) << " " << name.str()
+                          << " redraws=" << redraws.total()
                           << " peak=" << rendered.peak
                           << " kickMidi=" << rendered.kickMidiSample
                           << " bass=" << presetName (bank, rolla::Bass, preset[rolla::Bass])
@@ -812,12 +883,14 @@ int main (int argc, char** argv)
             std::uint32_t seeds[rolla::NumParts];
             seedsFor (dialect, roll, seeds);
             rolla::Groove groove {};
+            RollRedraws redraws;
             if (! rolla::generate (groove, settings, seeds, 0x7fu))
             {
                 std::cerr << "FAIL ORIG_REFUSED " << rolla::dialectId (dialect) << " " << name.str() << "\n";
                 ++failures;
                 continue;
             }
+            redraws.take (groove);
             for (int guard = 0; guard < 16; ++guard)
             {
                 bool close = false;
@@ -827,6 +900,7 @@ int main (int argc, char** argv)
                 if (! close)
                     break;
                 seeds[rolla::Bass] ^= 0x9E3779B9u + (std::uint32_t) guard * 0x85EBCA6Bu;
+                ++redraws.skeleton;
                 if (! rolla::generate (groove, settings, seeds, 0x7fu))
                 {
                     std::cerr << "FAIL ORIG_REFUSED " << rolla::dialectId (dialect) << " " << name.str()
@@ -834,8 +908,10 @@ int main (int argc, char** argv)
                     ++failures;
                     break;
                 }
+                redraws.take (groove);
             }
             seen[dialect].push_back (groove);
+            writeRollJson (dir, dialect, name.str(), seeds, redraws);
 
             std::vector<std::string> written;
             std::string error;
@@ -869,6 +945,7 @@ int main (int argc, char** argv)
                       << " bass=" << groove.lane[rolla::Bass].count
                       << " stab=" << groove.lane[rolla::Stab].count
                       << " guard=" << groove.guardRef
+                      << " redraws=" << redraws.total()
                       << " peak=" << peak << "\n";
         }
     }

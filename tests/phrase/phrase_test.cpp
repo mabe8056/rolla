@@ -8,6 +8,7 @@
 // particular seeds.
 
 #include "Generator/RuleComposer.h"
+#include "Generator/RuleTables.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -298,7 +299,25 @@ void runBasics()
                && phrase::degreeToSemis (7, phrase::Dorian) == 12 && phrase::degreeToSemis (-7, phrase::Phrygian) == -12
                && phrase::degreeToSemis (2, phrase::Phrygian) == 3 && phrase::degreeToSemis (5, phrase::Dorian) == 9,
            "degree -> semitone mapping");
-    check (rules::drawMode (Gaskin, 0.1f, 99u) == phrase::Phrygian, "JACKIN is phrygian");
+    // Genre model v1.2: modes inside the scorer's scale. JACKIN aeolian or
+    // phrygian (never dorian), BOUNCY never phrygian (weight 0), all styles use
+    // only the three minor modes and draw more than one of them.
+    for (int dialect = 0; dialect < NumDialects; ++dialect)
+    {
+        int seen[3] {};
+        for (std::uint32_t k = 0; k < 400; ++k)
+            ++seen[std::clamp (rules::drawMode (dialect, (float) (k % 11) / 10.f, 1u + k * 0x9E3779B9u), 0, 2)];
+        char d[160];
+        std::snprintf (d, sizeof d, "%s: dorian %d aeolian %d phrygian %d of 400", kNames[dialect], seen[0], seen[1], seen[2]);
+        bool ok = seen[phrase::Aeolian] > 0;
+        if (dialect == Gaskin)
+            ok = ok && seen[phrase::Dorian] == 0 && seen[phrase::Phrygian] > 0;
+        else if (dialect == Pop)
+            ok = ok && seen[phrase::Phrygian] == 0 && seen[phrase::Dorian] > 0;
+        else
+            ok = ok && seen[phrase::Dorian] > 0 && seen[phrase::Phrygian] > 0;
+        check (ok, "mode weights follow the v1.2 model (JACKIN never dorian, BOUNCY never phrygian)", d);
+    }
 
     // The guard itself: a back half of single-pitch-class bars with 2-3 attacks.
     Lane thin;
@@ -317,6 +336,209 @@ void runBasics()
     Lane full;
     rules::composeBass (full, p, 77u);
     check (! rules::thinRepeatedBackHalf (full, 8), "back-half guard stays quiet on a composed line");
+}
+
+float entropyOf (const float* v, int n)
+{
+    float s = 0.f;
+    for (int i = 0; i < n; ++i)
+        s += v[i];
+    double h = 0.0;
+    for (int i = 0; i < n; ++i)
+        if (v[i] > 0.f)
+            h -= (v[i] / s) * std::log (v[i] / s);
+    return (float) (h / std::log ((double) n));
+}
+
+// The compiled model (RuleTables.h, generated from genre_writing_model.json
+// v1.2): distributions sum to 1, no transition cell over 0.60, every table at
+// or over its entropy floor, single-source voicings gone, stab cap 3.
+void runModelTables()
+{
+    using namespace rules::tables;
+    int bad = 0;
+    std::string why;
+    for (int st = 0; st < kStyles; ++st)
+    {
+        for (int r = 0; r < 12; ++r)
+        {
+            float sb = 0.f, ss = 0.f, mb = 0.f, ms = 0.f;
+            for (int c = 0; c < 12; ++c)
+            {
+                sb += kBassTrans[st][r][c];
+                ss += kStabTrans[st][r][c];
+                mb = std::max (mb, kBassTrans[st][r][c]);
+                ms = std::max (ms, kStabTrans[st][r][c]);
+            }
+            if (std::fabs (sb - 1.f) > 0.002f || std::fabs (ss - 1.f) > 0.002f || mb > kCellCeiling + 1.0e-4f || ms > kCellCeiling + 1.0e-4f
+                || entropyOf (kBassTrans[st][r], 12) < kFloorRowBass - 0.005f || entropyOf (kStabTrans[st][r], 12) < kFloorRowStab - 0.005f)
+            {
+                ++bad;
+                why = std::string (kNames[st]) + " transition row " + std::to_string (r);
+            }
+        }
+        for (int g = 0; g < 3; ++g)
+            if (entropyOf (kBassOnset[st][g], 16) < kFloorOnsetBass - 0.005f)
+            {
+                ++bad;
+                why = std::string (kNames[st]) + " bass onset grid " + std::to_string (g);
+            }
+        for (int g = 0; g < 3; ++g)
+            if (entropyOf (kStabGiven[st][g], 16) < kFloorOnsetStab - 0.005f)
+            {
+                ++bad;
+                why = std::string (kNames[st]) + " stab grid " + std::to_string (g);
+            }
+        float vw = 0.f;
+        for (int v = 0; v < kVoicingCount[st]; ++v)
+        {
+            const auto& V = kStabVoicings[st][v];
+            vw += V.w;
+            // A&R single-source voicings, removed in v1.2.
+            const int shapes[7][4] = { { 0, 2, 3, 7 }, { 0, 4, 7, 11 }, { 0, 1, 3, 11 }, { 0, 1, 3, -1 }, { 0, 5, 9, -1 }, { 0, 10, -1, -1 }, { 0, 11, -1, -1 } };
+            for (const auto& sh : shapes)
+            {
+                int n = 0;
+                while (n < 4 && sh[n] >= 0)
+                    ++n;
+                bool same = n == V.n;
+                for (int i = 0; same && i < n; ++i)
+                    same = V.iv[i] == sh[i];
+                if (same)
+                {
+                    ++bad;
+                    why = std::string (kNames[st]) + " carries a removed single-source voicing";
+                }
+            }
+        }
+        if (std::fabs (vw - 1.f) > 0.003f)
+        {
+            ++bad;
+            why = std::string (kNames[st]) + " voicing weights do not sum to 1";
+        }
+        const float m = kModeWeights[st][0] + kModeWeights[st][1] + kModeWeights[st][2];
+        if (std::fabs (m - 1.f) > 0.002f)
+        {
+            ++bad;
+            why = std::string (kNames[st]) + " mode weights do not sum to 1";
+        }
+    }
+    check (bad == 0 && kStabHitsCap <= 3 && kHatSwingLo >= 0.53f && kHatSwingHi <= 0.57f,
+           "model tables: sums, 0.60 cell ceiling, entropy floors, removed voicings, stab cap 3, swing band", why);
+}
+
+// Composer-level v1.2 checks per style: density near the style median,
+// on-kick share near its target, median length inside the guard band,
+// mutations in the back half, >= 2 pitch classes in bars 5-8, one note per
+// onset, the tonic guard, and stabs with no m2 / m9 against the bass under them.
+void runV12 (int dialect, std::uint32_t base)
+{
+    using namespace rules::tables;
+    double notes = 0.0;
+    double kick = 0.0;
+    int lenOk = 0;
+    int diffBack = 0;
+    int diffAll = 0;
+    int thinBars = 0;
+    int backBars = 0;
+    int dups = 0;
+    int tonicBad = 0;
+    int stabHits = 0;
+    int stabClash = 0;
+    const int rolls = 200;
+    for (int roll = 0; roll < rolls; ++roll)
+    {
+        const std::uint32_t seed = rollSeed (base, roll, dialect);
+        rules::BassParams p;
+        p.dialect = dialect;
+        p.mode = rules::drawMode (dialect, 0.55f, seed);
+        Lane bass;
+        rules::composeBass (bass, p, seed);
+        notes += (double) bass.count / 8.0;
+        kick += rules::kickShare (bass);
+        const float med = rules::medianLength (bass);
+        if (dialect == Pop || (med >= kLenMedLo[dialect] - 0.26f && med <= kLenMedHi[dialect] + 0.01f))
+            ++lenOk;
+        dups += rules::duplicateOnsets (bass);
+        if (! rules::tonicGuardOk (bass, dialect))
+            ++tonicBad;
+        int grid[8][16];
+        for (auto& row : grid)
+            for (int& x : row)
+                x = -1;
+        for (int i = 0; i < bass.count; ++i)
+        {
+            const int st = (int) std::lround (bass.notes[i].start);
+            if (st >= 0 && st < 128)
+                grid[st / 16][st % 16] = pcOf (bass.notes[i].chord[0]);
+        }
+        // Mutations: bars 4-7 against the cell bar of the same parity.
+        for (int b = 3; b < 7; ++b)
+            for (int s = 0; s < 16; ++s)
+                if (grid[b][s] != grid[b & 1][s])
+                {
+                    ++diffAll;
+                    if (s >= 8)
+                        ++diffBack;
+                }
+        for (int b = 4; b < 8; ++b)
+        {
+            int n = 0;
+            int pcs = 0;
+            for (int s = 0; s < 16; ++s)
+                if (grid[b][s] >= 0)
+                {
+                    ++n;
+                    pcs |= 1 << grid[b][s];
+                }
+            ++backBars;
+            if (n >= 1 && (pcs & (pcs - 1)) == 0)
+                ++thinBars;
+        }
+        rules::StabParams sp;
+        sp.dialect = dialect;
+        sp.mode = p.mode;
+        sp.perBar = 3;
+        Lane stab;
+        rules::composeStab (stab, bass, sp, seed ^ 0x5717u);
+        for (int i = 0; i < stab.count; ++i)
+        {
+            ++stabHits;
+            const float t = stab.notes[i].start;
+            for (int k = 0; k < bass.count; ++k)
+            {
+                if (bass.notes[k].start > t + 1.0e-3f || bass.notes[k].start + bass.notes[k].length <= t + 1.0e-3f)
+                    continue;
+                const int bpc = pcOf (bass.notes[k].chord[0]);
+                for (int c = 0; c < stab.notes[i].nChord && c < 4; ++c)
+                {
+                    const int ic = pcOf (stab.notes[i].chord[c] - bpc);
+                    if (ic == 1 || ic == 11)
+                    {
+                        ++stabClash;
+                        c = 4;
+                    }
+                }
+            }
+        }
+    }
+    const double npb = notes / rolls;
+    const double ks = kick / rolls;
+    const double back = diffAll > 0 ? (double) diffBack / diffAll : 1.0;
+    char d[320];
+    std::snprintf (d, sizeof d,
+                   "%s: notes/bar %.2f (median %.1f), on-kick %.3f (target %.2f), length guard %d/%d, back-half share %.2f, "
+                   "one-pitch bars 5-8 %d/%d, dup onsets %d, tonic guard misses %d, stab m2/m9 %d of %d",
+                   kNames[dialect], npb, kBassDensityMedian[dialect], ks, kKickTarget[dialect], lenOk, rolls, back, thinBars, backBars,
+                   dups, tonicBad, stabClash, stabHits);
+    check (npb >= kBassDensityMedian[dialect] - 1.5 && npb <= kBassDensityMedian[dialect] + 1.0, "v1.2 composer density near the style median", d);
+    check (ks <= kKickTarget[dialect] + 0.08 && ks <= 0.35, "v1.2 composer on-kick share near its target, under 35%", d);
+    check (lenOk * 10 >= rolls * 9, "v1.2 median note length inside the guard band in >= 90% of rolls", d);
+    check (back >= kBackHalfShareMin, ">= 60% of bar-to-bar mutations in the back half (slots 9-16)", d);
+    check (thinBars * 20 <= backBars, "bars 5-8 carry >= 2 pitch classes (>= 95% of bars)", d);
+    check (dups == 0, "one note per onset (DUP_NOTES)", d);
+    check (tonicBad == 0, "tonic guard: root most-sounding and the top-2 share held", d);
+    check (stabClash * 50 <= stabHits, "stabs make no m2 / m9 against the sounding bass (<= 2% before the harmony pass)", d);
 }
 
 } // namespace
@@ -344,6 +566,9 @@ int main (int argc, char** argv)
     // Fixed bases: the gate bases of the roll tests.
     const std::uint32_t fixed[] = { 1u, 77u, 913u, 423423u, 20261018u, 2026101852u, 2517220185u };
     runBasics();
+    runModelTables();
+    for (int dialect = 0; dialect < NumDialects; ++dialect)
+        runV12 (dialect, 2026101852u);
     for (int dialect = 0; dialect < NumDialects; ++dialect)
     {
         for (std::uint32_t base : fixed)

@@ -1,11 +1,24 @@
 #pragma once
 
 // Rule composer: every roll's bass and stab lanes are composed fresh from
-// seeded sampling over the abstracted statistics in RuleTables.h. Nothing here
-// stores or looks up a note sequence, rhythm cell, motif, skeleton or voicing:
-// onsets come from per-16th probabilities, lengths from a length distribution,
-// pitches from a degree / interval Markov chain under the roll's mode, stabs
-// from a chord-quality palette placed by bass-gap probabilities.
+// seeded sampling over the genre model (resources/genre/genre_writing_model.json
+// v1.2, compiled into RuleTables.h by tools/gen_rule_tables.py). Nothing here
+// stores, caches or looks up a note sequence, rhythm cell, motif, skeleton or
+// voicing, and nothing is kept between rolls:
+//   - one mode per roll, drawn from the style's mode weights (all inside the
+//     scorer's scale);
+//   - notes per bar from the density curve, onset slots from the per-16th
+//     onset weights (kick steps weighted to the style's on-kick median);
+//   - pitches from the first-order degree table times the degree-by-beat-
+//     strength table, masked to the mode; octave placement from the interval
+//     distribution;
+//   - lengths as a fraction of the gap to the next onset, with median-length
+//     and long-note guards;
+//   - every table meets the model's entropy floors (transition cells capped at
+//     0.60) at run time, before the mode mask;
+//   - stabs placed by P(stab onset | bass state) with the gap weight, at most
+//     3 hits a bar, voicings from the chord-quality palette that are in the
+//     mode and make no m2 / m9 with the bass under them.
 // No JUCE. Same seed + same parameters -> same lane.
 //
 // Pitches follow the Lane convention: chord[0] is semitones from the key root.
@@ -37,9 +50,19 @@ bool inMode (int semis, int mode) noexcept;
 namespace rolla::rules
 {
 
-// The roll's mode: JACKIN phrygian; the others a DARK-weighted draw from the
-// bass seed (RuleTables kModeDorianA / kModePhrygianB).
+// The roll's mode from the style's model weights, tilted by DARK (dorian
+// brighter, phrygian darker). JACKIN draws aeolian or phrygian, never dorian.
 int drawMode (int dialect, float dark, std::uint32_t bassSeed) noexcept;
+
+// Bass submode of the roll (sets the density and length targets).
+enum Submode : int
+{
+    SubNone = 0,
+    SubDeepDark,
+    SubDeepSparse,
+    SubBounce,
+    SubPulse
+};
 
 struct BassParams
 {
@@ -47,20 +70,21 @@ struct BassParams
     int bars = 8;
     int mode = phrase::Aeolian;
     float dark = 0.55f;
+    int sub = SubNone;
 };
 
 // Composes a bass line over p.bars (2, 4 or 8) into `lane` (cleared first; the
-// lane seed is left alone). Structure: bar 1 the call, bar 2 the answer
-// (JACKIN: drawn into the call's silence), bars 3-4 repeat them (the bar-4
-// answer is a later pass), bars 5-7 carry the density arc and back-half
-// variation, the last bar rests from 16th 13 on (the turn). The kick share
-// never passes 35% and the back-half guard (thinRepeatedBackHalf) never fires
-// on what this returns unless every retry hit it. Returns the arc index
-// (RuleTables kArcNames).
+// lane seed is left alone). Bar 1 is the call, bar 2 its answer (JACKIN: drawn
+// into the call's silence), bars 3-4 restate them, bar 4 answers in its back
+// half, bars 5-7 restate with back-half mutations toward the density curve,
+// and the last bar turns (rest from 16th 13 on, plus a bar-8 palette move).
+// Guards, each a recompose: kick share <= 35%, the output onset entropy, the
+// tonic guard, the thin-cell guard, one note per onset. Returns the density
+// shape index (RuleTables kArcNames).
 int composeBass (Lane& lane, const BassParams& p, std::uint32_t seed);
 
-// One Markov degree step for the style under the mode, from prevSemi: the
-// semitone of a scale degree (0..11). Deterministic in `hash`.
+// One first-order degree step for the style under the mode, from prevSemi:
+// returns a pitch class (0..11) in the mode. Deterministic in `hash`.
 int sampleDegreeSemis (int dialect, int mode, int prevSemi, std::uint32_t hash) noexcept;
 
 struct StabParams
@@ -68,7 +92,8 @@ struct StabParams
     int dialect = UkMin;
     int bars = 8;
     int mode = phrase::Aeolian;
-    int perBar = 1;            // chord hits per bar (the STAB / BUSY knob count)
+    int perBar = 1;            // chord hits per bar (the STAB / BUSY knob count), capped at 3
+    std::uint8_t lighterMask = 0; // bars (bit b) that take one hit fewer than perBar
     bool skipOdd = false;      // only even bars
     float length = 2.f;        // hit length in 16ths
     bool varyLength = false;   // ROLLER: 1.5 / 2 / 2.5 per bar
@@ -76,19 +101,32 @@ struct StabParams
     bool repeatByParity = false; // JACKIN: bars of one parity make the same choices
 };
 
-// Stabs placed by the style's gap / sustain / onset shares against `bass`
-// (never on a bass attack outside BOUNCY), two chord voicings per roll (one
-// per bar parity) from the chord-quality palette, folded into the register band.
+// Stabs placed against `bass`: per bar the style's gap / sustain / onset
+// shares (never on a bass attack outside BOUNCY, never on a kick step), slots
+// weighted by the model's P(stab onset | bass state) with the gap weight and
+// the answer after a bass phrase end. Two voicings per roll (one per bar
+// parity), in the mode, with no m2 / m9 against the bass under their hits.
 void composeStab (Lane& lane, const Lane& bass, const StabParams& p, std::uint32_t seed);
 
 // One chord from the style's palette under the mode: up to 4 tones in `out`.
 void stabVoicing (int dialect, int mode, std::uint32_t hash, int* out, int& n) noexcept;
 
-// A&R guard: in the back half of the loop (bars nb/2 .. nb-1), two or more bars
-// that play a single pitch class on 1..3 attacks. Such a line is composed again.
+// Thin-cell guard (A&R): in the back half of the loop (bars nb/2 .. nb-1), two
+// or more bars that play a single pitch class on 1..4 attacks. Such a line is
+// composed again.
 bool thinRepeatedBackHalf (const Lane& lane, int bars) noexcept;
 
 // Share of bass attacks on kick steps (16ths 1, 5, 9, 13).
 float kickShare (const Lane& lane) noexcept;
+
+// Attacks that share an onset with an earlier note of the lane (DUP_NOTES).
+int duplicateOnsets (const Lane& lane) noexcept;
+
+// Tonic guard: the root is the most-sounding pitch class and the root plus the
+// next pitch class hold at least the style's top-2 share of bass time.
+bool tonicGuardOk (const Lane& lane, int dialect) noexcept;
+
+// Median note length in 16ths (0 for an empty lane).
+float medianLength (const Lane& lane) noexcept;
 
 } // namespace rolla::rules

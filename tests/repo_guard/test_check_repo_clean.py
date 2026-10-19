@@ -111,6 +111,28 @@ def main():
     code, res = run(make_repo(dict(CLEAN, **{"docs/x.json": json.dumps({"Kick - Snare": [1, 2, 3]})})))
     check(code == 0, "a short track-shaped key without event data passes")
 
+    # Public genre model leak test: pooled numbers pass; provenance / source
+    # keys, a reference name (built from the shifted list) or a reference id fail.
+    model = {"version": "1.2", "styles": {"ROLLER": {"bass": {"onset_prob": {"body": [0.5] * 16}, "kick": {"target_pct": 17}}}}}
+    code, res = run(make_repo(dict(CLEAN, **{"resources/genre/genre_writing_model.json": json.dumps(model),
+                                             "resources/genre/GENRE_WRITING_RULES.md": "# rules\nPooled numbers only.\n"})))
+    check(code == 0, "genre: a pooled model and its rules pass")
+    shifted = "".join(chr(ord(c) - 1) for c in "Xby!Nbtufs")
+    genre_cases = [
+        ({"styles": {"ROLLER": {"provenance": {"x": 1}}}}, "provenance"),
+        ({"styles": {"DEEP": {"ref_counts": [3, 4]}}}, "ref_counts"),
+        ({"styles": {"DEEP": {"stab": {"ref_ids": ["a"]}}}}, "ref_ids"),
+        ({"styles": {"BOUNCY": {"track_name": "x"}}}, "track_name"),
+        ({"styles": {"JACKIN": {"raw_grid": [1, 0, 1]}}}, "raw_grid"),
+        ({"styles": {"JACKIN": {"note": "measured on " + shifted}}}, "names a reference"),
+        ({"styles": {"JACKIN": {"note": "grid close to t04"}}}, "reference id"),
+    ]
+    for doc, needle in genre_cases:
+        code, res = run(make_repo(dict(CLEAN, **{"resources/genre/genre_writing_model.json": json.dumps(doc)})))
+        check(code == 1 and flagged(res, "generator", needle), f"genre: {needle} is a leak")
+    code, res = run(make_repo(dict(CLEAN, **{"resources/genre/GENRE_WRITING_RULES.md": "Built from " + shifted.lower() + ".\n"})))
+    check(code == 1 and flagged(res, "generator", "names a reference"), "genre: a reference name in the public rules fails")
+
     # Generator rule: whole words only, case-sensitive, and only in src/ and resources/.
     code, res = run(make_repo(dict(CLEAN, **{"src/Generator/K.cpp": "const float kDegreeEmphasis = 1.f; bool closer = true;\n",
                                              "docs/notes.md": "The old kPhrase table is gone.\n"})))

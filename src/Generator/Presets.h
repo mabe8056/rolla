@@ -152,7 +152,7 @@ struct DialectDefaults
     char presetId[NumParts][24] {};
     int presetIndex[NumParts] { -1, -1, -1, -1, -1, -1, -1 };
     bool hitsMute = true;
-    float swing = 0.52f;
+    float swing = 0.537f; // genre model v1.2 hat band 53-57%
     bool bassDuck = false;
     bool bassGlide = false;
     float bassDuckDb = 13.f;
