@@ -21,7 +21,7 @@
     },
     "styles": {
       "type": "object",
-      "propertyNames": { "enum": ["ukmin", "long", "pop", "gaskin"] },
+      "propertyNames": { "enum": ["ukmin", "long", "pop", "jackin"] },
       "additionalProperties": { "$ref": "#/$defs/style" }
     }
   },

@@ -2217,10 +2217,10 @@
    "lane": "HITS",
    "voice": null,
    "presets": [
-    "hits.gaskin.organ"
+    "hits.jackin.organ"
    ],
    "roles": [
-    "hits.gaskin.organ primary"
+    "hits.jackin.organ primary"
    ],
    "root": "C2",
    "bytes": 323000,
@@ -2261,10 +2261,10 @@
    "lane": "HITS",
    "voice": null,
    "presets": [
-    "hits.gaskin.organ"
+    "hits.jackin.organ"
    ],
    "roles": [
-    "hits.gaskin.organ pool"
+    "hits.jackin.organ pool"
    ],
    "root": "C3",
    "bytes": 266632,
@@ -2967,11 +2967,11 @@
    "lane": "HITS",
    "voice": null,
    "presets": [
-    "hits.gaskin.organ",
+    "hits.jackin.organ",
     "hits.pop.piano"
    ],
    "roles": [
-    "hits.gaskin.organ pool",
+    "hits.jackin.organ pool",
     "hits.pop.piano pool"
    ],
    "root": "C4",
@@ -3013,11 +3013,11 @@
    "lane": "HITS",
    "voice": null,
    "presets": [
-    "hits.gaskin.organ",
+    "hits.jackin.organ",
     "hits.long.hoover"
    ],
    "roles": [
-    "hits.gaskin.organ pool",
+    "hits.jackin.organ pool",
     "hits.long.hoover pool"
    ],
    "root": "G#1",
@@ -3103,10 +3103,10 @@
    "lane": "HITS",
    "voice": null,
    "presets": [
-    "hits.gaskin.organ"
+    "hits.jackin.organ"
    ],
    "roles": [
-    "hits.gaskin.organ pool"
+    "hits.jackin.organ pool"
    ],
    "root": "C3",
    "bytes": 600632,
@@ -3147,11 +3147,11 @@
    "lane": "HITS",
    "voice": null,
    "presets": [
-    "hits.gaskin.organ",
+    "hits.jackin.organ",
     "hits.pop.piano"
    ],
    "roles": [
-    "hits.gaskin.organ pool",
+    "hits.jackin.organ pool",
     "hits.pop.piano pool"
    ],
    "root": "F3",
@@ -3235,10 +3235,10 @@
    "lane": "HITS",
    "voice": null,
    "presets": [
-    "hits.gaskin.organ"
+    "hits.jackin.organ"
    ],
    "roles": [
-    "hits.gaskin.organ pool"
+    "hits.jackin.organ pool"
    ],
    "root": "C5",
    "bytes": 231504,
@@ -4245,11 +4245,11 @@
    "lane": "PAD",
    "voice": null,
    "presets": [
-    "pad.gaskin.swellpad",
+    "pad.jackin.swellpad",
     "pad.ukmin.susswell"
    ],
    "roles": [
-    "pad.gaskin.swellpad pool",
+    "pad.jackin.swellpad pool",
     "pad.ukmin.susswell primary"
    ],
    "root": "F2",
@@ -4291,11 +4291,11 @@
    "lane": "PAD",
    "voice": null,
    "presets": [
-    "pad.gaskin.swellpad",
+    "pad.jackin.swellpad",
     "pad.ukmin.susswell"
    ],
    "roles": [
-    "pad.gaskin.swellpad primary",
+    "pad.jackin.swellpad primary",
     "pad.ukmin.susswell pool"
    ],
    "root": "D#1",
@@ -4381,12 +4381,12 @@
    "lane": "PAD",
    "voice": null,
    "presets": [
-    "pad.gaskin.swellpad",
+    "pad.jackin.swellpad",
     "pad.long.wideswell",
     "pad.ukmin.susswell"
    ],
    "roles": [
-    "pad.gaskin.swellpad pool",
+    "pad.jackin.swellpad pool",
     "pad.long.wideswell primary",
     "pad.ukmin.susswell pool"
    ],
@@ -4519,10 +4519,10 @@
    "lane": "PAD",
    "voice": null,
    "presets": [
-    "pad.gaskin.swellpad"
+    "pad.jackin.swellpad"
    ],
    "roles": [
-    "pad.gaskin.swellpad pool"
+    "pad.jackin.swellpad pool"
    ],
    "root": "F3",
    "bytes": 2879176,
@@ -4945,11 +4945,11 @@
    "lane": "PAD",
    "voice": null,
    "presets": [
-    "pad.gaskin.swellpad",
+    "pad.jackin.swellpad",
     "pad.ukmin.susswell"
    ],
    "roles": [
-    "pad.gaskin.swellpad pool",
+    "pad.jackin.swellpad pool",
     "pad.ukmin.susswell pool"
    ],
    "root": "G#6",
@@ -5075,11 +5075,11 @@
    "lane": "PAD",
    "voice": null,
    "presets": [
-    "pad.gaskin.swellpad",
+    "pad.jackin.swellpad",
     "pad.long.wideswell"
    ],
    "roles": [
-    "pad.gaskin.swellpad pool",
+    "pad.jackin.swellpad pool",
     "pad.long.wideswell pool"
    ],
    "root": "C4",
@@ -5295,11 +5295,11 @@
    "lane": "PAD",
    "voice": null,
    "presets": [
-    "pad.gaskin.swellpad",
+    "pad.jackin.swellpad",
     "pad.ukmin.susswell"
    ],
    "roles": [
-    "pad.gaskin.swellpad pool",
+    "pad.jackin.swellpad pool",
     "pad.ukmin.susswell pool"
    ],
    "root": "C1",
@@ -6687,11 +6687,11 @@
    "lane": "DRUMS",
    "voice": "KICK",
    "presets": [
-    "drums.gaskin.kit",
+    "drums.jackin.kit",
     "drums.ukmin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:kick",
+    "drums.jackin.kit pool:kick",
     "drums.ukmin.kit primary:kick"
    ],
    "root": "A#1",
@@ -6733,10 +6733,10 @@
    "lane": "DRUMS",
    "voice": "KICK",
    "presets": [
-    "drums.gaskin.kit"
+    "drums.jackin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit primary:kick"
+    "drums.jackin.kit primary:kick"
    ],
    "root": "A#1",
    "bytes": 71528,
@@ -6777,11 +6777,11 @@
    "lane": "DRUMS",
    "voice": "KICK",
    "presets": [
-    "drums.gaskin.kit",
+    "drums.jackin.kit",
     "drums.ukmin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:kick",
+    "drums.jackin.kit pool:kick",
     "drums.ukmin.kit pool:kick"
    ],
    "root": "A1",
@@ -6823,11 +6823,11 @@
    "lane": "DRUMS",
    "voice": "KICK",
    "presets": [
-    "drums.gaskin.kit",
+    "drums.jackin.kit",
     "drums.ukmin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:kick",
+    "drums.jackin.kit pool:kick",
     "drums.ukmin.kit pool:kick"
    ],
    "root": "A1",
@@ -6869,11 +6869,11 @@
    "lane": "DRUMS",
    "voice": "KICK",
    "presets": [
-    "drums.gaskin.kit",
+    "drums.jackin.kit",
     "drums.ukmin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:kick",
+    "drums.jackin.kit pool:kick",
     "drums.ukmin.kit pool:kick"
    ],
    "root": "G#1",
@@ -6915,11 +6915,11 @@
    "lane": "DRUMS",
    "voice": "KICK",
    "presets": [
-    "drums.gaskin.kit",
+    "drums.jackin.kit",
     "drums.ukmin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:kick",
+    "drums.jackin.kit pool:kick",
     "drums.ukmin.kit pool:kick"
    ],
    "root": "G#1",
@@ -6961,11 +6961,11 @@
    "lane": "DRUMS",
    "voice": "KICK",
    "presets": [
-    "drums.gaskin.kit",
+    "drums.jackin.kit",
     "drums.ukmin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:kick",
+    "drums.jackin.kit pool:kick",
     "drums.ukmin.kit pool:kick"
    ],
    "root": "G#1",
@@ -7555,11 +7555,11 @@
    "lane": "DRUMS",
    "voice": "CLAP",
    "presets": [
-    "drums.gaskin.kit",
+    "drums.jackin.kit",
     "drums.ukmin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:clap",
+    "drums.jackin.kit pool:clap",
     "drums.ukmin.kit primary:clap"
    ],
    "root": "C3",
@@ -7601,10 +7601,10 @@
    "lane": "DRUMS",
    "voice": "CLAP",
    "presets": [
-    "drums.gaskin.kit"
+    "drums.jackin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit primary:clap"
+    "drums.jackin.kit primary:clap"
    ],
    "root": "C3",
    "bytes": 84792,
@@ -7645,11 +7645,11 @@
    "lane": "DRUMS",
    "voice": "CLAP",
    "presets": [
-    "drums.gaskin.kit",
+    "drums.jackin.kit",
     "drums.ukmin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:clap",
+    "drums.jackin.kit pool:clap",
     "drums.ukmin.kit pool:clap"
    ],
    "root": "C3",
@@ -7691,11 +7691,11 @@
    "lane": "DRUMS",
    "voice": "CLAP",
    "presets": [
-    "drums.gaskin.kit",
+    "drums.jackin.kit",
     "drums.ukmin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:clap",
+    "drums.jackin.kit pool:clap",
     "drums.ukmin.kit pool:clap"
    ],
    "root": "C3",
@@ -7737,11 +7737,11 @@
    "lane": "DRUMS",
    "voice": "CLAP",
    "presets": [
-    "drums.gaskin.kit",
+    "drums.jackin.kit",
     "drums.ukmin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:clap",
+    "drums.jackin.kit pool:clap",
     "drums.ukmin.kit pool:clap"
    ],
    "root": "C3",
@@ -7783,11 +7783,11 @@
    "lane": "DRUMS",
    "voice": "CLAP",
    "presets": [
-    "drums.gaskin.kit",
+    "drums.jackin.kit",
     "drums.ukmin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:clap",
+    "drums.jackin.kit pool:clap",
     "drums.ukmin.kit pool:clap"
    ],
    "root": "C3",
@@ -7829,11 +7829,11 @@
    "lane": "DRUMS",
    "voice": "CLAP",
    "presets": [
-    "drums.gaskin.kit",
+    "drums.jackin.kit",
     "drums.ukmin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:clap",
+    "drums.jackin.kit pool:clap",
     "drums.ukmin.kit pool:clap"
    ],
    "root": "C3",
@@ -9037,11 +9037,11 @@
    "lane": "DRUMS",
    "voice": "CH",
    "presets": [
-    "drums.gaskin.kit",
+    "drums.jackin.kit",
     "drums.ukmin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:hat_closed",
+    "drums.jackin.kit pool:hat_closed",
     "drums.ukmin.kit primary:hat_closed"
    ],
    "root": "C3",
@@ -9083,10 +9083,10 @@
    "lane": "DRUMS",
    "voice": "CH",
    "presets": [
-    "drums.gaskin.kit"
+    "drums.jackin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit primary:hat_closed"
+    "drums.jackin.kit primary:hat_closed"
    ],
    "root": "C3",
    "bytes": 24168,
@@ -9127,11 +9127,11 @@
    "lane": "DRUMS",
    "voice": "CH",
    "presets": [
-    "drums.gaskin.kit",
+    "drums.jackin.kit",
     "drums.ukmin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:hat_closed",
+    "drums.jackin.kit pool:hat_closed",
     "drums.ukmin.kit pool:hat_closed"
    ],
    "root": "C3",
@@ -9173,11 +9173,11 @@
    "lane": "DRUMS",
    "voice": "CH",
    "presets": [
-    "drums.gaskin.kit",
+    "drums.jackin.kit",
     "drums.ukmin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:hat_closed",
+    "drums.jackin.kit pool:hat_closed",
     "drums.ukmin.kit pool:hat_closed"
    ],
    "root": "C3",
@@ -9219,11 +9219,11 @@
    "lane": "DRUMS",
    "voice": "CH",
    "presets": [
-    "drums.gaskin.kit",
+    "drums.jackin.kit",
     "drums.ukmin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:hat_closed",
+    "drums.jackin.kit pool:hat_closed",
     "drums.ukmin.kit pool:hat_closed"
    ],
    "root": "C3",
@@ -9265,11 +9265,11 @@
    "lane": "DRUMS",
    "voice": "CH",
    "presets": [
-    "drums.gaskin.kit",
+    "drums.jackin.kit",
     "drums.ukmin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:hat_closed",
+    "drums.jackin.kit pool:hat_closed",
     "drums.ukmin.kit pool:hat_closed"
    ],
    "root": "C3",
@@ -9311,11 +9311,11 @@
    "lane": "DRUMS",
    "voice": "CH",
    "presets": [
-    "drums.gaskin.kit",
+    "drums.jackin.kit",
     "drums.ukmin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:hat_closed",
+    "drums.jackin.kit pool:hat_closed",
     "drums.ukmin.kit pool:hat_closed"
    ],
    "root": "C3",
@@ -9653,11 +9653,11 @@
    "lane": "DRUMS",
    "voice": "OH",
    "presets": [
-    "drums.gaskin.kit",
+    "drums.jackin.kit",
     "drums.ukmin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:hat_open",
+    "drums.jackin.kit pool:hat_open",
     "drums.ukmin.kit primary:hat_open"
    ],
    "root": "C3",
@@ -9699,10 +9699,10 @@
    "lane": "DRUMS",
    "voice": "OH",
    "presets": [
-    "drums.gaskin.kit"
+    "drums.jackin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit primary:hat_open"
+    "drums.jackin.kit primary:hat_open"
    ],
    "root": "C3",
    "bytes": 168608,
@@ -9743,11 +9743,11 @@
    "lane": "DRUMS",
    "voice": "OH",
    "presets": [
-    "drums.gaskin.kit",
+    "drums.jackin.kit",
     "drums.ukmin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:hat_open",
+    "drums.jackin.kit pool:hat_open",
     "drums.ukmin.kit pool:hat_open"
    ],
    "root": "C3",
@@ -9789,11 +9789,11 @@
    "lane": "DRUMS",
    "voice": "OH",
    "presets": [
-    "drums.gaskin.kit",
+    "drums.jackin.kit",
     "drums.ukmin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:hat_open",
+    "drums.jackin.kit pool:hat_open",
     "drums.ukmin.kit pool:hat_open"
    ],
    "root": "C3",
@@ -9835,11 +9835,11 @@
    "lane": "DRUMS",
    "voice": "OH",
    "presets": [
-    "drums.gaskin.kit",
+    "drums.jackin.kit",
     "drums.ukmin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:hat_open",
+    "drums.jackin.kit pool:hat_open",
     "drums.ukmin.kit pool:hat_open"
    ],
    "root": "C3",
@@ -9881,11 +9881,11 @@
    "lane": "DRUMS",
    "voice": "OH",
    "presets": [
-    "drums.gaskin.kit",
+    "drums.jackin.kit",
     "drums.ukmin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:hat_open",
+    "drums.jackin.kit pool:hat_open",
     "drums.ukmin.kit pool:hat_open"
    ],
    "root": "C3",
@@ -9927,11 +9927,11 @@
    "lane": "DRUMS",
    "voice": "OH",
    "presets": [
-    "drums.gaskin.kit",
+    "drums.jackin.kit",
     "drums.ukmin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:hat_open",
+    "drums.jackin.kit pool:hat_open",
     "drums.ukmin.kit pool:hat_open"
    ],
    "root": "C3",
@@ -10269,10 +10269,10 @@
    "lane": "DRUMS",
    "voice": "RIDE",
    "presets": [
-    "drums.gaskin.kit"
+    "drums.jackin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit primary:ride"
+    "drums.jackin.kit primary:ride"
    ],
    "root": "C3",
    "bytes": 157776,
@@ -10313,10 +10313,10 @@
    "lane": "DRUMS",
    "voice": "RIDE",
    "presets": [
-    "drums.gaskin.kit"
+    "drums.jackin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:ride"
+    "drums.jackin.kit pool:ride"
    ],
    "root": "C3",
    "bytes": 153392,
@@ -10357,10 +10357,10 @@
    "lane": "DRUMS",
    "voice": "RIDE",
    "presets": [
-    "drums.gaskin.kit"
+    "drums.jackin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:ride"
+    "drums.jackin.kit pool:ride"
    ],
    "root": "C3",
    "bytes": 107680,
@@ -10401,10 +10401,10 @@
    "lane": "DRUMS",
    "voice": "RIDE",
    "presets": [
-    "drums.gaskin.kit"
+    "drums.jackin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:ride"
+    "drums.jackin.kit pool:ride"
    ],
    "root": "C3",
    "bytes": 107480,
@@ -10445,10 +10445,10 @@
    "lane": "DRUMS",
    "voice": "RIDE",
    "presets": [
-    "drums.gaskin.kit"
+    "drums.jackin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:ride"
+    "drums.jackin.kit pool:ride"
    ],
    "root": "C3",
    "bytes": 105584,
@@ -10489,10 +10489,10 @@
    "lane": "DRUMS",
    "voice": "RIDE",
    "presets": [
-    "drums.gaskin.kit"
+    "drums.jackin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:ride"
+    "drums.jackin.kit pool:ride"
    ],
    "root": "C3",
    "bytes": 75328,
@@ -10533,11 +10533,11 @@
    "lane": "DRUMS",
    "voice": "PERC",
    "presets": [
-    "drums.gaskin.kit",
+    "drums.jackin.kit",
     "drums.ukmin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:perc_tom",
+    "drums.jackin.kit pool:perc_tom",
     "drums.ukmin.kit primary:perc_tom"
    ],
    "root": "B2",
@@ -10579,10 +10579,10 @@
    "lane": "DRUMS",
    "voice": "PERC",
    "presets": [
-    "drums.gaskin.kit"
+    "drums.jackin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit primary:perc_tom"
+    "drums.jackin.kit primary:perc_tom"
    ],
    "root": "G3",
    "bytes": 85880,
@@ -10623,11 +10623,11 @@
    "lane": "DRUMS",
    "voice": "PERC",
    "presets": [
-    "drums.gaskin.kit",
+    "drums.jackin.kit",
     "drums.ukmin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:perc_tom",
+    "drums.jackin.kit pool:perc_tom",
     "drums.ukmin.kit pool:perc_tom"
    ],
    "root": "F3",
@@ -10681,11 +10681,11 @@
    "lane": "DRUMS",
    "voice": "PERC",
    "presets": [
-    "drums.gaskin.kit",
+    "drums.jackin.kit",
     "drums.ukmin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:perc_tom",
+    "drums.jackin.kit pool:perc_tom",
     "drums.ukmin.kit pool:perc_tom"
    ],
    "root": "G#2",
@@ -10945,11 +10945,11 @@
    "lane": "DRUMS",
    "voice": "PERC",
    "presets": [
-    "drums.gaskin.kit",
+    "drums.jackin.kit",
     "drums.ukmin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:perc_tom",
+    "drums.jackin.kit pool:perc_tom",
     "drums.ukmin.kit pool:perc_tom"
    ],
    "root": "D5",
@@ -10991,11 +10991,11 @@
    "lane": "DRUMS",
    "voice": "PERC",
    "presets": [
-    "drums.gaskin.kit",
+    "drums.jackin.kit",
     "drums.ukmin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:perc_tom",
+    "drums.jackin.kit pool:perc_tom",
     "drums.ukmin.kit pool:perc_tom"
    ],
    "root": "D5",
@@ -11037,11 +11037,11 @@
    "lane": "DRUMS",
    "voice": "PERC",
    "presets": [
-    "drums.gaskin.kit",
+    "drums.jackin.kit",
     "drums.ukmin.kit"
    ],
    "roles": [
-    "drums.gaskin.kit pool:perc_tom",
+    "drums.jackin.kit pool:perc_tom",
     "drums.ukmin.kit pool:perc_tom"
    ],
    "root": "C#5",

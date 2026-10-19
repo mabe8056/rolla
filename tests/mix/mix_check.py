@@ -19,7 +19,7 @@ usage:
   mix_check.py stimulus <out.wav> [--seconds 8]               # writes the synthetic switch stimulus (50 Hz line grid, 48 kHz); the ONLY audio this script writes
   mix_check.py switch  <wav> --switch-at S [--ramp-ms 50] [--dialect FROM>TO]
                        # dialect-switch click / gain-jump test (MIX_SPEC §9.3) on a lane render of the stimulus, switch at S seconds
-  --dialect / --style  UKMIN | LONG | POP | GASKIN (aliases: 'UK MIN', UK_MIN, 'GASKIN 90s', GASKIN90S); selects style overrides
+  --dialect / --style  UKMIN | LONG | POP | JACKIN (aliases: 'UK MIN', UK_MIN, 'JACKIN 90s', JACKIN90S); selects style overrides
 options: --targets tests/targets.json (default: next to this script)  --json out.json
 Exit code 0 = all PASS, 1 = any FAIL, 2 = usage / unreadable.
 Measures (all from the file):
@@ -341,8 +341,8 @@ def guess_lane(p,T):
 def norm_dialect(d):
     if d is None: return None
     u=d.upper().replace(' ','').replace('_','').replace('-','')
-    m={'UKMIN':'UKMIN','LONG':'LONG','POP':'POP','GASKIN':'GASKIN','GASKIN90S':'GASKIN','GASKIN90':'GASKIN'}
-    if u not in m: raise SystemExit(f'unknown dialect {d}; use UKMIN|LONG|POP|GASKIN')
+    m={'UKMIN':'UKMIN','LONG':'LONG','POP':'POP','JACKIN':'JACKIN','JACKIN90S':'JACKIN','JACKIN90':'JACKIN'}
+    if u not in m: raise SystemExit(f'unknown dialect {d}; use UKMIN|LONG|POP|JACKIN')
     return m[u]
 STIM_F0=50.0   # switch stimulus: line spectrum on multiples of 50 Hz -> exactly periodic every 20 ms
 def stimulus(sr,sec):
@@ -393,7 +393,7 @@ def main():
         C=render_checks(r,t,A.kind) if A.mode=='render' else sample_checks(r,t,A.path)
         res.append({'file':A.path,'lane':A.lane,'voice':A.voice,'style':A.style,'measure':r,'checks':C})
     elif A.mode=='combos':
-        Ds=[A.style] if A.style else ['UKMIN','LONG','POP','GASKIN']
+        Ds=[A.style] if A.style else ['UKMIN','LONG','POP','JACKIN']
         o,C=combos_mode(A.path,T,A.trim_table,Ds); res.append({'combos':o,'checks':C})
     elif A.mode=='mute':
         r,C=mute_leak(A.path,T,A.full,A.stem,A.expected,A.silent,A.lane_ref,A.lane,A.max_lag); res.append({'file':A.path,'lane':A.lane,'dialect':A.style,'measure':r,'checks':C})
