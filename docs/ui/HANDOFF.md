@@ -13,7 +13,7 @@ Preview states in the browser: `index.html#bass-hover`, `#bass-press`, `#bass-ro
 RollaEditor (AudioProcessorEditor, 1024×640 logical, fixed aspect)
 ├── Header
 │   ├── Logo ("ROLLA" wordmark, text)
-│   ├── DialectSelector          segmented: UK MIN · LONG · POP · GASKIN 90s
+│   ├── DialectSelector          segmented: UK MIN · LONG · POP · JACKIN 90s
 │   ├── KeyStepper               ◀  D MIN  ▶
 │   ├── BpmReadout               host tempo, read-only
 │   ├── UndoButton / RedoButton

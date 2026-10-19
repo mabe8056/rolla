@@ -27,7 +27,7 @@ struct EngineParams
     int preset[NumParts] {};
     bool duck = true;
     bool drumsToMain = true;
-    float swing = 0.52f;
+    float swing = 0.537f; // model v1.2 hat swing target (53-57%)
     float outputDb = 0.f;
     float drumsAccent = 0.6f;
     // Per-voice drum panel. Defaults are an identity: tune 0 st, decay 0.5, level 0 dB, accent off.

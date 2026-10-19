@@ -91,7 +91,7 @@
           },
           "styles": [
             "long",
-            "gaskin"
+            "jackin"
           ]
         },
         {
@@ -245,7 +245,7 @@
           },
           "styles": [
             "long",
-            "gaskin"
+            "jackin"
           ]
         },
         {
@@ -332,7 +332,7 @@
           },
           "styles": [
             "ukmin",
-            "gaskin"
+            "jackin"
           ]
         },
         {
@@ -445,7 +445,7 @@
           },
           "styles": [
             "ukmin",
-            "gaskin"
+            "jackin"
           ]
         },
         {
@@ -606,7 +606,7 @@
             }
           },
           "styles": [
-            "gaskin"
+            "jackin"
           ]
         },
         {
@@ -734,7 +734,7 @@
           },
           "styles": [
             "pop",
-            "gaskin"
+            "jackin"
           ]
         },
         {
@@ -934,7 +934,7 @@
             }
           },
           "styles": [
-            "gaskin"
+            "jackin"
           ]
         }
       ]
@@ -950,7 +950,7 @@
       "vox": "close",
       "drums": "tight",
       "hitsMute": true,
-      "swing": 0.52
+      "swing": 0.537
     },
     "long": {
       "bass": "round",
@@ -974,7 +974,7 @@
       "hitsMute": true,
       "swing": 0.567
     },
-    "gaskin": {
+    "jackin": {
       "bass": "round",
       "stab": "swell",
       "hits": "warehouse",

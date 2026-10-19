@@ -135,6 +135,16 @@ public:
 
     void triggerRoll();
     void triggerShuffle (int part);
+
+    // Status line after the originality floor refused a ROLL / shuffle / reshape
+    // and the previous roll was kept ("Roll refused: ..."). Empty again after
+    // the next accepted roll. serial changes on every set or clear.
+    struct RollNotice
+    {
+        juce::String text;
+        std::uint32_t serial = 0;
+    };
+    RollNotice rollNotice() const;
     // Alt-click on a solo button: solo `part` and clear every other lane's solo.
     void setExclusiveSolo (int part);
 
@@ -204,6 +214,9 @@ private:
     void parameterChanged (const juce::String& parameterID, float newValue) override;
     void applyDialect (int dialect);
     void regenerate (int onlyPart);
+    void setRollNotice (const juce::String& text);
+    mutable std::mutex noticeMu;
+    RollNotice notice;
     void requestReshape();
     void reshapeUnkept();
     EngineParams readParams (std::shared_ptr<const PresetBank>& hold) const;

@@ -66,7 +66,7 @@ target_sources(ROLLA
         src/Sampler/SamplePrep.cpp
         src/Sampler/UserSlots.cpp
         src/Generator/Generator.cpp
-        src/Generator/PhraseBank.cpp
+        src/Generator/RuleComposer.cpp
         src/Generator/Presets.cpp
         src/Generator/MidiFile.cpp
         src/Drums/DrumMachine.cpp
@@ -103,6 +103,9 @@ target_link_libraries(ROLLA
 # where ROLLA looks first. Audio stays out of the repo: point this at a folder on disk.
 #   cmake -B build -DROLLA_SAMPLE_PACK_DIR=/path/to/pack
 set(ROLLA_SAMPLE_PACK_DIR "" CACHE PATH "Sample pack folder copied into the built plugin bundles")
+# Private genre data (orig_builtin.json, genre_targets.json) copied into
+# Contents/Resources/Genre with the pack. Never in the repo.
+set(ROLLA_GENRE_DATA_DIR "" CACHE PATH "Private genre data folder copied into the built plugin bundles")
 if(ROLLA_SAMPLE_PACK_DIR)
     if(NOT IS_DIRECTORY "${ROLLA_SAMPLE_PACK_DIR}")
         message(FATAL_ERROR "ROLLA_SAMPLE_PACK_DIR is not a folder: ${ROLLA_SAMPLE_PACK_DIR}")
@@ -124,7 +127,7 @@ if(ROLLA_SAMPLE_PACK_DIR)
         else()
             # Copies (APFS clones on macOS), writes .rolla-pack.json, re-signs ad hoc.
             add_custom_command(TARGET ROLLA_${rolla_format} POST_BUILD
-                COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tools/inject_pack.sh" "${rolla_bundle}" "${ROLLA_SAMPLE_PACK_DIR}"
+                COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tools/inject_pack.sh" "${rolla_bundle}" "${ROLLA_SAMPLE_PACK_DIR}" "${ROLLA_GENRE_DATA_DIR}"
                 VERBATIM)
         endif()
     endforeach()
@@ -137,7 +140,7 @@ add_executable(rolla-render
     src/Engine/SampleLibrary.cpp
     src/Sampler/SamplePrep.cpp
     src/Generator/Generator.cpp
-    src/Generator/PhraseBank.cpp
+    src/Generator/RuleComposer.cpp
     src/Generator/Presets.cpp
     src/Generator/MidiFile.cpp
     src/Drums/DrumMachine.cpp
@@ -173,7 +176,7 @@ add_executable(rolla-sample-check
     src/Engine/SampleLibrary.cpp
     src/Sampler/SamplePrep.cpp
     src/Generator/Generator.cpp
-    src/Generator/PhraseBank.cpp
+    src/Generator/RuleComposer.cpp
     src/Generator/Presets.cpp
     src/Drums/DrumMachine.cpp
     src/Drums/DrumPattern.cpp
@@ -209,7 +212,7 @@ add_executable(rolla-ui-shot
     src/Sampler/SamplePrep.cpp
     src/Sampler/UserSlots.cpp
     src/Generator/Generator.cpp
-    src/Generator/PhraseBank.cpp
+    src/Generator/RuleComposer.cpp
     src/Generator/Presets.cpp
     src/Generator/MidiFile.cpp
     src/Drums/DrumMachine.cpp
@@ -244,7 +247,7 @@ add_executable(rolla-sampler-test
     src/Sampler/SamplePrep.cpp
     src/Sampler/UserSlots.cpp
     src/Generator/Generator.cpp
-    src/Generator/PhraseBank.cpp
+    src/Generator/RuleComposer.cpp
     src/Generator/Presets.cpp
     src/Drums/DrumMachine.cpp
     src/Drums/DrumPattern.cpp
@@ -303,8 +306,7 @@ add_executable(rolla-tp-test
     src/Sampler/UserSlots.cpp
     src/Generator/Generator.cpp
     src/Generator/Presets.cpp
-    src/Generator/PhraseBank.cpp
-    src/Generator/Arrangement.cpp
+    src/Generator/RuleComposer.cpp
     src/Drums/DrumMachine.cpp
     src/Drums/DrumPattern.cpp
     src/Mix/MixProgram.cpp
@@ -342,7 +344,7 @@ add_executable(rolla-roll-test
     src/Sampler/SamplePrep.cpp
     src/Sampler/UserSlots.cpp
     src/Generator/Generator.cpp
-    src/Generator/PhraseBank.cpp
+    src/Generator/RuleComposer.cpp
     src/Generator/Presets.cpp
     src/Generator/MidiFile.cpp
     src/Drums/DrumMachine.cpp
@@ -355,6 +357,8 @@ target_include_directories(rolla-roll-test PRIVATE src)
 
 target_compile_definitions(rolla-roll-test
     PRIVATE
+        # Lets the test pump the message loop on macOS (runDispatchLoopUntil).
+        JUCE_MODAL_LOOPS_PERMITTED=1
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
         JUCE_DISPLAY_SPLASH_SCREEN=0
@@ -371,10 +375,10 @@ target_link_libraries(rolla-roll-test
         juce::juce_recommended_warning_flags
 )
 
-# DEEP / JACKIN phrase grammar checks. No JUCE.
+# Rule composer checks (hard rules, skeleton variety, determinism). No JUCE.
 add_executable(rolla-phrase-test
     tests/phrase/phrase_test.cpp
-    src/Generator/PhraseBank.cpp
+    src/Generator/RuleComposer.cpp
 )
 
 target_include_directories(rolla-phrase-test PRIVATE src)
@@ -387,7 +391,7 @@ add_executable(rolla-mix-render
     src/Sampler/SamplePrep.cpp
     src/Sampler/UserSlots.cpp
     src/Generator/Generator.cpp
-    src/Generator/PhraseBank.cpp
+    src/Generator/RuleComposer.cpp
     src/Generator/Presets.cpp
     src/Drums/DrumMachine.cpp
     src/Drums/DrumPattern.cpp
@@ -413,14 +417,6 @@ target_link_libraries(rolla-mix-render
         juce::juce_recommended_warning_flags
 )
 
-# Bar-8 turnaround and 7+1 harmony helpers. No JUCE.
-add_executable(rolla-arrange-test
-    tests/arrange/arrange_test.cpp
-    src/Generator/Arrangement.cpp
-)
-
-target_include_directories(rolla-arrange-test PRIVATE src)
-
 # Export end to end: MIDI == played notes, stems, names, folder export.
 add_executable(rolla-export-test
     tests/export/export_test.cpp
@@ -433,7 +429,7 @@ add_executable(rolla-export-test
     src/Sampler/SamplePrep.cpp
     src/Sampler/UserSlots.cpp
     src/Generator/Generator.cpp
-    src/Generator/PhraseBank.cpp
+    src/Generator/RuleComposer.cpp
     src/Generator/Presets.cpp
     src/Generator/MidiFile.cpp
     src/Drums/DrumMachine.cpp
@@ -477,7 +473,7 @@ add_executable(rolla-bundle-test
     src/Sampler/SamplePrep.cpp
     src/Sampler/UserSlots.cpp
     src/Generator/Generator.cpp
-    src/Generator/PhraseBank.cpp
+    src/Generator/RuleComposer.cpp
     src/Generator/Presets.cpp
     src/Generator/MidiFile.cpp
     src/Drums/DrumMachine.cpp
@@ -522,7 +518,7 @@ add_executable(rolla-knob-test
     src/Sampler/SamplePrep.cpp
     src/Sampler/UserSlots.cpp
     src/Generator/Generator.cpp
-    src/Generator/PhraseBank.cpp
+    src/Generator/RuleComposer.cpp
     src/Generator/Presets.cpp
     src/Generator/MidiFile.cpp
     src/Drums/DrumMachine.cpp
@@ -535,6 +531,8 @@ target_include_directories(rolla-knob-test PRIVATE src)
 
 target_compile_definitions(rolla-knob-test
     PRIVATE
+        # Lets the test pump the message loop on macOS (runDispatchLoopUntil).
+        JUCE_MODAL_LOOPS_PERMITTED=1
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
         JUCE_DISPLAY_SPLASH_SCREEN=0
@@ -556,7 +554,7 @@ add_executable(rolla-variety
     tools/variety_main.cpp
     tools/PatternStats.cpp
     src/Generator/Generator.cpp
-    src/Generator/PhraseBank.cpp
+    src/Generator/RuleComposer.cpp
 )
 target_include_directories(rolla-variety PRIVATE src tools)
 target_compile_options(rolla-variety PRIVATE -Wall -Wextra -Wpedantic)
@@ -565,7 +563,7 @@ target_compile_options(rolla-variety PRIVATE -Wall -Wextra -Wpedantic)
 add_executable(rolla-dump
     tools/dump_grooves.cpp
     src/Generator/Generator.cpp
-    src/Generator/PhraseBank.cpp
+    src/Generator/RuleComposer.cpp
 )
 target_include_directories(rolla-dump PRIVATE src)
 target_compile_options(rolla-dump PRIVATE -Wall -Wextra -Wpedantic)
@@ -581,7 +579,7 @@ add_executable(rolla-rolls
     src/Sampler/SamplePrep.cpp
     src/Sampler/UserSlots.cpp
     src/Generator/Generator.cpp
-    src/Generator/PhraseBank.cpp
+    src/Generator/RuleComposer.cpp
     src/Generator/Presets.cpp
     src/Generator/MidiFile.cpp
     src/Drums/DrumMachine.cpp
