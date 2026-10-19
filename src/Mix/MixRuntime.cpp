@@ -273,6 +273,9 @@ void MixRuntime::prepare (double sampleRate) noexcept
     // One-pole toward the wanted gain: cuts in ~0.3 s, boosts in ~1.5 s.
     levelCut = 1.f - std::exp (-1.f / (float) (0.3 * sr));
     levelBoost = 1.f - std::exp (-1.f / (float) (1.5 * sr));
+    // Peak gain stage: 0.3 ms per pole on the way down, 60 ms back up.
+    peakAtk = 1.f - std::exp (-1.f / (float) (0.0003 * sr));
+    peakRel = 1.f - std::exp (-1.f / (float) (0.060 * sr));
     for (auto& s : strip)
     {
         s.level.kL.prepare (sr);
@@ -289,6 +292,7 @@ void MixRuntime::reset() noexcept
 {
     for (auto& s : strip)
     {
+        s.peakG1 = s.peakG2 = 1.f;
         for (int i = 0; i < 2; ++i)
         {
             s.hpfL[i].reset(); s.hpfR[i].reset();
@@ -711,10 +715,27 @@ void MixRuntime::process (int lane, float& l, float& r) noexcept
 
     const float trim = dbToLin (c.outputTrimDb);
     const float ceilLin = dbToLin (c.tpCeilDb);
+    float xL = yL * trim;
+    float xR = yR * trim;
+    // KICK, RIM and PERC: a smooth peak gain stage holds the hit 1 dB under the
+    // ceiling, so a hit that arrives too hot (the first kick of a render, before
+    // the lane level has settled) is turned down instead of squared by the clip:
+    // that square edge was the engine click the A&R detector found on bar 1. A
+    // kick's peak builds over a few milliseconds, so two 0.3 ms poles follow it
+    // without lookahead or latency. The clip after it stays as the hard limit.
+    if ((lane == 6 || lane == 9 || lane == 13) && c.tpCeilDb < 23.f)
+    {
+        const float peak = std::max (std::fabs (xL), std::fabs (xR)) * 1.12f; // true-peak allowance
+        const float want = peak > 1.0e-9f ? std::min (1.f, 0.89f * ceilLin / peak) : 1.f;
+        s.peakG1 += (want < s.peakG1 ? peakAtk : peakRel) * (want - s.peakG1);
+        s.peakG2 += (s.peakG1 < s.peakG2 ? peakAtk : peakRel) * (s.peakG1 - s.peakG2);
+        xL *= s.peakG2;
+        xR *= s.peakG2;
+    }
     // Soft knee into a hard clamp at 4×, after the trim, so makeup can put the body
     // back on the short-term target while the peak stays on the ceiling. No sum limiter.
-    l = flush (clipSample (s, 0, yL * trim, ceilLin));
-    r = flush (clipSample (s, 1, yR * trim, ceilLin));
+    l = flush (clipSample (s, 0, xL, ceilLin));
+    r = flush (clipSample (s, 1, xR, ceilLin));
 
     if (s.rampSample < 1000000)
         ++s.rampSample;
