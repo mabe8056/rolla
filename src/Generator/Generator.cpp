@@ -1828,11 +1828,34 @@ void writeHits (Lane& lane, const Groove& g, const Settings& s, Rng& rng, int mo
         want = std::min (10, want + 2);
 
     const int loop = std::min (s.bars, 8) * 16;
-    // One chord from the style's chord-quality palette (RuleTables), as the stab draws it.
-    int voiTones[4] {};
-    int voiN = 0;
-    rules::stabVoicing (s.dialect, mode, rng.nextU() | 1u, voiTones, voiN);
-    voiN = clampi (voiN, 1, 3);
+    // Two or three chords from the style's chord-quality palette (RuleTables), as
+    // the stab draws them, whose pitch-class sets differ by two notes or more; the
+    // hits cycle through them in time order. One chord on every hit lined up with
+    // a reference's offbeat stab within one note (the originality voicing match).
+    struct Chord { int tones[4]; int n; unsigned mask; };
+    Chord chords[3] {};
+    int nChords = 0;
+    const int wantChords = 2 + (rng.next() < 0.35 ? 1 : 0);
+    for (int tries = 0; tries < 24 && nChords < wantChords; ++tries)
+    {
+        Chord c {};
+        rules::stabVoicing (s.dialect, mode, rng.nextU() | 1u, c.tones, c.n);
+        c.n = clampi (c.n, 1, 3);
+        for (int k = 0; k < c.n; ++k)
+            c.mask |= 1u << (unsigned) (((c.tones[k] % 12) + 12) % 12);
+        bool distinct = true;
+        for (int j = 0; j < nChords && distinct; ++j)
+        {
+            const unsigned both = c.mask & chords[j].mask;
+            const unsigned either = c.mask | chords[j].mask;
+            // Jaccard under 0.75: not the same set give or take one note.
+            distinct = (float) __builtin_popcount (both) < 0.75f * (float) __builtin_popcount (either);
+        }
+        if (distinct || tries == 23)
+            chords[nChords++] = c;
+    }
+    int hitIndex = 0;
+    auto chordFor = [&] () -> const Chord& { return chords[(hitIndex++) % std::max (1, nChords)]; };
 
     // IN STAB: the hits double the stab's answers, one hit per stab onset
     // (up to `want`), instead of filling the holes around them.
@@ -1853,9 +1876,10 @@ void writeHits (Lane& lane, const Groove& g, const Settings& s, Rng& rng, int mo
             Ev e;
             e.start = start;
             e.len = std::clamp (stab.notes[i].length, 0.5f, 1.5f);
-            e.nChord = (std::uint8_t) voiN;
-            for (int c = 0; c < voiN; ++c)
-                e.chord[c] = (std::int8_t) voiTones[c];
+            const Chord& ch = chordFor();
+            e.nChord = (std::uint8_t) ch.n;
+            for (int c = 0; c < ch.n; ++c)
+                e.chord[c] = (std::int8_t) ch.tones[c];
             e.vel = 106;
             if (pushEv (lane, e, s.bars))
                 lane.notes[lane.count - 1].timbre = (std::uint8_t) ((int) (rng.next() * 5.0) % 5);
@@ -1895,12 +1919,22 @@ void writeHits (Lane& lane, const Groove& g, const Settings& s, Rng& rng, int mo
         Ev e;
         e.start = (float) best;
         e.len = rng.next() < 0.65 ? 1.f : 1.5f;
-        e.nChord = (std::uint8_t) voiN;
-        for (int c = 0; c < voiN; ++c)
-            e.chord[c] = (std::int8_t) voiTones[c];
+        const Chord& ch = chords[0];
+        e.nChord = (std::uint8_t) ch.n;
+        for (int c = 0; c < ch.n; ++c)
+            e.chord[c] = (std::int8_t) ch.tones[c];
         e.vel = 106;
         if (pushEv (lane, e, s.bars))
             lane.notes[lane.count - 1].timbre = (std::uint8_t) ((int) (rng.next() * 5.0) % 5);
+    }
+    // The chord cycle runs in time order.
+    std::sort (lane.notes, lane.notes + lane.count, [] (const Note& a, const Note& b) { return a.start < b.start; });
+    for (int i = 0; i < lane.count; ++i)
+    {
+        const Chord& ch = chords[i % std::max (1, nChords)];
+        lane.notes[i].nChord = (std::uint8_t) ch.n;
+        for (int c = 0; c < 4; ++c)
+            lane.notes[i].chord[c] = (std::int8_t) (c < ch.n ? ch.tones[c] : 0);
     }
 }
 

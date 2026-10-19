@@ -1335,38 +1335,88 @@ void composeStab (Lane& lane, const Lane& bass, const StabParams& p, std::uint32
         }
     }
 
-    // Two voicings per roll, one per bar parity, never the same chord twice,
-    // each clear of a semitone against the bass under its hits.
+    // Two voicings per roll, one per bar parity, each clear of a semitone against
+    // the bass under its hits. The second is a different chord, not the first give
+    // or take one note (pitch-class Jaccard under 0.75): one chord on every hit
+    // lined up with a reference's stab line (the originality voicing match).
+    auto pcMask = [] (const int* tones, int n) noexcept
+    {
+        unsigned m = 0;
+        for (int k = 0; k < n; ++k)
+            m |= 1u << (unsigned) pcOf (tones[k]);
+        return m;
+    };
+    auto popc = [] (unsigned m) noexcept
+    {
+        int c = 0;
+        for (; m != 0; m &= m - 1)
+            ++c;
+        return c;
+    };
     int voi[2][4] {};
     int nv[2] {};
     int bottom0 = 0;
+    // ROLLER and DEEP alternate the two chords hit by hit (below), so each has to
+    // clear the bass under every hit, not only its own bar parity.
+    const bool byHit = st == styleOf (UkMin) || st == styleOf (Long);
+    const unsigned allBass = bassMask[0] | bassMask[1];
     for (int par = 0; par < 2; ++par)
     {
         int strength = 1;
         for (int k = 0; k < 3; ++k)
             if (strengthVote[par][k] > strengthVote[par][strength])
                 strength = k;
-        for (int t = 0; t < 6; ++t)
+        int bestV[4] {};
+        int bestN = 0;
+        float bestJ = 2.f;
+        for (int t = 0; t < 12; ++t)
         {
             Rng rv (mix32 (seed, (par == 0 ? 0x570Bu : 0x571Bu) + (std::uint32_t) t * 31u));
             int bottom = 0;
-            chooseVoicing (st, p.mode, bassMask[par], par == 0 ? -1 : bottom0, strength, rv, voi[par], nv[par], bottom);
+            chooseVoicing (st, p.mode, byHit ? allBass : bassMask[par], par == 0 ? -1 : bottom0, strength, rv, voi[par], nv[par], bottom);
             if (par == 0)
             {
                 bottom0 = bottom;
                 break;
             }
-            bool same = nv[1] == nv[0];
-            for (int k = 0; same && k < nv[0]; ++k)
-                same = voi[1][k] == voi[0][k];
-            if (! same)
+            const unsigned a = pcMask (voi[0], nv[0]);
+            const unsigned b = pcMask (voi[1], nv[1]);
+            const float j = (float) popc (a & b) / (float) std::max (1, popc (a | b));
+            if (j < bestJ)
+            {
+                bestJ = j;
+                bestN = nv[1];
+                for (int k = 0; k < 4; ++k)
+                    bestV[k] = voi[1][k];
+            }
+            if (j < 0.75f)
                 break;
+        }
+        if (par == 1)
+        {
+            nv[1] = bestN;
+            for (int k = 0; k < 4; ++k)
+                voi[1][k] = bestV[k];
         }
     }
 
+    // ROLLER and DEEP: the two chords alternate hit by hit in time order. Their
+    // few hits can all fall in bars of one parity, which left one chord on every
+    // hit. BOUNCY and JACKIN keep one chord per bar parity: their busier stab
+    // line alternating hit by hit reads as a figure.
+    int order[kMaxNotes];
+    for (int h = 0; h < nh; ++h)
+        order[h] = h;
+    std::sort (order, order + nh, [&] (int a, int b)
+    {
+        return hits[a].bar * kBar + hits[a].slot < hits[b].bar * kBar + hits[b].slot;
+    });
+    int turn[kMaxNotes] {};
+    for (int k = 0; k < nh; ++k)
+        turn[order[k]] = byHit ? (k & 1) : (hits[order[k]].bar & 1);
     for (int h = 0; h < nh && lane.count < kMaxNotes; ++h)
     {
-        const int par = hits[h].bar & 1;
+        const int par = turn[h];
         Note n;
         n.start = (float) (hits[h].bar * kBar + hits[h].slot);
         n.length = hits[h].len;
