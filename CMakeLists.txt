@@ -299,6 +299,7 @@ target_link_libraries(rolla-fingerprint
 # Master true-peak safety stage: guard DSP + every style x INTENSITY.
 add_executable(rolla-tp-test
     tests/tpguard/tp_guard_test.cpp
+    tests/tpguard/chain_click_test.cpp
     src/Engine/Engine.cpp
     src/Engine/Sampler.cpp
     src/Engine/SampleLibrary.cpp

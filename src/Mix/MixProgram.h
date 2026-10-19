@@ -82,6 +82,9 @@ struct MixProgram
     // Frozen for a render (same gain on FULL / MUTE / SOLO). Not a limiter.
     float sumAlignDb[kMixDialects] {};
     // Absolute ceiling for the per-lane oversampled clip, after output trim. 24 dB = off.
+    // A ceiling under (st_target_lufs + the lane's natural PLR) forces the clip to flatten
+    // every hit to hold the target, which squares transients into clicks. KICK, RIM and
+    // PERC therefore sit on their targets.json tp_max, and lane level holds the ST target.
     float tpCeilDb[kMixDialects][kMixLanes] {};
     char overrideId[kMixMelodic][kMixOverrideSlots][24] {};
     MixOverride overrideChain[kMixMelodic][kMixOverrideSlots] {};

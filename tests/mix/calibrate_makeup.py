@@ -76,7 +76,13 @@ def main():
             if not sum_pass:
                 got = None if measured is None else round(measured + mk, 2)
                 print(f"{style} {name} measured {measured} target {target} makeup {lanes[name]} -> {got} TP {r['tp_dbtp']:.2f}")
-        out["dialects"][style] = {"sum_align_db": round(align, 2), "lanes": lanes}
+        row = {"sum_align_db": round(align, 2), "lanes": lanes}
+        # tp_ceil_db is hand-set (KICK/RIM/PERC sit on their targets.json tp_max so the
+        # per-lane clip does not square transients). Carry it over; never drop it.
+        ceil = prev.get("dialects", {}).get(style, {}).get("tp_ceil_db")
+        if ceil is not None:
+            row = {"sum_align_db": row["sum_align_db"], "tp_ceil_db": ceil, "lanes": lanes}
+        out["dialects"][style] = row
     json.dump(out, open(dest, "w"), indent=1)
     print("wrote", dest)
     return 0
