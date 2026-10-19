@@ -77,8 +77,9 @@ def main():
                 got = None if measured is None else round(measured + mk, 2)
                 print(f"{style} {name} measured {measured} target {target} makeup {lanes[name]} -> {got} TP {r['tp_dbtp']:.2f}")
         row = {"sum_align_db": round(align, 2), "lanes": lanes}
-        # tp_ceil_db is hand-set (KICK/RIM/PERC sit on their targets.json tp_max so the
-        # per-lane clip does not square transients). Carry it over; never drop it.
+        # tp_ceil_db is hand-set: every lane sits at max(its targets.json tp_max, the old ceiling), so the
+        # per-lane clip is a peak safety, never the level control. Ceilings 11-20 dB under tp_max squared
+        # BASS/STAB/PLUCK notes (engine clicks) while makeup ran 15-30 dB hot. Carry it over; never drop it.
         ceil = prev.get("dialects", {}).get(style, {}).get("tp_ceil_db")
         if ceil is not None:
             row = {"sum_align_db": row["sum_align_db"], "tp_ceil_db": ceil, "lanes": lanes}
