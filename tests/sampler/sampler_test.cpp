@@ -789,7 +789,7 @@ float sincRead (const std::vector<float>& src, double index)
 // the 0.5 ms raised-cosine fade-in and the 4 ms fade at the file end. Without
 // them the tile is the raw file: what "plays as recorded" is measured against.
 void addTile (std::vector<float>& out, const std::vector<float>& src, double fileRate, int at, double ratio,
-              int until, bool edges, double sr = 48000.0)
+              int until, bool edges, double sr = 48000.0, bool startFade = true)
 {
     constexpr double pi = 3.14159265358979;
     const int frames = (int) src.size();
@@ -806,7 +806,7 @@ void addTile (std::vector<float>& out, const std::vector<float>& src, double fil
         double s = unity ? (double) src[(size_t) k] : (double) sincRead (src, idx);
         if (edges)
         {
-            if (k < attackN)
+            if (startFade && k < attackN)
                 s *= 0.5 * (1.0 - std::cos (pi * (double) k / (double) attackN));
             const double remain = (double) frames - (double) (k + 1) * ratio;
             if (remain < fadeLen)
@@ -855,7 +855,7 @@ SourceLR sourceOf (const rolla::SampleAudio& a)
 // (t = 0 and both loop wraps included for the kick). Two rules:
 //  - away from the loop wraps (where the engine fades the loop end on purpose) the
 //    render nulls against the file, tiled at the hits at one fitted gain, to under
-//    -80 dBFS; only the engine's 0.5 ms frame-0 fade and 4 ms end fade are modelled;
+//    -80 dBFS; only the engine's 0.5 ms frame-0 fade (files that open on a step) and 4 ms end fade are modelled;
 //  - the render's d2_clicks events are all events of the raw file tiled at the same
 //    offsets and gain: the engine adds no step. A hard cut injected into the render
 //    must be caught (the rule can see an engine step).
@@ -913,7 +913,9 @@ void checkDrumAsRecorded (rolla::PresetBank& bank, const rolla::SampleLibrary& l
     }
     expect (! hits.empty() && (every != 4 || hits.front() == 0), tag + ": the hits play from t = 0");
 
-    // Expected render: each hit cut at the next loop wrap, with the engine's edges.
+    // Expected render: each hit cut at the next loop wrap, with the engine's edges
+    // (the 0.5 ms file-start fade only for a file that opens on a step).
+    const bool startFade = rolla::Sampler::opensOnStep (*audio);
     const double ratio = std::clamp (audio->rate / sr, 0.25, 4.0);
     std::vector<float> eL ((size_t) total, 0.f), eR ((size_t) total, 0.f);
     std::vector<float> rawL ((size_t) total, 0.f), rawR ((size_t) total, 0.f);
@@ -923,8 +925,8 @@ void checkDrumAsRecorded (rolla::PresetBank& bank, const rolla::SampleLibrary& l
         for (int w : wraps)
             if (w > at)
                 until = std::min (until, w);
-        addTile (eL, src.l, src.rate, at, ratio, until, true);
-        addTile (eR, src.r, src.rate, at, ratio, until, true);
+        addTile (eL, src.l, src.rate, at, ratio, until, true, sr, startFade);
+        addTile (eR, src.r, src.rate, at, ratio, until, true, sr, startFade);
         addTile (rawL, src.l, src.rate, at, ratio, total, false);
         addTile (rawR, src.r, src.rate, at, ratio, total, false);
     }

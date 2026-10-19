@@ -464,16 +464,38 @@ void Sampler::reset() noexcept
     stepEst = 0.f;
 }
 
+bool Sampler::opensOnStep (const SampleAudio& a) noexcept
+{
+    const int n = std::min (a.frames, (int) a.left.size());
+    if (n < 2)
+        return false;
+    const bool stereo = (int) a.right.size() >= n;
+    const int span = std::clamp ((int) (0.001 * a.rate), 8, n - 1);
+    double first = 0.0, moves = 0.0;
+    for (int c = 0; c < (stereo ? 2 : 1); ++c)
+    {
+        const auto& x = c == 0 ? a.left : a.right;
+        first = std::max (first, (double) std::fabs (x[0]));
+        double sum = 0.0;
+        for (int k = 1; k <= span; ++k)
+            sum += std::fabs ((double) x[(size_t) k] - (double) x[(size_t) k - 1]);
+        moves = std::max (moves, sum / (double) span);
+    }
+    return first > 1.0e-3 && first > 4.0 * moves;
+}
+
 void Sampler::armAttack (Voice& v) noexcept
 {
     // A note that starts mid-file (slice, start offset, vox lead-in, reverse)
     // fades in over 3 ms so the cut does not click. One that starts on the
-    // file's first sample fades in over 0.5 ms: the transient stays, but a
-    // file trimmed onto a non-zero sample (most pack kicks, rims, bass stabs)
-    // no longer opens on a full-level step. With no fade at all every such
-    // hit was a click.
+    // file's first sample fades in over 0.5 ms when the file opens on a step
+    // (opensOnStep: trimmed onto a non-zero sample, like most pack kicks, rims
+    // and bass stabs), so it no longer opens on a full-level step. A file that
+    // opens into noise or rises from zero plays as recorded: fading it moved
+    // a noisy kick's attack bands by up to 4 dB.
     const bool fileStart = ! v.reverse && ! v.tempoSync && v.pos < 0.5;
-    v.attackN = std::max (8, (int) ((fileStart ? 0.0005 : 0.003) * sr));
+    const bool fade = ! fileStart || (v.audio != nullptr && opensOnStep (*v.audio));
+    v.attackN = fade ? std::max (8, (int) ((fileStart ? 0.0005 : 0.003) * sr)) : 0;
     v.attackLeft = v.attackN;
     v.fade = 1.f;
     v.fadeInc = 0.f;
