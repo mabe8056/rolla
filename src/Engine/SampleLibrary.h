@@ -3,6 +3,7 @@
 #include "SampleChop.h"
 #include "SampleSpec.h"
 #include "../Sampler/SamplePrep.h"
+#include "../Sampler/PitchProbe.h"
 
 #include <atomic>
 #include <condition_variable>
@@ -136,7 +137,7 @@ inline bool samplePhrase (const char* text, const char* a, const char* b, const 
 
 inline bool sampleTextEqual (const char* a, const char* b) noexcept;
 
-// styles 0 fits every dialect. Otherwise bit 0 is UK MIN, then LONG, POP, GASKIN.
+// styles 0 fits every dialect. Otherwise bit 0 is UK MIN, then LONG, POP, JACKIN.
 inline bool sampleStyleAllows (std::uint8_t styles, int dialect) noexcept
 {
     if (styles == 0 || dialect < 0 || dialect >= NumDialects)
@@ -502,6 +503,10 @@ struct SampleAudio
     int slices[24] { 0 };
     // First audible frame (2 ms early). Vox phrases often open on silence.
     int lead = 0;
+    // Measured at load (PitchProbe.h). Library files only; user slots keep their own root.
+    PitchInfo pitch;
+    // The note in the filename, -1 when none. Trusted only where the measurement agrees.
+    int namedRoot = -1;
     // -1 until loadOne measures the in-memory buffer. The file on disk is not written.
     float flatness = -1.f;
     int loudStart = 0;
@@ -650,8 +655,22 @@ void ensureSampleFolders (const juce::File& root);
 
 // The files the sampler will reach for first with these presets and picks:
 // each lane's preferred pool entry and its next neighbours (window), and every drum voice.
+// drumPick: NumDrumVoices per-voice picks (-1 unset), or null for the shared drum pick.
 void collectPlayFiles (const PresetBank& bank, const SampleIndex& index, const int preset[NumParts],
-                       const int samplePick[NumParts], int dialect, int window, std::vector<std::string>& out);
+                       const int samplePick[NumParts], int dialect, int window, std::vector<std::string>& out,
+                       const int* drumPick = nullptr);
+
+// Offline renders (tools, tests). Loads these files ahead of the background list
+// and blocks until each one is loaded or confirmed missing, at most timeoutMs.
+// Files still loading at the deadline are logged to stderr with `who`.
+// Returns true when none is still loading.
+bool waitForSampleFiles (SampleLibrary& library, const std::vector<std::string>& paths, int timeoutMs, const char* who);
+
+// collectPlayFiles (window 8, the plugin's PrefetchTimer list) + waitForSampleFiles,
+// so an offline render never starts its first block before a lane's file is in memory.
+bool prefetchPlayFiles (SampleLibrary& library, const PresetBank& bank, const SampleIndex& index,
+                        const int preset[NumParts], const int samplePick[NumParts], int dialect,
+                        int timeoutMs, const char* who);
 
 // Per-user cache files (kind "index" or "loudness"). Never inside the sample root.
 juce::File sampleCacheFor (const juce::File& sampleRoot, const char* kind);

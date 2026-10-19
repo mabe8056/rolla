@@ -124,8 +124,8 @@ int main (int argc, char** argv)
             glyphs.getGlyph (0).createPath (path);
             return path.getBounds().getHeight();
         };
-        std::printf ("gaskin_width_px %.2f\nlane_cap_px %.2f\nsection_cap_px %.2f\n",
-                     measureWidth (rolla::Theme::Role::pill, "GASKIN 90s"),
+        std::printf ("jackin_width_px %.2f\nlane_cap_px %.2f\nsection_cap_px %.2f\n",
+                     measureWidth (rolla::Theme::Role::pill, "JACKIN 90s"),
                      capHeight (rolla::Theme::Role::lane),
                      capHeight (rolla::Theme::Role::section));
         std::printf ("lane_i_px %.2f\nlane_m_px %.2f\nword_i_px %.2f\nword_m_px %.2f\n",

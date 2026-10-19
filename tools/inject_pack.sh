@@ -6,12 +6,19 @@
 #
 #   tools/inject_pack.sh build/ROLLA_artefacts/Release/VST3/ROLLA.vst3 /path/to/pack
 #   tools/inject_pack.sh build/ROLLA_artefacts/Release/AU/ROLLA.component /path/to/pack
+#   tools/inject_pack.sh <bundle> /path/to/pack /path/to/private/genre    # + Resources/Genre
+#
+# The optional third argument (or $ROLLA_GENRE_DATA_DIR) is the private genre
+# data folder: orig_builtin.json (the originality backstop's banned figures,
+# hashed), genre_targets.json, sample_features.json (the genre brain's library
+# measurements) and mesh_rules.json go into <bundle>/Contents/Resources/Genre.
+# They are private and never committed; the plugin reads them from the bundle.
 #
 # The pack stays out of the repo: this only writes inside the bundle.
 # cmake -DROLLA_SAMPLE_PACK_DIR=/path/to/pack runs this after every plugin build.
 set -euo pipefail
 
-usage="usage: tools/inject_pack.sh <ROLLA.vst3|ROLLA.component|ROLLA.app> <packdir>"
+usage="usage: tools/inject_pack.sh <ROLLA.vst3|ROLLA.component|ROLLA.app> <packdir> [genre_data_dir]"
 bundle=${1:?$usage}
 pack=${2:?$usage}
 bundle=${bundle%/}
@@ -72,6 +79,25 @@ cat > "$dest/.rolla-pack.json" <<EOF
   "manifestSha256": "${manifest_sha}"
 }
 EOF
+
+genre=${3:-${ROLLA_GENRE_DATA_DIR:-}}
+genre_files=0
+if [ -n "$genre" ]; then
+    if [ ! -d "$genre" ]; then
+        echo "inject_pack: genre data dir $genre is not a folder" >&2
+        exit 1
+    fi
+    gdest="$bundle/Contents/Resources/Genre"
+    rm -rf "$gdest"
+    mkdir -p "$gdest"
+    for f in orig_builtin.json genre_targets.json sample_features.json mesh_rules.json; do
+        if [ -f "$genre/$f" ]; then
+            cp "$genre/$f" "$gdest/$f"
+            genre_files=$((genre_files + 1))
+        fi
+    done
+    [ "$(uname)" = "Darwin" ] && xattr -cr "$gdest" 2>/dev/null || true
+fi
 
 if [ "$(uname)" = "Darwin" ]; then
     codesign --force --deep -s - "$bundle"

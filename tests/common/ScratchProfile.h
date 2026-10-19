@@ -97,6 +97,7 @@ inline std::string useScratchProfile (const char* tag, bool inheritParent = fals
                  && putEnv ("ROLLA_SCRATCH_DIR", h)
                  && putEnv ("ROLLA_SETTINGS_DIR", h + sep + "settings")
                  && putEnv ("ROLLA_CACHE_DIR", h + sep + "cache")
+                 && putEnv ("ROLLA_ORIG_INDEX", "") // the originality index then sits in the scratch settings folder
                  && putEnv ("ROLLA_DEFAULT_ROOT", h + sep + "Music" + sep + "ROLLA" + sep + "Samples")
                  && putEnv ("ROLLA_BUNDLE_ROOT", h + sep + "no-bundle" + sep + "Contents" + sep + "Resources" + sep + "Samples");
     return ok ? h : std::string();

@@ -1,9 +1,16 @@
 name: build
 
+# Draft PRs get light checks: sample coverage, the Linux test binaries and the
+# quick unit tests. macOS, Windows, the long Linux renders, the sample-pack
+# shards and the mix renders run only on non-draft PRs (including the
+# ready_for_review run), pushes to main and manual dispatch.
+# github.event.pull_request is empty outside pull_request events, so
+# `!github.event.pull_request.draft` is true there.
 on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
 concurrency:
@@ -30,6 +37,7 @@ jobs:
 
   macos:
     name: macOS universal VST3 + AU
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: macos-14
     timeout-minutes: 90
     steps:
@@ -68,6 +76,12 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$AU"
           echo "$VST3" > /tmp/rolla_vst3_path
           echo "$AU" > /tmp/rolla_au_path
+
+      - name: inject_pack.sh on the built bundles (copies; the originals stay as built)
+        run: |
+          set -euo pipefail
+          tests/bundle/inject_pack_check.sh "$(cat /tmp/rolla_vst3_path)"
+          tests/bundle/inject_pack_check.sh "$(cat /tmp/rolla_au_path)"
 
       - name: pluginval strictness 5
         env:
@@ -158,6 +172,7 @@ jobs:
 
   windows:
     name: Windows x64 VST3
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: windows-2022
     timeout-minutes: 90
     steps:
@@ -195,6 +210,22 @@ jobs:
     name: Linux VST3 + renders
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    env:
+      # Compiler cache: JUCE is rebuilt for every test target, so most objects
+      # repeat within a run and across runs.
+      # No CCACHE_BASEDIR: it makes ccache pass relative source paths to the
+      # compiler, which turns __FILE__ into "../tests/..." and breaks
+      # tests/sampler/sampler_test.cpp, which finds resources/presets.json
+      # from __FILE__. The workspace path is the same on every run, so it
+      # gains nothing here. Only time_macros sloppiness (JUCE's compile date
+      # string may go stale); include_file_mtime/ctime is dropped so headers
+      # generated during the build (BinaryData.h, JuceHeader.h) are never
+      # trusted from a direct-mode manifest.
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_COMPRESS: "true"
+      CCACHE_MAXSIZE: 500M
+      CCACHE_SLOPPINESS: time_macros
+      LIGHT: ${{ github.event.pull_request.draft == true }}
     steps:
       - uses: actions/checkout@v4
 
@@ -205,17 +236,49 @@ jobs:
             build-essential cmake ninja-build pkg-config \
             libasound2-dev libfreetype6-dev libx11-dev libxinerama-dev \
             libxrandr-dev libxcursor-dev libxcomposite-dev libxext-dev \
-            libglu1-mesa-dev libgtk-3-dev xvfb python3-pip python3-venv
+            libglu1-mesa-dev libgtk-3-dev xvfb python3-pip python3-venv ccache
+
+      # v2 keys: the v1 caches hold objects built with CCACHE_BASEDIR.
+      # Prefixes must not be prefixes of each other (ccache-linux- used to
+      # match ccache-linux-pack-).
+      - name: Restore compiler cache
+        id: ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-v2-full-${{ hashFiles('CMakeLists.txt', 'src/**', 'tests/**/*.cpp', 'tests/**/*.h', 'tools/**/*.cpp', 'tools/**/*.h', 'resources/**') }}
+          restore-keys: |
+            ccache-v2-full-
 
       - name: Configure and build
         run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --target ROLLA_VST3 rolla-render rolla-rolls rolla-sampler-test rolla-sample-check rolla-roll-test rolla-knob-test rolla-phrase-test rolla-arrange-test rolla-tp-test rolla-export-test rolla-profile-test
+          set -euo pipefail
+          mkdir -p "$CCACHE_DIR"
+          ccache -z
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DROLLA_TEST_TONE_PACK=/tmp/rolla-tone-pack
+          TESTS="rolla-sampler-test rolla-sample-check rolla-roll-test rolla-knob-test rolla-phrase-test rolla-tp-test rolla-export-test rolla-bundle-test rolla-profile-test"
+          if [ "$LIGHT" = "true" ]; then
+            echo "Draft PR: building test binaries only"
+            cmake --build build --target $TESTS
+          else
+            cmake --build build --target ROLLA_VST3 rolla-render rolla-rolls $TESTS
+          fi
+          ccache -s
+
+      # Drafts build a partial object set; only full runs save, so the cache
+      # under a given key always covers every target.
+      - name: Save compiler cache
+        if: always() && !github.event.pull_request.draft && steps.ccache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ${{ steps.ccache.outputs.cache-primary-key }}
 
       - name: Profile isolation (no test touches a real ROLLA profile)
         run: |
           set -euo pipefail
           ./build/rolla-profile-test
+
 
       - name: Sampler tests
         run: |
@@ -224,36 +287,48 @@ jobs:
           ./build/rolla-sample-check
 
       - name: Renderer smoke
+        if: ${{ !github.event.pull_request.draft }}
         run: |
           set -euo pipefail
           python3 -m pip install --user --break-system-packages numpy scipy soundfile pyloudnorm
           python3 tests/roll/renderer_smoke.py --rolls ./build/rolla-rolls
 
-      - name: Sample pack render checks (bar-1 kick, silent lanes, mutes, STAB)
-        run: |
-          set -euo pipefail
-          # Generated pack (no sample audio in git), bigger than the old load table.
-          python3 tests/roll/sample_pack_check.py --rolls ./build/rolla-rolls \
-            --seeds 1,2 --count 20 --full-count 6 --jobs 4 --stab-sweep
-
       - name: Export end to end
+        if: ${{ !github.event.pull_request.draft }}
         run: |
           set -euo pipefail
           python3 -c "import sys; sys.path.insert(0, 'tests/roll'); import renderer_smoke as r; r.build_pack('/tmp/rolla-tone-pack')"
-          ./build/rolla-export-test --samples /tmp/rolla-tone-pack
+          # rolla-export-test in 10 slices (midi, audio-<style>, vox-<range>,
+          # length2), each with its own scratch profile, run in parallel.
+          ctest --test-dir build -L export -j "$(nproc)" --output-on-failure
+
+      - name: Bundled samples (bundle root, one bar per lane, fidelity, silence, settings)
+        run: |
+          set -euo pipefail
+          # Scratch profile only; writes its own tone pack into a temp bundle.
+          ./build/rolla-bundle-test
+
+      - name: inject_pack.sh on the built VST3
+        if: ${{ !github.event.pull_request.draft }}
+        run: |
+          set -euo pipefail
+          VST3=$(find build -path '*ROLLA.vst3' -type d -print -quit)
+          test -n "$VST3"
+          tests/bundle/inject_pack_check.sh "$VST3"
 
       - name: Roll tests
         run: |
           set -euo pipefail
           ./build/rolla-roll-test
 
-      - name: Phrase grammar and arrangement
+      - name: Phrase grammar
         run: |
           set -euo pipefail
           ./build/rolla-phrase-test
-          ./build/rolla-arrange-test
 
+      # About 6 minutes on main; built on drafts, run on full CI only.
       - name: True-peak guard tests
+        if: ${{ !github.event.pull_request.draft }}
         run: |
           set -euo pipefail
           ./build/rolla-tp-test
@@ -261,13 +336,15 @@ jobs:
       - name: Knob and export tests
         run: |
           set -euo pipefail
-          ./build/rolla-knob-test
+          # Tone pack from the export step: every knob's audio check runs.
+          ./build/rolla-knob-test --samples /tmp/rolla-tone-pack
 
       - name: Offline renders
+        if: ${{ !github.event.pull_request.draft }}
         run: |
           set -euo pipefail
           # rolla-render's 0.10 cpu gate is a quiet-machine realtime budget.
-          # ubuntu-24.04 runners have landed just over it (gaskin 0.109) while
+          # ubuntu-24.04 runners have landed just over it (jackin 0.109) while
           # A&R still passed. Waive only that line, and only up to 0.25.
           set +e
           ./build/rolla-render "$GITHUB_WORKSPACE/renders" > /tmp/rolla-render.log 2>&1
@@ -294,6 +371,7 @@ jobs:
           test -n "$(find "$GITHUB_WORKSPACE/renders" -name '*.wav' -print -quit)"
 
       - name: pluginval strictness 5
+        if: ${{ !github.event.pull_request.draft }}
         env:
           # The plugin honours these two; keeps settings and caches off the runner's profile.
           ROLLA_SETTINGS_DIR: ${{ runner.temp }}/rolla-profile/settings
@@ -311,6 +389,7 @@ jobs:
           xvfb-run -a "$BIN" --strictness-level 5 --timeout-ms 900000 --validate-in-process --verbose "$VST3"
 
       - name: Upload renders
+        if: ${{ !github.event.pull_request.draft }}
         uses: actions/upload-artifact@v4
         with:
           name: ROLLA-linux-renders
@@ -318,6 +397,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload headless roll renderer
+        if: ${{ !github.event.pull_request.draft }}
         uses: actions/upload-artifact@v4
         with:
           name: rolla-rolls-linux
@@ -326,20 +406,44 @@ jobs:
           if-no-files-found: error
 
       - name: MIDI score, audio checks skipped without samples
+        if: ${{ !github.event.pull_request.draft }}
         continue-on-error: true
         run: |
           set -euo pipefail
           ./build/rolla-rolls --style all --count 20 --seed 1 --out "$GITHUB_WORKSPACE/ci-rolls"
           python3 -m pip install --user --break-system-packages mido || true
-          for style in ukmin long pop gaskin; do
+          for style in ukmin long pop jackin; do
             python3 tools/score_rolls.py "$GITHUB_WORKSPACE/ci-rolls/$style" --style "$style" --no-orig || true
           done
           echo "clicks, tails, loudness: SKIPPED (no sample pack on this runner)"
 
-  mix:
-    name: Mix strip renders
+  # Split out of the Linux job: it was ~43 of its ~87 minutes, against a
+  # 90-minute timeout. Builds only rolla-rolls and runs in parallel.
+  linux-pack:
+    name: Linux sample pack checks (${{ matrix.part }})
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    # The same checks as one sample_pack_check.py run with
+    # --seeds 1,2 --count 20 --full-count 6 --stab-sweep, spread over runners.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: full
+            args: --part full --seeds 1 --full-count 6 --jobs 4
+          - part: kick-1
+            args: --part kick --seeds 1 --count 20 --jobs 4
+          - part: kick-2
+            args: --part kick --seeds 2 --count 20 --jobs 4
+          - part: stab
+            args: --part stab --stab-sweep --jobs 4
+    env:
+      # Same ccache settings as the Linux job (see the comment there).
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_COMPRESS: "true"
+      CCACHE_MAXSIZE: 500M
+      CCACHE_SLOPPINESS: time_macros
     steps:
       - uses: actions/checkout@v4
 
@@ -350,12 +454,84 @@ jobs:
             build-essential cmake ninja-build pkg-config \
             libasound2-dev libfreetype6-dev libx11-dev libxinerama-dev \
             libxrandr-dev libxcursor-dev libxcomposite-dev libxext-dev \
-            libglu1-mesa-dev libgtk-3-dev python3-pip python3-venv
+            libglu1-mesa-dev libgtk-3-dev xvfb python3-pip python3-venv ccache
+
+      - name: Restore compiler cache
+        id: ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-v2-pack-${{ hashFiles('CMakeLists.txt', 'src/**', 'tests/**/*.cpp', 'tests/**/*.h', 'tools/**/*.cpp', 'tools/**/*.h', 'resources/**') }}
+          restore-keys: |
+            ccache-v2-pack-
+
+      - name: Configure and build
+        run: |
+          mkdir -p "$CCACHE_DIR"
+          ccache -z
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build build --target rolla-rolls
+          ccache -s
+
+      - name: Save compiler cache
+        if: always() && steps.ccache.outputs.cache-hit != 'true' && matrix.part == 'full'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ${{ steps.ccache.outputs.cache-primary-key }}
+
+      - name: Sample pack render checks (bar-1 kick, silent lanes, mutes, STAB)
+        run: |
+          set -euo pipefail
+          # Generated pack (no sample audio in git), bigger than the old load table.
+          python3 tests/roll/sample_pack_check.py --rolls ./build/rolla-rolls ${{ matrix.args }}
+
+  mix:
+    name: Mix strip renders
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      # Same ccache settings as the Linux job (see the comment there).
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_COMPRESS: "true"
+      CCACHE_MAXSIZE: 500M
+      CCACHE_SLOPPINESS: time_macros
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake ninja-build pkg-config \
+            libasound2-dev libfreetype6-dev libx11-dev libxinerama-dev \
+            libxrandr-dev libxcursor-dev libxcomposite-dev libxext-dev \
+            libglu1-mesa-dev libgtk-3-dev python3-pip python3-venv ccache
+
+      - name: Restore compiler cache
+        id: ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-v2-mix-${{ hashFiles('CMakeLists.txt', 'src/**', 'tests/**/*.cpp', 'tests/**/*.h', 'tools/**/*.cpp', 'tools/**/*.h', 'resources/**') }}
+          restore-keys: |
+            ccache-v2-mix-
 
       - name: Configure and build mix harness
         run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++
+          mkdir -p "$CCACHE_DIR"
+          ccache -z
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++ -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           cmake --build build --target rolla-mix-render
+          ccache -s
+
+      - name: Save compiler cache
+        if: always() && steps.ccache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ${{ steps.ccache.outputs.cache-primary-key }}
 
       - name: Validate profiles
         run: python3 tests/mix/validate_profiles.py
@@ -369,7 +545,7 @@ jobs:
           python3 tests/mix/mix_check.py stimulus "$GITHUB_WORKSPACE/mix-renders/stimulus.wav" --seconds 4
           ./build/rolla-mix-render --switch --stim "$GITHUB_WORKSPACE/mix-renders/stimulus.wav" --from UKMIN --to LONG --at 1.0 --lane STAB "$GITHUB_WORKSPACE/mix-renders/switch/UKMIN_LONG.wav"
           ./build/rolla-mix-render --switch --stim "$GITHUB_WORKSPACE/mix-renders/stimulus.wav" --from LONG --to POP --at 1.0 --lane STAB "$GITHUB_WORKSPACE/mix-renders/switch/LONG_POP.wav"
-          ./build/rolla-mix-render --switch --stim "$GITHUB_WORKSPACE/mix-renders/stimulus.wav" --from POP --to GASKIN --at 1.0 --lane STAB "$GITHUB_WORKSPACE/mix-renders/switch/POP_GASKIN.wav"
+          ./build/rolla-mix-render --switch --stim "$GITHUB_WORKSPACE/mix-renders/stimulus.wav" --from POP --to JACKIN --at 1.0 --lane STAB "$GITHUB_WORKSPACE/mix-renders/switch/POP_JACKIN.wav"
           python3 tests/mix/run_mix_checks.py --gate --switch-dir "$GITHUB_WORKSPACE/mix-renders/switch" "$GITHUB_WORKSPACE/mix-renders"
 
       - name: tp_guard table

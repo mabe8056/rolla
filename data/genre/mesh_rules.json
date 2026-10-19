@@ -1,0 +1,43 @@
+{
+  "_about": "Kit meshing tolerances (src/GenreBrain/KitMesh.h, loaded by KitMeshJson.h). Neutral numbers from docs/mix/MIX_SPEC.md and tests/mix/targets.json; no reference data. Same values as MeshRules::fromMixSpec(); any key left out keeps that default. Pairs are [full, clear]: full severity at or under the first, none from the second.",
+  "version": 1,
+  "conflict_at": 1.0,
+  "kick_bass": {
+    "sub_own_min": 0.5,
+    "sub_heavy": 0.75,
+    "sub_weight": 0.5,
+    "fund_unison_st": 0.35,
+    "fund_clash_clear_st": [2.0, 3.0],
+    "fund_weight": 1.0,
+    "fund_proxy_weight": 0.5,
+    "kick_pitch_conf_min": 0.3,
+    "kick_f0_hz": [40.0, 80.0],
+    "kick_f0_per_centroid": 0.66,
+    "default_bpm": 126.0,
+    "tail_ramp_ms": 100.0,
+    "tail_weight": 1.0
+  },
+  "bass_tonal": {
+    "tonal_sub_max": 0.15,
+    "tonal_sub_ramp": 0.15,
+    "stab_centroid_min_hz": 389.0,
+    "mask_weight": 1.0,
+    "register_full_clear_st": [7.0, 12.0],
+    "register_centroid_full_clear_oct": [1.0, 2.0],
+    "register_weight": 1.0
+  },
+  "crowding": {
+    "full_clear_st": [3.0, 7.0],
+    "centroid_full_clear_oct": [0.25, 0.5],
+    "weight": 1.0
+  },
+  "key": {
+    "tone_weight": 1.0,
+    "min_conf": 0.2
+  },
+  "top_band": {
+    "min_hz": 6473.0,
+    "full_clear_oct": [0.1, 0.33],
+    "weight": 1.0
+  }
+}

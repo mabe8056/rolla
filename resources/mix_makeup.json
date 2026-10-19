@@ -45,7 +45,7 @@
     "PAD": -0.41, "VOX": 16.61
    }
   },
-  "GASKIN": {
+  "JACKIN": {
    "sum_align_db": 0.61,
    "tp_ceil_db": {
     "KICK": -17.5, "CLAP": -23.0, "SNARE": -21.0, "RIM": -23.0,

@@ -19,6 +19,24 @@
 namespace rolla
 {
 
+inline bool anyLaneSoloed (const bool (&solo)[NumParts]) noexcept
+{
+    for (bool s : solo)
+        if (s)
+            return true;
+    return false;
+}
+
+// Solo is playback-only. With any lane soloed, every other lane plays as muted;
+// a soloed lane the user also muted stays muted. With no solo this changes nothing.
+inline void foldSolo (bool (&mute)[NumParts], const bool (&solo)[NumParts]) noexcept
+{
+    if (! anyLaneSoloed (solo))
+        return;
+    for (int i = 0; i < NumParts; ++i)
+        mute[i] = mute[i] || ! solo[i];
+}
+
 class RollaProcessor : public juce::AudioProcessor,
                        private juce::AudioProcessorValueTreeState::Listener
 {
@@ -94,6 +112,9 @@ public:
     juce::String exportMidiToDocuments();
     // One type-1 MIDI file: tempo track, then one track per lane.
     juce::StringArray writeTempMidi();
+    // One single-track MIDI file per lane (all 7, empty lanes included), one loop
+    // (LENGTH) long, in one fresh cache folder. Same names as writeLaneMidi.
+    juce::StringArray writeLaneMidiFiles();
     // One WAV stem per lane, one loop long (the LENGTH setting), seamless and
     // downbeat-aligned. Same cache and drag path as the MIDI file.
     juce::StringArray writeStemAudio();
@@ -113,6 +134,18 @@ public:
 
     void triggerRoll();
     void triggerShuffle (int part);
+
+    // Status line after the originality floor refused a ROLL / shuffle / reshape
+    // and the previous roll was kept ("Roll refused: ..."). Empty again after
+    // the next accepted roll. serial changes on every set or clear.
+    struct RollNotice
+    {
+        juce::String text;
+        std::uint32_t serial = 0;
+    };
+    RollNotice rollNotice() const;
+    // Alt-click on a solo button: solo `part` and clear every other lane's solo.
+    void setExclusiveSolo (int part);
 
     bool laneSampleMissing (int part) const;
     void setSamplesRoot (const juce::File& folder);
@@ -149,6 +182,17 @@ public:
     // Library-relative file the last note on a lane (or drum voice) played. Tests only.
     std::string lastPickedFile (int part, int drumVoice = -1) const { return engine.lastPickedFile (part, drumVoice); }
 
+    // Per-voice drum pick (genre brain); -1 plays the shared drum pick. Tests and status.
+    int drumVoicePick (int voice) const noexcept
+    {
+        return voice >= 0 && voice < NumDrumVoices ? drumPick[voice].load (std::memory_order_relaxed) : -1;
+    }
+    void setDrumVoicePick (int voice, int pick) noexcept
+    {
+        if (voice >= 0 && voice < NumDrumVoices)
+            drumPick[voice].store (pick < 0 ? -1 : pick, std::memory_order_relaxed);
+    }
+
     // 14 session slots (6 lanes + 8 drum voices). Paths persist; audio does not.
     bool loadUserSlot (int slot, const juce::File& file, juce::String& error);
     void clearUserSlot (int slot);
@@ -171,6 +215,9 @@ private:
     void parameterChanged (const juce::String& parameterID, float newValue) override;
     void applyDialect (int dialect);
     void regenerate (int onlyPart);
+    void setRollNotice (const juce::String& text);
+    mutable std::mutex noticeMu;
+    RollNotice notice;
     void requestReshape();
     void reshapeUnkept();
     EngineParams readParams (std::shared_ptr<const PresetBank>& hold) const;
@@ -233,6 +280,14 @@ private:
     SampleLibrary library;
     UserSlots slots;
     std::atomic<int> samplePick[NumParts] {};
+    // One pick per drum voice, -1 (set in the constructor) until the genre brain
+    // draws it. A plain roll or an old session resets it, so drums use samplePick[Drums].
+    std::atomic<int> drumPick[NumDrumVoices] {};
+    // Genre brain (Job G2): the bundle's Genre/ data, loaded on the first roll. With
+    // no data a roll keeps today's seed draw. Message thread only.
+    struct GenreBrainState;
+    std::shared_ptr<GenreBrainState> genreBrain;
+    void applyGenreBrain (std::uint32_t mask, const Settings& s, const std::uint32_t* seeds, const int* presetFor);
     std::atomic<int> samplesFoundCount { -1 };
     std::atomic<int> samplesMissingCount { -1 };
 
@@ -256,6 +311,14 @@ private:
     std::atomic<double> playPpq { 0.0 };
     std::atomic<float> lastBpm { 130.f };
     double previewPpq = 0.0;
+    // Free-running phrase (audio thread only). FL Studio loops its pattern, so its
+    // ppq wraps every pattern length while the transport keeps playing. Each host
+    // loop wrap adds the wrapped distance here, so an 8-bar roll plays through a
+    // 4-bar host loop. Cleared on stop -> start and on a real seek.
+    double phraseOffset = 0.0;
+    double hostExpectPpq = 0.0;
+    double hostLastBeats = 0.0;
+    bool hostRolling = false;
     double preparedRate = 48000.0;
     // Pattern MIDI held back by the tp_guard latency (see delayMidiOut). Audio thread only.
     juce::MidiBuffer midiLate, midiNow, midiNext;

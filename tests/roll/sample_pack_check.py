@@ -244,7 +244,7 @@ def run(rolls, args, cache):
 
 def render_set(rolls, pack, out, cache, seed, count, stem_lanes, jobs):
     """One rolla-rolls per style; up to `jobs` at a time."""
-    styles = ["ukmin", "long", "pop", "gaskin"]
+    styles = ["ukmin", "long", "pop", "jackin"]
     env = profile_env(cache)
     pending, running, logs = list(styles), [], {}
     while pending or running:
@@ -284,6 +284,9 @@ def main():
     ap.add_argument("--jobs", type=int, default=1)
     ap.add_argument("--stab-sweep", action="store_true")
     ap.add_argument("--work", default="")
+    ap.add_argument("--part", choices=("all", "full", "kick", "stab"), default="all",
+                    help="run one block so CI can spread them over parallel jobs: full (every stem, first seed), "
+                         "kick (bar-1 kick per seed), stab (--stab-sweep). all runs every block, as before")
     a = ap.parse_args()
 
     work = Path(a.work) if a.work else Path(tempfile.mkdtemp(prefix="rolla-pack-"))
@@ -296,14 +299,14 @@ def main():
 
     fails = []
     seeds = [int(s) for s in a.seeds.split(",") if s]
-    if a.full_count > 0 and seeds:
+    if a.part in ("all", "full") and a.full_count > 0 and seeds:
         d = out / f"full_seed_{seeds[0]}"
         render_set(a.rolls, pack, d, cache, seeds[0], a.full_count, "BASS,STAB,HITS,PLUCK,PAD,VOX,DRUMS", a.jobs)
         rolls = sorted(d.glob("*/roll_*"))
         print(f"all stems, seed {seeds[0]}: {len(rolls)} rolls")
         for roll in rolls:
             check_roll(roll, fails)
-    for seed in seeds:
+    for seed in (seeds if a.part in ("all", "kick") else []):
         d = out / f"seed_{seed}"
         render_set(a.rolls, pack, d, cache, seed, a.count, "DRUMS", a.jobs)
         rolls = sorted(d.glob("*/roll_*"))
@@ -318,8 +321,8 @@ def main():
     if extra:
         fails.append(f"files written into the sample folder: {extra[:5]}")
 
-    if a.stab_sweep:
-        for style in ("ukmin", "long", "pop", "gaskin"):
+    if a.stab_sweep and a.part in ("all", "stab"):
+        for style in ("ukmin", "long", "pop", "jackin"):
             lo = stab_notes(a.rolls, style, 7, 0.0, out, cache)
             mid = stab_notes(a.rolls, style, 7, 0.55, out, cache)
             hi = stab_notes(a.rolls, style, 7, 1.0, out, cache)
