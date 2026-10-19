@@ -581,6 +581,48 @@ target_link_libraries(rolla-knob-test
         juce::juce_recommended_warning_flags
 )
 
+# Test isolation: every settings / cache / sample-root / export / user-slot path
+# is in the scratch profile, and the ROLLA_TEST_MODE guard refuses real folders.
+add_executable(rolla-profile-test
+    tests/profile/profile_guard_test.cpp
+    src/PluginProcessor.cpp
+    src/PluginEditor.cpp
+    src/ui/Theme.cpp
+    src/Engine/Engine.cpp
+    src/Engine/Sampler.cpp
+    src/Engine/SampleLibrary.cpp
+    src/Sampler/SamplePrep.cpp
+    src/Sampler/UserSlots.cpp
+    src/Generator/Generator.cpp
+    src/Generator/RuleComposer.cpp
+    src/Generator/Presets.cpp
+    src/Generator/MidiFile.cpp
+    src/Drums/DrumMachine.cpp
+    src/Drums/DrumPattern.cpp
+    src/Mix/MixProgram.cpp
+    src/Mix/MixRuntime.cpp
+)
+
+target_include_directories(rolla-profile-test PRIVATE src)
+
+target_compile_definitions(rolla-profile-test
+    PRIVATE
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_DISPLAY_SPLASH_SCREEN=0
+        JUCE_REPORT_APP_USAGE=0
+)
+
+target_link_libraries(rolla-profile-test
+    PRIVATE
+        RollaData
+        juce::juce_audio_utils
+        juce::juce_dsp
+        juce::juce_audio_formats
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags
+)
+
 # Offline variety check. No JUCE. Not part of the CI workflow.
 add_executable(rolla-variety
     tools/variety_main.cpp

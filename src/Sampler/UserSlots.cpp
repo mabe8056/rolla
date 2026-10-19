@@ -1,5 +1,6 @@
 #include "UserSlots.h"
 #include "SamplePrep.h"
+#include "../Engine/RollaSettings.h"
 #include "../Engine/SampleChop.h"
 
 #include <algorithm>
@@ -60,9 +61,12 @@ bool UserSlots::safeRelative (const std::string& path) noexcept
 
 void UserSlots::setRoot (const juce::File& root)
 {
+    // Test mode: never copy into a real user's ROLLA folder (falls back to the
+    // guarded default root, which is the scratch profile's).
+    const auto safe = settings::writeAllowed (root, "user slot copies") ? root : SampleLibrary::defaultRoot();
     {
         std::lock_guard<std::mutex> lock (rootMu);
-        rootDir = root;
+        rootDir = safe;
     }
     ensureUserFolders();
     for (int i = 0; i < kUserSlotCount; ++i)
@@ -73,6 +77,13 @@ juce::File UserSlots::root() const
 {
     std::lock_guard<std::mutex> lock (rootMu);
     return rootDir;
+}
+
+juce::File UserSlots::copyFolder (int slot) const
+{
+    if (! validSlot (slot))
+        return {};
+    return root().getChildFile ("USER").getChildFile (userSlotFolder (slot));
 }
 
 void UserSlots::ensureUserFolders() const

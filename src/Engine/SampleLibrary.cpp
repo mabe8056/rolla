@@ -113,6 +113,7 @@ juce::File sampleCacheFor (const juce::File& sampleRoot, const char* kind)
         dir = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
                   .getChildFile ("ROLLA")
                   .getChildFile ("Cache");
+    dir = settings::guardPath (dir, "sample cache", "cache");
     dir.createDirectory();
     const auto key = juce::String::toHexString (sampleRoot.getFullPathName().hashCode64());
     return dir.getChildFile (juce::String (kind) + "-" + key + ".json");
@@ -125,11 +126,12 @@ juce::File loudnessCacheFor (const juce::File& sampleRoot)
 
 juce::File SampleLibrary::defaultRoot()
 {
-    if (const auto over = settings::testFolder ("ROLLA_DEFAULT_ROOT"); over != juce::File())
-        return over;
-    return juce::File::getSpecialLocation (juce::File::userMusicDirectory)
-        .getChildFile ("ROLLA")
-        .getChildFile ("Samples");
+    auto root = settings::testFolder ("ROLLA_DEFAULT_ROOT");
+    if (root == juce::File())
+        root = juce::File::getSpecialLocation (juce::File::userMusicDirectory)
+                   .getChildFile ("ROLLA")
+                   .getChildFile ("Samples");
+    return settings::guardPath (root, "default sample root", "Music/ROLLA/Samples");
 }
 
 juce::File SampleLibrary::bundledRoot()
@@ -182,6 +184,8 @@ juce::File SampleLibrary::userSlotRootFor (const juce::File& sampleRoot)
 void ensureSampleFolders (const juce::File& root)
 {
     if (SampleLibrary::isBundledRoot (root))
+        return;
+    if (! settings::writeAllowed (root, "sample folders"))
         return;
     const char* parts[] = { "BASS", "STAB", "HITS", "PLUCK", "PAD", "VOX" };
     const char* drums[] = { "KICK", "CLAP", "SNARE", "RIM", "CH", "OH", "RIDE", "PERC" };

@@ -2047,7 +2047,8 @@ juce::String RollaProcessor::getDrumSampleName (int voice) const
 
 juce::String RollaProcessor::exportMidiToDocuments()
 {
-    return exportMidiTo (juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("ROLLA"));
+    return exportMidiTo (settings::guardPath (juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("ROLLA"),
+                                              "MIDI export folder", "Documents/ROLLA"));
 }
 
 juce::File RollaProcessor::exportCache() const
@@ -2068,6 +2069,7 @@ juce::File RollaProcessor::exportCache() const
                   .getChildFile (".cache").getChildFile ("ROLLA");
        #endif
     }
+    dir = settings::guardPath (dir, "export cache", "cache/ROLLA");
     dir.createDirectory();
     return dir;
 }

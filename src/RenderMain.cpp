@@ -2,6 +2,7 @@
 #include "Engine/Engine.h"
 #include "Generator/Generator.h"
 #include "Generator/Presets.h"
+#include "../tests/common/ScratchProfile.h"
 
 #include <BinaryData.h>
 
@@ -784,6 +785,22 @@ void forceSynth (rolla::PresetBank& bank)
 
 int main (int argc, char** argv)
 {
+    // Never the real user profile: settings, caches and ~/Music/ROLLA/Samples go
+    // to a scratch folder. `--samples DIR` renders with that pack, read only.
+    if (rolla::test::useScratchProfile ("render", true).empty() || ! rolla::test::useSamplesArg (argc, argv))
+    {
+        std::cerr << "could not set up a scratch profile\n";
+        return 1;
+    }
+    juce::String outArg;
+    for (int i = 1; i < argc; ++i)
+    {
+        if (std::string (argv[i]) == "--samples" && i + 1 < argc)
+            ++i;
+        else
+            outArg = juce::String::fromUTF8 (argv[i]);
+    }
+
     juce::ScopedJuceInitialiser_GUI juce;
     const int rng = checkRng();
     if (rng != 0)
@@ -801,9 +818,7 @@ int main (int argc, char** argv)
     if (! havePack)
         std::cout << "no sample pack; sample renders stay silent\n";
 
-    juce::File dir = juce::File::getCurrentWorkingDirectory().getChildFile ("renders");
-    if (argc > 1)
-        dir = juce::File (argv[1]);
+    const juce::File dir = juce::File::getCurrentWorkingDirectory().getChildFile (outArg.isNotEmpty() ? outArg : juce::String ("renders"));
     dir.createDirectory();
 
     int failures = 0;
