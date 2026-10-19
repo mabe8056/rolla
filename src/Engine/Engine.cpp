@@ -16,6 +16,13 @@ namespace rolla
 {
 namespace
 {
+// Plugin builds play samples only, so no bus adds tanh colour to them.
+#if ROLLA_PLUGIN_BUILD
+constexpr bool kCleanBus = true;
+#else
+constexpr bool kCleanBus = false;
+#endif
+
 
 // MIX_SPEC: kick and bass hold corr <120 Hz ≥ 0.99 on the master.
 constexpr float kSubMonoHz = 120.f;
@@ -352,7 +359,7 @@ struct Engine::Impl
     Svf dHp, dLp;
     juce::Reverb reverb;
     int reverbIdle = 1000000;
-    DcBlock mainDc, mainDcR, drumDc;
+    DcBlock mainDc, mainDcR, drumDc, drumDcR;
     // Master mono below 120 Hz (LR4 on the side, mix path only). It used to be
     // L += LP(M) - LP(L) with a 2-pole LP: the side then only saw 1 - LP, a
     // 6 dB/oct shelf (about -3 dB at 60 Hz), so the plate's side sailed through.
@@ -413,6 +420,7 @@ struct Engine::Impl
         mainDc.setCutoff (20.f, sr);
         mainDcR.setCutoff (20.f, sr);
         drumDc.setCutoff (25.f, sr);
+        drumDcR.setCutoff (25.f, sr);
         drums.prepare (sr);
         mixRt.prepare (sampleRate);
         tpGuard.prepare (sampleRate);
@@ -443,6 +451,7 @@ struct Engine::Impl
         mainDc.reset();
         mainDcR.reset();
         drumDc.reset();
+        drumDcR.reset();
         masterMono.reset();
         plateMono.reset();
         drumMono.reset();
@@ -2193,12 +2202,17 @@ void Engine::process (const Groove& groove,
         {
             drumLft = synthL + samp + playL[Drums];
             drumRgt = synthR + samp + playR[Drums];
+#if ROLLA_PLUGIN_BUILD
+            // Samples only: the bus is a clean gain. (Unused while the mix program loads.)
+            drumLft *= dLvl;
+            drumRgt *= dLvl;
+#else
             const float dDrive = 1.f + dp.drive * 2.f;
             drumLft = fastTanh (drumLft * dDrive) * dLvl;
             drumRgt = fastTanh (drumRgt * dDrive) * dLvl;
+#endif
             drumLft = E.drumDc.process (drumLft);
-            // Independent DC state would be better; a shared one-pole is acceptable at this gain.
-            drumRgt = flush (drumRgt);
+            drumRgt = E.drumDcR.process (drumRgt);
         }
         // Stereo drum samples, voice pans and slot kicks put side energy under 120 Hz.
         // Mono it here, so the main sum and the DRUMS stem get the same bus.
@@ -2320,8 +2334,14 @@ void Engine::process (const Groove& groove,
         }
         else
         {
+#if ROLLA_PLUGIN_BUILD
+            // Samples only: a clean sum. The true-peak guard below is the safety.
+            outL = flush (E.mainDc.process (outL) * og);
+            outR = flush (E.mainDcR.process (outR) * og);
+#else
             outL = flush (fastTanh (E.mainDc.process (outL) * 1.05f) * og);
-            outR = flush (fastTanh (outR * 1.05f) * og);
+            outR = flush (fastTanh (E.mainDcR.process (outR) * 1.05f) * og);
+#endif
         }
         // The free tail after the loop is hard silence. Reach that silence
         // on a raised cosine, or the last playing sample steps into the zero.
@@ -2353,9 +2373,9 @@ void Engine::process (const Groove& groove,
         if (mainR != nullptr)
             mainR[i] = outR;
         if (drumL != nullptr)
-            drumL[i] = params.mix != nullptr && params.mix->loaded ? flush (drumLft * og) : flush (fastTanh (drumLft) * og);
+            drumL[i] = (params.mix != nullptr && params.mix->loaded) || kCleanBus ? flush (drumLft * og) : flush (fastTanh (drumLft) * og);
         if (drumR != nullptr)
-            drumR[i] = params.mix != nullptr && params.mix->loaded ? flush (drumRgt * og) : flush (fastTanh (drumRgt) * og);
+            drumR[i] = (params.mix != nullptr && params.mix->loaded) || kCleanBus ? flush (drumRgt * og) : flush (fastTanh (drumRgt) * og);
     }
 
     // Master true-peak safety (-6 dBTP). The DRUMS bus rides the same delay.

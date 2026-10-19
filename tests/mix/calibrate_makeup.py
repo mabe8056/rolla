@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import mix_check as mc
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-STYLES = ["UKMIN", "LONG", "POP", "GASKIN"]
+STYLES = ["UKMIN", "LONG", "POP", "JACKIN"]
 LANES = [
     ("KICK", "KICK", None),
     ("CLAP", "DRUMS", "CLAP"),
