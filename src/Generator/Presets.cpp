@@ -375,9 +375,10 @@ void loadDefaultPresets (PresetBank& bank)
     auto blank = std::make_unique<PresetBank>();
     bank = std::move (*blank);
     fillDialect (bank.dialect[UkMin], "pluck", "dub", "warehouse", "hook", "air", "close", "tight", true, 0.52f);
-    fillDialect (bank.dialect[Long], "round", "swell", "dusty", "bright", "wide", "booth", "tight", true, 0.51f);
-    fillDialect (bank.dialect[Pop], "click", "click", "rave", "soft", "air", "chop", "tight", true, 0.50f);
-    fillDialect (bank.dialect[Gaskin], "round", "swell", "warehouse", "hook", "dark", "chop", "room", false, 0.50f);
+    // 16th swing per style (A&R msg 423 #3): ROLLER 52, DEEP 54, BOUNCY 56.7, JACKIN 56.5.
+    fillDialect (bank.dialect[Long], "round", "swell", "dusty", "bright", "wide", "booth", "tight", true, 0.54f);
+    fillDialect (bank.dialect[Pop], "click", "click", "rave", "soft", "air", "chop", "tight", true, 0.567f);
+    fillDialect (bank.dialect[Gaskin], "round", "swell", "warehouse", "hook", "dark", "chop", "room", false, 0.565f);
     auto& g = bank.dialect[Gaskin];
     g.bassDuck = true;
     g.bassGlide = true;

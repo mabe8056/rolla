@@ -1,7 +1,11 @@
 #include "PluginProcessor.h"
 #include "../common/ScratchProfile.h"
 #include "Generator/MidiFile.h"
+#include "Generator/Generator.h"
+#include "Generator/PhraseBank.h"
+#include "Generator/Presets.h"
 
+#include <BinaryData.h>
 #include <juce_events/juce_events.h>
 
 #include <algorithm>
@@ -12,6 +16,7 @@
 #include <functional>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 #include <vector>
@@ -20,12 +25,16 @@
 #include <intrin.h>
 #endif
 
-// JUCE builds with modal loops off, so MessageManager::runDispatchLoopUntil is not in the
-// library. The roll and shuffle handlers post to the message queue; this drains it.
+// The roll and shuffle handlers post to the message queue; pumpUntil drains it.
+// Linux uses the internal hook. macOS and Windows use
+// MessageManager::runDispatchLoopUntil, which needs JUCE_MODAL_LOOPS_PERMITTED=1
+// (set for this target in CMakeLists.txt).
+#if JUCE_LINUX
 namespace juce::detail
 {
 bool dispatchNextMessageOnSystemQueue (bool returnIfNoPendingMessages);
 }
+#endif
 
 namespace
 {
@@ -66,8 +75,12 @@ bool pumpUntil (const std::function<bool()>& done)
     const auto start = juce::Time::getMillisecondCounter();
     while (! done() && juce::Time::getMillisecondCounter() - start < 5000)
     {
+#if JUCE_LINUX
         if (! juce::detail::dispatchNextMessageOnSystemQueue (true))
             juce::Thread::sleep (1);
+#else
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (2);
+#endif
     }
     return done();
 }
@@ -294,6 +307,25 @@ int pcOfNote (int semi)
     return pc;
 }
 
+// BOUNCY pulse mode is a steady four-attack grid. Bass notes are now held to
+// the next onset (A&R msg 423), so mean length no longer tells pulse from the
+// 5-note phrase; count bars (final bar aside) with exactly four onsets.
+bool popPulseGrid (const rolla::Lane& lane, int bars)
+{
+    int fours = 0;
+    const int body = std::min (bars, 8) - 1;
+    for (int b = 0; b < body; ++b)
+    {
+        int n = 0;
+        for (int i = 0; i < lane.count; ++i)
+            if ((int) std::lround (lane.notes[i].start) / 16 == b)
+                ++n;
+        if (n == 4)
+            ++fours;
+    }
+    return body > 0 && fours * 7 >= body * 5;
+}
+
 void testEarReview()
 {
     const std::uint32_t base = 2517220185u;
@@ -313,7 +345,7 @@ void testEarReview()
 
     for (int style = 0; style < 4; ++style)
     {
-        int reaction = 0;
+        int rootTwoFour = 0;
         int stackedBass = 0;
         int stackedStab = 0;
         int pluck = 0;
@@ -365,7 +397,7 @@ void testEarReview()
                         s3 = true;
                 }
                 if (s1 && s3)
-                    ++reaction;
+                    ++rootTwoFour;
             }
             pluck += g.lane[rolla::Pluck].count;
 
@@ -406,10 +438,7 @@ void testEarReview()
                 }
                 if (moves > 0)
                     popOct += 100.0 * oct / moves;
-                double lens = 0;
-                for (int i = 0; i < lane.count; ++i)
-                    lens += lane.notes[i].length;
-                if (lane.count > 0 && lens / lane.count >= 1.8)
+                if (popPulseGrid (lane, g.bars))
                     ++pulseN;
             }
             if (roll == 0)
@@ -427,10 +456,10 @@ void testEarReview()
             }
         }
         std::cout << names[style] << " stacked bass " << stackedBass << " stacked stab " << stackedStab
-                  << " reaction bars " << reaction << " pluck notes " << pluck << "\n";
+                  << " root 2&4 bars " << rootTwoFour << " pluck notes " << pluck << "\n";
         expect (stackedBass == 0, std::string (names[style]) + " bass is monophonic");
         expect (stackedStab == 0, std::string (names[style]) + " stabs do not stack");
-        expect (reaction == 0, std::string (names[style]) + " avoids the reaction figure");
+        expect (rootTwoFour == 0, std::string (names[style]) + " avoids the banned 2&4 root figure");
         if (style == rolla::Long || style == rolla::Pop)
             expect (pluck > 0, std::string (names[style]) + " plays pluck");
         else
@@ -802,10 +831,7 @@ void testScorerV23()
                         same = false;
                 if (bestRest >= 4 && ! same)
                     ++turn;
-                double lens = 0;
-                for (int i = 0; i < bass.count; ++i)
-                    lens += bass.notes[i].length;
-                if (bass.count > 0 && lens / bass.count >= 1.8)
+                if (popPulseGrid (bass, g.bars))
                     ++pulse;
             }
             if (style == rolla::Gaskin)
@@ -889,6 +915,298 @@ void testScorerV23()
     }
 }
 
+// A&R msg 423 #1 and #2: bass on the kick near the reference medians (hard cap
+// 35%), and bass held for most of the loop. 4 styles x 20 seeds.
+void testAr423Bass()
+{
+    const std::uint32_t base = 423423u;
+    const char* names[] = { "ROLLER", "DEEP", "BOUNCY", "JACKIN" };
+    const double target[] = { 0.17, 0.07, 0.32, 0.19 };
+    for (int style = 0; style < 4; ++style)
+    {
+        int onsets = 0;
+        int onKick = 0;
+        double sndSum = 0.0;
+        double sndMin = 1.0;
+        for (int roll = 0; roll < 20; ++roll)
+        {
+            rolla::Settings s;
+            s.dialect = style;
+            s.bars = 8;
+            std::uint32_t seeds[rolla::NumParts] {};
+            for (int p = 0; p < rolla::NumParts; ++p)
+                seeds[p] = base + (std::uint32_t) roll * 0x9E3779B9u + (std::uint32_t) p * 17u
+                         + (std::uint32_t) style * 101u;
+            rolla::Groove g {};
+            rolla::generate (g, s, seeds, 0x7fu);
+            const auto& bass = g.lane[rolla::Bass];
+            const double loop = (double) (g.bars * 16);
+            int rollOn = 0;
+            int rollKick = 0;
+            double held = 0.0;
+            for (int i = 0; i < bass.count; ++i)
+            {
+                const int st = (int) std::lround (bass.notes[i].start);
+                ++rollOn;
+                if (st % 4 == 0)
+                    ++rollKick;
+                held += bass.notes[i].length;
+                expect (bass.notes[i].start + bass.notes[i].length <= (float) loop + 0.01f,
+                        std::string (names[style]) + " roll " + std::to_string (roll) + " bass stays inside the loop");
+            }
+            onsets += rollOn;
+            onKick += rollKick;
+            const double snd = loop > 0.0 ? held / loop : 0.0;
+            sndSum += snd;
+            sndMin = std::min (sndMin, snd);
+            expect (rollOn > 0 && (double) rollKick <= 0.35 * rollOn + 1.0e-6,
+                    std::string (names[style]) + " roll " + std::to_string (roll) + " bass on kick <= 35%");
+            expect (snd >= 0.72, std::string (names[style]) + " roll " + std::to_string (roll) + " bass sounding "
+                                 + std::to_string (snd) + " >= 0.72");
+            expect (bassHoldTicks (bass) <= 3,
+                    std::string (names[style]) + " roll " + std::to_string (roll) + " held bass does not overlap");
+        }
+        const double share = onsets > 0 ? (double) onKick / onsets : 0.0;
+        std::cout << names[style] << " A&R423 bass on kick " << (100.0 * share) << "% (target "
+                  << (100.0 * target[style]) << "%) sounding mean " << (sndSum / 20.0) << " min " << sndMin << "\n";
+        expect (std::abs (share - target[style]) <= 0.10,
+                std::string (names[style]) + " bass on-kick share within 10 points of the reference");
+        expect (share <= 0.35, std::string (names[style]) + " bass on-kick share <= 35%");
+    }
+}
+
+// A&R msg 423 #3: 16th swing defaults per style; the knob still moves freely.
+void testAr423Swing()
+{
+    const float want[] = { 0.52f, 0.54f, 0.567f, 0.565f };
+    auto defaults = std::make_unique<rolla::PresetBank>();
+    rolla::loadDefaultPresets (*defaults);
+    auto json = std::make_unique<rolla::PresetBank>();
+    expect (rolla::loadPresetsFromJson (*json, BinaryData::presets_json, BinaryData::presets_jsonSize),
+            "presets.json loads");
+    for (int d = 0; d < rolla::NumDialects; ++d)
+    {
+        expect (std::abs (defaults->dialect[d].swing - want[d]) < 1.0e-4f,
+                std::string (rolla::dialectName (d)) + " built-in swing default");
+        expect (std::abs (json->dialect[d].swing - want[d]) < 1.0e-4f,
+                std::string (rolla::dialectName (d)) + " presets.json swing default");
+    }
+
+    rolla::RollaProcessor proc;
+    proc.waitUntilReady();
+    auto swingNow = [&] { return proc.apvts.getRawParameterValue ("swing")->load(); };
+    for (int d : { (int) rolla::Long, (int) rolla::Pop, (int) rolla::Gaskin, (int) rolla::UkMin })
+    {
+        setDenorm (proc, "dialect", (float) d);
+        expect (pumpUntil ([&] { return std::abs (swingNow() - want[d]) < 0.0015f; }),
+                std::string (rolla::dialectName (d)) + " style sets the swing knob to its default");
+    }
+    setDenorm (proc, "swing", 0.555f);
+    expect (std::abs (swingNow() - 0.555f) < 0.0015f, "the swing knob still takes a user value");
+}
+
+// 4 styles x 50 seeds: no instant where the bass and a stab/pad tone are a
+// semitone apart (m2 / m9 / M7), the bass b2 share of bass sounding time stays
+// under the style cap (ROLLER 12%, DEEP 6%, BOUNCY 3%, JACKIN 6%; phrygian
+// rolls 30% with no natural 2 in stab/pad), the major 6 only shows up in
+// dorian rolls, and a dorian stab never carries the b6.
+void testHarmonyClashes()
+{
+    const std::uint32_t base = 1u;
+    const char* names[] = { "ROLLER", "DEEP", "BOUNCY", "JACKIN" };
+    const double styleCap[] = { 0.12, 0.06, 0.03, 0.06 };
+    for (int style = 0; style < 4; ++style)
+    {
+        int natural2 = 0;
+        int clashes = 0;
+        int b2Over = 0;
+        int sixthBad = 0;
+        int phrygianRolls = 0;
+        for (int roll = 0; roll < 50; ++roll)
+        {
+            rolla::Settings s;
+            s.dialect = style;
+            s.bars = 8;
+            std::uint32_t seeds[rolla::NumParts] {};
+            for (int p = 0; p < rolla::NumParts; ++p)
+                seeds[p] = base + (std::uint32_t) roll * 0x9E3779B9u + (std::uint32_t) p * 17u
+                         + (std::uint32_t) style * 101u;
+            rolla::Groove g {};
+            rolla::generate (g, s, seeds, 0x7fu);
+            const int mode = rolla::rollMode (s, seeds[rolla::Bass]);
+            if (mode == rolla::phrase::Phrygian)
+                ++phrygianRolls;
+
+            auto bass = g.lane[rolla::Bass];
+            std::sort (bass.notes, bass.notes + bass.count,
+                       [] (const rolla::Note& a, const rolla::Note& b) { return a.start < b.start; });
+            double total = 0;
+            double b2 = 0;
+            for (int i = 0; i < bass.count; ++i)
+            {
+                double len = bass.notes[i].length;
+                if (i + 1 < bass.count)
+                    len = std::min (len, (double) (bass.notes[i + 1].start - bass.notes[i].start));
+                len = std::max (0.0, len);
+                total += len;
+                const int pc = pcOfNote (bass.notes[i].chord[0]);
+                if (pc == 1)
+                    b2 += len;
+                if (pc == 9 && mode != rolla::phrase::Dorian)
+                    ++sixthBad;
+            }
+            const double cap = mode == rolla::phrase::Phrygian ? 0.30 : styleCap[style];
+            if (total > 0 && b2 / total > cap + 1e-5)
+                ++b2Over;
+            if (mode == rolla::phrase::Phrygian)
+                for (int part : { (int) rolla::Stab, (int) rolla::Pad })
+                    for (int k = 0; k < g.lane[part].count; ++k)
+                        for (int c = 0; c < std::max (1, (int) g.lane[part].notes[k].nChord) && c < 4; ++c)
+                            if (pcOfNote (g.lane[part].notes[k].chord[c]) == 2)
+                                ++natural2;
+            if (mode == rolla::phrase::Dorian)
+            {
+                const auto& stab = g.lane[rolla::Stab];
+                for (int k = 0; k < stab.count; ++k)
+                    for (int c = 0; c < std::max (1, (int) stab.notes[k].nChord) && c < 4; ++c)
+                        if (pcOfNote (stab.notes[k].chord[c]) == 8)
+                            ++sixthBad;
+            }
+
+            // Sample every quarter-16th midpoint across the loop.
+            for (int q = 0; q < g.bars * 64; ++q)
+            {
+                const float t = (float) q * 0.25f + 0.125f;
+                int bpc = -1;
+                for (int i = 0; i < bass.count; ++i)
+                    if (bass.notes[i].vel > 2 && t >= bass.notes[i].start && t < bass.notes[i].start + bass.notes[i].length)
+                        bpc = pcOfNote (bass.notes[i].chord[0]);
+                if (bpc < 0)
+                    continue;
+                bool clash = false;
+                for (int part : { (int) rolla::Stab, (int) rolla::Pad })
+                {
+                    const auto& l = g.lane[part];
+                    for (int k = 0; k < l.count && ! clash; ++k)
+                    {
+                        const auto& n = l.notes[k];
+                        if (n.vel <= 2 || t < n.start || t >= n.start + n.length)
+                            continue;
+                        for (int c = 0; c < std::max (1, (int) n.nChord) && c < 4; ++c)
+                        {
+                            const int d = (pcOfNote (n.chord[c]) - bpc + 12) % 12;
+                            if (d == 1 || d == 11)
+                                clash = true;
+                        }
+                    }
+                }
+                if (clash)
+                {
+                    ++clashes;
+                    break;
+                }
+            }
+        }
+        std::cout << names[style] << " harmony: clash rolls " << clashes << "/50 b2-over " << b2Over
+                  << " sixth-bad " << sixthBad << " phrygian rolls " << phrygianRolls
+                  << " phrygian natural-2 " << natural2 << "\n";
+        expect (clashes == 0, std::string (names[style]) + " bass never sits a semitone from stab/pad");
+        expect (b2Over == 0, std::string (names[style]) + " b2 under the style cap (phrygian 30%)");
+        expect (natural2 == 0, std::string (names[style]) + " phrygian stab/pad carry no natural 2");
+        expect (sixthBad == 0, std::string (names[style]) + " major 6 only in dorian, no b6 stab in dorian");
+    }
+}
+
+// 4 styles x 50 seeds: no lane has two note-ons of one pitch on one 16th or
+// two same-pitch notes sounding at once, no bar has more than 3 stab chord
+// hits, and about 20-40% of rolls end with a bar-8 bass pickup.
+void testLaneHygiene()
+{
+    const std::uint32_t base = 77u;
+    const char* names[] = { "ROLLER", "DEEP", "BOUNCY", "JACKIN" };
+    int pickups = 0;
+    int rolls = 0;
+    for (int style = 0; style < 4; ++style)
+    {
+        int dupOrOverlap = 0;
+        int stabOver = 0;
+        int stylePickups = 0;
+        for (int roll = 0; roll < 50; ++roll)
+        {
+            rolla::Settings s;
+            s.dialect = style;
+            s.bars = 8;
+            std::uint32_t seeds[rolla::NumParts] {};
+            for (int p = 0; p < rolla::NumParts; ++p)
+                seeds[p] = base + (std::uint32_t) roll * 0x9E3779B9u + (std::uint32_t) p * 17u
+                         + (std::uint32_t) style * 101u;
+            rolla::Groove g {};
+            rolla::generate (g, s, seeds, 0x7fu);
+            ++rolls;
+
+            for (int p = 0; p < rolla::Drums; ++p)
+            {
+                const auto& l = g.lane[p];
+                dupOrOverlap += laneDuplicateOns (l);
+                for (int i = 0; i < l.count; ++i)
+                    for (int j = i + 1; j < l.count; ++j)
+                    {
+                        const auto& a = l.notes[i];
+                        const auto& b = l.notes[j];
+                        const bool sameOn = std::lround (a.start) == std::lround (b.start);
+                        const bool overlap = a.start < b.start + b.length - 1e-3f && b.start < a.start + a.length - 1e-3f;
+                        if (sameOn || ! overlap)
+                            continue; // same-onset repeats are counted by laneDuplicateOns
+                        bool shared = false;
+                        for (int c = 0; c < std::max (1, (int) a.nChord) && c < 4; ++c)
+                            for (int d = 0; d < std::max (1, (int) b.nChord) && d < 4; ++d)
+                                if (a.chord[c] == b.chord[d])
+                                    shared = true;
+                        if (shared)
+                            ++dupOrOverlap;
+                    }
+            }
+
+            const auto& stab = g.lane[rolla::Stab];
+            for (int bar = 0; bar < g.bars; ++bar)
+            {
+                std::set<long> hits;
+                for (int k = 0; k < stab.count; ++k)
+                {
+                    const long st = std::lround (stab.notes[k].start);
+                    if (st / 16 == bar)
+                        hits.insert (st);
+                }
+                if (hits.size() > 3)
+                    ++stabOver;
+            }
+
+            if (rolla::rollWantsPickup (seeds[rolla::Bass]))
+            {
+                const auto& bass = g.lane[rolla::Bass];
+                const int origin = (g.bars - 1) * 16;
+                bool landed = false;
+                for (int i = 0; i < bass.count; ++i)
+                {
+                    const int st = (int) std::lround (bass.notes[i].start);
+                    if (st >= origin + 13 && st < origin + 16)
+                        landed = true;
+                }
+                if (landed)
+                    ++stylePickups;
+            }
+        }
+        pickups += stylePickups;
+        std::cout << names[style] << " hygiene: dup/overlap " << dupOrOverlap << " stab bars over 3 " << stabOver
+                  << " pickups " << stylePickups << "/50\n";
+        expect (dupOrOverlap == 0, std::string (names[style]) + " no duplicate or overlapping same-pitch notes in any lane");
+        expect (stabOver == 0, std::string (names[style]) + " at most 3 stab hits per bar");
+    }
+    const double rate = rolls > 0 ? (double) pickups / rolls : 0.0;
+    std::cout << "bar-8 pickups " << pickups << "/" << rolls << "\n";
+    expect (rate >= 0.20 && rate <= 0.40, "about 20-40% of rolls have a bar-8 pickup");
+}
+
 void testShuffleKeepsManualLock()
 {
     rolla::RollaProcessor proc;
@@ -921,6 +1239,10 @@ int main()
 
     testEarReview();
     testScorerV23();
+    testAr423Bass();
+    testAr423Swing();
+    testHarmonyClashes();
+    testLaneHygiene();
     testRollSkipsMutedAndKept();
     testShuffleClearsAutoKeep();
     testShuffleKeepsManualLock();

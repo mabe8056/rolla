@@ -35,7 +35,9 @@ public:
                ChordAsk ask = {}) noexcept;
 
     // Returns the gain the synthesized drum voice should keep (0 = sample replaced it).
-    float takeDrum (int voice, int velocity, const PresetBank& bank, const EngineParams& params) noexcept;
+    // gainScale: per-hit accent (DRUMS ACCENT on the downbeat, the voice's ACCENT).
+    float takeDrum (int voice, int velocity, const PresetBank& bank, const EngineParams& params,
+                    float gainScale = 1.f) noexcept;
     void releaseNote (int part, int midiNote) noexcept;
 
     void releaseAll() noexcept;
@@ -110,9 +112,16 @@ private:
         float envOct = 0.f;
         float fEnv = 1.f;
         float fCoef = 0.99f;
-        float hpfHz = 20.f;
+        // Sample voices run unfiltered unless TONE is off neutral (sampleFilter).
+        // When they are filtered, L and R take the same path.
+        bool lowpass = false;
+        float hpfHz = 0.f;
         float hpState = 0.f;
+        float hpStateR = 0.f;
         Ladder ladder;
+        Ladder ladderR;
+        // Output samples until a drum hit releases (DECAY below 0.5); -1 plays the whole file.
+        int gateLeft = -1;
         struct Env
         {
             int stage = 0;
@@ -134,6 +143,8 @@ private:
                        Take& take, float& drumKeep) noexcept;
 
     double sr = 48000.0;
+    // takeDrum's gainScale, seen by playUserSlot for a drum voice. Audio thread only.
+    float drumGain = 1.f;
     int serial = 1;
     int sliceCursor[NumParts] {};
     Voice voices[40];

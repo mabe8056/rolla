@@ -1,7 +1,7 @@
 # ROLLA MIX_SPEC v1: baked lane processing, loudness targets, sample prep, render test
 
 Owner: Mix Engineer. Written Sat 17 Oct 2026, about 12:10 PM ET, for Maestro on Melak's behalf.
-Inputs: the 8 reference artists (9 tracks: Local Dub *Reaction* and *V-Line/Cruiza*, Stef Davidse, Laidlaw, LIGHTLEAK, M-High, Josh Baker, Gaskin, Eliyajaya/Ellia), plus transcriptions/CROSS_TRACK_RULES.md, presets/PRESET_SPEC.md and AR_SOUND_REVIEW.md.
+Inputs: the 9 reference tracks (REF_R1..R6, REF_B1, REF_D2, REF_J1/J2), plus CTR (private cross-track rules, `<private refs>`), presets/PRESET_SPEC.md and AR_SOUND_REVIEW.md.
 Test: `tests/mix_check.py` with `tests/targets.json`. Results are in `tests/results/*.json`.
 
 **Rules this spec keeps.**
@@ -21,9 +21,9 @@ Test: `tests/mix_check.py` with `tests/targets.json`. Results are in `tests/resu
 
 ## 0. Method and confidence (reference measurement)
 
-**Window.** Each ref was measured over the ~29.5 s drop block that matches its `drums.mid` (Reaction: my drop block 251.04–280.54 s).
+**Window.** Each ref was measured over the ~29.5 s drop block that matches its `drums.mid` (REF_R5: my drop block 251.04–280.54 s).
 
-**Separation.** htdemucs stems (drums/bass/other/vocals). MIDI was aligned by cross-correlating kick notes against the drums-stem onset envelope below 150 Hz. Reaction has no drums.mid, so its kicks come from a beat grid snapped ±30 ms to the onset maximum, claps from beats 2/4, and hats from HP 6 kHz onsets.
+**Separation.** demucs stems (drums/bass/other/vocals). MIDI was aligned by cross-correlating kick notes against the drums-stem onset envelope below 150 Hz. REF_R5 has no drums.mid, so its kicks come from a beat grid snapped ±30 ms to the onset maximum, claps from beats 2/4, and hats from HP 6 kHz onsets.
 
 **Scripts** (scratch, not shipped): `/workspace/mixeng-scratch/tools/elements.py`, `agg.py`, `style_agg.py`, `tilt.py`, `mixrel.py`, `make_targets.py`. Data is in `/workspace/mixeng-scratch/{elem,data}/`. All jobs ran one at a time with OMP_NUM_THREADS=2; available memory stayed at 1.6–1.9 GB throughout.
 
@@ -35,7 +35,7 @@ Test: `tests/mix_check.py` with `tests/targets.json`. Results are in `tests/resu
 | clap | drums stem, HP 500 Hz, gated −5/+200 ms around note 39 | MED | Hat bleed raises the centroid, so clap centroid is not used as a target. |
 | hats | drums stem, HP 5 kHz (CH/OH shapes from notes 42/46) | MED-HIGH | CH and OH are summed for loudness. OH has n = 4–5 clean hits. |
 | perc | drums stem, BP 250 Hz–5 kHz, with kick/clap/hat windows gated out | LOW | Residual. |
-| vox | vocals stem; counted absent if more than 25 dB under kick | MED | Absent on M-High and Gaskin (n = 7). |
+| vox | vocals stem; counted absent if more than 25 dB under kick | MED | Absent on REF_B1 and REF_J1/J2 (n = 7). |
 | pad, hits, snare, rim, ride | not isolable in these drops | n/a | Fallbacks: pad = PRESET_SPEC; hits = A&R; snare/rim/ride = PRESET_SPEC §9 one-shot data. |
 
 **Metrics.**
@@ -60,7 +60,7 @@ Test: `tests/mix_check.py` with `tests/targets.json`. Results are in `tests/resu
 
 **Low end.**
 - Bass mono point is ≥ 224 Hz on all 9 tracks; 6 of 9 stay mono to ≥ 1 kHz.
-- Kick corr is ≥ 0.995 on 8 of 9 tracks. Reaction is 0.976, with S/M −19.2.
+- Kick corr is ≥ 0.995 on 8 of 9 tracks. REF_R5 is 0.976, with S/M −19.2.
 
 **Kick level vs the stem sum** (drop window, [M] `mixrel.py`):
 - Kick ST max = mix ST max −4.7 dB, median (−6.6…−3.6).
@@ -71,7 +71,7 @@ Test: `tests/mix_check.py` with `tests/targets.json`. Results are in `tests/resu
 - Overall median −1.64 (−2.22…−1.18) [M].
 - So the whole-mix tilt is the same across styles. Styles differ in how they spread it across lanes (below).
 
-### 1.1 Per-style medians (UK MIN = Reaction, V-Line, Stef, Laidlaw; LONG = LIGHTLEAK; POP = M-High + Josh; GASKIN 90s = Gaskin; Ellia is an outlier and is excluded from the style rows)
+### 1.1 Per-style medians (UK MIN = REF_R5, REF_R4, REF_R2, REF_R1; LONG = REF_D2; POP = REF_B1 + REF_R3; GASKIN 90s = REF_J1/J2; REF_R6 is an outlier and is excluded from the style rows)
 
 | Style | Bass re kick | Stab re kick | Clap re kick | Hats re kick | Perc re kick | Vox re kick | Stab crest | Stab S/M | Stab tilt dB/oct | Hats tilt | Vox tilt | Bass sub+low % | Kick crest |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -123,7 +123,7 @@ Test: `tests/mix_check.py` with `tests/targets.json`. Results are in `tests/resu
 | DRUMS:CH | −40.3 | ±1.5 | −21.7 | −25.1…−1.2 | <120 ≤ −40 dB | [D] OH −12 |
 | DRUMS:RIDE | −46.3 | ±1.5 | −27.7 | −25.1…−1.2 | <120 ≤ −40 dB | [PRESET_SPEC R] OH −18 |
 | DRUMS:PERC | −31.3 | ±1.5 | −6.8 | −22.3…−7.1 | <120 ≤ −25 dB | [M LOW] −7.63 re kick |
-| VOX | −28.7 | ±1 | −3.2 | −15.1…+2.9 | <120 ≤ −20 dB | [M] −4.98 re kick. The TP cap is loose because of Laidlaw's vox PLR of 23.4; the SUM TP check governs. |
+| VOX | −28.7 | ±1 | −3.2 | −15.1…+2.9 | <120 ≤ −20 dB | [M] −4.98 re kick. The TP cap is loose because of REF_R1's vox PLR of 23.4; the SUM TP check governs. |
 | HITS | −27.7 | ±1 | −8.0 | −11.4…+1.2 | corr <120 ≥ 0.98 [A&R]; <120 ≤ −15 dB | [A&R] bass −3 LU |
 | PAD | −32.7 | ±1.5 | −20.7 | −12…0 [N] | <120 ≤ −20 dB | [PRESET_SPEC D] bass −8 (−26 vs −18) |
 | **SUM** | **−19.0** | ±0.5 | −5.0 (target −6 ±1) | (none) | corr <120 ≥ 0.99 | [D] |
@@ -176,7 +176,7 @@ Compressor conventions:
 | HPF | 28 Hz, 24 dB/oct | [D] about half of kick f0 50.1–55.9 Hz [M-melak IQR]; keeps f0 |
 | LPF | none on the body. Click level per PRESET_SPEC (UK −15 dB, GASKIN −8 dB re kick peak) | [M-melak] |
 | EQ 1 | +1.5 dB @ 55 Hz, Q 1.0 | [D] f0 A1 default; centroid target 80 Hz (75–86) [M] |
-| EQ 2 | −2 dB @ 250 Hz, Q 1.4 | [D] 200–800 Hz share ≤ 2 % (Reaction 0.5 %) [M] |
+| EQ 2 | −2 dB @ 250 Hz, Q 1.4 | [D] 200–800 Hz share ≤ 2 % (REF_R5 0.5 %) [M] |
 | Comp | thr −18 dBFS, 4:1, attack **15 ms**, release **160 ms**, knee 6 dB, target GR 3 dB (GASKIN 5) | attack: refs keep the body at +50 ms within 2.5 dB (−9.3…+0.2) of the hit peak [M], so the first 15 ms pass; release = decay to −20 dB, 166 ms (85–261) [M]; crest window 7.5–10.5 [M]; ratio/knee/GR [N] |
 | Sat | soft-clip (tanh), drive +3 dB (GASKIN +5), mix 100 % | [N]. Test: crest 5.5–14.5 dB, PLR 9.1–14.7 |
 | Width | mono (sum to M below 141 Hz; S/M ≤ −19.2) | [M] mono point 141 Hz to ≥ 1 kHz |
@@ -187,9 +187,9 @@ Compressor conventions:
 | Stage | Setting | Ref median (range) / basis |
 |---|---|---|
 | HPF | 30 Hz, 24 dB/oct | [D] below root D1 36.7 Hz |
-| LPF | SUB/ROUND: 2.5 kHz, 12 dB/oct | [M] 800 Hz–5 kHz share ≤ 1.4 % ([CTR] ≤ 1.4 % above 400 Hz; Reaction 0.09 %) |
+| LPF | SUB/ROUND: 2.5 kHz, 12 dB/oct | [M] 800 Hz–5 kHz share ≤ 1.4 % ([CTR] ≤ 1.4 % above 400 Hz; REF_R5 0.09 %) |
 | EQ 1 | +1.5 dB @ 90 Hz, Q 0.9 | [M] centroid 89 Hz (77–102). The ROLLA render measures 62 Hz |
-| EQ 2 | low shelf −2 dB @ 45 Hz | [M/A&R] the render has 72.6 % below 60 Hz; A&R target about 50 %, Reaction 53.4 % |
+| EQ 2 | low shelf −2 dB @ 45 Hz | [M/A&R] the render has 72.6 % below 60 Hz; A&R target about 50 %, REF_R5 53.4 % |
 | Comp | thr −20 dBFS, 4:1, attack **8 ms**, release **150 ms**, knee 6 dB, target GR 4 dB (POP 5, GASKIN 6) | attack 7.5 ms (0–23) [M]; release = decay to −20 dB, 157 ms (52–251) [M], inside [CTR] recovery 102–228; crest 12.5 (10.5–14.2); dyn range 22.9 [M]; GR [N] |
 | Sat | tape, drive +4 dB, mix 50 % (GASKIN +2 / 20 %) | [N]. Bounded by the test: mid ≤ 1.4 %, high ≤ 0.5 %; GASKIN ref sub+low 99.0 % vs UK 94.9 % [M] |
 | Width | mono below 220 Hz (hard), S/M ≤ −23.8 full band | [M] mono point ≥ 224 Hz on 9/9; corr ≥ 0.992 |
@@ -202,8 +202,8 @@ Compressor conventions:
 | SUB / ROUND (B1/B3) | as above | n/a |
 | REESE (sub layer + reese layer) | sub layer = BASS chain. Reese layer: HPF **220 Hz** 24 dB/oct; mono below 150 Hz (corr ≥ 0.98); comp 3:1, attack 10 ms, release 120 ms (1/16 at 126 BPM ≈ 119 ms); sat drive +6 dB / 40 %. Lane test: centroid 77–160 Hz, mid ≤ 6 % | [A&R] reese HPF 110→220, hoover low end mono; the rest [N] |
 | CLICK (gate DUCK) | release 100 ms | [M] POP bass decay to −20 dB = 96 ms |
-| GASKIN dialect | GR 6 dB, sat +2 dB / 20 %, release 160 ms | [M] Gaskin crest 11.0, dyn range 20.1, decay 163 ms |
-| LONG dialect | release 210 ms | [M] LIGHTLEAK decay 214.5 ms |
+| GASKIN dialect | GR 6 dB, sat +2 dB / 20 %, release 160 ms | [M] REF_J1/J2 crest 11.0, dyn range 20.1, decay 163 ms |
+| LONG dialect | release 210 ms | [M] REF_D2 decay 214.5 ms |
 
 ### STAB (and PLUCK)
 
@@ -222,9 +222,9 @@ Compressor conventions:
 
 | Variant | Changes | Basis |
 |---|---|---|
-| DUB / LONG stab | release 110 ms | [M] LIGHTLEAK decay 106 ms |
-| CHORD / UK stab | release 180 ms | [M] V-Line 180.5 ms, Ellia 180 ms |
-| GASKIN rave stab | release 250 ms, GR 7 | [M] Gaskin decay 254 ms, crest 16.8, dyn range 15.0 |
+| DUB / LONG stab | release 110 ms | [M] REF_D2 decay 106 ms |
+| CHORD / UK stab | release 180 ms | [M] REF_R4 180.5 ms, REF_R6 180 ms |
+| GASKIN rave stab | release 250 ms, GR 7 | [M] REF_J1/J2 decay 254 ms, crest 16.8, dyn range 15.0 |
 | POP / CLICK stab | release 125 ms, GR 5 | [M] POP decay 126 ms, crest 19.0 |
 | [A&R] tail rule | −10 dB at about 850 ms | Applies to the long chord stab |
 
@@ -259,7 +259,7 @@ PLUCK uses the STAB chain with release 110 ms [M: shortest "other" decay group].
 |---|---|---|
 | HPF | 220 Hz 24 dB/oct | [A&R] |
 | EQ | −2 dB @ 500 Hz Q 1 | [D] the hit renders sit at 50–71 % in 200–800 Hz |
-| Comp | thr −20 dBFS, 4:1, attack 11 ms, release 250 ms, knee 6 dB, GR 4 | [M borrowed] Gaskin stab attack 11 ms, decay 254 ms; GR [N] |
+| Comp | thr −20 dBFS, 4:1, attack 11 ms, release 250 ms, knee 6 dB, GR 4 | [M borrowed] REF_J1/J2 stab attack 11 ms, decay 254 ms; GR [N] |
 | Sat | +4 dB / 40 % | [N] |
 | Width | mono below 150 Hz (corr <120 ≥ 0.98) | [A&R] |
 | Level | bass −3 LU = −27.7 LUFS-S, measured as LUFS, not RMS | [A&R] |
@@ -677,7 +677,7 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
      },
      "lufs_offset_vs_kick_db": -1.0,
      "st_target_lufs": -24.7,
-     "output_trim_db": 0.0,
+     "output_trim_db": -0.47,
      "level_src": "D clamp"
     },
     "STAB": {
@@ -744,7 +744,7 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
      },
      "lufs_offset_vs_kick_db": -3.1,
      "st_target_lufs": -26.8,
-     "output_trim_db": -0.0,
+     "output_trim_db": 3.72,
      "level_src": "M"
     },
     "VOX": {
@@ -811,7 +811,7 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
      },
      "lufs_offset_vs_kick_db": -5.0,
      "st_target_lufs": -28.7,
-     "output_trim_db": -0.0,
+     "output_trim_db": 22.02,
      "level_src": "M"
     },
     "HITS": {
@@ -839,8 +839,8 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
       "knee_db": 6,
       "target_gr_db": 4,
       "src": {
-       "attack_ms": "M(borrowed Gaskin stab)",
-       "release_ms": "M(borrowed Gaskin stab)",
+       "attack_ms": "M(borrowed REF_J1/J2 stab)",
+       "release_ms": "M(borrowed REF_J1/J2 stab)",
        "threshold_dbfs": "N",
        "ratio": "N",
        "knee_db": "N",
@@ -919,7 +919,7 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
      },
      "lufs_offset_vs_kick_db": -9.0,
      "st_target_lufs": -32.7,
-     "output_trim_db": -0.0,
+     "output_trim_db": 11.23,
      "level_src": "PRESET_SPEC D"
     },
     "PLUCK": {
@@ -986,7 +986,7 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
      },
      "lufs_offset_vs_kick_db": -3.1,
      "st_target_lufs": -26.8,
-     "output_trim_db": -0.0,
+     "output_trim_db": 0.0,
      "level_src": "M"
     },
     "DRUMS": {
@@ -1056,7 +1056,7 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
        },
        "lufs_offset_vs_kick_db": -2.5,
        "st_target_lufs": -26.2,
-       "output_trim_db": -0.0,
+       "output_trim_db": 4.44,
        "level_src": "M"
       },
       "SNARE": {
@@ -1116,7 +1116,7 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
        },
        "lufs_offset_vs_kick_db": -2.5,
        "st_target_lufs": -26.2,
-       "output_trim_db": -0.0,
+       "output_trim_db": 4.44,
        "level_src": "N(clap slot)"
       },
       "RIM": {
@@ -1170,7 +1170,7 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
        },
        "lufs_offset_vs_kick_db": -7.5,
        "st_target_lufs": -31.2,
-       "output_trim_db": -0.0,
+       "output_trim_db": 4.44,
        "level_src": "M-ref"
       },
       "CH": {
@@ -1232,7 +1232,7 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
        },
        "lufs_offset_vs_kick_db": -16.6,
        "st_target_lufs": -40.3,
-       "output_trim_db": -0.0,
+       "output_trim_db": 4.44,
        "level_src": "M split"
       },
       "OH": {
@@ -1294,7 +1294,7 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
        },
        "lufs_offset_vs_kick_db": -4.6,
        "st_target_lufs": -28.3,
-       "output_trim_db": -0.0,
+       "output_trim_db": 4.44,
        "level_src": "M"
       },
       "RIDE": {
@@ -1349,7 +1349,7 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
        },
        "lufs_offset_vs_kick_db": -22.6,
        "st_target_lufs": -46.3,
-       "output_trim_db": -0.0,
+       "output_trim_db": 4.44,
        "level_src": "PRESET_SPEC R"
       },
       "PERC": {
@@ -1409,7 +1409,7 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
        },
        "lufs_offset_vs_kick_db": -7.6,
        "st_target_lufs": -31.3,
-       "output_trim_db": -0.0,
+       "output_trim_db": 4.44,
        "level_src": "M"
       },
       "KICK": {
@@ -1473,7 +1473,7 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
        },
        "lufs_offset_vs_kick_db": 0.0,
        "st_target_lufs": -23.7,
-       "output_trim_db": 0.0,
+       "output_trim_db": 4.44,
        "level_src": "D anchor"
       }
      }
@@ -1720,8 +1720,8 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
       "knee_db": 6,
       "target_gr_db": 4,
       "src": {
-       "attack_ms": "M(borrowed Gaskin stab)",
-       "release_ms": "M(borrowed Gaskin stab)",
+       "attack_ms": "M(borrowed REF_J1/J2 stab)",
+       "release_ms": "M(borrowed REF_J1/J2 stab)",
        "threshold_dbfs": "N",
        "ratio": "N",
        "knee_db": "N",
@@ -2601,8 +2601,8 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
       "knee_db": 6,
       "target_gr_db": 4,
       "src": {
-       "attack_ms": "M(borrowed Gaskin stab)",
-       "release_ms": "M(borrowed Gaskin stab)",
+       "attack_ms": "M(borrowed REF_J1/J2 stab)",
+       "release_ms": "M(borrowed REF_J1/J2 stab)",
        "threshold_dbfs": "N",
        "ratio": "N",
        "knee_db": "N",
@@ -3320,7 +3320,7 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
      },
      "lufs_offset_vs_kick_db": -1.0,
      "st_target_lufs": -24.7,
-     "output_trim_db": 0.0,
+     "output_trim_db": -4.0,
      "level_src": "D clamp"
     },
     "STAB": {
@@ -3482,8 +3482,8 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
       "knee_db": 6,
       "target_gr_db": 4,
       "src": {
-       "attack_ms": "M(borrowed Gaskin stab)",
-       "release_ms": "M(borrowed Gaskin stab)",
+       "attack_ms": "M(borrowed REF_J1/J2 stab)",
+       "release_ms": "M(borrowed REF_J1/J2 stab)",
        "threshold_dbfs": "N",
        "ratio": "N",
        "knee_db": "N",
@@ -4178,16 +4178,16 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
    },
    "STAB:DUB": {
     "comp.release_ms": 110,
-    "src": "M LIGHTLEAK decay 106"
+    "src": "M REF_D2 decay 106"
    },
    "STAB:CHORD": {
     "comp.release_ms": 180,
-    "src": "M V-Line 180.5 / Ellia 180"
+    "src": "M REF_R4 180.5 / REF_R6 180"
    },
    "STAB:GASKIN_RAVE": {
     "comp.release_ms": 250,
     "comp.target_gr_db": 7,
-    "src": "M Gaskin decay 254, crest 16.8"
+    "src": "M REF_J1/J2 decay 254, crest 16.8"
    },
    "STAB:POP_CLICK": {
     "comp.release_ms": 125,

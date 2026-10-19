@@ -363,10 +363,13 @@ struct DrumMachine::Core
         return std::clamp (hit.decayScale * hit.patchDecay * punch, 0.08f, 6.f);
     }
 
+    // Retrigger restarts the voice, so the old waveform stops here. Hold its
+    // last output and let it decay (~8 ms) under the new hit. This must happen
+    // on every retrigger: the old 0.015 gate skipped quiet tails, and a long
+    // kick tail under 0.015 stepped straight to zero on the next kick.
     void armRing (float& last, float& ring) const noexcept
     {
-        if (std::fabs (last) > 0.015f)
-            ring = last;
+        ring = last;
     }
 
     void triggerKick (const DrumHit& hit) noexcept
@@ -374,7 +377,7 @@ struct DrumMachine::Core
         const bool gaskin = hit.dialect == Gaskin;
         float hz = DrumMachine::kickHzForKey (hit.key) * hit.tuneRatio;
         hz *= std::pow (2.f, hit.tone * 0.12f);
-        // The key follow sits near 55 Hz. Tune is ±12 st, so the body has to
+        // The key follow sits at 46-62 Hz (near 52.8 Hz). Tune is ±12 st, so the body has to
         // be allowed about an octave either side or the knob barely moves.
         hz = std::clamp (hz, 30.f, 120.f);
         armRing (kick.last, kick.ring);
@@ -563,7 +566,10 @@ struct DrumMachine::Core
             else
                 kick.pitch *= kick.pitchC;
             kick.fade = std::min (1.f, kick.fade + kick.fadeInc);
-            raw = (body * kick.fade + kick.click.tick (sr)) * kick.gain;
+            // Raised cosine, 1.1 ms. The strike leaves the body at its peak, so
+            // a linear ramp still opened on a visible first-sample step.
+            const float fadeG = kick.fade >= 1.f ? 1.f : 0.5f * (1.f - std::cos (kPi * kick.fade));
+            raw = (body * fadeG + kick.click.tick (sr)) * kick.gain;
             if (! kick.env.on && kick.click.env < 1.0e-5f)
                 kick.on = false;
         }
@@ -737,26 +743,34 @@ float DrumMachine::kickHzForKey (int key) noexcept
     float bestHz = 55.f;
     float bestDist = 1.0e9f;
     int bestDeg = -1;
-    for (int midi = 24; midi <= 48; ++midi)
+    // Pass 0: the preferred 49-56 Hz window. Keys F, F#, A# and B have no
+    // root / 4th / 5th there, so pass 1 widens to 40-70 Hz (still nearest
+    // 52.8 Hz) instead of dropping to a 55 Hz that is out of key.
+    const float lo[2] = { 48.95f, 40.f };
+    const float hi[2] = { 56.05f, 70.f };
+    for (int pass = 0; pass < 2 && bestDeg < 0; ++pass)
     {
-        const int pc = midi % 12;
-        int deg = -1;
-        for (int i = 0; i < 3; ++i)
-            if (pc == (key + degree[i]) % 12)
-                deg = i;
-        if (deg < 0)
-            continue;
-        const float hz = 440.f * std::pow (2.f, (midi - 69) / 12.f);
-        if (hz < 48.95f || hz > 56.05f)
-            continue;
-        const float dist = std::fabs (hz - 52.8f);
-        const bool closer = dist + 0.03f < bestDist;
-        const bool tieToFifth = std::fabs (dist - bestDist) <= 0.05f && deg == 2 && bestDeg != 2;
-        if (bestDeg < 0 || closer || tieToFifth)
+        for (int midi = 24; midi <= 48; ++midi)
         {
-            bestHz = hz;
-            bestDist = dist;
-            bestDeg = deg;
+            const int pc = midi % 12;
+            int deg = -1;
+            for (int i = 0; i < 3; ++i)
+                if (pc == (key + degree[i]) % 12)
+                    deg = i;
+            if (deg < 0)
+                continue;
+            const float hz = 440.f * std::pow (2.f, (midi - 69) / 12.f);
+            if (hz < lo[pass] || hz > hi[pass])
+                continue;
+            const float dist = std::fabs (hz - 52.8f);
+            const bool closer = dist + 0.03f < bestDist;
+            const bool tieToFifth = std::fabs (dist - bestDist) <= 0.05f && deg == 2 && bestDeg != 2;
+            if (bestDeg < 0 || closer || tieToFifth)
+            {
+                bestHz = hz;
+                bestDist = dist;
+                bestDeg = deg;
+            }
         }
     }
     return bestHz;
