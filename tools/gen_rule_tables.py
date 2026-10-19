@@ -81,6 +81,8 @@ inline constexpr int kBarCountHi = 8;
 inline constexpr float kAnswerKeepFront[kStyles] = { 0.85f, 0.60f, 0.85f, 0.0f };
 inline constexpr float kAnswerCallSlotWeight[kStyles] = { 0.45f, 0.50f, 0.50f, 0.12f };
 inline constexpr float kAnswerSilentBoost[kStyles] = { 1.0f, 1.0f, 1.0f, 1.8f };
+// JACKIN onset weight in the front / back half of the bar (its hook leans into beats 3-4).
+inline constexpr float kJackinBackLean[2] = { 0.50f, 1.50f };
 // P(bar 5 or 6 restates with a back-half mutation).
 inline constexpr float kBackHalfVariation[kStyles] = { 0.35f, 0.65f, 0.60f, 0.40f };
 // Smallest density change (notes) that redraws a restated bar's back half (bars 5-7).

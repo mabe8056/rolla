@@ -173,6 +173,42 @@ void applyBusyDensity (Lane& lane, int dialect, int bars, float busy, std::uint3
     int w = 0;
     const int lastBar = std::min (bars, 8) - 1;
     static const int fillSlots[] = { 1, 2, 3, 5, 6, 7, 9, 10, 11, 13, 14, 15 };
+
+    // Low BUSY: the same number of notes comes out, but only from bars of the
+    // sparser parity (bars 1/3/5/7 or 2/4/6/8), so the 2-bar pattern still
+    // repeats and the bar densities spread instead of evening out (A&R loop
+    // repeat and CONSTANT_DENSITY). Inside a bar the front half thins first,
+    // never the bar's first note, so bar-to-bar changes stay in the back halves.
+    int dropAt[8] {};
+    bool thinBar[8] {};
+    if (factor < 1.f)
+    {
+        int count[8] {};
+        int total = 0, parityCount[2] {};
+        for (int i = 0; i < lane.count; ++i)
+        {
+            const int st = (int) std::lround (lane.notes[i].start);
+            if (st >= 0 && st < bars * 16 && st / 16 < 8)
+            {
+                ++count[st / 16];
+                ++total;
+                parityCount[(st / 16) & 1]++;
+            }
+        }
+        int drops = 0;
+        for (int b = 0; b < std::min (bars, 8); ++b)
+            drops += count[b] - std::clamp ((int) std::lround ((float) count[b] * factor), 1, 9);
+        const int par = parityCount[0] <= parityCount[1] ? 0 : 1;
+        int nPar = 0;
+        for (int b = par; b < std::min (bars, 8); b += 2)
+            ++nPar;
+        const int each = nPar > 0 ? (drops + nPar - 1) / nPar : 0;
+        for (int b = par; b < std::min (bars, 8); b += 2)
+        {
+            thinBar[b] = true;
+            dropAt[b] = std::min (each, std::max (0, count[b] - 2));
+        }
+    }
     for (int bar = 0; bar < bars && bar < 8; ++bar)
     {
         int idx[16];
@@ -188,6 +224,37 @@ void applyBusyDensity (Lane& lane, int dialect, int bars, float busy, std::uint3
         target = std::clamp (target, 1, 9);
         if (bar == lastBar && target > n)
             target = n;
+        if (factor < 1.f)
+        {
+            // Thinning: drop from this bar only if it is one of the thinned
+            // parity, front-half notes (not the first) before back-half ones.
+            target = thinBar[bar] ? std::max (2, n - dropAt[bar]) : n;
+            target = std::min (target, n);
+            bool drop[16] {};
+            int toDrop = n - target;
+            for (int pass = 0; pass < 2 && toDrop > 0; ++pass)
+                for (int k = n - 1; k >= 1 && toDrop > 0; --k)
+                {
+                    const int sl = (int) std::lround (lane.notes[idx[k]].start) % 16;
+                    if (! drop[k] && (pass == 1 || sl < 8))
+                    {
+                        drop[k] = true;
+                        --toDrop;
+                    }
+                }
+            for (int k = 0; k < n; ++k)
+            {
+                const int st = (int) std::lround (lane.notes[idx[k]].start);
+                if (drop[k])
+                {
+                    if (st >= 0 && st / 16 == bar && st / 16 < 8)
+                        used[bar][st % 16] = false;
+                }
+                else if (w < kMaxNotes)
+                    out[w++] = lane.notes[idx[k]];
+            }
+            continue;
+        }
         const int keep = std::min (n, target);
         for (int k = keep; k < n; ++k)
         {
@@ -2852,9 +2919,13 @@ constexpr int kClashTries = 8;
 float b2Cap (int dialect, int mode) noexcept
 {
     // Genre model v1.2: ROLLER 6% (was 12), DEEP 6, JACKIN 6, BOUNCY 3; phrygian 30.
+    // One point of margin: the Composer gate reads b2 time on a 16th grid, clipped
+    // at the next onset, which can land just over the cap our exact lengths keep.
+    // Phrygian's long b2 notes round up most on that grid (5.5 -> 6 sixteenths).
+    constexpr float kMargin = 0.01f;
     if (mode == phrase::Phrygian)
-        return rules::tables::kPhrygianB2Cap;
-    return rules::tables::kB2Cap[clampi (dialect, 0, rules::tables::kStyles - 1)];
+        return rules::tables::kPhrygianB2Cap - 0.04f;
+    return std::max (0.f, rules::tables::kB2Cap[clampi (dialect, 0, rules::tables::kStyles - 1)] - kMargin);
 }
 
 // Out-of-mode pitch class -> the in-mode neighbour. Works for all three modes:
@@ -3810,6 +3881,89 @@ void fillBassDensity (Lane& lane, int dialect, int bars, float busy, std::uint32
     sortByStart (lane);
 }
 
+// A&R msg 423 held bass (JACKIN sounds 0.72 or more of the loop): when a line
+// sounds less than `target`, the notes before the longest gaps grow toward 0.95
+// of their gap, inside the long-note band (7% of notes may reach 6-8 sixteenths),
+// until it gets there.
+void fillBassSounding (Lane& lane, int bars, float target)
+{
+    const int n = std::min (lane.count, kMaxNotes);
+    const float loop = (float) (std::min (bars, kMaxBars) * 16);
+    if (n <= 0 || loop <= 0.f)
+        return;
+    sortByStart (lane);
+    float total = 0.f;
+    for (int i = 0; i < n; ++i)
+        total += lane.notes[i].length;
+    if (total >= target * loop)
+        return;
+    const float tailCut = bassTailCut (bars);
+    int order[kMaxNotes];
+    float gap[kMaxNotes];
+    for (int i = 0; i < n; ++i)
+    {
+        order[i] = i;
+        const float next = i + 1 < n ? lane.notes[i + 1].start : loop;
+        gap[i] = next - lane.notes[i].start;
+    }
+    std::sort (order, order + n, [&] (int a, int b) { return gap[a] > gap[b]; });
+    // The long-note band allows 7% of the notes at 6 sixteenths or more: the fill
+    // may use what is left of that allowance (up to 8) before it stops at 5.9.
+    int longLeft = (int) std::floor (0.07f * (float) n + 1.0e-4f);
+    for (int i = 0; i < n; ++i)
+        if (lane.notes[i].length >= 6.f - 1.0e-4f)
+            --longLeft;
+    for (int k = 0; k < n && total < target * loop; ++k)
+    {
+        Note& note = lane.notes[order[k]];
+        if (note.start >= tailCut || pcOf (note.chord[0]) == 1)
+            continue;
+        const bool mayGoLong = longLeft > 0 && note.length < 6.f && 0.95f * gap[order[k]] >= 6.f;
+        const float grow = std::min ({ 0.95f * gap[order[k]], mayGoLong ? 8.f : 5.9f, tailCut - note.start });
+        if (mayGoLong && grow >= 6.f)
+            --longLeft;
+        if (grow > note.length)
+        {
+            total += grow - note.length;
+            note.length = grow;
+        }
+    }
+    // A line too sparse to get there by length alone: a short anticipation (the
+    // next note's pitch, off the kick) goes in the widest remaining gap.
+    for (int added = 0; added < 8 && total < target * loop && lane.count < kMaxNotes; ++added)
+    {
+        sortByStart (lane);
+        int best = -1;
+        float bestRoom = 0.f;
+        for (int i = 0; i + 1 < lane.count; ++i)
+        {
+            const float end = lane.notes[i].start + lane.notes[i].length;
+            const float room = lane.notes[i + 1].start - end;
+            if (room > bestRoom && lane.notes[i + 1].start < tailCut)
+            {
+                bestRoom = room;
+                best = i;
+            }
+        }
+        if (best < 0 || bestRoom < 2.f)
+            break;
+        const float end = lane.notes[best].start + lane.notes[best].length;
+        int slot = (int) std::ceil (end + 0.25f);
+        if (kickSlot (slot % 16))
+            ++slot;
+        const float next = lane.notes[best + 1].start;
+        if ((float) slot + 0.5f > next)
+            break;
+        Note ant = lane.notes[best + 1];
+        ant.start = (float) slot;
+        ant.length = std::min (5.9f, 0.95f * (next - (float) slot));
+        ant.vel = (std::uint8_t) std::max (3, (int) ant.vel - 12);
+        lane.notes[lane.count++] = ant;
+        total += ant.length;
+    }
+    sortByStart (lane);
+}
+
 // A&R lane F3 / BASS_REESE_LONG (Maestro 655: the scorer's length bands win over
 // the gap ratio): notes of 6 sixteenths or more stay at or under maxShare of the
 // notes. The longest are shortened to 5.9 (just under 6) first.
@@ -4159,6 +4313,152 @@ void fitBounceSounding (Lane& lane, int bars, float lo, float hi, std::uint32_t 
 // bar (turn / pickup), never a bar's first onset, never under 0.30 sounding.
 // Removing a note adds no clash, overlap or duplicate, so this is safe after
 // harmonizeRoll.
+// A&R loop gate (rep2 0.50 / rep4 0.47) and back-half variation: each bar's front
+// half (16ths 0-7) restates the bar `lag` bars before it, so the line comes back
+// every `lag` bars and changes from bar to bar live in the back halves. Bar 4
+// (the answer) and the last bar (the turn) keep their own front halves; bars set
+// in wholeBars (0-based) restate the whole bar.
+void restoreFrontHalves (Lane& lane, int bars, int lag, std::uint32_t wholeBars = 0)
+{
+    const int nb = std::min (bars, kMaxBars);
+    if (nb <= lag || lane.count <= 0)
+        return;
+    sortByStart (lane);
+    auto barOf = [] (const Note& n) { return (int) std::lround (n.start) / 16; };
+    auto front = [] (const Note& n) { return (int) std::lround (n.start) % 16 < 8; };
+    Note out[kMaxNotes];
+    int w = 0;
+    for (int b = 0; b < nb; ++b)
+    {
+        const bool own = b < lag || b == 3 || b == nb - 1;
+        // Bars in wholeBars restate the whole bar, not only its front half.
+        const bool whole = ! own && (wholeBars & (1u << (unsigned) b)) != 0;
+        for (int i = 0; i < lane.count && w < kMaxNotes; ++i)
+        {
+            const Note& n = lane.notes[i];
+            if (barOf (n) == b && (own || (! whole && ! front (n))))
+                out[w++] = n;
+            else if (! own && barOf (n) == b - lag && (whole || front (n)))
+            {
+                Note c = n;
+                c.start += (float) (lag * 16);
+                out[w++] = c;
+            }
+        }
+    }
+    lane.count = w;
+    for (int i = 0; i < w; ++i)
+        lane.notes[i] = out[i];
+    sortByStart (lane);
+    enforceMonophonic (lane);
+}
+
+// The A&R var_backhalf measure: of the 16ths where a bar differs from the bar
+// before (attack pitch class, sustain or rest), the share in 16ths 8-15.
+float backHalfShare (const Lane& lane, int bars) noexcept
+{
+    const int nb = std::min (bars, kMaxBars);
+    const int L = nb * 16;
+    if (nb < 2)
+        return 1.f;
+    int tok[kMaxSteps];
+    for (int k = 0; k < L; ++k)
+        tok[k] = -1; // rest
+    for (int i = 0; i < lane.count; ++i)
+    {
+        const Note& n = lane.notes[i];
+        if (n.vel <= 2)
+            continue;
+        const int st = (int) std::lround (n.start);
+        const int en = std::min (L, (int) std::lround (n.start + n.length));
+        if (st < 0 || st >= L)
+            continue;
+        for (int k = st + 1; k < en; ++k)
+            if (tok[k] < 0)
+                tok[k] = 12; // sustain
+        tok[st] = pcOf (n.chord[0]);
+    }
+    int diff = 0, back = 0;
+    for (int i = 16; i < L; ++i)
+        if (tok[i] != tok[i - 16])
+        {
+            ++diff;
+            if (i % 16 >= 8)
+                ++back;
+        }
+    return diff > 0 ? (float) back / (float) diff : 1.f;
+}
+
+// A&R var_backhalf (changes from bar to bar mostly in the back half). Other
+// styles: a bar whose front half differs from the bar before takes that bar's
+// front half, most-changed first, until the share reaches `want`. JACKIN is left
+// alone here (its bars must not repeat each other); its onsets lean into the back
+// half when they are drawn.
+void fixBackHalfVariation (Lane& lane, int bars, int dialect, float want)
+{
+    const int nb = std::min (bars, kMaxBars);
+    if (nb < 4 || lane.count <= 0 || backHalfShare (lane, bars) >= want)
+        return;
+    sortByStart (lane);
+    auto barOf = [] (const Note& n) { return (int) std::lround (n.start) / 16; };
+    auto slotOf = [] (const Note& n) { return (int) std::lround (n.start) % 16; };
+    // JACKIN's bars must not repeat each other (rep1 <= 0.1): its onsets lean
+    // into the back half at composition instead (RuleComposer, kJackinBackLean).
+    if (dialect == Jackin)
+        return;
+    for (int guard = 0; guard < nb && backHalfShare (lane, bars) < want; ++guard)
+    {
+        // The bar (2..last-1) whose front half differs most from the bar before.
+        int bestBar = -1;
+        int bestDiff = 0;
+        for (int b = 2; b < nb - 1; ++b)
+        {
+            bool fa[8] {}, fb[8] {};
+            int pa[8] {}, pb[8] {};
+            for (int i = 0; i < lane.count; ++i)
+            {
+                const Note& n = lane.notes[i];
+                const int sl = slotOf (n);
+                if (sl >= 8)
+                    continue;
+                if (barOf (n) == b - 1) { fa[sl] = true; pa[sl] = pcOf (n.chord[0]); }
+                if (barOf (n) == b) { fb[sl] = true; pb[sl] = pcOf (n.chord[0]); }
+            }
+            int d = 0;
+            for (int k = 0; k < 8; ++k)
+                if (fa[k] != fb[k] || (fa[k] && pa[k] != pb[k]))
+                    ++d;
+            if (d > bestDiff)
+            {
+                bestDiff = d;
+                bestBar = b;
+            }
+        }
+        if (bestBar < 0)
+            break;
+        Note out[kMaxNotes];
+        int w = 0;
+        for (int i = 0; i < lane.count && w < kMaxNotes; ++i)
+        {
+            const Note& n = lane.notes[i];
+            if (barOf (n) == bestBar && slotOf (n) < 8)
+                continue;
+            out[w++] = n;
+            if (barOf (n) == bestBar - 1 && slotOf (n) < 8 && w < kMaxNotes)
+            {
+                Note c = n;
+                c.start += 16.f;
+                out[w++] = c;
+            }
+        }
+        lane.count = w;
+        for (int i = 0; i < w; ++i)
+            lane.notes[i] = out[i];
+        sortByStart (lane);
+        enforceMonophonic (lane);
+    }
+}
+
 // BOUNCY bounce register: the export plays the BOUNCY bass from octave 2 (MIDI
 // 36 + key), which suits pulse (A&R pulse lane 25-42) but puts every bounce line
 // over the bounce lane's 25-36 median. A bounce line moves down an octave when
@@ -4972,6 +5272,8 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
             // A&R lane F7: octave moves 15-26% of the moves (OCTAVE_PUMP over 26).
             capPulseOctaves (g.lane[Bass], 0.25f);
             lowerBounceRegister (g.lane[Bass], s.key);
+            if (backHalfShare (g.lane[Bass], s.bars) < 0.52f)
+                fixBackHalfVariation (g.lane[Bass], s.bars, s.dialect, 0.52f);
         }
         else if (popMode == BassModePulse)
         {
@@ -4983,10 +5285,27 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
         }
         else
         {
+            // ROLLER: bars 3 and 5 restate bar 1 whole (the A comes back); the
+            // answer (bar 4), bars 6-7's back halves and the turn carry the change.
+            if (s.dialect == UkMin)
+                restoreFrontHalves (g.lane[Bass], s.bars, 2, (1u << 2) | (1u << 4));
+            // DEEP: front halves only; its density movement stays in the bars.
+            else if (s.dialect == Long)
+            {
+                restoreFrontHalves (g.lane[Bass], s.bars, 2);
+                // The restated fronts change the gaps: DEEP's held line is filled again.
+                holdDeepBass (g.lane[Bass], s.bars, bassSeed, 0.80f);
+            }
             // A&R lane F7: octave moves stay at or under 24% (OCTAVE_PUMP over 26).
             capPulseOctaves (g.lane[Bass], 0.24f);
             // Model v1.2: 0.79-0.83 of the gap to the next note.
             guardGapRatio (g.lane[Bass], s.bars, 0.79f, 0.83f);
+            // A&R var_backhalf, read on the final lengths; the lengths are fitted again.
+            if (backHalfShare (g.lane[Bass], s.bars) < 0.52f)
+            {
+                fixBackHalfVariation (g.lane[Bass], s.bars, s.dialect, 0.52f);
+                guardGapRatio (g.lane[Bass], s.bars, 0.79f, 0.83f);
+            }
             // Maestro 655: the scorer's length bands win; DEEP keeps its held notes.
             if (s.dialect != Long)
                 capLongBassNotes (g.lane[Bass], 0.07f);
@@ -4994,6 +5313,9 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
         // The length guard changes how long each pitch sounds: the b2 cap (and
         // the mode snap) are checked again on the final lengths.
         conformBass (g.lane[Bass], mode, b2Cap (s.dialect, mode));
+        // JACKIN's held line (A&R 423) on the final pitches; b2 notes never grow.
+        if (s.dialect == Jackin)
+            fillBassSounding (g.lane[Bass], s.bars, 0.74f);
         // The final bass lengths can ring under upper notes they used to stop
         // before: every upper lane gives way to the bass that ships again.
         for (int part : { (int) Stab, (int) Pad, (int) Pluck, (int) Hits, (int) Vox })

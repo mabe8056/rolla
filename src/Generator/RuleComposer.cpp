@@ -859,9 +859,16 @@ int composeOnce (Lane& lane, const BassParams& p, const BassTables& t, Rng& r, b
     const float scale = densityTarget (st, p.sub) / std::max (0.5f, kBassDensityMedian[st]);
     Bar bars[8];
 
+    // JACKIN hooks lean into beats 3-4: its onset weights shift toward the back
+    // half of the bar, so the bar-to-bar changes (its bars never repeat each
+    // other) land mostly there (A&R var_backhalf).
+    float lean[kBar];
+    for (int s = 0; s < kBar; ++s)
+        lean[s] = t.grid[0][s] * (st == styleOf (Jackin) ? (s < 8 ? kJackinBackLean[0] : kJackinBackLean[1]) : 1.f);
+
     // Bar 1: the call.
     Bar& call = bars[0];
-    drawOnsets (t.grid[0], drawCount (st, 0, scale, r), kBar, r, call.on);
+    drawOnsets (lean, drawCount (st, 0, scale, r), kBar, r, call.on);
     pitchBar (st, p.mode, p.dark, t, call, 0, 0, true, false, r);
 
     // Bar 2: the answer.
@@ -872,7 +879,7 @@ int composeOnce (Lane& lane, const BassParams& p, const BassTables& t, Rng& r, b
         if (st == styleOf (Jackin))
         {
             for (int s = 0; s < kBar; ++s)
-                w[s] = t.grid[0][s] * (call.on[s] ? kAnswerCallSlotWeight[st] : kAnswerSilentBoost[st]);
+                w[s] = lean[s] * (call.on[s] ? kAnswerCallSlotWeight[st] : kAnswerSilentBoost[st]);
         }
         else if (r.next() < (double) kAnswerKeepFront[st])
         {
