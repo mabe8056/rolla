@@ -2632,169 +2632,6 @@ void dedupeNoteOns (Lane& lane)
         lane.notes[i] = out[i];
 }
 
-// Last rolls of this process. A 20-roll batch plus the skeleton redraws fit;
-// the compare is a handful of bitsets, so ROLL stays instant.
-constexpr int kRhythmHist = 64;
-
-struct RhythmSnap
-{
-    std::uint64_t lo = 0;
-    std::uint64_t hi = 0;
-    std::uint32_t b2 = 0;
-};
-
-struct RhythmRing
-{
-    RhythmSnap snap[kRhythmHist] {};
-    int n = 0;
-    int head = 0;
-};
-
-RhythmRing& rhythmRing (int dialect)
-{
-    static RhythmRing rings[NumDialects];
-    if (dialect < 0 || dialect >= NumDialects)
-        dialect = 0;
-    return rings[dialect];
-}
-
-int popBits (std::uint64_t x) noexcept
-{
-#if defined (_MSC_VER)
-    return (int) __popcnt64 (x);
-#else
-    return __builtin_popcountll (x);
-#endif
-}
-
-RhythmSnap rhythmSnap (const Lane& lane) noexcept
-{
-    RhythmSnap s;
-    for (int i = 0; i < lane.count; ++i)
-    {
-        const int st = (int) std::lround (lane.notes[i].start);
-        if (st < 0 || st >= 128)
-            continue;
-        if (st < 64)
-            s.lo |= 1ull << st;
-        else
-            s.hi |= 1ull << (st - 64);
-        if (st < 32)
-            s.b2 |= 1u << st;
-    }
-    return s;
-}
-
-float jaccard32 (std::uint32_t a, std::uint32_t b) noexcept
-{
-    const std::uint32_t uni = a | b;
-    if (uni == 0)
-        return 0.f;
-    return (float) popBits (a & b) / (float) popBits (uni);
-}
-
-float jaccard8 (const RhythmSnap& a, const RhythmSnap& b) noexcept
-{
-    const int inter = popBits (a.lo & b.lo) + popBits (a.hi & b.hi);
-    const int uni = popBits (a.lo | b.lo) + popBits (a.hi | b.hi);
-    if (uni <= 0)
-        return 0.f;
-    return (float) inter / (float) uni;
-}
-
-bool rhythmTwin (const RhythmSnap& a, const RhythmSnap& b) noexcept
-{
-    // Model v1.2 batch twin line (twin_jaccard_max).
-    return jaccard32 (a.b2, b.b2) >= rules::tables::kTwinJaccardMax || jaccard8 (a, b) >= rules::tables::kTwinJaccardMax;
-}
-
-bool rhythmClose (const RhythmRing& ring, const RhythmSnap& snap) noexcept
-{
-    const int n = std::min (ring.n, kRhythmHist);
-    for (int i = 0; i < n; ++i)
-        if (rhythmTwin (ring.snap[i], snap))
-            return true;
-    return false;
-}
-
-void rememberRhythm (RhythmRing& ring, const RhythmSnap& snap)
-{
-    ring.snap[ring.head] = snap;
-    ring.head = (ring.head + 1) % kRhythmHist;
-    if (ring.n < kRhythmHist)
-        ++ring.n;
-}
-
-bool moveOffKick (Lane& lane, int bar, std::uint32_t salt)
-{
-    if (bar < 0 || bar >= 8 || lane.count <= 1)
-        return false;
-    bool used[16] {};
-    int idx[16];
-    int nIn = 0;
-    for (int i = 0; i < lane.count; ++i)
-    {
-        const int st = (int) std::lround (lane.notes[i].start);
-        if (st / 16 != bar)
-            continue;
-        const int s = st % 16;
-        used[s] = true;
-        if (nIn < 16)
-            idx[nIn++] = i;
-    }
-    if (nIn < 1)
-        return false;
-    const int ni = idx[(int) (salt % (std::uint32_t) nIn)];
-    const int from = (int) std::lround (lane.notes[ni].start) % 16;
-    for (int step = 2; step < 16; ++step)
-    {
-        const int dest = (from + step) % 16;
-        if (kickSlot (dest) || used[dest])
-            continue;
-        if (std::abs (dest - from) < 2)
-            continue;
-        used[from] = false;
-        used[dest] = true;
-        lane.notes[ni].start = (float) (bar * 16 + dest);
-        const int gap = 16 - dest;
-        if (lane.notes[ni].length > (float) gap)
-            lane.notes[ni].length = std::max (1.f, (float) gap - 0.05f);
-        return true;
-    }
-    return false;
-}
-
-// Move two attacks. Odd passes stay inside bars 1-2, which is the grid the
-// twin gate measures first. Even passes touch later bars except bar 4 and
-// the closing turn.
-bool nudgeRhythm (Lane& lane, std::uint32_t salt, int pass)
-{
-    const int early[] = { 0, 1, 0, 1 };
-    const int later[] = { 2, 5, 6, 4 };
-    const int* barsTry = (pass & 1) == 0 ? early : later;
-    int moved = 0;
-    for (int attempt = 0; attempt < 4 && moved < 2; ++attempt)
-        if (moveOffKick (lane, barsTry[attempt], salt + (std::uint32_t) attempt * 17u + (std::uint32_t) pass * 3u))
-            ++moved;
-    return moved > 0;
-}
-
-// Near-identical means Jaccard >= 0.80 on the bars 1-2 onset grid OR the
-// full 8-bar grid. One moved 16th is often still a twin; keep going until
-// both grids clear, bounded so a roll cannot stall.
-void separateTwinRhythm (Lane& lane, int dialect, std::uint32_t seed)
-{
-    RhythmRing& ring = rhythmRing (dialect);
-    RhythmSnap snap = rhythmSnap (lane);
-    for (int t = 0; t < 8 && rhythmClose (ring, snap); ++t)
-    {
-        if (! nudgeRhythm (lane, seed + (std::uint32_t) t * 17u, t))
-            break;
-        snap = rhythmSnap (lane);
-    }
-    rememberRhythm (ring, snap);
-}
-
 namespace
 {
 
@@ -3122,20 +2959,39 @@ void fixUpperClashes (Groove& g, int part)
         if (w == 0)
         {
             // Take a bass pitch class that clashes with no other bass note it
-            // sounds over (two bass notes can sit a semitone apart).
-            int target = pcOf (bass.notes[firstBass].chord[0]);
+            // sounds over. When the bass slides a semitone under the note (two
+            // bass notes a semitone apart), no pitch fits both: the note keeps
+            // the first bass pitch and ends where the bass moves (or goes).
+            int target = -1;
             for (int pc = 0; pc < 12; ++pc)
                 if ((bassPcs & (1u << pc)) != 0 && (bad & (1u << pc)) == 0)
                 {
                     target = pc;
                     break;
                 }
+            if (target < 0)
+            {
+                target = pcOf (bass.notes[firstBass].chord[0]);
+                float cut = n.start + n.length;
+                for (int i = 0; i < bass.count; ++i)
+                    if (bass.notes[i].vel > 2 && overlaps (bass.notes[i], n) && bass.notes[i].start > n.start
+                        && pcOf (bass.notes[i].chord[0]) != target)
+                        cut = std::min (cut, bass.notes[i].start);
+                n.length = cut - n.start;
+                if (n.length < 0.5f)
+                    n.vel = 0; // dropped below
+            }
             keep[w++] = (std::int8_t) retarget (n.chord[0], (target - bias + 12) % 12);
         }
         n.nChord = (std::uint8_t) w;
         for (int c = 0; c < 4; ++c)
             n.chord[c] = c < w ? keep[c] : 0;
     }
+    int w2 = 0;
+    for (int k = 0; k < l.count; ++k)
+        if (l.notes[k].vel > 0)
+            l.notes[w2++] = l.notes[k];
+    l.count = w2;
 }
 
 // No lane plays the same pitch twice at once: a note that is still sounding
@@ -4579,7 +4435,6 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
     }
     if (regen (Bass))
     {
-        separateTwinRhythm (g.lane[Bass], s.dialect, bassSeed);
         enforceMonophonic (g.lane[Bass]);
         avoidRootTwoFour (g.lane[Bass]);
         if (s.dialect == Pop)
@@ -4655,6 +4510,14 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
         else
             // Model v1.2: 0.79-0.83 of the gap to the next note.
             guardGapRatio (g.lane[Bass], s.bars, 0.79f, 0.83f);
+        // The final bass lengths can ring under upper notes they used to stop
+        // before: every upper lane gives way to the bass that ships again.
+        for (int part : { (int) Stab, (int) Pad, (int) Pluck, (int) Hits, (int) Vox })
+        {
+            fixUpperClashes (g, part);
+            dedupeNoteOns (g.lane[part]);
+            trimSamePitchOverlaps (g.lane[part]);
+        }
     }
     g.guardScore = shippedHard ? 0.f : 1.f;
     g.guardLevel = shippedHard ? 2 : 0;
