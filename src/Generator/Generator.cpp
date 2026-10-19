@@ -2095,17 +2095,30 @@ void writeDrums (DrumLane& drums, std::uint32_t seed, const Settings& s, Rng& rn
     // Ride belongs in the pattern, for four bars at a time. BUSY opens that
     // spell and adds hats; a quiet BUSY keeps a single ride and thins the hats.
     // The overlay does not draw from the drum seed, so min and max cannot tie.
+    // Each ride bar draws its own offbeat 8ths from the style's offbeat odds
+    // (at least two a bar), from a stream of its own so BUSY moves only this.
     const int rideBars = s.busy > 0.7f ? s.bars : (s.busy < 0.3f ? 1 : std::min (4, s.bars));
     const int rideVel = s.busy > 0.7f ? 96 : 80;
+    Rng rideRng (drums.seed * 0x9E3779B1u + 0x52494445u);
     for (int bar = 0; bar < rideBars && bar < s.bars; ++bar)
-        for (int slot : { 2, 6, 10, 14 })
-            drums.vel[Ride][bar * 16 + slot] = (std::uint8_t) rideVel;
+    {
+        int placed = 0;
+        for (int slot = 2; slot < 16; slot += 4)
+        {
+            const bool forced = slot >= 10 && placed < (slot == 10 ? 1 : 2);
+            if (! forced && rideRng.next() >= (double) rt::kHatOffbeatProb[st])
+                continue;
+            drums.vel[Ride][bar * 16 + slot] = (std::uint8_t) (rideVel - 8 + (int) (rideRng.next() * 16.0));
+            ++placed;
+        }
+    }
     if (s.busy < 0.3f)
     {
+        // One ride hit, on an offbeat 8th drawn for this roll.
+        const int lone = 2 + 4 * (int) (rideRng.next() * 4.0);
         for (int t = 0; t < steps; ++t)
-            if (t != 10)
-                drums.vel[Ride][t] = 0;
-        drums.vel[Ride][10] = 80;
+            drums.vel[Ride][t] = 0;
+        drums.vel[Ride][lone] = 80;
         int seen = 0;
         for (int t = 0; t < steps; ++t)
         {
@@ -2134,8 +2147,9 @@ void writeDrums (DrumLane& drums, std::uint32_t seed, const Settings& s, Rng& rn
         }
     }
     // Style intensity. The middle leaves the style pattern alone. Low strips
-    // percussion to one hit a bar (the bar's first). High lays a 3, 5, or 7
-    // step perc loop on top of it.
+    // percussion to one hit a bar (the bar's first). High lays an odd-length
+    // perc loop over the bar line: its period (3, 5 or 7 sixteenths, the
+    // style's own most likely) and phase are drawn per roll.
     if (s.styleIntensity <= 0.25f)
     {
         for (int bar = 0; bar < s.bars; ++bar)
@@ -2154,23 +2168,30 @@ void writeDrums (DrumLane& drums, std::uint32_t seed, const Settings& s, Rng& rn
     }
     else if (s.styleIntensity >= 0.75f)
     {
-        const int step = s.dialect == Long ? 5 : (s.dialect == Jackin ? 7 : 3);
-        for (int t = 1; t < steps; t += step)
+        Rng loopRng (drums.seed * 0x85EBCA6Bu + 0x50455243u);
+        static constexpr int kPeriods[3] = { 3, 5, 7 };
+        const int home = s.dialect == Long ? 1 : (s.dialect == Jackin ? 2 : 0);
+        const double x = loopRng.next();
+        const int pick = x < 0.5 ? home : (x < 0.75 ? (home + 1) % 3 : (home + 2) % 3);
+        const int step = kPeriods[pick];
+        const int phase = (int) (loopRng.next() * (double) step);
+        for (int t = phase; t < steps; t += step)
         {
             if (kickSlot (t % 16))
                 continue;
             if (drums.vel[Perc][t] == 0)
-                drums.vel[Perc][t] = 62;
+                drums.vel[Perc][t] = (std::uint8_t) (56 + (int) (loopRng.next() * 14.0));
         }
     }
-    // FILL: the last beat of the phrase becomes a snare / tom run into the
-    // downbeat. Hats there drop out so the run reads. Seed-free, so the same
-    // roll with FILL on and off differs only in that beat.
+    // FILL: the last beat of the phrase becomes a run into the downbeat that
+    // ends on the low tom. The hits before it (one to three snare, mid tom or
+    // rim) and a rising velocity are drawn per roll from a stream of their
+    // own, so the same roll with FILL on and off differs only in that beat.
+    // Hats there drop out so the run reads.
     if (s.fill && steps >= 16)
     {
         const int beat = steps - 4;
-        static constexpr int kRun[4] = { Snare, Snare, TomMid, TomLow };
-        static constexpr int kVel[4] = { 78, 92, 100, 110 };
+        Rng fillRng (drums.seed * 0xC2B2AE35u + 0x46494C4Cu);
         for (int k = 0; k < 4; ++k)
         {
             const int t = beat + k;
@@ -2178,8 +2199,28 @@ void writeDrums (DrumLane& drums, std::uint32_t seed, const Settings& s, Rng& rn
             drums.vel[HatO][t] = 0;
             drums.vel[Ride][t] = 0;
             drums.vel[Perc][t] = 0;
-            drums.vel[kRun[k]][t] = (std::uint8_t) kVel[k];
         }
+        bool hit[3] = { false, false, false };
+        const int count = 1 + (int) (fillRng.next() * 3.0);
+        for (int placed = 0; placed < count;)
+        {
+            const int k = (int) (fillRng.next() * 3.0);
+            if (! hit[k])
+            {
+                hit[k] = true;
+                ++placed;
+            }
+        }
+        const int base = 70 + (int) (fillRng.next() * 14.0);
+        for (int k = 0; k < 3; ++k)
+        {
+            if (! hit[k])
+                continue;
+            const double v = fillRng.next();
+            const int voice = v < 0.5 ? Snare : (v < 0.8 ? TomMid : Rim);
+            drums.vel[voice][beat + k] = (std::uint8_t) std::min (110, base + 10 * k + (int) (fillRng.next() * 8.0));
+        }
+        drums.vel[TomLow][beat + 3] = (std::uint8_t) (104 + (int) (fillRng.next() * 16.0));
     }
 }
 
