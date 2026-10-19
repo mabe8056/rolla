@@ -152,6 +152,7 @@ RenderStats renderDialect (const rolla::PresetBank& bank, int dialect, const juc
     rolla::Engine engine;
     engine.prepare (sr, 256);
     rolla::EngineParams params;
+    params.sampleTrue = false; // synth offline renders keep the legacy path
     for (int i = 0; i < rolla::NumParts; ++i)
     {
         params.tone[i] = 0.5f;
@@ -292,6 +293,7 @@ Take renderTake (const rolla::PresetBank&, const rolla::Groove& groove, const ro
 rolla::EngineParams baseParams (const rolla::PresetBank& bank, int bars)
 {
     rolla::EngineParams params;
+    params.sampleTrue = false; // synth offline renders keep the legacy path
     for (int i = 0; i < rolla::NumParts; ++i)
     {
         params.tone[i] = 0.5f;
@@ -733,6 +735,7 @@ void silenceCheck (const rolla::PresetBank& bank)
     engine.prepare (48000.0, 128);
     rolla::Groove groove {};
     rolla::EngineParams params;
+    params.sampleTrue = false; // synth offline renders keep the legacy path
     params.presets = &bank;
     params.bars = 8;
     params.swing = 0.52f;

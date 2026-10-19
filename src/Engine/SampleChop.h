@@ -303,9 +303,10 @@ inline ChopPlan planSampleChop (int lane, int frames, double rate, float bpm, st
     if (lane == Pad && padBed)
     {
         const int win = std::clamp ((int) (rate * 1.0), fade * 8, frames);
-        int start = std::clamp (loudStart, 0, frames - 1);
+        // At least one fade into the file, so the loop seam has frames before its start to crossfade from.
+        int start = std::clamp (loudStart, std::min (fade, frames - 1), frames - 1);
         if (start + win > frames)
-            start = std::max (0, frames - win);
+            start = std::max (std::min (fade, std::max (0, frames - win)), frames - win);
         plan.start = start;
         plan.end = std::min (frames, start + win);
         plan.fade = fade;

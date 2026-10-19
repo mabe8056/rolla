@@ -780,10 +780,15 @@ void Sampler::readVoice (Voice& v, float& l, float& r) noexcept
     float ls = readSinc (v.audio->left, index);
     float rs = readSinc (v.audio->right, index);
 
-    if (! v.tempoSync && v.loop && v.xfade > 4.0 && v.pos > v.loopB - v.xfade && v.pos < v.loopB)
+    // The seam crossfade must end where playback resumes after the wrap (loopA), so the
+    // incoming side reads the xfade frames just before loopA. Reading from loopA forward
+    // ended on loopA + xfade and the wrap then jumped back xfade frames: a step on every
+    // loop (PAD beds clicked once a second). No room before loopA means no crossfade.
+    const double seam = std::min (v.xfade, v.loopA);
+    if (! v.tempoSync && v.loop && seam > 4.0 && v.pos > v.loopB - seam && v.pos < v.loopB)
     {
-        const float t = (float) ((v.pos - (v.loopB - v.xfade)) / v.xfade);
-        const double head = v.loopA + (v.pos - (v.loopB - v.xfade));
+        const float t = (float) ((v.pos - (v.loopB - seam)) / seam);
+        const double head = v.pos - (v.loopB - v.loopA);
         const double hi = v.reverse ? (n - 1.0 - head) : head;
         const float w = std::sin (t * 0.5f * kSincPi);
         const float u = std::cos (t * 0.5f * kSincPi);
@@ -1101,11 +1106,11 @@ bool Sampler::playUserSlot (int part, int drumVoice, int midiNote, int velocity,
     fresh.fade = 0.f;
     fresh.fadeInc = drumVoice >= 0 ? 1.f / std::max (8.f, 0.002f * srF) : 1.f / 64.f;
     fresh.stopping = false;
-    float trim = amp.trim * std::clamp (velocity / 127.f, 0.05f, 1.f);
+    float trim = (params.sampleTrue ? 1.f : amp.trim) * std::clamp (velocity / 127.f, 0.05f, 1.f);
     if (drumVoice >= 0)
         trim *= ampDb (params.drumLevelDb[drumVoice]) * drumGain;
     fresh.gain = trim * decision.sampleMix * ampDb (decision.gainDb);
-    fresh.pan = (part == Stab || part == Pad) ? 0.15f : 0.f;
+    fresh.pan = (part == Stab || part == Pad) && ! params.sampleTrue ? 0.15f : 0.f;
     fresh.res = amp.res;
     fresh.fEnv = 1.f;
     fresh.fCoef = expDecay (std::max (4.f, drumVoice >= 0 ? 30.f : amp.tau), srF);
@@ -1399,6 +1404,9 @@ Sampler::Take Sampler::startNote (int part, int midiNote, int velocity, float en
             result.synthGain = 0.f;
             return result;
         }
+        // Sample-true: the file plays whole from its first frame, never a slice or a hold loop.
+        if (params.sampleTrue)
+            chop = ChopPlan {};
     }
 
     Voice* slot = allocate (part);
@@ -1426,7 +1434,8 @@ Sampler::Take Sampler::startNote (int part, int midiNote, int velocity, float en
     fresh.fade = 0.f;
     fresh.fadeInc = 1.f / 64.f;
     fresh.stopping = false;
-    fresh.gain = amp.trim * std::clamp (velocity / 127.f, 0.05f, 1.f);
+    // Sample-true: the load-normalised file x velocity; the lane fader sets the level.
+    fresh.gain = (params.sampleTrue ? 1.f : amp.trim) * std::clamp (velocity / 127.f, 0.05f, 1.f);
     // Adaptive treatment for the drawn file (null: none set, the voice is as before).
     // The drum-pack fallback is a stand-in from another lane: the lane's treatment
     // was decided for a different sound, so it plays untreated.
@@ -1439,7 +1448,7 @@ Sampler::Take Sampler::startNote (int part, int midiNote, int velocity, float en
     const bool layered = &played == &spec && played.mode == SampleMode::Layer && ! kSamplesOnly;
     if (layered)
         fresh.gain *= std::clamp (played.layerMix, 0.f, 1.f);
-    fresh.pan = (part == Stab || part == Pad) ? 0.15f : 0.f;
+    fresh.pan = (part == Stab || part == Pad) && ! params.sampleTrue ? 0.15f : 0.f;
     fresh.res = amp.res;
     fresh.fEnv = 1.f;
     fresh.fCoef = expDecay (std::max (4.f, amp.tau), srF);
@@ -1457,8 +1466,8 @@ Sampler::Take Sampler::startNote (int part, int midiNote, int velocity, float en
     // drawn from a pool or a recipe plays from its first sample, once.
     const bool ownFile = ! fromPack && choice.file != nullptr && played.file[0] != 0
                          && std::strcmp (choice.file, played.file) == 0;
-    double startFrame = ownFile ? std::clamp ((double) played.start, 0.0, 16.0) * audio->rate : 0.0;
-    if (choice.slice && audio->sliceCount > 1)
+    double startFrame = ownFile && ! params.sampleTrue ? std::clamp ((double) played.start, 0.0, 16.0) * audio->rate : 0.0;
+    if (choice.slice && audio->sliceCount > 1 && ! params.sampleTrue)
     {
         const int s = (choice.sliceIndex % audio->sliceCount + audio->sliceCount) % audio->sliceCount;
         startFrame = (double) audio->slices[s];
@@ -1467,12 +1476,12 @@ Sampler::Take Sampler::startNote (int part, int midiNote, int velocity, float en
     if (part == Vox && startFrame < (double) audio->lead)
         startFrame = (double) audio->lead;
     // VOX chops start on the voice, not on a lead-in or a breath (in memory).
-    if (part == Vox && ! fromPack && ! phrase && audio->voicedCount > 0)
+    if (part == Vox && ! fromPack && ! phrase && audio->voicedCount > 0 && ! params.sampleTrue)
         startFrame = (double) voxStart ((int) startFrame, choice.slice, choice.sliceIndex, audio->voiced, audio->voicedCount,
                                         audio->voicedFloor, audio->left.data(),
                                         audio->right.empty() ? nullptr : audio->right.data(), audio->frames, audio->rate);
     fresh.pos = startFrame;
-    fresh.loop = ownFile && played.loop.on && part != Hits && part != Vox;
+    fresh.loop = ownFile && played.loop.on && part != Hits && part != Vox && ! params.sampleTrue;
     const auto region = makeLoopRegion (played.loop, audio->rate, audio->frames, startFrame);
     fresh.loopA = region.a;
     fresh.loopB = region.b;
@@ -1684,7 +1693,7 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
     const auto amp = ampFor (bank, Drums, presetOf (params, Drums));
     const float tune = std::pow (2.f, params.drumTuneSt[voice] / 12.f);
     // Multiplies the TUNE knob; exactly 1 when off, so the ratio is bit-identical.
-    const double keyFollow = voice == Kick && params.kickKeyFollow && ownFile
+    const double keyFollow = voice == Kick && params.kickKeyFollow && ! params.sampleTrue && ownFile
                                  ? kickKeyFollowRatio (audio->pitch, params.key)
                                  : 1.0;
     Voice fresh;
@@ -1699,7 +1708,7 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
     fresh.end16 = 1.0e9f;
     fresh.fade = 0.f;
     fresh.fadeInc = 1.f / std::max (8.f, 0.002f * (float) sr);
-    fresh.gain = amp.trim * std::clamp (velocity / 127.f, 0.05f, 1.f) * ampDb (params.drumLevelDb[voice]) * gainScale;
+    fresh.gain = (params.sampleTrue ? 1.f : amp.trim) * std::clamp (velocity / 127.f, 0.05f, 1.f) * ampDb (params.drumLevelDb[voice]) * gainScale;
     if (spec.mode == SampleMode::Layer)
         fresh.gain *= std::clamp (spec.layerMix, 0.f, 1.f);
     const genre::Treatment* treat = params.treatments != nullptr && ownHit

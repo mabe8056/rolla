@@ -4,6 +4,7 @@
 #include "../Drums/DrumMachine.h"
 #include "../Generator/Scale.h"
 #include "../Mix/MixRuntime.h"
+#include "../Mix/LaneFaders.h"
 #include "../Mix/TruePeakGuard.h"
 #include "../Sampler/UserSlots.h"
 
@@ -418,8 +419,9 @@ struct Engine::Impl
         for (int i = 0; i < NumParts; ++i)
             level[i].setTime (18.f, sr);
         outGain.setTime (20.f, sr);
-        mainDc.setCutoff (20.f, sr);
-        mainDcR.setCutoff (20.f, sr);
+        // DC safety only: 20 Hz took about 1 dB off a kick's 40 Hz fundamental.
+        mainDc.setCutoff (5.f, sr);
+        mainDcR.setCutoff (5.f, sr);
         drumDc.setCutoff (25.f, sr);
         drumDcR.setCutoff (25.f, sr);
         drums.prepare (sr);
@@ -801,7 +803,9 @@ void Engine::process (const Groove& groove,
             pos = wrapLoop (pos + d16, loop16);
             // Loop wrap or relocate: the loop end faded the output to silence,
             // but kick tails are still sounding. Reopen on a 1 ms raised cosine.
-            if (pos < prev && ! (justStarted && i == 0))
+            // Sample-true: voices already fade at the loop end; no master dip, so the
+            // downbeat kick keeps its transient on every repeat.
+            if (pos < prev && ! (justStarted && i == 0) && ! params.sampleTrue)
             {
                 E.wrapN = std::max (8, (int) (0.001 * sr));
                 E.wrapIn = E.wrapN;
@@ -1112,7 +1116,8 @@ void Engine::process (const Groove& groove,
                     int iv[4];
                     for (int c = 0; c < count && c < 4; ++c)
                         iv[c] = n.chord[c];
-                    if (part == Stab && sp.chordOn && count <= 1 && sp.chordN > 1)
+                    // Sample-true: a stab note is the stab, not a parallel chord re-pitched from one file.
+                    if (part == Stab && sp.chordOn && count <= 1 && sp.chordN > 1 && ! params.sampleTrue)
                     {
                         const int root = count == 1 ? (int) n.chord[0] : 0;
                         count = std::min (4, sp.chordN);
@@ -1366,7 +1371,7 @@ void Engine::process (const Groove& groove,
                 // plays, duck follows this function's kick note-ons instead.
                 // Mix path: muting drums must not retarget duck, or SOLO/MUTE/FULL
                 // bass envelopes stop nulling. Quarter-grid fallback stays on the legacy path.
-                if (params.mix == nullptr && params.mute[Drums] && params.duck && (t % 4) == 0)
+                if (params.mix == nullptr && params.mute[Drums] && (params.duck && ! params.sampleTrue) && (t % 4) == 0)
                 {
                     const float depth = std::max (0.f, bp.duckDb + punchB * 8.f);
                     const float rec = bp.duckRecoverMs;
@@ -1498,7 +1503,7 @@ void Engine::process (const Groove& groove,
                     const float sampleGain = accentOf (voice) * ((voice == Kick || voice == Clap) ? quarterAcc : 1.f);
                     // Mix path: muting drums must not drop the kick duck, or SOLO/MUTE/FULL
                     // bass envelopes stop nulling. The legacy path still skips it.
-                    if (voice == Kick && params.duck && (params.mix != nullptr || ! params.mute[Drums]))
+                    if (voice == Kick && (params.duck && ! params.sampleTrue) && (params.mix != nullptr || ! params.mute[Drums]))
                     {
                         const float depth = std::max (0.f, bp.duckDb + punchB * 8.f);
                         const float rec = bp.duckRecoverMs;
@@ -1810,8 +1815,10 @@ void Engine::process (const Groove& groove,
         sampler.render (playL, playR, (float) prev, (float) pos, transport.playing, (float) loop16);
 
         const float bFader = E.level[Bass].next();
-        const float bDuck = params.duck ? E.duckB.next() : 1.f;
-        const float bDry = renderBass (E.bass) + renderBass (E.live) + playL[Bass];
+        const float bDuck = (params.duck && ! params.sampleTrue) ? E.duckB.next() : 1.f;
+        // Sample-true: a stereo bass file sums to mono (it was its left channel only).
+        const float bDry = renderBass (E.bass) + renderBass (E.live)
+                           + (params.sampleTrue ? 0.5f * (playL[Bass] + playR[Bass]) : playL[Bass]);
         float bSamp = bDry * bFader * bDuck;
 
         float sL = 0, sR = 0, sDelay = 0, sRev = 0;
@@ -1823,7 +1830,7 @@ void Engine::process (const Groove& groove,
             sDelay += (l + r) * 0.5f * v.delaySend;
             sRev += (l + r) * 0.5f * v.revSend;
         }
-        const float stabDuck = params.duck ? E.duckS.next() : 1.f;
+        const float stabDuck = (params.duck && ! params.sampleTrue) ? E.duckS.next() : 1.f;
         const float stabFader = E.level[Stab].next();
         const float sDryL = sL + playL[Stab];
         const float sDryR = sR + playR[Stab];
@@ -1840,7 +1847,7 @@ void Engine::process (const Groove& groove,
             pR += r;
         }
         const float pluckFader = E.level[Pluck].next();
-        const float pluckDuck = params.duck ? E.duckPl.next() : 1.f;
+        const float pluckDuck = (params.duck && ! params.sampleTrue) ? E.duckPl.next() : 1.f;
         const float pDryL = pL + playL[Pluck];
         const float pDryR = pR + playR[Pluck];
         pL = pDryL * pluckFader * pluckDuck;
@@ -1854,7 +1861,7 @@ void Engine::process (const Groove& groove,
             aR += r;
             aRev += (l + r) * 0.5f * v.revSend;
         }
-        const float padDuck = params.duck ? E.duckP.next() : 1.f;
+        const float padDuck = (params.duck && ! params.sampleTrue) ? E.duckP.next() : 1.f;
         const float padFader = E.level[Pad].next();
         const float aDryL = aL + playL[Pad];
         const float aDryR = aR + playR[Pad];
@@ -2009,7 +2016,7 @@ void Engine::process (const Groove& groove,
             hR += y * (1.f + v.pan * 0.5f);
         }
         const float hitsFader = E.level[Hits].next();
-        const float hitsDuck = params.duck ? E.duckH.next() : 1.f;
+        const float hitsDuck = (params.duck && ! params.sampleTrue) ? E.duckH.next() : 1.f;
         const float hDryL = hL + playL[Hits];
         const float hDryR = hR + playR[Hits];
         hL = hDryL * hitsFader * hitsDuck;
@@ -2069,7 +2076,7 @@ void Engine::process (const Groove& groove,
             voxRev += y * v.revSend;
         }
         const float voxFader = E.level[Vox].next();
-        const float voxDuck = params.duck ? E.duckV.next() : 1.f;
+        const float voxDuck = (params.duck && ! params.sampleTrue) ? E.duckV.next() : 1.f;
         const float vDryL = voxL + playL[Vox];
         const float vDryR = voxR + playR[Vox];
         voxL = vDryL * voxFader * voxDuck;
@@ -2145,7 +2152,15 @@ void Engine::process (const Groove& groove,
             {
                 float l = dryL * duck;
                 float r = dryR * duck;
-                E.mixRt.process (lane, l, r);
+                if (params.sampleTrue)
+                {
+                    // The sample as recorded at its lane fader. No strip.
+                    const float g = dbToGain (laneFaderDb (params.dialect, lane));
+                    l *= g;
+                    r *= g;
+                }
+                else
+                    E.mixRt.process (lane, l, r);
                 if (muted)
                     l = r = 0.f;
                 else
@@ -2176,6 +2191,8 @@ void Engine::process (const Groove& groove,
             sRev = 0.5f * (sL + sR) * sp.reverbSend;
             aRev = 0.5f * (aL + aR) * padP.reverbSend;
             voxRev = 0.5f * (voxL + voxR) * vp.reverbSend;
+            if (params.sampleTrue)
+                sDelay = sRev = aRev = voxRev = 0.f; // dry: no delay or plate added to the samples
 
             // Kick Snare Clap Rim — toms stay linear — HatC HatO Ride Perc.
             // Toms are not a solo lane. A shared nonlinear perc strip would
@@ -2189,8 +2206,9 @@ void Engine::process (const Groove& groove,
                 {
                     if (! params.mute[Drums] && ! params.drumVoiceMute[v])
                     {
-                        drumLft += dryL * dLvl;
-                        drumRgt += dryR * dLvl;
+                        const float tom = params.sampleTrue ? dbToGain (laneFaderDb (params.dialect, kFaderPerc)) : 1.f;
+                        drumLft += dryL * dLvl * tom;
+                        drumRgt += dryR * dLvl * tom;
                     }
                     continue;
                 }
@@ -2224,7 +2242,8 @@ void Engine::process (const Groove& groove,
         // Stereo drum samples, voice pans and slot kicks put side energy under 120 Hz.
         // Mono it here, so the main sum and the DRUMS stem get the same bus.
         // Linear, so MUTE - (FULL - SOLO) still nulls.
-        E.drumMono.process (drumLft, drumRgt, kSubMonoHz, srF);
+        if (! params.sampleTrue)
+            E.drumMono.process (drumLft, drumRgt, kSubMonoHz, srF);
 
         float fxGate = 1.f;
         if (transport.playing)
@@ -2299,7 +2318,8 @@ void Engine::process (const Groove& groove,
         }
 
         float revL = 0.f, revR = 0.f;
-        const float send = (sRev + aRev + voxRev + (drumLft + drumRgt) * 0.5f * dp.room) * fxGate;
+        const float room = params.sampleTrue ? 0.f : dp.room;
+        const float send = (sRev + aRev + voxRev + (drumLft + drumRgt) * 0.5f * room) * fxGate;
         // The idle skip is a level gate. On the mix path it must stay closed, or a
         // sparse solo drops the plate while the full mix keeps it running and the
         // mute null fails.
@@ -2331,11 +2351,12 @@ void Engine::process (const Groove& groove,
         {
             // Linear sum. The shared fastTanh was the mute leak: MUTE − (FULL − SOLO)
             // left a common 250 Hz–4 kHz residual from the cubic term of the sum.
-            const float sg = E.mixRt.sumGain();
+            const float sg = params.sampleTrue ? 1.f : E.mixRt.sumGain();
             // Mono below 120 Hz on the master: the plate, the delay and the unstripped
             // toms / slot kicks put side energy under the lanes' own mono-below.
             // LR4 on the side, mid untouched. Linear, so MUTE − (FULL − SOLO) still nulls.
-            E.masterMono.process (outL, outR, kSubMonoHz, srF);
+            if (! params.sampleTrue)
+                E.masterMono.process (outL, outR, kSubMonoHz, srF);
             outL = flush (E.mainDc.process (outL) * sg * og);
             outR = flush (E.mainDcR.process (outR) * sg * og);
         }
@@ -2352,7 +2373,7 @@ void Engine::process (const Groove& groove,
         }
         // The free tail after the loop is hard silence. Reach that silence
         // on a raised cosine, or the last playing sample steps into the zero.
-        if (transport.playing)
+        if (transport.playing && ! params.sampleTrue)
         {
             const double untilEnd = loop16 - pos;
             const double window = d16 * 0.010 * sr;
@@ -2386,6 +2407,7 @@ void Engine::process (const Groove& groove,
     }
 
     // Master true-peak safety (-6 dBTP). The DRUMS bus rides the same delay.
+    E.tpGuard.setCeilingDbtp (params.sampleTrue ? kSampleTrueCeilingDbtp : TruePeakGuard::kDefaultCeilingDbtp);
     E.tpGuard.setEnabled (params.tpGuard);
     E.tpGuard.process (mainL, mainR, drumL, drumR, numSamples);
 }

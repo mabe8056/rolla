@@ -475,7 +475,8 @@ void RollaProcessor::guardRetunes()
                 int iv[4] {};
                 for (int c = 0; c < count; ++c)
                     iv[c] = note.chord[c];
-                if (part == Stab && sp.chordOn && count <= 1 && sp.chordN > 1)
+                // Mirrors Engine: no stab chord memory on the sample-true path.
+                if (part == Stab && sp.chordOn && count <= 1 && sp.chordN > 1 && ! rolla::EngineParams {}.sampleTrue)
                 {
                     const int rootIv = iv[0];
                     count = std::min (4, sp.chordN);
@@ -1355,7 +1356,8 @@ EngineParams RollaProcessor::readParams (std::shared_ptr<const PresetBank>& hold
     for (int i = 0; i < NumParts; ++i)
         solo[i] = raw (apvts, (juce::String (partId (i)) + "Solo").toRawUTF8()) >= 0.5f;
     foldSolo (params.mute, solo);
-    params.kickKeyFollow = true;
+    // Sample-true: drums at recorded pitch (Melak, Oct 19). Key follow stays in the engine for tools.
+    params.kickKeyFollow = false;
     for (int v = 0; v < NumDrumVoices; ++v)
     {
         params.drumPick[v] = drumPick[v].load (std::memory_order_relaxed);

@@ -108,6 +108,7 @@ rolla::EngineParams makeParams (const rolla::PresetBank& bank, const rolla::MixP
     params.sampleIndex = index;
     params.bpm = (float) kBpm;
     params.mix = &mix;
+    params.sampleTrue = false; // this tool renders and tests the MIX_SPEC strip itself
     // FULL unmutes every MAIN lane, so the frozen mask is all six bits.
     params.sumMask = 63;
     params.bypassSumTrim = bypassSum;

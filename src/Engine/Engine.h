@@ -79,6 +79,13 @@ struct EngineParams
     // tests that build EngineParams by hand keep the old sample path. At the
     // knob defaults (tone / punch 0.5, accent 0.6, voice accent off) it is an identity.
     bool sampleShaping = false;
+    // Sample-true playback (Melak, Oct 19: "samples as they are, one fader per lane,
+    // light master safety limiter, drums at recorded pitch"). Each lane is the
+    // load-normalised sample x velocity x one static fader (src/Mix/LaneFaders.h), then
+    // a clean sum and the true-peak guard as a rare-peak safety. Off brings back the
+    // MIX_SPEC strip, sum trim, duck, FX sends, mono-below, chops and preset trims
+    // (kept for rolla-mix-render and the strip tests).
+    bool sampleTrue = true;
 };
 
 struct Transport
