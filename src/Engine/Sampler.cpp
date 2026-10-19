@@ -240,6 +240,104 @@ bool readyChoice (const SampleLibrary* library, const SampleSpec& spec, int midi
     return false;
 }
 
+// The chop gate (SampleChop.h) for one loaded file, with the inputs take() uses.
+ChopPlan chopPlanFor (int part, const SampleAudio& audio, const char* file, const EngineParams& params) noexcept
+{
+    const bool hardName = sampleTextListed (file, kHardBroadband, 6);
+    const bool padBed = part == Pad && sampleTextListed (file, kSoftPadBed, 4);
+    const auto seed = (std::uint32_t) std::max (0, params.samplePick[part]);
+    return planSampleChop (part, audio.frames, audio.rate, params.bpm, seed,
+                           audio.slices, audio.sliceCount, audio.loudStart,
+                           audio.flatness, hardName, padBed);
+}
+
+// HITS / STAB: a blocked chop drops that file, not the note. The next loaded
+// file in the same pool whose chop is not blocked plays instead, the way a
+// missing file swaps within its pool. The first still-loading neighbour is
+// requested so a later note can use it. False when nothing usable is loaded.
+bool unblockedSwap (const SampleLibrary* library, const SampleIndex* index, const SampleSpec& spec,
+                    bool recipe, int part, const EngineParams& params, const char* blockedFile,
+                    SampleChoice& choice, const SampleAudio*& audio, ChopPlan& chop) noexcept
+{
+    if (library == nullptr || (part != Hits && part != Stab))
+        return false;
+    bool requested = false;
+    // Returns true when `file` is loaded and its chop plays (or it is a phrase loop, which is not chopped).
+    auto usable = [&] (const char* file, bool phraseLoop, int fileBpm, const SampleAudio*& got, ChopPlan& plan) noexcept
+    {
+        got = nullptr;
+        plan = ChopPlan {};
+        if (file == nullptr || file[0] == 0)
+            return false;
+        if (blockedFile != nullptr && std::strcmp (file, blockedFile) == 0)
+            return false;
+        const auto state = peekFile (library, file, got);
+        if (state == FileState::Pending && ! requested)
+        {
+            library->request (file);
+            requested = true;
+        }
+        if (state != FileState::Ready || got == nullptr)
+            return false;
+        if (! (phraseLoop && fileBpm > 0))
+            plan = chopPlanFor (part, *got, file, params);
+        return ! plan.blocked;
+    };
+
+    if (recipe && index != nullptr)
+    {
+        const PoolFilter filter = poolFilterWithFiles (*index, spec, part, spec.filter.voice, params.dialect);
+        const int n = sampleIndexCount (*index, part, filter);
+        if (n <= 1)
+            return false;
+        const int start = std::max (0, params.samplePick[part]) % n;
+        const int limit = n < 64 ? n : 64;
+        for (int i = 1; i < limit; ++i)
+        {
+            const auto* entry = sampleIndexAt (*index, part, filter, (start + i) % n);
+            if (entry == nullptr)
+                continue;
+            const SampleAudio* got = nullptr;
+            ChopPlan plan;
+            if (! usable (entry->path, entry->phraseLoop, entry->fileBpm, got, plan))
+                continue;
+            choice.file = entry->path;
+            choice.root = entry->root > 0 ? entry->root : 60;
+            choice.phraseLoop = entry->phraseLoop;
+            choice.fileBpm = entry->fileBpm;
+            choice.slice = false;
+            audio = got;
+            chop = plan;
+            return true;
+        }
+        return false;
+    }
+
+    // A preset's own file list: its file, its pool, its zones.
+    const char* extras[SampleSpec::kPool + SampleSpec::kZones + 1] {};
+    int n = 0;
+    if (spec.file[0] != 0)
+        extras[n++] = spec.file;
+    for (int i = 0; i < spec.poolCount && i < SampleSpec::kPool; ++i)
+        if (spec.pool[i][0] != 0)
+            extras[n++] = spec.pool[i];
+    for (int i = 0; i < spec.zoneCount && i < SampleSpec::kZones && n < SampleSpec::kPool + SampleSpec::kZones + 1; ++i)
+        if (spec.zones[i].file[0] != 0)
+            extras[n++] = spec.zones[i].file;
+    for (int i = 0; i < n; ++i)
+    {
+        const SampleAudio* got = nullptr;
+        ChopPlan plan;
+        if (! usable (extras[i], false, 0, got, plan))
+            continue;
+        choice.file = extras[i];
+        audio = got;
+        chop = plan;
+        return true;
+    }
+    return false;
+}
+
 // The chosen preset wins. A confirmed-missing file tries the rest of the lane.
 // A file that is still loading does not get replaced by another sample.
 // If nothing is ready, take() plays the matching synth instead of silence.
@@ -1027,18 +1125,21 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
         return result;
     }
 
-    // Slice in memory. A blocked chop is broadband: the note stays silent.
+    // Slice in memory. A blocked chop is broadband: that file is not played.
+    // HITS and STAB swap to another file in the same pool whose chop plays, so
+    // one broadband file cannot silence the lane for the whole roll. Only when
+    // no such file is loaded does the note stay silent (a PAD bed always does).
     ChopPlan chop;
     const bool phrase = choice.phraseLoop && choice.fileBpm > 0;
     if (! fromPack && ! phrase && choice.file != nullptr && choice.file[0] != 0
         && (part == Hits || part == Stab || part == Pad))
     {
-        const bool hardName = sampleTextListed (choice.file, kHardBroadband, 6);
         const bool padBed = part == Pad && sampleTextListed (choice.file, kSoftPadBed, 4);
-        const auto seed = (std::uint32_t) std::max (0, params.samplePick[part]);
-        chop = planSampleChop (part, audio->frames, audio->rate, params.bpm, seed,
-                               audio->slices, audio->sliceCount, audio->loudStart,
-                               audio->flatness, hardName, padBed);
+        chop = chopPlanFor (part, *audio, choice.file, params);
+        if (chop.blocked && (part == Hits || part == Stab)
+            && unblockedSwap (params.library, params.sampleIndex, played, recipe, part, params,
+                              choice.file, choice, audio, chop))
+            chop.blocked = false;
         if (chop.blocked && (part == Hits || part == Stab || padBed))
         {
             result.kind = 1;

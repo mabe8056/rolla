@@ -140,6 +140,32 @@ void writeTone (const juce::File& file, double seconds, float amplitude, float h
     writer->writeFromAudioSampleBuffer (buf, 0, buf.getNumSamples());
 }
 
+// White noise: broadband, so the chop gate blocks it.
+void writeNoise (const juce::File& file, double seconds, float amplitude, std::uint32_t seed)
+{
+    file.getParentDirectory().createDirectory();
+    juce::WavAudioFormat wav;
+    auto fileStream = std::make_unique<juce::FileOutputStream> (file);
+    if (fileStream == nullptr || ! fileStream->openedOk())
+        return;
+    std::unique_ptr<juce::OutputStream> stream (fileStream.release());
+    const auto options = juce::AudioFormatWriterOptions().withSampleRate (48000.0)
+                                                          .withNumChannels (1)
+                                                          .withBitsPerSample (16);
+    auto writer = wav.createWriterFor (stream, options);
+    if (writer == nullptr)
+        return;
+    const int n = (int) std::lround (seconds * 48000.0);
+    juce::AudioBuffer<float> buf (1, n);
+    std::uint32_t s = seed;
+    for (int i = 0; i < n; ++i)
+    {
+        s = s * 1664525u + 1013904223u;
+        buf.setSample (0, i, amplitude * ((((s >> 8) & 0xffff) / 32768.f) - 1.f));
+    }
+    writer->writeFromAudioSampleBuffer (buf, 0, n);
+}
+
 rolla::SlotQuery slotQuery (int mode, bool ready, bool missing, bool loading)
 {
     rolla::SlotQuery slot;
@@ -3312,6 +3338,122 @@ int main()
         expect (before.getSize() == after.getSize()
                     && std::memcmp (before.getData(), after.getData(), before.getSize()) == 0,
                 "the source wav is unchanged");
+    }
+
+    // ---------------------------------------------------------------- blocked chop falls back
+    {
+        // HITS and STAB in a real roll: a broadband file the name table lets
+        // through (a gritty "Chord Stab") is blocked by the chop gate. That drops
+        // the file, not the note: playback swaps to another file in the same pool
+        // instead of leaving the lane silent for the whole roll.
+        const auto gateRoot = rootDir.getChildFile ("chopgate");
+        for (const char* kind : { "index", "loudness" })
+            rolla::sampleCacheFor (gateRoot, kind).deleteFile();
+        gateRoot.deleteRecursively();
+        const double gateSeconds = rolla::kChopMinSeconds + 1.5;
+        struct GateLane
+        {
+            int part;
+            const char* name;
+            const char* grit;
+            const char* clean;
+        };
+        const GateLane gateLanes[] = {
+            { rolla::Hits, "HITS", "HITS/Chord_Stab_Grit_C4.wav", "HITS/Chord_Stab_Clean_C4.wav" },
+            { rolla::Stab, "STAB", "STAB/Synth_Stab_Grit_C4.wav", "STAB/Synth_Stab_Clean_C4.wav" },
+        };
+        for (const auto& gl : gateLanes)
+        {
+            writeNoise (gateRoot.getChildFile (gl.grit), gateSeconds, 0.6f, 7u + (std::uint32_t) gl.part);
+            writeTone (gateRoot.getChildFile (gl.clean), gateSeconds, 0.8f, 440.f, false);
+        }
+        rolla::SampleLibrary gateLib;
+        gateLib.setRoot (gateRoot);
+        gateLib.startIndex ("{\"files\":[]}", 12);
+        expect (waitUntil ([&] { return gateLib.indexedFound() >= 4; }), "chop-gate index publishes");
+        const auto gateSnap = gateLib.index();
+        gateLib.preload ({ std::string (gateLanes[0].grit), std::string (gateLanes[0].clean),
+                           std::string (gateLanes[1].grit), std::string (gateLanes[1].clean) });
+        expect (waitUntil ([&] {
+                    for (const auto& gl : gateLanes)
+                        if (! gateLib.ready (gl.grit) || ! gateLib.ready (gl.clean))
+                            return false;
+                    return true;
+                }),
+                "chop-gate files load");
+
+        rolla::PresetBank gateBank;
+        gateBank.count[rolla::Hits] = 1;
+        gateBank.count[rolla::Stab] = 1;
+        for (auto* spec : { &gateBank.hits[0].sample, &gateBank.stab[0].sample })
+        {
+            spec->mode = rolla::SampleMode::Sample;
+            spec->file[0] = 0;
+            spec->poolCount = 0;
+            spec->zoneCount = 0;
+            spec->filter = rolla::PoolFilter {};
+            spec->filter.on = true;
+        }
+        gateBank.hits[0].sample.filter.lane = rolla::Hits;
+        gateBank.stab[0].sample.filter.lane = rolla::Stab;
+        gateBank.hits[0].decayMs = 5000.f;
+
+        for (const auto& gl : gateLanes)
+        {
+            const std::string lane (gl.name);
+            if (gateSnap == nullptr)
+            {
+                expect (false, lane + " chop-gate index is missing");
+                break;
+            }
+            const auto* gritAudio = gateLib.tryGet (gl.grit);
+            expect (gritAudio != nullptr && gritAudio->flatness >= rolla::kTonalFlatness,
+                    lane + ": the gritty file measures broadband (flatness "
+                        + std::to_string (gritAudio != nullptr ? gritAudio->flatness : -1.f) + ")");
+
+            rolla::EngineParams gp;
+            gp.presets = &gateBank;
+            gp.library = &gateLib;
+            gp.sampleIndex = gateSnap.get();
+            gp.dialect = rolla::Gaskin;
+            gp.bpm = 130.f;
+            for (int i = 0; i < rolla::NumDrumVoices; ++i)
+                gp.drumDecay[i] = 0.5f;
+            const auto& spec = rolla::sampleSpecFor (gateBank, gl.part, 0);
+            const auto filter = rolla::poolFilterWithFiles (*gateSnap, spec, gl.part, spec.filter.voice, gp.dialect);
+            const int n = rolla::sampleIndexCount (*gateSnap, gl.part, filter);
+            int gritAt = -1;
+            for (int i = 0; i < n; ++i)
+                if (const auto* e = rolla::sampleIndexAt (*gateSnap, gl.part, filter, i))
+                    if (std::strcmp (e->path, gl.grit) == 0)
+                        gritAt = i;
+            expect (n == 2 && gritAt >= 0,
+                    lane + ": the pool holds the gritty and the clean file (n=" + std::to_string (n) + ")");
+            // The roll's pick lands on the blocked file.
+            gp.samplePick[gl.part] = std::max (0, gritAt);
+
+            rolla::Sampler gs;
+            gs.prepare (48000.0);
+            gs.take (gl.part, 60, 110, 1.0e9f, gateBank, gp);
+            float peak = 0.f;
+            float prev16 = 0.f;
+            float pos16 = 0.01f;
+            for (int i = 0; i < 12000; ++i)
+            {
+                float laneL[rolla::NumParts] {};
+                float laneR[rolla::NumParts] {};
+                gs.render (laneL, laneR, prev16, pos16, true, 0.f);
+                peak = std::max (peak, std::max (std::fabs (laneL[gl.part]), std::fabs (laneR[gl.part])));
+                prev16 = pos16;
+                pos16 += 0.0001f;
+            }
+            const auto picked = gs.lastPickedFile (gl.part);
+            expect (peak > 1.0e-3f,
+                    lane + ": a blocked chop falls back to another pool file and sounds (peak "
+                        + std::to_string (peak) + ")");
+            expect (picked == gl.clean,
+                    lane + ": the blocked file is swapped for the clean file in its pool (" + picked + ")");
+        }
     }
 
     // ---------------------------------------------------------------- vox starts on the voice
