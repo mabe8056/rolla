@@ -1230,6 +1230,7 @@ void composeStab (Lane& lane, const Lane& bass, const StabParams& p, std::uint32
 
     int placedAll = 0;
     int onBeat = 0;
+    const int plannedHits = std::clamp (per, 1, kStabHitsCap) * (p.skipOdd ? (nb + 1) / 2 : nb);
     // Per-roll copies of the stab onset weights with the model's onset entropy floor.
     float given[3][kBar];
     for (int c = 0; c < 3; ++c)
@@ -1296,7 +1297,9 @@ void composeStab (Lane& lane, const Lane& bass, const StabParams& p, std::uint32
                     bool legal[kBar];
                     // Beats (kick steps) take stabs too, up to the style's on-beat
                     // ceiling of the roll's hits so far (A&R: DEEP 20%, JACKIN 30%).
-                    const bool beatOk = (float) (onBeat + 1) <= kStabOnBeatCeil[st] * (float) (placedAll + 1);
+                    // Measured against the roll's planned hits, so bars of one parity
+                    // make the same choice (JACKIN's 2-bar stab repeat).
+                    const bool beatOk = (float) (onBeat + 1) <= kStabOnBeatCeil[st] * (float) std::max (1, plannedHits);
                     for (int s = 0; s < kBar; ++s)
                     {
                         legal[s] = cls[s] == want && ! taken[s] && (beatOk || ! kickStep (s));

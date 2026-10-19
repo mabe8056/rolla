@@ -96,6 +96,9 @@ struct Groove
     // BOUNCY bass mode of the last bass roll: 0 not BOUNCY, 1 bounce, 2 pulse.
     // MidiExport writes it into the bass track ("mode:bounce" / "mode:pulse").
     int bassMode = 0;
+    // The roll's mode (phrase::Mode: 0 dorian, 1 aeolian, 2 phrygian) for every
+    // pitched lane, as shipped (a redraw can change it with the bass seed).
+    int mode = 1;
     // Redraws behind the last generate(): orig = the originality check (#76
     // guard: built-in banned figures and the reference index) refused the
     // roll, guard = the thin-cell guard (bars 5-8) refused it. One log entry

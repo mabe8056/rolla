@@ -1196,7 +1196,8 @@ void testHarmonyClashes()
                          + (std::uint32_t) style * 101u;
             rolla::Groove g {};
             rolla::generate (g, s, seeds, 0x7fu);
-            const int mode = rolla::rollMode (s, seeds[rolla::Bass]);
+            // The mode of the roll that shipped (an originality redraw draws it again).
+            const int mode = g.mode;
             if (mode == rolla::phrase::Phrygian)
                 ++phrygianRolls;
 

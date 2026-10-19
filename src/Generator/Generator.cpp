@@ -30,10 +30,13 @@ struct RollCtx
 thread_local RollCtx tRoll;
 
 // A pitch class from the style's first-order degree table, one step from
-// prevPc, in the roll's mode, never one in `avoid` (bit pc). -1 if 12 draws
-// find none.
+// prevPc, in the roll's mode, never one in `avoid` (bit pc) and never the b2.
+// -1 if 12 draws find none.
 int drawPc (int prevPc, unsigned avoid, std::uint32_t hash)
 {
+    // The b2 is the composer's (and JACKIN's flat-2 flavour's), under its cap:
+    // a rewrite pass never adds one.
+    avoid |= 1u << 1;
     for (int t = 0; t < 12; ++t)
     {
         const int pc = rules::sampleDegreeSemis (tRoll.dialect, tRoll.mode, ((prevPc % 12) + 12) % 12,
@@ -1361,7 +1364,8 @@ void loopJackinBass (Lane& lane, int bars, std::uint32_t seed)
             lane.notes[i].length = std::max (0.25f, room);
     }
     // Same share and hash as differBar4, so the bar-4 answer rate is unchanged.
-    if (nb >= 8 && (float) (((seed ? seed : 1u) * 0xC2B2AE35u) % 1000u) < 1000.f * rules::tables::kBar4AnswerProb[std::clamp ((int) Jackin, 0, rules::tables::kStyles - 1)])
+    // Same share and hash as differBar4 (see there).
+    if (nb >= 8 && (((seed ? seed : 1u) * 0xC2B2AE35u) % 100u) < 58u)
         answerJackinBar4 (lane, seed);
 }
 
@@ -1431,7 +1435,10 @@ void differBar4 (Lane& lane, int bars, std::uint32_t seed)
         return;
     // Just over half the rolls. A pitch-class change is what the token test counts;
     // a one-slot slide with the same pitch still matches.
-    const bool answer = (float) (((seed ? seed : 1u) * 0xC2B2AE35u) % 1000u) < 1000.f * rules::tables::kBar4AnswerProb[std::clamp (tRoll.dialect, 0, rules::tables::kStyles - 1)];
+    // 58% here: the composer already answers bar 2 at the model's rate, and the
+    // later density, kick and hold passes move bar 4 on some copied rolls too,
+    // so the shipped rate lands near the model's kBar4AnswerProb (~0.8-0.9).
+    const bool answer = (((seed ? seed : 1u) * 0xC2B2AE35u) % 100u) < 58u;
     const int srcBar = 1;
     const int dstBar = 3;
     if (dstBar >= bars)
@@ -1693,7 +1700,9 @@ void finishPhrase (Lane& lane, const Settings& s, std::uint32_t seed, bool pulse
             applyBusyDensity (lane, dialect, bars, s.busy, seed);
         }
     }
-    paintPhraseVariety (lane, dialect, seed, pulse ? 0.f : 0.24f);
+    // Bounce carries the style's octave moves (pulse stays near zero and is 30-40%
+    // of a batch), so the BOUNCY average lands in the 15-30% lane.
+    paintPhraseVariety (lane, dialect, seed, pulse ? 0.f : 0.30f);
     differBar4 (lane, bars, seed);
     finishBass (lane);
     if (dialect == Pop)
@@ -3235,7 +3244,8 @@ bool addBar8Pickup (Groove& g, int mode, int dialect, std::uint32_t bassSeed)
 void harmonizeRoll (Groove& g, const Settings& s, std::uint32_t bassSeed, std::uint32_t partMask)
 {
     auto regen = [&] (int part) { return (partMask & (1u << part)) != 0; };
-    const int mode = rollMode (s, bassSeed);
+    const int mode = tRoll.mode;
+    (void) bassSeed;
     const float cap = b2Cap (s.dialect, mode);
     for (int part : { (int) Stab, (int) Pad, (int) Pluck, (int) Hits })
         if (regen (part))
@@ -3521,15 +3531,28 @@ void fillBassDensity (Lane& lane, int dialect, int bars, float busy, std::uint32
         const int st = std::clamp ((int) Long, 0, rt::kStyles - 1);
         Rng rd (postHash (seed ^ 0xDEE5u, 5u) | 1u);
         const bool busyLine = mean >= target + 1.f;
+        float front = 0.f;
+        for (int j = 0; j < 4; ++j)
+            front += rt::kBassDensity[st][j][0] / 4.f;
+        int c[3];
+        int moved = 0;
         for (int j = 0; j < 3; ++j)
         {
             const float g = (float) ((rd.next() + rd.next() + rd.next() - 1.5) * 2.0);
-            const float want = rt::kBassDensity[st][4 + j][0] + rt::kBassDensity[st][4 + j][1] * 0.5f * g;
-            const int c = std::clamp ((int) std::lround (want - mean), 0, 2);
+            const float delta = rt::kBassDensity[st][4 + j][0] - front + rt::kBassDensity[st][4 + j][1] * 0.5f * g;
+            c[j] = std::clamp ((int) std::lround (std::fabs (delta)), 0, 2);
+            moved += c[j];
+        }
+        // The back half moves against the front (A&R CONSTANT_DENSITY): a
+        // draw with no movement gets one bar of it.
+        if (moved == 0)
+            c[(int) (rd.nextU() % 3u)] = 1;
+        for (int j = 0; j < 3; ++j)
+        {
             if (busyLine)
-                thin[4 + j] = c;
+                thin[4 + j] = c[j];
             else
-                add[4 + j] += c;
+                add[4 + j] += c[j];
         }
     }
 
@@ -3730,7 +3753,14 @@ void guardGapRatio (Lane& lane, int bars, float lo, float hi)
     {
         const float next = i + 1 < lane.count ? lane.notes[i + 1].start : loop + lane.notes[0].start;
         const float gap = std::max (0.5f, next - lane.notes[i].start);
-        float len = std::clamp (lane.notes[i].length, lo * gap, hi * gap);
+        // The last bar keeps the turn's rest: there a note is only ever shortened.
+        const bool lastBar = lane.notes[i].start >= loop - 16.f;
+        float len = std::min (lane.notes[i].length, hi * gap);
+        if (! lastBar)
+            len = std::max (len, lo * gap);
+        else if (lane.notes[i].start < loop - 4.f)
+            // Lengthened too, but never into the turn's rest (16th 13 on).
+            len = std::max (len, std::min (lo * gap, loop - 4.f - lane.notes[i].start));
         len = std::clamp (len, 0.5f, 8.f);
         // Never past the next onset (one note per onset, no overlap).
         len = std::min (len, std::max (0.25f, gap - 1.f / 120.f));
@@ -4216,6 +4246,7 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
 
     const std::uint32_t bassSeed = seeds[Bass] ? seeds[Bass] : 1u;
     // One mode per roll for every pitched lane (harmonizeRoll snaps to it again).
+    // Groove::mode records it for the roll that ships.
     const int mode = rollMode (s, bassSeed);
     tRoll.dialect = s.dialect;
     tRoll.mode = mode;
@@ -4510,6 +4541,9 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
         else
             // Model v1.2: 0.79-0.83 of the gap to the next note.
             guardGapRatio (g.lane[Bass], s.bars, 0.79f, 0.83f);
+        // The length guard changes how long each pitch sounds: the b2 cap (and
+        // the mode snap) are checked again on the final lengths.
+        conformBass (g.lane[Bass], mode, b2Cap (s.dialect, mode));
         // The final bass lengths can ring under upper notes they used to stop
         // before: every upper lane gives way to the bass that ships again.
         for (int part : { (int) Stab, (int) Pad, (int) Pluck, (int) Hits, (int) Vox })
@@ -4519,6 +4553,7 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
             trimSamePitchOverlaps (g.lane[part]);
         }
     }
+    g.mode = mode;
     g.guardScore = shippedHard ? 0.f : 1.f;
     g.guardLevel = shippedHard ? 2 : 0;
     std::snprintf (g.guardRef, sizeof g.guardRef, "%s", shippedHard ? "HARD" : "ORIGINAL");
