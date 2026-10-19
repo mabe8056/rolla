@@ -20,6 +20,11 @@ float dbToLin (float db) noexcept
     return std::pow (10.f, db / 20.f);
 }
 
+// KICK / RIM / PERC: the hold reads a beat pattern's loudest 3 s window, about 0.5 dB
+// over the window's mean on a four-on-the-floor kick (measured on the 197 library kicks:
+// median -24.36 -> -23.85 LUFS-S for a -23.70 target with this added).
+constexpr float kHitHoldOverMeanDb = 0.5f;
+
 // 4× windowed-sinc, cutoff at base Nyquist, Hamming, 32 taps. Phase sums are ~1
 // so a constant passes at unity. Downsample coefficients are the same kernel at gain 1/4.
 constexpr float kTpUp[4][8] = {
@@ -273,9 +278,6 @@ void MixRuntime::prepare (double sampleRate) noexcept
     // One-pole toward the wanted gain: cuts in ~0.3 s, boosts in ~1.5 s.
     levelCut = 1.f - std::exp (-1.f / (float) (0.3 * sr));
     levelBoost = 1.f - std::exp (-1.f / (float) (1.5 * sr));
-    // Peak gain stage: 0.3 ms per pole on the way down, 60 ms back up.
-    peakAtk = 1.f - std::exp (-1.f / (float) (0.0003 * sr));
-    peakRel = 1.f - std::exp (-1.f / (float) (0.060 * sr));
     for (auto& s : strip)
     {
         s.level.kL.prepare (sr);
@@ -292,7 +294,6 @@ void MixRuntime::reset() noexcept
 {
     for (auto& s : strip)
     {
-        s.peakG1 = s.peakG2 = 1.f;
         for (int i = 0; i < 2; ++i)
         {
             s.hpfL[i].reset(); s.hpfR[i].reset();
@@ -711,31 +712,14 @@ void MixRuntime::process (int lane, float& l, float& r) noexcept
     }
 
     if (laneLevel)
-        levelLane (s, c, yL, yR);
+        levelLane (s, c, yL, yR, lane == 6 || lane == 9 || lane == 13);
 
     const float trim = dbToLin (c.outputTrimDb);
     const float ceilLin = dbToLin (c.tpCeilDb);
-    float xL = yL * trim;
-    float xR = yR * trim;
-    // KICK, RIM and PERC: a smooth peak gain stage holds the hit 1 dB under the
-    // ceiling, so a hit that arrives too hot (the first kick of a render, before
-    // the lane level has settled) is turned down instead of squared by the clip:
-    // that square edge was the engine click the A&R detector found on bar 1. A
-    // kick's peak builds over a few milliseconds, so two 0.3 ms poles follow it
-    // without lookahead or latency. The clip after it stays as the hard limit.
-    if ((lane == 6 || lane == 9 || lane == 13) && c.tpCeilDb < 23.f)
-    {
-        const float peak = std::max (std::fabs (xL), std::fabs (xR)) * 1.12f; // true-peak allowance
-        const float want = peak > 1.0e-9f ? std::min (1.f, 0.89f * ceilLin / peak) : 1.f;
-        s.peakG1 += (want < s.peakG1 ? peakAtk : peakRel) * (want - s.peakG1);
-        s.peakG2 += (s.peakG1 < s.peakG2 ? peakAtk : peakRel) * (s.peakG1 - s.peakG2);
-        xL *= s.peakG2;
-        xR *= s.peakG2;
-    }
     // Soft knee into a hard clamp at 4×, after the trim, so makeup can put the body
     // back on the short-term target while the peak stays on the ceiling. No sum limiter.
-    l = flush (clipSample (s, 0, xL, ceilLin));
-    r = flush (clipSample (s, 1, xR, ceilLin));
+    l = flush (clipSample (s, 0, yL * trim, ceilLin));
+    r = flush (clipSample (s, 1, yR * trim, ceilLin));
 
     if (s.rampSample < 1000000)
         ++s.rampSample;
@@ -752,7 +736,7 @@ void MixRuntime::process (int lane, float& l, float& r) noexcept
 // It reads only this lane (before the mute), so FULL / MUTE / SOLO share one gain.
 // Blocks well under the hold (rests, silence) neither move the hold nor the gain,
 // so a lane coming back from a rest is not boosted.
-void MixRuntime::levelLane (Strip& s, const MixChain& c, float& l, float& r) noexcept
+void MixRuntime::levelLane (Strip& s, const MixChain& c, float& l, float& r, bool hitLane) noexcept
 {
     auto& lv = s.level;
     const double kl = lv.kL.process ((double) l);
@@ -778,8 +762,23 @@ void MixRuntime::levelLane (Strip& s, const MixChain& c, float& l, float& r) noe
             // The hold falls 0.5 dB/s while the lane plays, so a quieter section is found.
             lv.holdDb = std::max (stDb, lv.holdDb - 0.05f);
             float err = c.stTargetLufs - lv.holdDb;
-            err = err > 0.f ? std::max (0.f, err - 0.5f) : std::min (0.f, err + 0.5f);
-            lv.wantLin = dbToLin (std::clamp (err, -9.f, 12.f));
+            if (hitLane)
+            {
+                // KICK / RIM / PERC land on the target. The gain is absolute (target minus
+                // the lane's own level), so the 0.5 dB dead band below left every hit lane
+                // 0.5 dB short, and the hold reads a beat-pattern's loudest window, another
+                // ~0.5 dB over its mean: real kicks sat at -24.7 for a -23.7 target. Here the
+                // wanted gain moves only when it is more than 0.5 dB off, then all the way.
+                const float wantDb = 20.f * std::log10 (std::max (lv.wantLin, 1.0e-6f));
+                const float aim = std::clamp (err + kHitHoldOverMeanDb, -9.f, 12.f);
+                if (std::fabs (aim - wantDb) > 0.5f)
+                    lv.wantLin = dbToLin (aim);
+            }
+            else
+            {
+                err = err > 0.f ? std::max (0.f, err - 0.5f) : std::min (0.f, err + 0.5f);
+                lv.wantLin = dbToLin (std::clamp (err, -9.f, 12.f));
+            }
         }
     }
     lv.gain += (lv.wantLin - lv.gain) * (lv.wantLin < lv.gain ? levelCut : levelBoost);

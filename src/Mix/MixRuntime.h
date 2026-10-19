@@ -119,9 +119,6 @@ private:
         // 4× true-peak clip histories. Every lane runs the same FIR so the mute null keeps one delay.
         float tpUp[2][8] {};
         float tpDown[2][32] {};
-        // Peak gain stage (KICK, RIM, PERC): two cascaded one-poles toward the
-        // gain that keeps the hit under the ceiling.
-        float peakG1 = 1.f, peakG2 = 1.f;
     };
 
     static float raised (float u) noexcept;
@@ -133,12 +130,11 @@ private:
     MixChain blended (const Strip& s) const noexcept;
     float filterBank (Strip& s, float x, bool right, bool hpf, float freq, int slope, bool oldPath) noexcept;
     float eqBank (Strip& s, float x, bool right, int band, const MixEqBand& eq, bool oldPath) noexcept;
-    void levelLane (Strip& s, const MixChain& c, float& l, float& r) noexcept;
+    void levelLane (Strip& s, const MixChain& c, float& l, float& r, bool hitLane) noexcept;
 
     double sr = 48000.0;
     int ramp50 = 2400, ramp80 = 3840, ramp120 = 5760, corrN = 2400, rmsN = 240;
     int levelBlockN = 4800;
-    float peakAtk = 0.07f, peakRel = 0.0003f;
     float levelCut = 0.f, levelBoost = 0.f;
     bool laneLevel = true;
     Strip strip[kMixLanes];

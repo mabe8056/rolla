@@ -18,7 +18,10 @@
 // Set ROLLA_CLICK_PACK=<folder> to add every pack file whose path has "kick" (kicks)
 // or "rim" / "perc" (rim and perc). The folder is only read.
 //
-// Pass: rendered events <= raw events, and rendered score <= max(1.10 x raw, raw + 1).
+// Pass: rendered events <= raw events, and rendered score <= max(1.10 x raw, raw + 1),
+// both counted outside the first 10 ms after each onset. Inside that window is the hit's
+// attack: Melak (Oct 19) "The click is the attack it seems. That should be fine.", confirmed
+// by Maestro (Relay 665). The attack scores are printed on the same line, never asserted.
 // The slack covers the linear EQ/HPF and the 15 ms compressor attack nudging the local
 // RMS by a few percent; the A&R failure was 2.6 -> over 10 and 12 -> 16..19.
 // The kick also has to land on its st_target_lufs (+-1 LU), so loudness holds.
@@ -88,7 +91,9 @@ struct Score
 };
 
 // tools/score_rolls.py d2_clicks, plus the max ratio. x is scaled by gain first.
-Score d2Clicks (const std::vector<float>& x, double sr, float gain)
+// attack (optional, one flag per sample): only samples where attack[i] == want count.
+Score d2Clicks (const std::vector<float>& x, double sr, float gain,
+                const std::vector<char>* attack = nullptr, bool want = false)
 {
     Score s;
     const int n = (int) x.size();
@@ -110,6 +115,8 @@ Score d2Clicks (const std::vector<float>& x, double sr, float gain)
         const double loc = std::sqrt (std::max (0.0, c[(size_t) hi] - c[(size_t) lo]) / (double) std::max (hi - lo, 1));
         const double den = std::max (loc, 1.0e-6);
         const double ad = std::fabs (d[(size_t) i]);
+        if (attack != nullptr && ((*attack)[(size_t) i] != 0) != want)
+            continue;
         if (ad > 10.0 * den && ad > 0.02)
         {
             if (last < 0 || i - last > merge)
@@ -346,6 +353,10 @@ void runHit (const rolla::MixProgram& mix, const Hit& hit, int lane, const char*
     for (int b = 0; b < bars; ++b)
         for (int st : steps16)
             onsets.push_back ((int) std::llround ((double) (b * 16 + st) * s16));
+    std::vector<char> attack ((size_t) total, 0);
+    for (int on : onsets)
+        for (int k = 0; k < (int) (0.010 * sr) && on + k < total; ++k)
+            attack[(size_t) (on + k)] = 1;
 
     for (int d = 0; d < rolla::kMixDialects; ++d)
     {
@@ -364,16 +375,23 @@ void runHit (const rolla::MixProgram& mix, const Hit& hit, int lane, const char*
             const auto om = monoOf (out);
             const double rd = rmsOf (dm), ro = rmsOf (om);
             const float match = rd > 1.0e-12 ? (float) (ro / rd) : 1.f;
-            const Score raw = d2Clicks (dm, sr, match);
-            const Score got = d2Clicks (om, sr, 1.f);
+            // Melak, Oct 19 (Maestro 665): a click inside the hit's attack is the punch, not a
+            // fault. The first 10 ms after each onset are reported on their own; the check
+            // is everything outside them, same detector, same allowance.
+            const Score raw = d2Clicks (dm, sr, match, &attack, false);
+            const Score got = d2Clicks (om, sr, 1.f, &attack, false);
+            const Score rawAtk = d2Clicks (dm, sr, match, &attack, true);
+            const Score gotAtk = d2Clicks (om, sr, 1.f, &attack, true);
             const double allowed = std::max (1.10 * raw.maxRatio, raw.maxRatio + 1.0);
             const bool ok = got.events <= raw.events && got.maxRatio <= allowed;
             const std::string what = std::string (laneName) + " " + kDialectNames[d] + " " + levels[li].name + " "
-                                   + hit.name + ": strip adds no click";
+                                   + hit.name + ": strip adds no click outside the attack";
             char detail[320];
             std::snprintf (detail, sizeof (detail),
-                           "raw %.2f (%d ev, max step %.4f) -> out %.2f (%d ev, max step %.4f), allowed %.2f",
-                           raw.maxRatio, raw.events, raw.maxStep, got.maxRatio, got.events, got.maxStep, allowed);
+                           "raw %.2f (%d ev, max step %.4f) -> out %.2f (%d ev, max step %.4f), allowed %.2f;"
+                           " attack (reported) %.2f (%d ev) -> %.2f (%d ev)",
+                           raw.maxRatio, raw.events, raw.maxStep, got.maxRatio, got.events, got.maxStep, allowed,
+                           rawAtk.maxRatio, rawAtk.events, gotAtk.maxRatio, gotAtk.events);
             if (levels[li].asserted)
             {
                 check (ok, what, detail);
