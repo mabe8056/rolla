@@ -4,7 +4,7 @@
 Usage:  python3 derive_lane_bands.py <lane> [--mode bounce|pulse|sparse|dark] [--margin 0.1] [--bars 16] [--refs DIR]
         lane = ukmin (ROLLER) | long (DEEP) | pop (BOUNCY) | jackin (JACKIN)
 
-Reads the ref list from score_rolls.LANE_REFS (the ONE config spot), finds each ref's MIDI under
+Reads the ref list from score_rolls.LANE_REFS (private: $ROLLA_GENRE_DATA_DIR/score_refs.json), finds each ref's MIDI under
 <refs>/<ref id>/ (bass*.mid, drums*.mid, stabs*.mid; '_bXX-YY' suffixes = extra drop sections),
 measures every section with the scorer's own measure() (no originality, no WAV), and prints per metric:
 ref min / max, a suggested band (min/max widened by --margin of the span, at least the tolerance below),
@@ -38,6 +38,7 @@ def main():
     if not a.refs: ap.error("needs --refs DIR or ROLLA_REFS=DIR (private reference MIDI)")
     globals()["T"] = a.refs
     refs = cfg.get("refs") or [r for md, rs in cfg.get("modes", {}).items() if not a.mode or md == a.mode for r in rs]
+    if not refs: sys.exit("no refs listed for this lane: set ROLLA_GENRE_DATA_DIR to the folder with the private score_refs.json")
     lane_key = {("pop", "pulse"): "pop_pulse", ("long", "dark"): "long_dark"}.get((a.lane, a.mode), a.lane)
     print(f"# {cfg['name']} ({lane_key}) from {len(refs)} refs; pending (skipped): {cfg.get('pending') or 'none'}")
     rows = []
