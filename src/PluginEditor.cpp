@@ -3,9 +3,11 @@
 
 #include "DspUtil.h"
 #include "Generator/Intensity.h"
+#include "Generator/Scale.h"
 #include "LaneSampleUi.h"
 #include "RollFace.h"
 #include "UiTokens.h"
+#include "ui/TextFit.h"
 
 #include <cmath>
 
@@ -181,6 +183,20 @@ struct Look : LookAndFeel_V4
     Font getLabelFont (Label&) override { return Theme::font (Theme::Role::meta); }
     Font getTextButtonFont (TextButton&, int) override { return Theme::font (Theme::Role::button); }
 
+    // drawPopupMenuItem insets the text 28 px each side; size items so nothing is cut. 32 px rows per spec.
+    void getIdealPopupMenuItemSize (const String& text, bool isSeparator, int /*standardMenuItemHeight*/,
+                                    int& idealWidth, int& idealHeight) override
+    {
+        if (isSeparator)
+        {
+            idealWidth = 50;
+            idealHeight = Theme::space8;
+            return;
+        }
+        idealWidth = (int) std::ceil (textWidth (Theme::Role::preset, text)) + 56;
+        idealHeight = Theme::heightIcon;
+    }
+
     void drawPopupMenuBackground (Graphics& g, int width, int height) override
     {
         g.setColour (col (kCard));
@@ -205,9 +221,7 @@ struct Look : LookAndFeel_V4
             g.fillRect (area);
         }
         g.setColour (isActive ? col (kInk) : col (kInk3));
-        g.setFont (Theme::font (Theme::Role::preset));
-        auto textArea = area.reduced (28, 0);
-        g.drawText (text, textArea, Justification::centredLeft, false);
+        ::rolla::drawLabel (g, text, Theme::Role::preset, area.reduced (28, 0), Justification::centredLeft, true);
         if (isTicked)
         {
             g.setColour (col (kInk));
@@ -293,17 +307,14 @@ struct Look : LookAndFeel_V4
                 if (key.isEmpty())
                 {
                     g.setColour (col (kInk));
-                    g.setFont (Theme::font (Theme::Role::meta));
-                    g.drawText (value, row, Justification::centredLeft, false);
+                    ::rolla::drawLabel (g, value, Theme::Role::meta, row, Justification::centredLeft, true);
                     continue;
                 }
                 const float keyW = (text.startsWith ("INTENSITY") && i == 0) ? 96.f : 64.f;
                 g.setColour (col (kInk3));
-                g.setFont (Theme::font (Theme::Role::caption));
-                g.drawText (key, row.removeFromLeft (keyW), Justification::centredLeft, false);
+                ::rolla::drawLabel (g, key, Theme::Role::caption, row.removeFromLeft (keyW), Justification::centredLeft);
                 g.setColour (col (kInk));
-                g.setFont (Theme::font (Theme::Role::meta));
-                g.drawText (value, row.withTrimmedLeft (8.f), Justification::centredLeft, false);
+                ::rolla::drawLabel (g, value, Theme::Role::meta, row.withTrimmedLeft (8.f), Justification::centredLeft, true);
             }
             return;
         }
@@ -330,11 +341,6 @@ struct QuietButton : Button
 
     void paintButton (Graphics&, bool, bool) override {}
 };
-
-float textWidth (const Font& font, const String& text)
-{
-    return GlyphArrangement::getStringWidth (font, text);
-}
 
 struct KnobSlider : Slider
 {
@@ -439,10 +445,8 @@ struct LevelSlider : Slider
         g.drawRoundedRectangle (b.reduced (0.5f), rad - 0.5f, Theme::strokeHair);
 
         g.setColour (col (kInk));
-        g.setFont (Theme::font (Theme::Role::micro));
-        g.drawText ("LVL", b.reduced (8.f, 0.f), Justification::centredLeft, false);
-        g.setFont (Theme::font (Theme::Role::microval));
-        g.drawText (String (getValue(), 1), b.reduced (8.f, 0.f), Justification::centredRight, false);
+        drawLabel (g, "LVL", Theme::Role::micro, b.reduced (8.f, 0.f), Justification::centredLeft);
+        drawLabel (g, String (getValue(), 1), Theme::Role::microval, b.reduced (8.f, 0.f), Justification::centredRight);
         focusRing (g, *this);
     }
 };
@@ -554,10 +558,11 @@ struct IntensitySlider : Slider
         auto b = getLocalBounds().toFloat();
         const bool hot = isMouseOver();
         const bool held = isMouseButtonDown();
+        const float rad = Theme::pillRadius (b.getHeight());
         g.setColour (col (kPaper));
-        g.fillRoundedRectangle (b, 20.f);
+        g.fillRoundedRectangle (b, rad);
         g.setColour (col (held ? kInk : (hot ? kInk2 : kLine2)));
-        g.drawRoundedRectangle (b.reduced (0.5f), 19.5f, Theme::strokeHair);
+        g.drawRoundedRectangle (b.reduced (0.5f), rad - 0.5f, Theme::strokeHair);
 
         const float pos = (float) valueToProportionOfLength (getValue());
         g.setColour (col (kLine2));
@@ -567,14 +572,15 @@ struct IntensitySlider : Slider
         const float thumb = 16.f + 40.f * pos;
         g.fillEllipse (thumb - 6.f, 14.f, 12.f, 12.f);
 
-        auto read = Rectangle<float> (64.f, 4.f, 96.f, 14.f);
+        // Text column: from the end of the mini track to the pill's right inner edge.
+        const float textX = 64.f;
+        const float textW = jmax (0.f, b.getWidth() - textX - (float) Theme::space16);
         g.setColour (col (kInk3));
-        g.setFont (Theme::font (Theme::Role::meta));
-        g.drawText ("INTENSITY " + String (roundToInt (getValue())), read, Justification::centredLeft, false);
+        drawLabel (g, "INTENSITY " + String (roundToInt (getValue())), Theme::Role::meta,
+                   Rectangle<float> (textX, 4.f, textW, 14.f), Justification::centredLeft);
         g.setColour (col (kInk));
-        g.setFont (Theme::font (Theme::Role::pill));
-        g.drawText (word, Rectangle<float> (64.f, 18.f, 96.f, 16.f), Justification::centredLeft, false);
-        focusRing (g, *this, 20.f);
+        drawLabel (g, word, Theme::Role::pill, Rectangle<float> (textX, 18.f, textW, 16.f), Justification::centredLeft);
+        focusRing (g, *this, rad);
     }
 };
 
@@ -585,9 +591,10 @@ struct LabeledKnob : Component
     bool compact = false;
     bool macro = false;
 
+    // Labels draw inside the component's own bounds; the parent sizes it wide enough
+    // for the caption and readout (compact 40, sound 80, macro 136) and the knob sits centred.
     LabeledKnob()
     {
-        setPaintingIsUnclipped (true);
         addAndMakeVisible (slider);
     }
 
@@ -602,41 +609,30 @@ struct LabeledKnob : Component
 
     void resized() override
     {
-        if (compact)
-            slider.setBounds (0, 14, 32, 32);
-        else if (macro)
-            slider.setBounds (0, 24, 64, 64);
-        else
-            slider.setBounds (0, 24, 64, 64);
+        const int size = compact ? Theme::knobSmall : Theme::knobLarge;
+        slider.setBounds ((getWidth() - size) / 2, compact ? 14 : Theme::space24, size, size);
     }
 
     void paint (Graphics& g) override
     {
-        const float capW = macro ? 136.f : (float) getWidth();
-        const float capX = macro ? ((float) getWidth() - capW) * 0.5f : 0.f;
-        auto top = Rectangle<float> (capX, 0.f, capW, compact ? 12.f : 16.f);
+        const auto full = getLocalBounds().toFloat();
         g.setColour (col (kInk2));
-        g.setFont (Theme::font (compact ? Theme::Role::micro
-                                         : (macro ? Theme::Role::macro : Theme::Role::caption)));
-        g.drawText (caption, top, Justification::centred, false);
+        drawLabel (g, caption,
+                   compact ? Theme::Role::micro : (macro ? Theme::Role::macro : Theme::Role::caption),
+                   full.withHeight (compact ? 12.f : 16.f), Justification::centred);
 
         if (macro)
         {
-            const float valueW = 96.f;
-            const float valueX = ((float) getWidth() - valueW) * 0.5f;
             g.setColour (col (kInk));
-            g.setFont (Theme::font (Theme::Role::macroval));
-            g.drawText (readout, Rectangle<float> (valueX, 96.f, valueW, 16.f), Justification::centred, false);
+            drawLabel (g, readout, Theme::Role::macroval, full.withY (96.f).withHeight (16.f), Justification::centred);
             g.setColour (col (kInk2));
-            g.setFont (Theme::font (Theme::Role::meta));
-            g.drawText (detail, Rectangle<float> (capX, 112.f, capW, 16.f), Justification::centred, false);
+            drawLabel (g, detail, Theme::Role::meta, full.withY (112.f).withHeight (16.f), Justification::centred);
         }
         else
         {
             g.setColour (col (kInk));
-            g.setFont (Theme::font (compact ? Theme::Role::microval : Theme::Role::value));
-            auto bottom = getLocalBounds().toFloat().removeFromBottom (compact ? 12.f : 16.f);
-            g.drawText (readout, bottom, Justification::centred, false);
+            drawLabel (g, readout, compact ? Theme::Role::microval : Theme::Role::value,
+                       full.withTrimmedTop (full.getHeight() - (compact ? 12.f : 16.f)), Justification::centred);
         }
     }
 };
@@ -784,8 +780,7 @@ struct IconButton : QuietButton
 
         if (kind == mute || kind == solo)
         {
-            g.setFont (Theme::font (Theme::Role::button));
-            g.drawText (kind == mute ? "M" : "S", getLocalBounds(), Justification::centred, false);
+            drawLabel (g, kind == mute ? "M" : "S", Theme::Role::button, getLocalBounds(), Justification::centred);
         }
         else if (kind == dice)
         {
@@ -877,8 +872,7 @@ struct LaneDrag : Component
         if (audioMode)
         {
             g.setColour (col (kInk));
-            g.setFont (Theme::font (Theme::Role::micro));
-            g.drawText ("WAV", getLocalBounds(), Justification::centred, false);
+            drawLabel (g, "WAV", Theme::Role::micro, getLocalBounds(), Justification::centred);
         }
         else
         {
@@ -1094,8 +1088,7 @@ struct LaneRow : Component, FileDragAndDropTarget
                                    : ((selected || hovered) ? col (kInk)
                                                             : (laneOut ? col (kInk3) : col (kInk2)));
         g.setColour (nameCol);
-        g.setFont (nameFont);
-        g.drawText (name, 32, 12 + y0, 72, 16, Justification::centredLeft, false);
+        drawLabel (g, name, Theme::Role::lane, Rectangle<int> (32, 12 + y0, 72, 16), Justification::centredLeft);
         if (sampleMissing)
         {
             float x = 32.f + textWidth (nameFont, name) + 4.f;
@@ -1106,13 +1099,10 @@ struct LaneRow : Component, FileDragAndDropTarget
 
         if (laneOut)
         {
-            const float stripH = 24.f + ((float) getHeight() - 40.f) * (24.f / 40.f);
-            const int sh = jmax (1, roundToInt (stripH));
-            const int sy = jmax (0, roundToInt (((float) getHeight() - (float) sh) * 0.5f));
+            // Same box as the (hidden) pattern strip, so it never runs under the drag handle.
             g.setColour (col (kInk3));
-            g.setFont (Theme::font (Theme::Role::meta));
-            g.drawText ("out " + String (utf8 ("·")) + " comes in at " + String (comesIn) + "%",
-                        112, sy, 312, sh, Justification::centredLeft, false);
+            drawLabel (g, "out " + String (utf8 ("·")) + " comes in at " + String (comesIn) + "%",
+                       Theme::Role::meta, strip.getBounds(), Justification::centredLeft);
         }
 
         if (hot)
@@ -1232,8 +1222,8 @@ struct Stepper : Component
     {
         prev.setEnabled (! atStart);
         next.setEnabled (! atEnd);
-        prev.setAlpha (atStart ? 0.35f : 1.f);
-        next.setAlpha (atEnd ? 0.35f : 1.f);
+        prev.setAlpha (atStart ? Theme::alphaDisabled : 1.f);
+        next.setAlpha (atEnd ? Theme::alphaDisabled : 1.f);
     }
 
     void resized() override
@@ -1254,23 +1244,21 @@ struct Stepper : Component
 
         const bool kit = getHeight() < 36;
         const auto titleRole = sub.isEmpty() && ! kit ? Theme::Role::pill : Theme::Role::preset;
-        const auto titleFont = Theme::font (titleRole);
-        auto mid = getLocalBounds().reduced (40, 0).toFloat();
+        // Text column between the two arrow buttons. Preset names are bank content: ellipsis allowed.
+        auto mid = getLocalBounds().reduced (prev.getWidth(), 0).toFloat();
         g.setColour (strike ? col (kInk3) : col (kInk));
-        g.setFont (titleFont);
         if (sub.isEmpty())
-            g.drawText (title, mid, Justification::centred, false);
+            drawLabel (g, title, titleRole, mid, Justification::centred, true);
         else
         {
-            g.drawText (title, mid.removeFromTop (mid.getHeight() * 0.58f), Justification::centred, false);
+            drawLabel (g, title, titleRole, mid.removeFromTop (mid.getHeight() * 0.58f), Justification::centred, true);
             if (strike)
             {
-                const float tw = textWidth (titleFont, title);
+                const float tw = jmin (mid.getWidth(), textWidth (titleRole, title));
                 g.drawLine (mid.getCentreX() - tw * 0.5f, mid.getY() - 1.f, mid.getCentreX() + tw * 0.5f, mid.getY() - 1.f, 1.f);
             }
             g.setColour (col (kInk3));
-            g.setFont (Theme::font (Theme::Role::meta));
-            g.drawText (sub, mid, Justification::centred, false);
+            drawLabel (g, sub, Theme::Role::meta, mid, Justification::centred, true);
         }
     }
 
@@ -1302,8 +1290,69 @@ struct Stepper : Component
     }
 };
 
+// Compact header dropdown (KEY, SCALE): the value over a caption, and a caret.
+// Same pill as Stepper, without the arrows, so two fit in the stepperKey slot.
+struct DropPill : Component
+{
+    String title, sub;
+    std::function<void()> onOpen;
+
+    DropPill()
+    {
+        setMouseCursor (MouseCursor::PointingHandCursor);
+        setWantsKeyboardFocus (true);
+    }
+
+    void mouseDown (const MouseEvent&) override
+    {
+        if (onOpen)
+            onOpen();
+    }
+
+    bool keyPressed (const KeyPress& key) override
+    {
+        if (key == KeyPress::spaceKey || key == KeyPress::returnKey)
+        {
+            if (onOpen)
+                onOpen();
+            return true;
+        }
+        return false;
+    }
+
+    void mouseEnter (const MouseEvent&) override { repaint(); }
+    void mouseExit (const MouseEvent&) override { repaint(); }
+
+    void paint (Graphics& g) override
+    {
+        auto b = getLocalBounds().toFloat();
+        g.setColour (col (kPaper));
+        g.fillRoundedRectangle (b, b.getHeight() * 0.5f);
+        g.setColour (col (isMouseOver (false) ? kInk2 : kLine2));
+        g.drawRoundedRectangle (b.reduced (0.5f), b.getHeight() * 0.5f - 0.5f, Theme::strokeHair);
+
+        // 64 px pill: 8 px left inset, 16 px right for the caret, so a 40 px text column.
+        // Longest strings are "AUTO" / "SCALE" (5 mono glyphs at 10 pt, about 33 px).
+        auto text = getLocalBounds().toFloat().withTrimmedLeft ((float) Theme::space8).withTrimmedRight ((float) Theme::space16);
+        g.setColour (col (kInk));
+        drawLabel (g, title, Theme::Role::pill, text.removeFromTop (text.getHeight() * 0.58f), Justification::centred);
+        g.setColour (col (kInk3));
+        drawLabel (g, sub, Theme::Role::meta, text, Justification::centredTop);
+
+        const float cx = b.getRight() - (float) Theme::space8 - 4.f;
+        const float cy = b.getCentreY();
+        Path caret;
+        caret.startNewSubPath (cx - 3.5f, cy - 1.5f);
+        caret.lineTo (cx, cy + 2.f);
+        caret.lineTo (cx + 3.5f, cy - 1.5f);
+        g.setColour (col (isMouseOver (false) ? kInk : kInk2));
+        g.strokePath (caret, PathStrokeType (Theme::strokeIcon, PathStrokeType::curved, PathStrokeType::rounded));
+    }
+};
+
 struct DialectBar : Component
 {
+    static constexpr Theme::Role labelRole = Theme::Role::pill;
     QuietButton buttons[NumDialects];
     int current = 0;
     std::function<void (int)> onPick;
@@ -1360,7 +1409,6 @@ struct DialectBar : Component
 
     void paintOverChildren (Graphics& g) override
     {
-        g.setFont (Theme::font (Theme::Role::pill));
         for (int i = 0; i < NumDialects; ++i)
         {
             auto b = buttons[i].getBounds().toFloat();
@@ -1387,7 +1435,7 @@ struct DialectBar : Component
             auto label = buttons[i].getBounds();
             if (down && ! on)
                 label.translate (0, 1);
-            g.drawText (buttons[i].getButtonText(), label, Justification::centred, false);
+            drawLabel (g, buttons[i].getButtonText(), labelRole, label, Justification::centred);
             if (buttons[i].hasKeyboardFocus (false))
             {
                 g.setColour (col (kInk));
@@ -1399,6 +1447,7 @@ struct DialectBar : Component
 
 struct ModeBar : Component
 {
+    static constexpr Theme::Role labelRole = Theme::Role::button;
     QuietButton buttons[3];
     int current = 0;
     std::function<void (int)> onPick;
@@ -1450,7 +1499,6 @@ struct ModeBar : Component
 
     void paintOverChildren (Graphics& g) override
     {
-        g.setFont (Theme::font (Theme::Role::button));
         for (int i = 0; i < 3; ++i)
         {
             auto b = buttons[i].getBounds().toFloat();
@@ -1477,7 +1525,7 @@ struct ModeBar : Component
             auto label = buttons[i].getBounds();
             if (down && ! on)
                 label.translate (0, 1);
-            g.drawText (buttons[i].getButtonText(), label, Justification::centred, false);
+            drawLabel (g, buttons[i].getButtonText(), labelRole, label, Justification::centred);
             if (buttons[i].hasKeyboardFocus (false))
             {
                 g.setColour (col (kInk));
@@ -1529,7 +1577,7 @@ struct FaceRollButton : QuietButton, private Timer
 {
     RollaProcessor* proc = nullptr;
     String countText { "7 lanes" };
-    String keptText;
+    String keptText, keptShort;
     bool blocked = false;
 
     struct Tween
@@ -1584,15 +1632,17 @@ struct FaceRollButton : QuietButton, private Timer
         setPaintingIsUnclipped (true);
     }
 
-    void setCaption (const String& count, const String& kept, bool disable)
+    // kept: "  ·  BASS + STAB kept". shortKept ("  ·  2 kept") replaces it when it would not fit.
+    void setCaption (const String& count, const String& kept, const String& shortKept, bool disable)
     {
-        if (count == countText && kept == keptText && disable == blocked)
+        if (count == countText && kept == keptText && shortKept == keptShort && disable == blocked)
             return;
         countText = count;
         keptText = kept;
+        keptShort = shortKept;
         blocked = disable;
         setEnabled (! disable);
-        setAlpha (disable ? 0.35f : 1.f);
+        setAlpha (disable ? Theme::alphaDisabled : 1.f);
         repaint();
     }
 
@@ -1720,22 +1770,28 @@ struct FaceRollButton : QuietButton, private Timer
             pose.dark = paramRaw (proc->apvts, "dark");
         paintRollFace (g, { 16.f, 16.f, 96.f, 96.f }, pose);
 
+        // Text column: right of the face (16 + 96 + 16) to the tile's 16 px inner margin.
+        const float textX = 128.f;
+        const float textRight = b.getRight() - (float) Theme::space16;
+        const auto keycap = Rectangle<float> (textRight - 48.f, 40.f, 48.f, 20.f);
+
         g.setColour (col (kInk));
-        g.setFont (Theme::font (Theme::Role::roll));
-        g.drawText ("Roll", 128, 32, 150, 40, Justification::centredLeft, false);
+        drawLabel (g, "Roll", Theme::Role::roll,
+                   Rectangle<float> (textX, 32.f, keycap.getX() - (float) Theme::space8 - textX, 40.f),
+                   Justification::centredLeft);
 
         g.setColour (col (kInk2));
-        g.setFont (Theme::font (Theme::Role::keycap));
-        g.drawRoundedRectangle (272.f, 40.f, 48.f, 20.f, Theme::radiusKey, Theme::strokeHair);
-        g.drawText ("SPACE", 272, 40, 48, 20, Justification::centred, false);
+        g.drawRoundedRectangle (keycap, Theme::radiusKey, Theme::strokeHair);
+        drawLabel (g, "SPACE", Theme::Role::keycap, keycap, Justification::centred);
 
-        const auto captionFont = Theme::font (Theme::Role::meta);
-        const auto left = textWidth (captionFont, countText);
+        const float room = jmax (0.f, textRight - textX);
+        const float left = jmin (room, std::ceil (textWidth (Theme::Role::meta, countText)));
         g.setColour (col (kInk));
-        g.setFont (captionFont);
-        g.drawText (countText, 128, 80, (int) std::ceil (left), 16, Justification::centredLeft, false);
+        drawLabel (g, countText, Theme::Role::meta, Rectangle<float> (textX, 80.f, left, 16.f), Justification::centredLeft);
+        const auto tail = textWidth (Theme::Role::meta, keptText) <= room - left ? keptText : keptShort;
         g.setColour (col (kInk2));
-        g.drawText (keptText, 128 + (int) std::ceil (left), 80, 190, 16, Justification::centredLeft, false);
+        drawLabel (g, tail, Theme::Role::meta, Rectangle<float> (textX + left, 80.f, room - left, 16.f),
+                   Justification::centredLeft);
         focusRing (g, *this, Theme::radiusPanel);
     }
 };
@@ -1804,14 +1860,14 @@ struct SampleSlot : Component, FileDragAndDropTarget
             auto text = b.reduced (12.f, 0.f);
             if (loaded)
                 text.removeFromRight (32.f);
+            // File names are user content: ellipsis allowed.
             g.setColour (col (kInk));
-            g.setFont (Theme::font (Theme::Role::meta));
-            g.drawText (fromSlot ? slotLabel() : (loaded ? proc->getVoxSampleName() : "drop"),
-                        text.removeFromTop (b.getHeight() * 0.55f),
-                        Justification::centredLeft, false);
+            drawLabel (g, fromSlot ? slotLabel() : (loaded ? proc->getVoxSampleName() : String ("drop")),
+                       Theme::Role::meta, text.removeFromTop (b.getHeight() * 0.55f),
+                       Justification::centredLeft, true);
             g.setColour (col (kInk2));
-            g.drawText (loaded ? "overrides preset" : utf8 ("wav · aif · aiff · flac"),
-                        text, Justification::centredLeft, false);
+            drawLabel (g, loaded ? String ("overrides preset") : utf8 ("wav · aif · aiff · flac"),
+                       Theme::Role::meta, text, Justification::centredLeft);
             if (loaded)
             {
                 g.setColour (col (kInk2));
@@ -1821,18 +1877,15 @@ struct SampleSlot : Component, FileDragAndDropTarget
         }
         else
         {
-            g.setFont (Theme::font (Theme::Role::micro));
             g.setColour (col (kInk));
             auto top = b.reduced (6.f, 1.f).removeFromTop (b.getHeight() * 0.5f);
-            g.drawText (loaded ? "YOUR WAV" : "PACK", top, Justification::centredLeft, false);
-            g.setFont (Theme::font (Theme::Role::microval));
+            drawLabel (g, loaded ? "YOUR WAV" : "PACK", Theme::Role::micro, top, Justification::centredLeft);
             g.setColour (col (kInk2));
-            auto name = fromSlot ? slotLabel()
-                                 : (loaded ? proc->getDrumSampleName (voice) : String (panelVoiceCode (voice)));
-            if (name.length() > 12)
-                name = name.substring (0, 11) + utf8 ("…");
-            g.drawText (name, b.reduced (6.f, 1.f).removeFromBottom (b.getHeight() * 0.5f),
-                        Justification::centredLeft, false);
+            const auto name = fromSlot ? slotLabel()
+                                       : (loaded ? proc->getDrumSampleName (voice) : String (panelVoiceCode (voice)));
+            // Truncate by measured width (68 px column), not by character count: 12 mono glyphs did not fit.
+            drawLabel (g, name, Theme::Role::microval, b.reduced (6.f, 1.f).removeFromBottom (b.getHeight() * 0.5f),
+                       Justification::centredLeft, true);
         }
         focusRing (g, *this, Theme::radiusSlot);
     }
@@ -1922,11 +1975,10 @@ struct AccentButton : QuietButton
         g.setColour (on ? col (kInk) : ((over || down) ? col (kInk2) : col (kLine2)));
         g.drawRoundedRectangle (b.reduced (0.5f), rad - 0.5f, Theme::strokeHair);
         g.setColour (on ? col (kPaper) : ((over || down) ? col (kInk) : col (kInk2)));
-        g.setFont (Theme::font (Theme::Role::button));
         auto label = getLocalBounds();
         if (down && ! on)
             label.translate (0, 1);
-        g.drawText ("ACCENT", label, Justification::centred, false);
+        drawLabel (g, "ACCENT", Theme::Role::button, label, Justification::centred);
         focusRing (g, *this);
     }
 
@@ -2010,9 +2062,10 @@ struct DrumColumn : Component
 
     void resized() override
     {
+        // Knob columns are 40 wide so "DECAY" (micro, ~33 px) fits; knob centres stay at x 20 / 60.
         slot.setBounds (0, 24, 80, 32);
-        tune.setBounds (4, 66, 32, 60);
-        decay.setBounds (44, 66, 32, 60);
+        tune.setBounds (0, 66, 40, 60);
+        decay.setBounds (40, 66, 40, 60);
         level.setBounds (0, 132, 80, 24);
         accent.setBounds (0, 164, 80, 24);
     }
@@ -2020,8 +2073,7 @@ struct DrumColumn : Component
     void paint (Graphics& g) override
     {
         g.setColour (col (kInk));
-        g.setFont (Theme::font (Theme::Role::voice));
-        g.drawText (panelVoiceLabel (voice), 0, 0, 80, 16, Justification::centredLeft, false);
+        drawLabel (g, panelVoiceLabel (voice), Theme::Role::voice, Rectangle<int> (0, 0, 80, 16), Justification::centredLeft);
     }
 };
 
@@ -2065,12 +2117,13 @@ struct DragTile : Component
         arrow.lineTo (38.f, 56.f);
         g.strokePath (arrow, PathStrokeType (Theme::strokeIcon, PathStrokeType::curved, PathStrokeType::rounded));
 
+        // Text column from the arrow to 8 px before EXPORT.
+        const int textW = exportBtn.getX() - Theme::space8 - 48;
         g.setColour (col (kInk));
-        g.setFont (Theme::font (Theme::Role::tile));
-        g.drawText (audioMode ? "DRAG STEMS" : "DRAG MIDI", 48, 28, 180, 18, Justification::centredLeft, false);
+        drawLabel (g, audioMode ? "DRAG STEMS" : "DRAG MIDI", Theme::Role::tile,
+                   Rectangle<int> (48, 28, textW, 18), Justification::centredLeft);
         g.setColour (col (kInk2));
-        g.setFont (Theme::font (Theme::Role::meta));
-        g.drawText (caption, 48, 48, 180, 16, Justification::centredLeft, false);
+        drawLabel (g, caption, Theme::Role::meta, Rectangle<int> (48, 48, textW, 16), Justification::centredLeft);
     }
 
     void paintOverChildren (Graphics& g) override
@@ -2089,11 +2142,10 @@ struct DragTile : Component
         g.setColour ((over || down) ? col (kInk2) : col (kLine2));
         g.drawRoundedRectangle (b.reduced (0.5f), rad - 0.5f, Theme::strokeHair);
         g.setColour ((over || down) ? col (kInk) : col (kInk2));
-        g.setFont (Theme::font (Theme::Role::button));
         auto label = exportBtn.getBounds();
         if (down)
             label.translate (0, 1);
-        g.drawText ("EXPORT", label, Justification::centred, false);
+        drawLabel (g, "EXPORT", Theme::Role::button, label, Justification::centred);
     }
 
     void resized() override
@@ -2197,14 +2249,11 @@ struct BpmReadout : Component
 
     void paint (Graphics& g) override
     {
-        const auto number = Theme::font (Theme::Role::value);
-        g.setFont (number);
+        const int w = jmin (getWidth(), (int) std::ceil (textWidth (Theme::Role::value, bpm)));
         g.setColour (col (kInk));
-        const float w = textWidth (number, bpm);
-        g.drawText (bpm, 0, 0, (int) std::ceil (w), getHeight(), Justification::centredLeft, false);
+        drawLabel (g, bpm, Theme::Role::value, Rectangle<int> (0, 0, w, getHeight()), Justification::centredLeft);
         g.setColour (col (kInk2));
-        g.setFont (Theme::font (Theme::Role::meta));
-        g.drawText (" BPM", (int) std::ceil (w), 0, getWidth(), getHeight(), Justification::centredLeft, false);
+        drawLabel (g, " BPM", Theme::Role::meta, Rectangle<int> (w, 0, getWidth() - w, getHeight()), Justification::centredLeft);
     }
 };
 
@@ -2219,11 +2268,13 @@ struct LogoButton : QuietButton
     void paintButton (Graphics& g, bool, bool) override
     {
         g.setColour (col (kInk));
-        g.setFont (Theme::font (Theme::Role::wordmark));
-        g.drawText ("ROLLA", getLocalBounds(), Justification::centredLeft, false);
+        drawLabel (g, "ROLLA", Theme::Role::wordmark, getLocalBounds(), Justification::centredLeft);
     }
 };
 
+// Bottom line: hover help on the left; a processor notice (RollaProcessor::setUiNotice,
+// e.g. the Key + Scale guard's "NO SAFE FILE: ...") on the right in the warn colour.
+// A refused roll's notice takes the whole line while it shows.
 struct StatusStrip : Component
 {
     String text { "Hover a control." };
@@ -2231,12 +2282,20 @@ struct StatusStrip : Component
 
     void setHelp (const String& next)
     {
-        const auto shown = next.isEmpty() ? String ("Hover a control.") : next;
+        // Rich hover cards are "key\tvalue" lines; the strip shows the first line only.
+        auto shown = next.upToFirstOccurrenceOf ("\n", false, false).replace ("\t", "  ").trim();
+        if (shown.isEmpty())
+            shown = "Hover a control.";
         if (shown == text)
             return;
         text = shown;
         repaint();
     }
+
+    // Retune guard notice ("NO SAFE FILE: BASS in F# Dorian"), right-aligned in the
+    // warning colour so it stays up while hover help changes on the left. A roll
+    // notice (above) takes the whole strip while it shows.
+    String retune;
 
     void setNotice (const String& next)
     {
@@ -2246,17 +2305,35 @@ struct StatusStrip : Component
         repaint();
     }
 
+    void setRetuneNotice (const String& next)
+    {
+        if (next == retune)
+            return;
+        retune = next;
+        repaint();
+    }
+
     void paint (Graphics& g) override
     {
-        g.setFont (Theme::font (Theme::Role::meta));
+        auto area = getLocalBounds().toFloat();
         if (notice.isNotEmpty())
         {
+            // A refused roll takes the whole strip until it times out.
             g.setColour (col (kWarn));
-            g.drawText (notice, getLocalBounds(), Justification::centredLeft, true);
+            drawLabel (g, notice, Theme::Role::meta, area, Justification::centredLeft, true);
             return;
         }
+        if (retune.isNotEmpty())
+        {
+            const auto font = Theme::Role::micro;
+            const float w = jmin (area.getWidth() * 0.6f, std::ceil (textWidth (font, retune)));
+            auto slot = area.removeFromRight (w);
+            area.removeFromRight ((float) Theme::space16);
+            g.setColour (col (kWarn));
+            drawLabel (g, retune, font, slot, Justification::centredRight, true);
+        }
         g.setColour (col (kInk2));
-        g.drawText (text, getLocalBounds(), Justification::centredLeft, false);
+        drawLabel (g, text, Theme::Role::meta, area, Justification::centredLeft, true);
     }
 };
 
@@ -2274,7 +2351,7 @@ struct RollaEditor::Content : Component
     LogoButton logo;
     DialectBar dialects;
     IntensitySlider intensity;
-    Stepper keyStep;
+    DropPill keyDrop, scaleDrop;
     BpmReadout bpm;
     HistoryButton undoBtn { false }, redoBtn { true };
     LaneRow rows[NumParts];
@@ -2307,6 +2384,7 @@ struct RollaEditor::Content : Component
     int switchPart = 0;
     double switchT0 = 0.0;
     int seenIntensity = -1;
+    std::uint32_t seenNoticeSerial = ~std::uint32_t (0);
     VBlankAttachment panelVblank;
     Groove groove;
     uint32_t seenGen = 0;
@@ -2325,18 +2403,16 @@ struct RollaEditor::Content : Component
         addAndMakeVisible (logo);
         addAndMakeVisible (dialects);
         addAndMakeVisible (intensity);
-        addAndMakeVisible (keyStep);
+        addAndMakeVisible (keyDrop);
+        addAndMakeVisible (scaleDrop);
         intensityA = std::make_unique<AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "intensity", intensity);
         addAndMakeVisible (bpm);
         addAndMakeVisible (undoBtn);
         addAndMakeVisible (redoBtn);
         logo.onClick = [this] { showScaleMenu (&logo); };
         dialects.onPick = [this] (int i) { setChoiceIndex (proc, "dialect", i); };
-        keyStep.onStep = [this] (int dir)
-        {
-            const int n = (choiceIndex (proc.apvts, "key") + dir + 12) % 12;
-            setChoiceIndex (proc, "key", n);
-        };
+        keyDrop.onOpen = [this] { showKeyMenu(); };
+        scaleDrop.onOpen = [this] { showScaleModeMenu(); };
         undoBtn.onClick = [this] { proc.undo.undo(); };
         redoBtn.onClick = [this] { proc.undo.redo(); };
 
@@ -2429,7 +2505,8 @@ struct RollaEditor::Content : Component
 
         bindHelp (logo, "Menu. Window scale, reduce motion, and the samples folder.");
         bindHelp (dialects, "Style. Each pill sets the groove, the sounds, and which lanes play.");
-        bindHelp (keyStep, "Key. Every lane follows this minor key.");
+        bindHelp (keyDrop, "Key. Auto keeps the session key; pick a note to lock it through every roll.");
+        bindHelp (scaleDrop, "Scale. Auto plays each style's own minor; lock Minor, Dorian, Phrygian, Major or Mixolydian.");
         bindHelp (intensity, "INTENSITY 75\t" + String (dialectName (0)));
         bindHelp (bpm, "Host tempo, in beats per minute.");
         bindHelp (undoBtn, "Undo the last edit.");
@@ -2526,6 +2603,47 @@ struct RollaEditor::Content : Component
                                     setBool (proc, "reduceMotion", paramRaw (proc.apvts, "reduceMotion") < 0.5f);
                                 else if (result == 7)
                                     chooseSamplesFolder();
+                            });
+    }
+
+    // KEY dropdown: Auto (the session key, unlocked) or a locked note.
+    void showKeyMenu()
+    {
+        PopupMenu menu;
+        const bool lockedNow = paramRaw (proc.apvts, "keyLock") >= 0.5f;
+        const int current = choiceIndex (proc.apvts, "key");
+        menu.addItem (1, String ("Auto (") + keyName (current) + ")", true, ! lockedNow);
+        menu.addSeparator();
+        for (int k = 0; k < 12; ++k)
+            menu.addItem (k + 2, keyName (k), true, lockedNow && k == current);
+        menu.showMenuAsync (PopupMenu::Options().withTargetComponent (&keyDrop),
+                            [this] (int result)
+                            {
+                                if (result == 1)
+                                    setBool (proc, "keyLock", false);
+                                else if (result >= 2 && result <= 13)
+                                {
+                                    setChoiceIndex (proc, "key", result - 2);
+                                    if (paramRaw (proc.apvts, "keyLock") < 0.5f)
+                                        setBool (proc, "keyLock", true);
+                                }
+                            });
+    }
+
+    // SCALE dropdown: Auto or one of the five locked scales.
+    void showScaleModeMenu()
+    {
+        PopupMenu menu;
+        const int current = choiceIndex (proc.apvts, "scale");
+        menu.addItem (1, "Auto (style minor)", true, current == ScaleAuto);
+        menu.addSeparator();
+        for (int s = ScaleMinor; s < NumScales; ++s)
+            menu.addItem (s + 1, scaleName (s), true, s == current);
+        menu.showMenuAsync (PopupMenu::Options().withTargetComponent (&scaleDrop),
+                            [this] (int result)
+                            {
+                                if (result >= 1 && result <= NumScales)
+                                    setChoiceIndex (proc, "scale", result - 1);
                             });
     }
 
@@ -2844,9 +2962,10 @@ struct RollaEditor::Content : Component
     void placeSound()
     {
         presetStep.setBounds (16, 112, 256, 40);
-        tone.setBounds (312, 88, 64, 112);
-        punch.setBounds (408, 88, 64, 112);
-        level.setBounds (504, 88, 64, 112);
+        // 80 wide so "−12.0 dB" (8 mono glyphs at 12 pt, ~62 px) has room; knob centres stay 344 / 440 / 536.
+        tone.setBounds (304, 88, 80, 112);
+        punch.setBounds (400, 88, 80, 112);
+        level.setBounds (496, 88, 80, 112);
         voxSlot.setBounds (16, 192, 240, 56);
         inStab.setBounds (184, 200, 40, Theme::heightSmall);
         kitStep.setBounds (248, 8, 176, 32);
@@ -2967,7 +3086,7 @@ struct RollaEditor::Content : Component
             rows[i].strip.setVisible (! out);
             rows[i].strip.setAlpha (muted ? Theme::alphaMuted : 1.f);
             rows[i].shuffle.setEnabled (! out);
-            rows[i].shuffle.setAlpha (out ? 0.35f : 1.f);
+            rows[i].shuffle.setAlpha (out ? Theme::alphaDisabled : 1.f);
             const auto tip = String (rows[i].selected ? "Close " : "Open ")
                            + laneShortName (i) + " sound";
             if (rows[i].getProperties()["rollaHelp"].toString() != tip)
@@ -2990,15 +3109,34 @@ struct RollaEditor::Content : Component
         dialects.setCurrent (choiceIndex (proc.apvts, "dialect"));
         for (int i = 0; i < NumDialects; ++i)
             dialects.buttons[i].repaint();
-        keyStep.title = String (keyName (choiceIndex (proc.apvts, "key"))) + " MIN";
-        keyStep.repaint();
+        {
+            const String keyTitle = keyName (choiceIndex (proc.apvts, "key"));
+            const String keySub = paramRaw (proc.apvts, "keyLock") >= 0.5f ? "KEY" : "AUTO";
+            const int scaleNow = choiceIndex (proc.apvts, "scale");
+            // Auto shows what plays: the style's own minor.
+            const String scaleTitle = scaleShort (scaleNow == ScaleAuto ? ScaleMinor : scaleNow);
+            const String scaleSub = scaleNow == ScaleAuto ? "AUTO" : "SCALE";
+            if (keyDrop.title != keyTitle || keyDrop.sub != keySub)
+            {
+                keyDrop.title = keyTitle;
+                keyDrop.sub = keySub;
+                keyDrop.repaint();
+            }
+            if (scaleDrop.title != scaleTitle || scaleDrop.sub != scaleSub)
+            {
+                scaleDrop.title = scaleTitle;
+                scaleDrop.sub = scaleSub;
+                scaleDrop.repaint();
+            }
+            status.setRetuneNotice (proc.retuneNotice());
+        }
 
         const bool canUndo = proc.undo.canUndo();
         const bool canRedo = proc.undo.canRedo();
         undoBtn.setEnabled (canUndo);
         redoBtn.setEnabled (canRedo);
-        undoBtn.setAlpha (canUndo ? 1.f : 0.35f);
-        redoBtn.setAlpha (canRedo ? 1.f : 0.35f);
+        undoBtn.setAlpha (canUndo ? 1.f : Theme::alphaDisabled);
+        redoBtn.setAlpha (canRedo ? 1.f : Theme::alphaDisabled);
 
         if (auto* preset = dynamic_cast<AudioParameterChoice*> (proc.apvts.getParameter (String (partId (selected)) + "Preset")))
         {
@@ -3077,12 +3215,21 @@ struct RollaEditor::Content : Component
                 bindHelp (intensity, tip);
         }
         if (allKept())
-            face.setCaption ("all kept", {}, true);
+            face.setCaption ("all kept", {}, {}, true);
         else
         {
             const auto count = String (rolling) + (rolling == 1 ? " lane" : " lanes");
             const auto tail = keptNames.isEmpty() ? String() : utf8 ("  ·  ") + keptNames.joinIntoString (" + ") + " kept";
-            face.setCaption (count, tail, false);
+            const auto tailShort = keptNames.isEmpty() ? String() : utf8 ("  ·  ") + String (keptNames.size()) + " kept";
+            face.setCaption (count, tail, tailShort, false);
+        }
+        {
+            const auto serial = proc.getUiNoticeSerial();
+            if (serial != seenNoticeSerial)
+            {
+                seenNoticeSerial = serial;
+                status.setRetuneNotice (proc.getUiNotice());
+            }
         }
         const auto unit = drag.audioMode ? (tracks == 1 ? utf8 (" stem · ") : utf8 (" stems · "))
                                          : (tracks == 1 ? utf8 (" track · ") : utf8 (" tracks · "));
@@ -3116,37 +3263,55 @@ struct RollaEditor::Content : Component
         card ({ 672.f, 480.f, 336.f, 48.f });
 
         g.setColour (col (kInk2));
-        g.setFont (Theme::font (Theme::Role::caption));
-        g.drawText ("SWING", 688, 492, 52, 24, Justification::centredLeft, false);
+        drawLabel (g, "SWING", Theme::Role::caption, Rectangle<int> (688, 492, 52, 24), Justification::centredLeft);
         g.setColour (col (kInk));
-        g.setFont (Theme::font (Theme::Role::value));
-        g.drawText (String (roundToInt (paramRaw (proc.apvts, "swing") * 100.f)) + "%",
-                    828, 492, 48, 24, Justification::centredLeft, false);
+        drawLabel (g, String (roundToInt (paramRaw (proc.apvts, "swing") * 100.f)) + "%", Theme::Role::value,
+                   Rectangle<int> (828, 492, 48, 24), Justification::centredLeft);
         g.setColour (col (kLine));
         g.fillRect (888, 492, 1, 24);
         g.setColour (col (kInk2));
-        g.setFont (Theme::font (Theme::Role::caption));
-        g.drawText ("DUCK", 904, 492, 48, 24, Justification::centredLeft, false);
+        drawLabel (g, "DUCK", Theme::Role::caption, Rectangle<int> (904, 492, 48, 24), Justification::centredLeft);
     }
 
     void resized() override
     {
-        logo.setBounds (16, 16, 76, 24);
-        dialects.setBounds (100, 8, Theme::segmentLarge * NumDialects + Theme::space8, Theme::heightControl);
-        intensity.setBounds (504, 8, 176, Theme::heightControl);
-        keyStep.setBounds (688, 8, Theme::stepperKey, Theme::heightControl);
-        bpm.setBounds (832, 20, 72, 16);
-        undoBtn.setBounds (912, 8, 40, 40);
-        redoBtn.setBounds (968, 8, 40, 40);
+        {
+            // Header: one 40 px row at y 8, 16 px outer margins, 8 px between controls
+            // (16 between undo and redo). Left to right: 16 logo 104 style 496 · 504 intensity 680
+            // · 688 KEY 752 · 760 SCALE 824 · 832 BPM 904 · 912 undo 952 · 968 redo 1008.
+            static_assert (2 * Theme::dropKey + Theme::space8 == Theme::stepperKey,
+                           "KEY + SCALE fill the old key stepper slot");
+            const int y = Theme::space8;
+            const int h = Theme::heightControl;
+            int x = Theme::space16;
+            logo.setBounds (x, Theme::space16, Theme::logoWidth, Theme::space24);
+            x = logo.getRight() + Theme::space8;
+            dialects.setBounds (x, y, Theme::segmentLarge * NumDialects + Theme::space8, h);
+            x = dialects.getRight() + Theme::space8;
+            intensity.setBounds (x, y, Theme::stepperKit, h);
+            x = intensity.getRight() + Theme::space8;
+            keyDrop.setBounds (x, y, Theme::dropKey, h);
+            x = keyDrop.getRight() + Theme::space8;
+            scaleDrop.setBounds (x, y, Theme::dropKey, h);
+
+            int right = getWidth() - Theme::space16;
+            redoBtn.setBounds (right - Theme::iconLarge, y, Theme::iconLarge, Theme::iconLarge);
+            right = redoBtn.getX() - Theme::space16;
+            undoBtn.setBounds (right - Theme::iconLarge, y, Theme::iconLarge, Theme::iconLarge);
+            right = undoBtn.getX() - Theme::space8;
+            bpm.setBounds (right - Theme::bpmWidth, y + (h - Theme::space16) / 2, Theme::bpmWidth, Theme::space16);
+            jassert (bpm.getX() >= scaleDrop.getRight() + Theme::space8);
+        }
 
         layoutLeft();
         placeSound();
 
         face.setBounds (672, 64, 336, 128);
-        dark.setBounds (724, 204, 64, 128);
-        busy.setBounds (892, 204, 64, 128);
-        bounce.setBounds (724, 340, 64, 128);
-        stab.setBounds (892, 340, 64, 128);
+        // Macro columns are 136 wide (caption and descriptor width); knobs stay centred at x 756 / 924.
+        dark.setBounds (688, 204, 136, 128);
+        busy.setBounds (856, 204, 136, 128);
+        bounce.setBounds (688, 340, 136, 128);
+        stab.setBounds (856, 340, 136, 128);
         swing.setBounds (744, 492, 80, 24);
         duck.setBounds (956, 492, 40, Theme::heightSmall);
         drag.setBounds (672, 536, 336, 88);
@@ -3168,14 +3333,12 @@ struct RollaEditor::Content : Component
 
         g.setColour (laneColour (selected));
         g.fillEllipse (16.f, 19.f, 10.f, 10.f);
-        const auto nameFont = Theme::font (Theme::Role::section);
         g.setColour (col (kInk));
-        g.setFont (nameFont);
         const auto panelName = String (laneShortName (selected));
-        g.drawText (panelName, 32, 12, 120, 24, Justification::centredLeft, false);
+        drawLabel (g, panelName, Theme::Role::section, Rectangle<int> (32, 12, 120, 24), Justification::centredLeft);
         if (samples.missing (selected))
         {
-            float x = 32.f + textWidth (nameFont, panelName) + 6.f;
+            float x = 32.f + textWidth (Theme::Role::section, panelName) + 6.f;
             if (selected == Drums && x > 96.f)
                 x = 96.f;
             paintMissingIcon (g, x, 18.f, 12.f);
@@ -3183,35 +3346,32 @@ struct RollaEditor::Content : Component
         if (selected != Drums)
         {
             g.setColour (col (kInk2));
-            g.setFont (Theme::font (Theme::Role::meta));
-            g.drawText (channelLine (selected), 152, 12, 160, 24, Justification::centredLeft, false);
+            drawLabel (g, channelLine (selected), Theme::Role::meta, Rectangle<int> (152, 12, 160, 24), Justification::centredLeft);
         }
         if (proc.laneEdited (selected))
         {
             g.setColour (col (kMark));
-            g.setFont (Theme::font (Theme::Role::micro));
-            g.drawText ("EDITED",
-                        selected == Drums ? Rectangle<int> (112, 12, 120, 24)
-                                          : Rectangle<int> (320, 12, 112, 24),
-                        Justification::centredLeft, false);
+            drawLabel (g, "EDITED", Theme::Role::micro,
+                       selected == Drums ? Rectangle<int> (112, 12, 120, 24) : Rectangle<int> (320, 12, 112, 24),
+                       Justification::centredLeft);
         }
 
         if (selected != Drums)
         {
             g.setColour (col (kInk2));
-            g.setFont (Theme::font (Theme::Role::caption));
-            g.drawText ("PRESET", 16, 88, 80, 16, Justification::centredLeft, false);
+            drawLabel (g, "PRESET", Theme::Role::caption, Rectangle<int> (16, 88, 80, 16), Justification::centredLeft);
             if (selected == Vox)
-                g.drawText ("SAMPLE", 16, 168, 80, 16, Justification::centredLeft, false);
+                drawLabel (g, "SAMPLE", Theme::Role::caption, Rectangle<int> (16, 168, 80, 16), Justification::centredLeft);
             if (selected == Hits)
             {
-                g.drawText ("PLACEMENT", 16, 168, 100, 16, Justification::centredLeft, false);
-                g.setFont (Theme::font (Theme::Role::pill));
+                drawLabel (g, "PLACEMENT", Theme::Role::caption, Rectangle<int> (16, 168, 100, 16), Justification::centredLeft);
                 g.setColour (col (kInk));
-                g.drawText ("In stab", 32, 192, 120, 40, Justification::centredLeft, false);
+                // Left edge on the 16 px panel padding, like the PLACEMENT caption; stops 8 px before the switch.
+                drawLabel (g, "In stab", Theme::Role::pill,
+                           Rectangle<int> (16, 192, inStab.getX() - Theme::space8 - 16, 40), Justification::centredLeft);
                 g.setColour (col (kInk2));
-                g.setFont (Theme::font (Theme::Role::meta));
-                g.drawText ("Hits land on the stab's answer slots.", 16, 240, 280, 16, Justification::centredLeft, true);
+                drawLabel (g, "Hits land on the stab's answer slots.", Theme::Role::meta,
+                           Rectangle<int> (16, 240, 280, 16), Justification::centredLeft);
             }
         }
         g.restoreState();
@@ -3262,6 +3422,8 @@ RollaEditor::RollaEditor (RollaProcessor& p)
     samplesBanner->setColour (Label::backgroundColourId, col (kWarn));
     samplesBanner->setColour (Label::textColourId, col (kPaper));
     samplesBanner->setJustificationType (Justification::centred);
+    // A long sample path ends in an ellipsis instead of squashed glyphs.
+    samplesBanner->setMinimumHorizontalScale (1.f);
     samplesBanner->setInterceptsMouseClicks (false, false);
     addChildComponent (samplesBanner.get());
     setOpaque (true);
@@ -3360,7 +3522,8 @@ void RollaEditor::resized()
     {
         const float scale = (float) getWidth() / (float) kEditorBaseW;
         samplesBanner->setBounds (0, 0, getWidth(), roundToInt (22.f * scale));
-        samplesBanner->setFont (Theme::font (Theme::Role::meta).withHeight (12.f * scale));
+        // Outside the scaled content, so scale the meta token by hand (10 pt in design space).
+        samplesBanner->setFont (Theme::font (Theme::Role::meta).withPointHeight (Theme::pointSize (Theme::Role::meta) * scale));
     }
     if (getWidth() >= 768)
         sizeDirty = true;

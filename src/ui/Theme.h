@@ -88,6 +88,9 @@ struct Theme
     static constexpr int stepperPreset = 256;
     static constexpr int stepperKey = 136;
     static constexpr int stepperKit = 176;
+    static constexpr int dropKey = 64;      // KEY and SCALE pills; two plus a space8 gap fill stepperKey
+    static constexpr int logoWidth = 80;
+    static constexpr int bpmWidth = 72;
     static constexpr int glyphBox = 16;
     static constexpr float padPillLarge = 12.f;
     static constexpr float padPillSmall = 10.f;
@@ -111,6 +114,11 @@ struct Theme
     // Face, point size and kerning for one role. Every drawn string goes through this.
     static juce::Font font (Role role);
     static float lineHeight (Role role) noexcept;
+    static float pointSize (Role role) noexcept;
+
+    // Smallest point size any role may use, in the 1024×640 design space
+    // (the spec's caption / sub-value size). knob_test checks every drawn string.
+    static constexpr float minTextPoint = 10.f;
 
     // Loads the seven faces once for the process. Safe to call from a background thread.
     static void warmTypefaces();

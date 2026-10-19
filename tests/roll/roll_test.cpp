@@ -6,6 +6,7 @@
 #include "Generator/OriginalityJson.h"
 #include "Generator/Intensity.h"
 #include "Generator/RuleComposer.h"
+#include "Generator/Scale.h"
 #include "Generator/Presets.h"
 
 #include <BinaryData.h>
@@ -3020,6 +3021,187 @@ void testOfflineIndexOverlap()
     }
 }
 
+// ---- KEY / SCALE picker (#13) ----
+
+// Out-of-scale tones across every pitched lane (vox read from its MIDI 64 bias).
+int scaleViolations (const rolla::Groove& g, int scale, int& tones)
+{
+    int bad = 0;
+    for (int part = 0; part < rolla::Drums; ++part)
+    {
+        const auto& lane = g.lane[part];
+        for (int i = 0; i < lane.count; ++i)
+        {
+            const int nc = std::clamp ((int) lane.notes[i].nChord, 1, 4);
+            for (int c = 0; c < nc; ++c)
+            {
+                ++tones;
+                if (! rolla::inLockedScale (scale, (int) lane.notes[i].chord[c] + rolla::scaleBiasFor (part)))
+                    ++bad;
+            }
+        }
+    }
+    return bad;
+}
+
+bool sameTimingKS (const rolla::Lane& a, const rolla::Lane& b)
+{
+    if (a.count != b.count)
+        return false;
+    for (int i = 0; i < a.count; ++i)
+    {
+        const auto& x = a.notes[i];
+        const auto& y = b.notes[i];
+        if (x.start != y.start || x.length != y.length || x.vel != y.vel || x.flags != y.flags || x.timbre != y.timbre)
+            return false;
+    }
+    return true;
+}
+
+bool sameLaneKS (const rolla::Lane& a, const rolla::Lane& b)
+{
+    if (! sameTimingKS (a, b) || a.seed != b.seed)
+        return false;
+    for (int i = 0; i < a.count; ++i)
+    {
+        if (a.notes[i].nChord != b.notes[i].nChord)
+            return false;
+        for (int c = 0; c < 4; ++c)
+            if (a.notes[i].chord[c] != b.notes[i].chord[c])
+                return false;
+    }
+    return true;
+}
+
+// KEY / SCALE picker (#13). Each locked scale keeps every generated tone in
+// scale, on fresh seeds per style. The spec asks for 200 seeds; 20 keeps the CI
+// run short and the count is one constant.
+void testLockedScales()
+{
+    constexpr int kRolls = 20;
+    const std::uint32_t base = 20261019u;
+    const char* names[] = { "ROLLER", "DEEP", "BOUNCY", "JACKIN" };
+    std::cout << "scale seeds from " << base << "\n";
+
+    expect (rolla::Settings {}.scale == rolla::ScaleAuto, "settings default to Auto");
+    expect (rolla::quantizeToScale (rolla::ScaleMajor, 3) == 4, "major: b3 -> 3");
+    expect (rolla::quantizeToScale (rolla::ScaleMajor, 10) == 11, "major: b7 -> 7");
+    expect (rolla::quantizeToScale (rolla::ScaleMajor, -9) == -8, "major: b3 an octave down -> 3");
+    expect (rolla::quantizeToScale (rolla::ScaleDorian, 8) == 9, "dorian: b6 -> 6");
+    expect (rolla::quantizeToScale (rolla::ScalePhrygian, 2) == 1, "phrygian: 2 -> b2");
+    expect (rolla::quantizeToScale (rolla::ScaleMixolydian, 15) == 16, "mixolydian: b3 up an octave -> 3");
+    expect (rolla::quantizeToScale (rolla::ScaleMinor, 9) == 8, "minor: the dorian 6 -> b6");
+    expect (rolla::quantizeToScale (rolla::ScaleAuto, 9) == 9, "auto leaves a tone alone");
+    for (int scale = rolla::ScaleMinor; scale < rolla::NumScales; ++scale)
+        for (int semi = -30; semi <= 30; ++semi)
+        {
+            const int q = rolla::quantizeToScale (scale, semi);
+            expect (rolla::inLockedScale (scale, q) && std::abs (q - semi) <= 1,
+                    std::string (rolla::scaleName (scale)) + " maps " + std::to_string (semi) + " in scale, one step at most");
+        }
+
+    for (int style = 0; style < 4; ++style)
+    {
+        for (int scale = rolla::ScaleMinor; scale < rolla::NumScales; ++scale)
+        {
+            int bad = 0;
+            int tones = 0;
+            for (int roll = 0; roll < kRolls; ++roll)
+            {
+                rolla::Settings s;
+                s.dialect = style;
+                s.bars = 8;
+                s.scale = scale;
+                std::uint32_t seeds[rolla::NumParts] {};
+                for (int p = 0; p < rolla::NumParts; ++p)
+                    seeds[p] = base + (std::uint32_t) roll * 0x9E3779B9u + (std::uint32_t) p * 17u
+                             + (std::uint32_t) style * 101u + (std::uint32_t) scale * 7919u;
+                rolla::Groove g {};
+                rolla::generate (g, s, seeds, 0x7fu);
+                bad += scaleViolations (g, scale, tones);
+            }
+            expect (bad == 0 && tones > 0, std::string (names[style]) + " locked " + rolla::scaleName (scale) + ": "
+                                               + std::to_string (bad) + " of " + std::to_string (tones) + " tones out of scale");
+        }
+
+        // Auto is untouched: applyScale(Auto) changes nothing, and a locked scale
+        // moves pitches only, never an onset, length or velocity.
+        rolla::Settings s;
+        s.dialect = style;
+        s.bars = 8;
+        std::uint32_t seeds[rolla::NumParts] {};
+        for (int p = 0; p < rolla::NumParts; ++p)
+            seeds[p] = base ^ (0xA5A5u + (std::uint32_t) p * 31u + (std::uint32_t) style * 977u);
+        rolla::Groove g {};
+        rolla::generate (g, s, seeds, 0x7fu);
+        rolla::Groove same = g;
+        rolla::applyScale (same, rolla::ScaleAuto, 0x7fu);
+        for (int p = 0; p < rolla::Drums; ++p)
+            expect (sameLaneKS (same.lane[p], g.lane[p]), std::string (names[style]) + " Auto leaves " + rolla::partId (p) + " as generated");
+        for (int scale = rolla::ScaleMinor; scale < rolla::NumScales; ++scale)
+        {
+            rolla::Groove q = g;
+            rolla::applyScale (q, scale, 0x7fu & ~(1u << rolla::Pad));
+            for (int p = 0; p < rolla::Drums; ++p)
+                expect (sameTimingKS (q.lane[p], g.lane[p]), std::string (names[style]) + " " + rolla::scaleName (scale)
+                                                               + " keeps the " + rolla::partId (p) + " rhythm");
+            expect (sameLaneKS (q.lane[rolla::Pad], g.lane[rolla::Pad]), "a lane outside the mask (kept) is not touched");
+        }
+    }
+}
+
+void testKeyScaleState()
+{
+    rolla::RollaProcessor proc;
+    proc.waitUntilReady();
+
+    for (const char* id : { "key", "keyLock", "scale" })
+    {
+        auto* param = proc.apvts.getParameter (id);
+        expect (param != nullptr && param->isAutomatable(), std::string (id) + " is an automatable parameter");
+    }
+    expect (! flag (proc, "keyLock"), "key starts on Auto");
+    expect ((int) proc.apvts.getRawParameterValue ("scale")->load() == rolla::ScaleAuto, "scale starts on Auto");
+
+    const auto before = proc.copyGroove().generation;
+    setDenorm (proc, "key", 5.f);
+    setFlag (proc, "keyLock", true);
+    setDenorm (proc, "scale", (float) rolla::ScaleDorian);
+    expect (pumpUntil ([&] { return proc.copyGroove().generation != before; }), "a scale change reshapes the unkept lanes");
+    int tones = 0;
+    expect (scaleViolations (proc.copyGroove(), rolla::ScaleDorian, tones) == 0 && tones > 0,
+            "after the scale change every lane is in Dorian");
+
+    // Re-roll keeps the locked key and scale.
+    std::uint32_t seeds[rolla::NumParts] {};
+    snapshot (proc, seeds);
+    rollUntil (proc, rolla::Pad, seeds[rolla::Pad]);
+    expect (seedOf (proc.copyGroove(), rolla::Pad) != seeds[rolla::Pad], "roll happened");
+    expect ((int) proc.apvts.getRawParameterValue ("key")->load() == 5 && flag (proc, "keyLock"), "roll keeps the locked key");
+    expect ((int) proc.apvts.getRawParameterValue ("scale")->load() == rolla::ScaleDorian, "roll keeps the locked scale");
+    tones = 0;
+    expect (scaleViolations (proc.copyGroove(), rolla::ScaleDorian, tones) == 0, "a re-roll stays in the locked scale");
+
+    juce::MemoryBlock block;
+    proc.getStateInformation (block);
+    rolla::RollaProcessor restored;
+    restored.waitUntilReady();
+    restored.setStateInformation (block.getData(), (int) block.getSize());
+    expect ((int) restored.apvts.getRawParameterValue ("key")->load() == 5, "state restores the key");
+    expect (flag (restored, "keyLock"), "state restores the key lock");
+    expect ((int) restored.apvts.getRawParameterValue ("scale")->load() == rolla::ScaleDorian, "state restores the scale");
+
+    setFlag (restored, "keyLock", false);
+    setDenorm (restored, "scale", (float) rolla::ScaleAuto);
+    juce::MemoryBlock autoBlock;
+    restored.getStateInformation (autoBlock);
+    rolla::RollaProcessor back;
+    back.waitUntilReady();
+    back.setStateInformation (autoBlock.getData(), (int) autoBlock.getSize());
+    expect (! flag (back, "keyLock") && (int) back.apvts.getRawParameterValue ("scale")->load() == rolla::ScaleAuto,
+            "state round-trips Auto for both");
+}
+
 } // namespace
 
 int main()
@@ -3056,6 +3238,9 @@ int main()
     testShuffleClearsAutoKeep();
     testShuffleKeepsManualLock();
     testIntensityChangesOutput();
+    testLockedScales();
+    testKeyScaleState();
+
     // Rule composer gates. Last, so the per-process rhythm history the earlier
     // (batch-reproducing) tests rely on is untouched.
     testRemovedTables();

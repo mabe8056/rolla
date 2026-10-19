@@ -41,13 +41,22 @@ struct EngineParams
     int bars = 8;
     int key = 2;
     int dialect = UkMin;
+    // ScaleMode (Generator/Scale.h). Auto leaves preset chord memory as written;
+    // a locked scale folds its parallel intervals into the scale.
+    int scale = 0;
     const PresetBank* presets = nullptr;
     const SampleLibrary* library = nullptr;
     // Published sample-folder index. Null until the background scan finishes.
     const SampleIndex* sampleIndex = nullptr;
     // Published by UserSlots. Null keeps the preset sample block only.
     const UserSlotView* userSlots = nullptr;
+    // Adaptive per-sample treatments set at roll time (Sampler.h). Null plays
+    // every sample as recorded, exactly as before.
+    const TreatmentSet* treatments = nullptr;
     int samplePick[NumParts] {};
+    // Retune guard, key locked: no file in the lane's pool survives the key, so the
+    // sampler stays silent on that lane (its MIDI still goes out). Set off the audio thread.
+    bool retuneMute[NumParts] {};
     // Per-voice drum pick into the voice's scanned pool (genre brain). -1 keeps the
     // shared samplePick[Drums] + tom shift, so old sessions and tests play as before.
     int drumPick[NumDrumVoices] { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };

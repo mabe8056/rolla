@@ -143,6 +143,9 @@ struct Settings
     float freedom = 0.35f;
     // Optional global chaos. 0 leaves the hidden per-roll bump as the only extra.
     float chaos = 0.f;
+    // ScaleMode (Generator/Scale.h). 0 is Auto: the style's own minor, as before.
+    // A locked scale quantizes every regenerated melodic lane after the draw.
+    int scale = 0;
 };
 
 enum BassMode : int

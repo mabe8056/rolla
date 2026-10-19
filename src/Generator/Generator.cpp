@@ -1,4 +1,5 @@
 #include "Generator.h"
+#include "Scale.h"
 #include "Originality.h"
 #include "RuleComposer.h"
 #include "RuleTables.h"
@@ -4391,6 +4392,7 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
     s.stab = std::clamp (s.stab, 0.f, 1.f);
     s.styleIntensity = std::clamp (s.styleIntensity, 0.f, 1.f);
     s.freedom = std::clamp (s.freedom, 0.f, 1.f);
+    s.scale = clampi (s.scale, 0, NumScales - 1);
 
     auto regen = [&] (int part) { return (partMask & (1u << part)) != 0; };
 
@@ -4711,6 +4713,19 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
             dedupeNoteOns (g.lane[part]);
             trimSamePitchOverlaps (g.lane[part]);
         }
+    }
+        // A locked scale is the last pitch step, after the roll-mode pass, so the
+    // user's scale always wins and Auto rolls are untouched byte for byte. Only
+    // regenerated lanes move: a kept lane stays as the user locked it.
+    if (s.scale != ScaleAuto)
+    {
+        applyScale (g, s.scale, partMask);
+        for (int part = 0; part < Drums; ++part)
+        {
+            dedupeNoteOns (g.lane[part]);
+            trimSamePitchOverlaps (g.lane[part]);
+        }
+        enforceMonophonic (g.lane[Bass]);
     }
     g.mode = mode;
     g.guardScore = shippedHard ? 0.f : 1.f;

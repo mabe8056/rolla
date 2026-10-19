@@ -2,6 +2,7 @@
 
 #include "../DspUtil.h"
 #include "../Drums/DrumMachine.h"
+#include "../Generator/Scale.h"
 #include "../Mix/MixRuntime.h"
 #include "../Mix/TruePeakGuard.h"
 #include "../Sampler/UserSlots.h"
@@ -1117,6 +1118,11 @@ void Engine::process (const Groove& groove,
                         count = std::min (4, sp.chordN);
                         for (int c = 0; c < count; ++c)
                             iv[c] = std::clamp (root + sp.chordIv[c], -48, 48);
+                        // Parallel chord memory is written for minor. A locked scale
+                        // folds it in, so the stab stays inside the picked scale.
+                        if (params.scale != ScaleAuto)
+                            for (int c = 0; c < count; ++c)
+                                iv[c] = quantizeToScale (params.scale, iv[c]);
                     }
                     const Extras& ex = part == Stab ? sp.ex : (part == Pluck ? pp.ex : padP.ex);
                     const ChordAsk ask = chordAskOf (iv, std::min (count, 4));

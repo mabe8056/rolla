@@ -4,6 +4,7 @@
 #include "Engine/Sampler.h"
 #include "Drums/DrumMachine.h"
 #include "GenreBrain/GenreTargetsJson.h"
+#include "GenreBrain/Treatment.h"
 #include "GenreBrain/KitMeshJson.h"
 #include "GenreBrain/LanePools.h"
 #include "GenreBrain/SampleFeaturesJson.h"
@@ -13,6 +14,7 @@
 #include "Sampler/PitchProbe.h"
 #include "Tools/FingerprintTool.h"
 #include "Sampler/PlayDecision.h"
+#include "Sampler/RetuneGuard.h"
 #include "Sampler/SamplePrep.h"
 #include "Sampler/UserSlots.h"
 #include "Generator/Presets.h"
@@ -346,6 +348,213 @@ void testPitchProbe()
     expect (rolla::chordFileOffset (ChordQuality::Major, ChordQuality::Minor) == 3, "major file on a minor chord plays from the minor third");
     expect (rolla::chordFileOffset (ChordQuality::Minor, ChordQuality::Minor) == 0, "matching quality stays put");
     expect (rolla::chordFileOffset (ChordQuality::Neutral, ChordQuality::Major) == 0, "neutral fits either");
+}
+
+// Synthetic harmonic tone: partials at 1/h, a linear attack, a 50 ms fade out.
+std::vector<float> harmonicTone (double midi, int partials, double seconds, double attackS, double rate = 48000.0)
+{
+    const int n = (int) (seconds * rate);
+    std::vector<float> out ((size_t) n, 0.f);
+    const double f = 440.0 * std::pow (2.0, (midi - 69.0) / 12.0);
+    for (int i = 0; i < n; ++i)
+    {
+        const double t = (double) i / rate;
+        const double env = std::min (1.0, t / attackS) * std::min (1.0, (seconds - t) / 0.05);
+        double x = 0.0;
+        for (int h = 1; h <= partials && f * h < 0.45 * rate; ++h)
+            x += 0.2 / h * std::sin (2.0 * 3.14159265358979 * f * h * t);
+        out[(size_t) i] = (float) (env * x);
+    }
+    return out;
+}
+
+rolla::RetuneRequest retuneAsk (const std::vector<float>& audio, double root, double semis, rolla::RetuneKind kind)
+{
+    rolla::RetuneRequest req;
+    req.left = audio.data();
+    req.frames = (int) audio.size();
+    req.rate = 48000.0;
+    req.outRate = 48000.0;
+    req.rootMidi = root;
+    req.semis = semis;
+    req.kind = kind;
+    return req;
+}
+
+void testRetuneGuard()
+{
+    using rolla::RetuneKind;
+    const auto npos = std::string::npos;
+
+    // A clean pad (G3, 50 ms attack) up 2 st reads the same: every check passes.
+    const auto pad = harmonicTone (55.0, 20, 1.5, 0.05);
+    const auto modest = rolla::judgeRetune (retuneAsk (pad, 55.0, 2.0, RetuneKind::Tonal));
+    expect (modest.ok, "guard: +2 st on a clean pad passes (" + modest.reason + ")");
+    expect (std::fabs (modest.metrics.centroidExcessOct) < 0.1, "guard: a clean shift moves the centroid only by the shift");
+    expect (rolla::judgeRetune (retuneAsk (pad, 55.0, 0.0, RetuneKind::Tonal)).ok, "guard: no shift is not a retune");
+
+    // Extreme: a pad pushed 9 st is past the +-3 st tonal cap.
+    const auto extreme = rolla::judgeRetune (retuneAsk (pad, 55.0, 9.0, RetuneKind::Tonal));
+    expect (! extreme.ok && extreme.reason.find ("cap") != npos,
+            "guard: +9 st on a pad fails the shift cap (" + extreme.reason + ")");
+    expect (! rolla::judgeRetune (retuneAsk (pad, 55.0, -6.0, RetuneKind::Short)).ok, "guard: -6 st is past the +-5 st stab cap");
+
+    // Bass: a D1 one-shot (36.7 Hz) down 4 st lands at 29.1 Hz, under the 30 Hz sub floor.
+    const auto bass = harmonicTone (26.0, 8, 1.0, 0.005);
+    const auto under = rolla::judgeRetune (retuneAsk (bass, 26.0, -4.0, RetuneKind::Bass));
+    expect (! under.ok && under.reason.find ("sub floor") != npos,
+            "guard: a bass pushed under the sub floor fails (" + under.reason + ")");
+    expect (under.metrics.fundamentalHz[1] < 30.0 && under.metrics.fundamentalHz[1] > 28.0, "guard: shifted fundamental is reported");
+    const auto bassUp = rolla::judgeRetune (retuneAsk (bass, 26.0, 2.0, RetuneKind::Bass));
+    expect (bassUp.ok, "guard: a D1 bass up 2 st stays in the sub band (" + bassUp.reason + ")");
+    // A bass pushed out of the sub band (A2 + 4 = C#3, 139 Hz) fails the ceiling.
+    const auto high = rolla::judgeRetune (retuneAsk (harmonicTone (45.0, 8, 1.0, 0.005), 45.0, 4.0, RetuneKind::Bass));
+    expect (! high.ok && high.reason.find ("sub band") != npos, "guard: a bass pushed too high fails (" + high.reason + ")");
+
+    // Aliasing: a strong 20 kHz partial up 4 st lands at 25.2 kHz and folds back.
+    std::vector<float> bright (48000, 0.f);
+    for (int i = 0; i < (int) bright.size(); ++i)
+    {
+        const double t = (double) i / 48000.0;
+        const double env = std::min (1.0, t / 0.005);
+        bright[(size_t) i] = (float) (env * (0.4 * std::sin (2.0 * 3.14159265358979 * 1000.0 * t)
+                                             + 0.4 * std::sin (2.0 * 3.14159265358979 * 20000.0 * t)));
+    }
+    const auto alias = rolla::judgeRetune (retuneAsk (bright, 83.2, 4.0, RetuneKind::Short));
+    expect (! alias.ok && alias.reason.find ("alias") != npos, "guard: a shift that aliases fails (" + alias.reason + ")");
+    expect (alias.metrics.foldShare > 0.3, "guard: the folded share is reported");
+
+    // Not retunable: under the confidence threshold with no agreeing filename note.
+    rolla::PitchInfo weak;
+    weak.rootPitch = 60.f;
+    weak.conf = 0.3f;
+    expect (rolla::retuneRoot (weak, -1) < 0.0, "guard: a weak measurement is not retuned");
+    expect (std::fabs (rolla::retuneRoot (weak, 48) - 60.0) < 1.0e-9, "guard: a weak measurement the label agrees with is");
+    expect (rolla::retuneKindFor (rolla::Bass, 0.5, false) == RetuneKind::Bass, "guard: bass class");
+    expect (rolla::retuneKindFor (rolla::Stab, 0.3, false) == RetuneKind::Short, "guard: a short stab is short");
+    expect (rolla::retuneKindFor (rolla::Stab, 2.0, true) == RetuneKind::Tonal, "guard: a held chord stab is tonal");
+
+    // An over-shifted pad is rejected and replaced. The note is G3 (55): the first
+    // pad is rooted on C#3 (+6 st), the next on F#3 (+1 st).
+    const auto padFar = harmonicTone (49.0, 20, 1.5, 0.05);
+    const auto padNear = harmonicTone (54.0, 20, 1.5, 0.05);
+    rolla::RetuneCache cache;
+    int judged = 0;
+    auto judge = [&] (int at, double& worst)
+    {
+        ++judged;
+        const double root = at == 0 ? 49.0 : 54.0;
+        rolla::PitchInfo info;
+        info.rootPitch = (float) root;
+        info.conf = 0.9f;
+        const double semis = rolla::tonalShift (info, -1, 55.0, rolla::ShiftRule {});
+        worst = std::fabs (semis);
+        const auto req = retuneAsk (at == 0 ? padFar : padNear, root, semis, RetuneKind::Tonal);
+        return cache.get (at == 0 ? "PAD/far" : "PAD/near", RetuneKind::Tonal, semis,
+                          [&] { return rolla::judgeRetune (req); });
+    };
+    const auto pick = rolla::pickRetuneSafe (2, 0, 8, judge);
+    expect (pick.safe && pick.index == 1, "guard: an over-shifted pad is rejected and the next pad plays");
+    expect (cache.size() == 2, "guard: one cached verdict per file and shift");
+    const auto again = rolla::pickRetuneSafe (2, 0, 8, judge);
+    expect (again.index == 1 && cache.size() == 2, "guard: a second roll reads the cache");
+
+    // Nothing passes: the nearest workable file (smallest shift) plays, flagged unsafe.
+    auto none = [] (int at, double& worst)
+    {
+        worst = at == 0 ? 7.0 : 6.0;
+        rolla::RetuneVerdict v;
+        v.ok = false;
+        v.reason = "over the cap";
+        return v;
+    };
+    const auto fallback = rolla::pickRetuneSafe (2, 0, 8, none);
+    expect (! fallback.safe && fallback.index == 1, "guard: with no pass, the smallest shift is the fallback");
+
+    // A file still loading is never skipped: judge it again later.
+    auto loading = [] (int, double&)
+    {
+        rolla::RetuneVerdict v;
+        v.ok = false;
+        v.known = false;
+        return v;
+    };
+    const auto wait = rolla::pickRetuneSafe (3, 2, 8, loading);
+    expect (wait.pending && wait.index == 2, "guard: a loading file keeps the pick");
+}
+
+// Melak's rule (Maestro 354): key locked and nothing survives -> mute the lane and
+// say so; key Auto -> the guard's passes choose the key.
+void testRetuneKeyRule()
+{
+    using rolla::RetuneKind;
+
+    // A one-file bass pool rooted on D1 (26). The bass plays the key root in
+    // octave 1 (MIDI 24 + key), as the engine sends it.
+    const auto bassD1 = harmonicTone (26.0, 8, 1.0, 0.005);
+    rolla::RetuneCache cache;
+    auto bassJudge = [&] (int key)
+    {
+        return [&, key] (int, double& worst)
+        {
+            rolla::PitchInfo info;
+            info.rootPitch = 26.f;
+            info.conf = 0.9f;
+            rolla::ShiftRule rule;
+            rule.cap = 12.0;
+            const double semis = rolla::tonalShift (info, -1, 24.0 + key, rule);
+            worst = std::fabs (semis);
+            const auto req = retuneAsk (bassD1, 26.0, semis, RetuneKind::Bass);
+            return cache.get ("BASS/d1", RetuneKind::Bass, semis, [&] { return rolla::judgeRetune (req); });
+        };
+    };
+    auto passes = [&] (int key)
+    {
+        return rolla::pickRetuneSafe (1, 0, 1, bassJudge (key)).safe ? 1 : 0;
+    };
+
+    // Key locked on A: D1 -> A1 is +7 st, past the bass cap, and the pool has no
+    // other file. The lane is muted, never played mangled, and the notice names it.
+    const auto lockedA = rolla::pickRetuneSafe (1, 0, 1, bassJudge (9));
+    expect (! lockedA.safe && rolla::retuneMuteFor (true, lockedA), "rule: key locked with no safe file mutes the lane");
+    expect (! rolla::retuneMuteFor (false, lockedA), "rule: key Auto never mutes; the key moves instead");
+    expect (rolla::retuneNoticeText ({ "BASS" }, "A", "Dorian") == "NO SAFE FILE: BASS in A Dorian",
+            "rule: the notice names the lane and the key");
+    expect (rolla::retuneNoticeText ({}, "A", "Dorian").empty(), "rule: no muted lane, no notice");
+    const auto lockedD = rolla::pickRetuneSafe (1, 0, 1, bassJudge (2));
+    expect (lockedD.safe && ! rolla::retuneMuteFor (true, lockedD), "rule: a surviving file is never muted");
+    rolla::RetunePick loadingPick;
+    loadingPick.pending = true;
+    loadingPick.index = 0;
+    expect (! rolla::retuneMuteFor (true, loadingPick), "rule: a file still loading is not a reason to mute");
+
+    // Key Auto from A: +-1 and +-2 still fail (+8, +6, +9, +5 st); C (+3 away, the
+    // + side first) is -2 st and passes.
+    const auto autoA = rolla::pickAutoKey (9, passes);
+    expect (autoA.found && autoA.key == 0, "rule: Auto moves to the nearest key where the lane survives (got "
+                                               + std::to_string (autoA.key) + ")");
+    // Today's key passing is kept and judged alone: nothing failing stays identical.
+    const auto autoD = rolla::pickAutoKey (2, passes);
+    expect (autoD.found && autoD.key == 2 && autoD.tried == 1, "rule: Auto keeps today's key when it passes");
+
+    // Ordering, fallback and pending, on a scripted pass table.
+    auto only = [] (std::vector<int> ok)
+    {
+        return [ok] (int k)
+        {
+            for (int v : ok)
+                if (v == k)
+                    return 1;
+            return 0;
+        };
+    };
+    expect (rolla::pickAutoKey (5, only ({ 4, 6 })).key == 6, "rule: at equal distance the key above wins");
+    expect (rolla::pickAutoKey (5, only ({ 3 })).key == 3, "rule: two below beats nothing");
+    expect (rolla::pickAutoKey (0, only ({ 11 })).key == 11, "rule: the search wraps round the octave");
+    const auto none = rolla::pickAutoKey (5, only ({}));
+    expect (! none.found && none.key == 5 && none.tried == 12, "rule: no key passes, today's key stays");
+    const auto later = rolla::pickAutoKey (5, [] (int k) { return k == 5 ? 0 : -1; });
+    expect (later.pending && later.key == 5, "rule: a loading file defers the key choice");
 }
 
 // Four-on-the-floor kick retrigger clicks. Long tails, so every kick lands on
@@ -1678,6 +1887,234 @@ void testGenreTargets()
     expect (std::fabs (box.style (Style::Jackin).groove.swing.hi - 0.646f) < 1.0e-4f, "genre json: ext swing percent becomes a ratio band");
 }
 
+// Adaptive per-sample treatment (GenreBrain/Treatment.h): decisions against the mock
+// targets, then the Sampler seam on synthetic files.
+void testTreatment()
+{
+    using namespace rolla::genre;
+    const auto mock = GenreTargets::mock();
+    const double bpm = 124.0;
+
+    // A short pad under a one-bar chord: it dies at 300 ms, the lane wants 400 ms or
+    // more, the note lasts ~1.9 s. Loop its body.
+    SampleFeatures pad;
+    pad.lane = Lane::Pad;
+    pad.centroidHz = 900.f;
+    pad.tiltDbPerOct = -5.f;
+    pad.attackMs = 4.f;
+    pad.decay20Ms = 250.f;
+    pad.subRatio = 0.05f;
+    pad.lengthMs = 300.f;
+    const auto& padLane = mock.lane (Style::Roller, Lane::Pad);
+    const auto padT = decideTreatment (pad, padLane, bpm, 16.f);
+    expect (padT.loop && padT.loopStartMs >= pad.attackMs && padT.loopEndMs <= pad.lengthMs
+                && padT.loopEndMs - padT.loopStartMs >= 20.f && padT.xfadeMs >= 5.f
+                && padT.xfadeMs <= 0.5f * (padT.loopEndMs - padT.loopStartMs),
+            "treatment: a short pad under a long note gets a crossfaded loop past its attack");
+    expect (padT.decayTrimMs == 0.f && ! padT.wantsLayer, "treatment: a looped pad is not trimmed or layered");
+    expect (! decideTreatment (pad, padLane, bpm, 2.f).loop, "treatment: a pad that outlasts its note is not looped");
+
+    // A stab inside every band plays as recorded.
+    SampleFeatures stab;
+    stab.lane = Lane::Stab;
+    stab.centroidHz = 1200.f;
+    stab.tiltDbPerOct = -5.f;
+    stab.attackMs = 4.f;
+    stab.decay20Ms = 220.f;
+    stab.subRatio = 0.05f;
+    stab.loudnessDb = -18.f;
+    stab.lengthMs = 400.f;
+    const auto& stabLane = mock.lane (Style::Roller, Lane::Stab);
+    const auto stabT = decideTreatment (stab, stabLane, bpm, 4.f);
+    expect (! stabT.changesVoice() && ! stabT.loop && stabT.decayTrimMs == 0.f && stabT.attackMs == 0.f
+                && stabT.gainDb == 0.f && ! stabT.wantsLayer && stabT.stretch == 1.f && ! stabT.stretchMarked,
+            "treatment: an in-band stab is left as recorded");
+
+    // A closed hat ringing 600 ms against a 10..120 ms band: trimmed to the band's edge.
+    SampleFeatures hat;
+    hat.lane = Lane::HatC;
+    hat.centroidHz = 8000.f;
+    hat.tiltDbPerOct = -3.f;
+    hat.attackMs = 1.f;
+    hat.decay20Ms = 600.f;
+    hat.subRatio = 0.01f;
+    hat.lengthMs = 900.f;
+    const auto& hatLane = mock.lane (Style::Roller, Lane::HatC);
+    const auto hatT = decideTreatment (hat, hatLane, bpm, 1.f);
+    expect (hatT.decayTrimMs >= hatLane.decayMs.hi && hatT.decayTrimMs <= hatLane.decayMs.hi + hat.attackMs + 0.01f,
+            "treatment: a long-tailed hat is trimmed to its decay band (" + std::to_string (hatT.decayTrimMs) + " ms)");
+    expect (hatT.releaseMs >= 5.f && hatT.releaseMs < hatT.decayTrimMs && ! hatT.loop,
+            "treatment: the trim fades out, inside the trim");
+    hat.decay20Ms = 80.f;
+    expect (decideTreatment (hat, hatLane, bpm, 1.f).decayTrimMs == 0.f, "treatment: an in-band hat is not trimmed");
+    // The same long hat in a style with longer hats gets a longer trim: the number is the band's.
+    hat.decay20Ms = 600.f;
+    expect (decideTreatment (hat, mock.lane (Style::Deep, Lane::HatC), bpm, 1.f).decayTrimMs > hatT.decayTrimMs,
+            "treatment: the trim follows the style's band, not a per-sound constant");
+
+    // A kick with no sub: flag a layer and say why.
+    SampleFeatures kick;
+    kick.lane = Lane::Kick;
+    kick.centroidHz = 300.f;
+    kick.tiltDbPerOct = -6.f;
+    kick.attackMs = 2.f;
+    kick.decay20Ms = 200.f;
+    kick.subRatio = 0.05f;
+    kick.lengthMs = 400.f;
+    const auto& kickLane = mock.lane (Style::Roller, Lane::Kick);
+    const auto kickT = decideTreatment (kick, kickLane, bpm, 1.f);
+    expect (kickT.wantsLayer && kickT.reason == LayerReason::Sub && kickT.layerMiss > 0.25f,
+            std::string ("treatment: a kick with no sub wants a layer (reason ") + layerReasonName (kickT.reason) + ")");
+    expect (! kickT.changesVoice(), "treatment: a layer call does not touch the voice");
+    kick.subRatio = 0.6f;
+    expect (! decideTreatment (kick, kickLane, bpm, 1.f).wantsLayer, "treatment: a kick with sub needs no layer");
+
+    // Loudness: the stab's slot is -8 dB under the kick. Pull toward it, bounded.
+    TreatmentOptions level;
+    level.referenceDb = -10.f;
+    stab.loudnessDb = -5.f; // +5 over the kick, 13 dB hot
+    const auto hot = decideTreatment (stab, stabLane, bpm, 4.f, level);
+    expect (hot.gainDb < 0.f && hot.gainDb >= -treatment::kGainMaxDb, "treatment: a hot stab is turned down, bounded");
+    stab.loudnessDb = -21.f; // -11 under the kick, 3 dB quiet
+    const auto quiet = decideTreatment (stab, stabLane, bpm, 4.f, level);
+    expect (quiet.gainDb > 0.f && quiet.gainDb < 3.f, "treatment: a quiet stab moves toward the slot, not past it");
+    stab.loudnessDb = -18.5f; // -8.5 under: inside the deadband
+    expect (decideTreatment (stab, stabLane, bpm, 4.f, level).gainDb == 0.f, "treatment: a stab in its slot keeps its level");
+    expect (decideTreatment (stab, stabLane, bpm, 4.f).gainDb == 0.f, "treatment: no reference level, no level move");
+
+    // Attack: a lane whose pads swell from 40 ms softens a 2 ms pad onset.
+    LaneTargets swell = padLane;
+    swell.attackMs.lo = 40.f;
+    swell.attackMs.hi = 300.f;
+    pad.attackMs = 2.f;
+    pad.decay20Ms = 900.f;
+    pad.lengthMs = 3000.f;
+    const auto soft = decideTreatment (pad, swell, bpm, 16.f);
+    expect (soft.attackMs == 40.f && ! soft.loop, "treatment: a sharp pad gets the band's attack");
+    expect (decideTreatment (pad, padLane, bpm, 16.f).attackMs == 0.f, "treatment: an attack inside the band is kept");
+
+    // Tempo: a tagged phrase loop reports the sampler's stretch; an untagged one is marked.
+    TreatmentOptions phrase;
+    phrase.phraseLoop = true;
+    phrase.fileBpm = 120;
+    const auto fit = decideTreatment (stab, stabLane, bpm, 16.f, phrase);
+    expect (std::fabs (fit.stretch - 124.f / 120.f) < 1.0e-4f && ! fit.stretchMarked && ! fit.loop && fit.decayTrimMs == 0.f,
+            "treatment: a tagged phrase loop is tempo-fit by the sampler");
+    phrase.fileBpm = 0;
+    expect (decideTreatment (stab, stabLane, bpm, 16.f, phrase).stretchMarked, "treatment: an untagged phrase loop is marked");
+
+    // ---- Through the Sampler ----------------------------------------------------
+    const auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("rolla-treatment-test");
+    root.deleteRecursively();
+    writeTone (root.getChildFile ("PAD/tail.wav"), 1.0, 0.4f, 440.f, false);
+    writeTone (root.getChildFile ("PAD/short.wav"), 0.3, 0.4f, 440.f, false);
+    rolla::SampleLibrary lib;
+    lib.setRoot (root);
+    lib.preload ({ "PAD/tail.wav", "PAD/short.wav" });
+    expect (waitUntil ([&] { return lib.ready ("PAD/tail.wav") && lib.ready ("PAD/short.wav"); }), "treatment files load");
+
+    rolla::PresetBank bank;
+    rolla::loadDefaultPresets (bank);
+    bank.count[rolla::Pad] = 1;
+    auto& spec = bank.pad[0].sample;
+    spec.mode = rolla::SampleMode::Sample;
+    spec.filter.on = false;
+    spec.loop = {};
+    spec.poolCount = 0;
+    spec.zoneCount = 0;
+    spec.start = 0.f;
+    spec.reverse = false;
+    spec.slice = false;
+    rolla::EngineParams params;
+    params.presets = &bank;
+    params.library = &lib;
+
+    auto renderPad = [&] (const char* file, const rolla::TreatmentSet* set, int frames)
+    {
+        std::snprintf (spec.file, sizeof spec.file, "%s", file);
+        rolla::EngineParams p = params;
+        p.treatments = set;
+        rolla::Sampler s;
+        s.prepare (48000.0);
+        s.take (rolla::Pad, 69, 110, 1.0e9f, bank, p);
+        std::vector<float> out ((size_t) frames);
+        for (auto& x : out)
+        {
+            float laneL[rolla::NumParts] {};
+            float laneR[rolla::NumParts] {};
+            s.render (laneL, laneR, 0.f, 0.f, false);
+            x = laneL[rolla::Pad];
+        }
+        return out;
+    };
+    auto lastAudible = [] (const std::vector<float>& v)
+    {
+        int last = -1;
+        for (int i = 0; i < (int) v.size(); ++i)
+            if (std::fabs (v[(size_t) i]) > 1.0e-4f)
+                last = i;
+        return last;
+    };
+    auto energy = [] (const std::vector<float>& v, int from, int to)
+    {
+        double e = 0.0;
+        for (int i = from; i < to && i < (int) v.size(); ++i)
+            e += (double) v[(size_t) i] * (double) v[(size_t) i];
+        return e;
+    };
+
+    const int frames = 60000;
+    const auto plain = renderPad ("PAD/tail.wav", nullptr, frames);
+    rolla::TreatmentSet none;
+    expect (plain == renderPad ("PAD/tail.wav", &none, frames), "treatment seam: an empty set renders identically");
+
+    Treatment trim;
+    trim.decayTrimMs = 200.f;
+    trim.releaseMs = 50.f;
+    rolla::TreatmentSet trimmed;
+    trimmed.set (rolla::Pad, trim, "PAD/tail.wav");
+    const auto cut = renderPad ("PAD/tail.wav", &trimmed, frames);
+    const int plainEnd = lastAudible (plain);
+    const int cutEnd = lastAudible (cut);
+    expect (plainEnd > 45000, "treatment seam: the untreated 1 s pad rings to its end (" + std::to_string (plainEnd) + ")");
+    expect (cutEnd > 0 && cutEnd <= (int) (0.2 * 48000.0) + 64 && cutEnd < plainEnd,
+            "treatment seam: a trimmed voice ends at its trim (" + std::to_string (cutEnd) + " vs " + std::to_string (plainEnd) + ")");
+    expect (energy (cut, 0, 4800) > 0.0 && std::fabs (energy (cut, 0, 4800) - energy (plain, 0, 4800)) < 1.0e-9,
+            "treatment seam: before the trim fade the voice is untouched");
+
+    rolla::TreatmentSet otherFile;
+    otherFile.set (rolla::Pad, trim, "PAD/other.wav");
+    expect (renderPad ("PAD/tail.wav", &otherFile, frames) == plain, "treatment seam: a treatment for another file is ignored");
+
+    // The short pad, looped by the decision for a style whose pads run long.
+    SampleFeatures shortPad;
+    shortPad.lane = Lane::Pad;
+    shortPad.centroidHz = 440.f;
+    shortPad.tiltDbPerOct = -5.f;
+    shortPad.attackMs = 4.f;
+    shortPad.decay20Ms = 290.f;
+    shortPad.subRatio = 0.f;
+    shortPad.lengthMs = 300.f;
+    const auto loopT = decideTreatment (shortPad, mock.lane (Style::Deep, Lane::Pad), bpm, 16.f);
+    expect (loopT.loop, "treatment: the short test pad gets a loop");
+    rolla::TreatmentSet looped;
+    looped.set (rolla::Pad, loopT);
+    const auto held = renderPad ("PAD/short.wav", &looped, frames);
+    const auto once = renderPad ("PAD/short.wav", nullptr, frames);
+    expect (lastAudible (once) < (int) (0.32 * 48000.0), "treatment seam: the untreated short pad stops at its end");
+    expect (energy (held, 28800, 38400) > 1.0e-3, "treatment seam: the looped short pad still sounds at 0.6 - 0.8 s");
+
+    Treatment louder;
+    louder.gainDb = 6.f;
+    rolla::TreatmentSet gained;
+    gained.set (rolla::Pad, louder);
+    const auto up = renderPad ("PAD/tail.wav", &gained, 9600);
+    const double ratio = energy (up, 0, 9600) / std::max (1.0e-12, energy (plain, 0, 9600));
+    expect (std::fabs (ratio - std::pow (10.0, 0.6)) < 0.05, "treatment seam: gainDb scales the voice");
+
+    root.deleteRecursively();
+}
+
 // Made-up samples with numbers typical of the mock bands; never real files or a profile.
 rolla::genre::SampleFeatures mockSample (rolla::genre::Lane lane, const std::string& id, const std::string& pack, bool onTarget)
 {
@@ -2045,9 +2482,12 @@ int main()
     juce::ScopedJuceInitialiser_GUI juce;
 
     testPitchProbe();
+    testRetuneGuard();
+    testRetuneKeyRule();
     testFingerprint();
     testFingerprintTool();
     testGenreTargets();
+    testTreatment();
     testSoundSelector();
     testKitMesh();
     testKickKeyFollow();
