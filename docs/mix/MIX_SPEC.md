@@ -677,7 +677,7 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
      },
      "lufs_offset_vs_kick_db": -1.0,
      "st_target_lufs": -24.7,
-     "output_trim_db": 0.0,
+     "output_trim_db": -0.47,
      "level_src": "D clamp"
     },
     "STAB": {
@@ -744,7 +744,7 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
      },
      "lufs_offset_vs_kick_db": -3.1,
      "st_target_lufs": -26.8,
-     "output_trim_db": -0.0,
+     "output_trim_db": 3.72,
      "level_src": "M"
     },
     "VOX": {
@@ -811,7 +811,7 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
      },
      "lufs_offset_vs_kick_db": -5.0,
      "st_target_lufs": -28.7,
-     "output_trim_db": -0.0,
+     "output_trim_db": 22.02,
      "level_src": "M"
     },
     "HITS": {
@@ -919,7 +919,7 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
      },
      "lufs_offset_vs_kick_db": -9.0,
      "st_target_lufs": -32.7,
-     "output_trim_db": -0.0,
+     "output_trim_db": 11.23,
      "level_src": "PRESET_SPEC D"
     },
     "PLUCK": {
@@ -986,7 +986,7 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
      },
      "lufs_offset_vs_kick_db": -3.1,
      "st_target_lufs": -26.8,
-     "output_trim_db": -0.0,
+     "output_trim_db": 0.0,
      "level_src": "M"
     },
     "DRUMS": {
@@ -1056,7 +1056,7 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
        },
        "lufs_offset_vs_kick_db": -2.5,
        "st_target_lufs": -26.2,
-       "output_trim_db": -0.0,
+       "output_trim_db": 4.44,
        "level_src": "M"
       },
       "SNARE": {
@@ -1116,7 +1116,7 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
        },
        "lufs_offset_vs_kick_db": -2.5,
        "st_target_lufs": -26.2,
-       "output_trim_db": -0.0,
+       "output_trim_db": 4.44,
        "level_src": "N(clap slot)"
       },
       "RIM": {
@@ -1170,7 +1170,7 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
        },
        "lufs_offset_vs_kick_db": -7.5,
        "st_target_lufs": -31.2,
-       "output_trim_db": -0.0,
+       "output_trim_db": 4.44,
        "level_src": "M-ref"
       },
       "CH": {
@@ -1232,7 +1232,7 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
        },
        "lufs_offset_vs_kick_db": -16.6,
        "st_target_lufs": -40.3,
-       "output_trim_db": -0.0,
+       "output_trim_db": 4.44,
        "level_src": "M split"
       },
       "OH": {
@@ -1294,7 +1294,7 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
        },
        "lufs_offset_vs_kick_db": -4.6,
        "st_target_lufs": -28.3,
-       "output_trim_db": -0.0,
+       "output_trim_db": 4.44,
        "level_src": "M"
       },
       "RIDE": {
@@ -1349,7 +1349,7 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
        },
        "lufs_offset_vs_kick_db": -22.6,
        "st_target_lufs": -46.3,
-       "output_trim_db": -0.0,
+       "output_trim_db": 4.44,
        "level_src": "PRESET_SPEC R"
       },
       "PERC": {
@@ -1409,7 +1409,7 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
        },
        "lufs_offset_vs_kick_db": -7.6,
        "st_target_lufs": -31.3,
-       "output_trim_db": -0.0,
+       "output_trim_db": 4.44,
        "level_src": "M"
       },
       "KICK": {
@@ -1473,7 +1473,7 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
        },
        "lufs_offset_vs_kick_db": 0.0,
        "st_target_lufs": -23.7,
-       "output_trim_db": 0.0,
+       "output_trim_db": 4.44,
        "level_src": "D anchor"
       }
      }
@@ -3320,7 +3320,7 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
      },
      "lufs_offset_vs_kick_db": -1.0,
      "st_target_lufs": -24.7,
-     "output_trim_db": 0.0,
+     "output_trim_db": -4.0,
      "level_src": "D clamp"
     },
     "STAB": {
