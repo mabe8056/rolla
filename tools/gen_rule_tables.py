@@ -19,7 +19,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODEL = os.path.join(ROOT, "resources", "genre", "genre_writing_model.json")
 HEADER = os.path.join(ROOT, "src", "Generator", "RuleTables.h")
 
-STYLES = ["ROLLER", "DEEP", "BOUNCY", "JACKIN"]  # Dialect order: UkMin, Long, Pop, Gaskin
+STYLES = ["ROLLER", "DEEP", "BOUNCY", "JACKIN"]  # Dialect order: UkMin, Long, Pop, Jackin
 MODES = ["Dorian", "Aeolian", "Phrygian"]       # phrase::Mode order
 PALETTE = ["pickup_into_bar1", "drop_out_last_beat", "fill_up_16ths", "pitch_answer",
            "octave_lift", "rhythmic_displacement", "truncation"]
@@ -141,7 +141,7 @@ def build(M):
     o.append("// weights, density curves, conditional stab-vs-bass weights and a chord-quality\n")
     o.append("// palette. No row, cell or value is a note sequence, rhythm cell or voicing of\n")
     o.append("// any one source. Style order is the Dialect enum: ROLLER (ukmin), DEEP (long),\n")
-    o.append("// BOUNCY (pop), JACKIN (gaskin).\n\n")
+    o.append("// BOUNCY (pop), JACKIN (jackin).\n\n")
     o.append("namespace rolla::rules::tables\n{\n\n")
     o.append("inline constexpr int kStyles = 4;\n")
     o.append(f"inline constexpr const char* kModelVersion = \"{M['version']}\";\n\n")

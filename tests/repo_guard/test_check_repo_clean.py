@@ -81,7 +81,7 @@ def main():
         ("secret", "cfg.py", "GH = '" + "gh" + "p_" + "a1B2" * 9 + "'\n", "GitHub token"),
         ("secret", "cfg2.py", "key = '" + "AK" + "IA" + "ABCDEFGHIJKLMNOP" + "'\n", "AWS"),
         ("secret", "app.json", json.dumps({"api_key": "Zx9" + "q" * 20}), "assigned secret"),
-        ("dump", "tools/out/gaskin/roll_00/x.txt", "x", "tools/out"),
+        ("dump", "tools/out/jackin/roll_00/x.txt", "x", "tools/out"),
         ("dump", "data/corpus.json", "{}", "corpus"),
         ("dump", "src/Generator/CorpusData.h", "int x;", "CorpusData"),
         ("large", "resources/big.json", json.dumps({"v": list(range(150000))}), "big.json"),

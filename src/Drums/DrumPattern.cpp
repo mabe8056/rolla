@@ -40,7 +40,7 @@ void writeDrumPattern (Groove& groove, const Settings& settings, Rng& rng)
         s.bars = 8;
     s.busy = std::clamp (s.busy, 0.f, 1.f);
     const int steps = s.bars * 16;
-    const bool gaskin = s.dialect == Gaskin;
+    const bool jackin = s.dialect == Jackin;
     const Lane& stab = groove.lane[Stab];
 
     auto jitter = [&] (int vel) noexcept
@@ -70,7 +70,7 @@ void writeDrumPattern (Groove& groove, const Settings& settings, Rng& rng)
                 d.vel[Snare][t] = jitter (72);
         }
 
-        if (gaskin)
+        if (jackin)
         {
             if (beat)
                 d.vel[HatC][t] = jitter (velFromDb (-12.f));

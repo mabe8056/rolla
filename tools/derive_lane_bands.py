@@ -2,7 +2,7 @@
 """derive_lane_bands.py  --  re-derive a lane's bands from its refs (scorer v2.2).
 
 Usage:  python3 derive_lane_bands.py <lane> [--mode bounce|pulse|sparse|dark] [--margin 0.1] [--bars 16] [--refs DIR]
-        lane = ukmin (ROLLER) | long (DEEP) | pop (BOUNCY) | gaskin (JACKIN)
+        lane = ukmin (ROLLER) | long (DEEP) | pop (BOUNCY) | jackin (JACKIN)
 
 Reads the ref list from score_rolls.LANE_REFS (the ONE config spot), finds each ref's MIDI under
 <refs>/<ref id>/ (bass*.mid, drums*.mid, stabs*.mid; '_bXX-YY' suffixes = extra drop sections),

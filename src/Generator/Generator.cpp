@@ -61,7 +61,7 @@ bool scalePc (int dialect, int semi) noexcept
     int pc = semi % 12;
     if (pc < 0)
         pc += 12;
-    if (dialect == Gaskin)
+    if (dialect == Jackin)
         return pc == 0 || pc == 1 || pc == 2 || pc == 3 || pc == 5 || pc == 7 || pc == 8 || pc == 10;
     return pc != 4 && pc != 6 && pc != 11;
 }
@@ -191,7 +191,7 @@ void applyBusyDensity (Lane& lane, int dialect, int bars, float busy, std::uint3
         for (int k = 0; k < keep && w < kMaxNotes; ++k)
             out[w++] = lane.notes[idx[k]];
 
-        const float fillLen = dialect == Pop ? 1.1f : dialect == Long ? 2.f : dialect == Gaskin ? 1.5f : 1.5f;
+        const float fillLen = dialect == Pop ? 1.1f : dialect == Long ? 2.f : dialect == Jackin ? 1.5f : 1.5f;
         const auto fillPitch = (std::int8_t) (dialect == Pop ? 7 : 0);
         int have = keep;
         int guard = 0;
@@ -456,7 +456,7 @@ void moveJackinNote (Lane& lane, int bars, int parity, std::uint32_t salt)
         bool allowed[16];
         for (int s = 0; s < 16; ++s)
             allowed[s] = s >= 1 && s <= 13 && ! kickSlot (s) && ! used[s];
-        const int dest = rules::sampleBassSlot (Gaskin, b == 3 ? 1 : 0, allowed, salt * 0x9E3779B1u + (std::uint32_t) b);
+        const int dest = rules::sampleBassSlot (Jackin, b == 3 ? 1 : 0, allowed, salt * 0x9E3779B1u + (std::uint32_t) b);
         int src = -1;
         for (int k = n - 1; k >= 0; --k)
         {
@@ -517,7 +517,7 @@ void leanJackinDotted (Lane& lane, int bars, std::uint32_t seed)
             bool allowed[16] {};
             for (int s : { 3, 6, 9, 15 })
                 allowed[s] = ! used[s];
-            const int dest = rules::sampleBassSlot (Gaskin, b == 3 ? 1 : 0, allowed,
+            const int dest = rules::sampleBassSlot (Jackin, b == 3 ? 1 : 0, allowed,
                                                     (seed ^ 0xD077u) * 0x9E3779B1u + (std::uint32_t) (b * 8 + guard));
             if (dest < 0)
                 break;
@@ -628,7 +628,7 @@ void styleJackinBass (Lane& lane, int bars, std::uint32_t seed, int mode)
     ensureColour (lane, seed);
     if (flavour == 1)
         paintFlat2 (lane);
-    fitRootShare (lane, 0.40f, 0.72f, seed, Gaskin, mode);
+    fitRootShare (lane, 0.40f, 0.72f, seed, Jackin, mode);
 }
 
 void enforceMonophonic (Lane& lane)
@@ -1361,7 +1361,7 @@ void loopJackinBass (Lane& lane, int bars, std::uint32_t seed)
             lane.notes[i].length = std::max (0.25f, room);
     }
     // Same share and hash as differBar4, so the bar-4 answer rate is unchanged.
-    if (nb >= 8 && (float) (((seed ? seed : 1u) * 0xC2B2AE35u) % 1000u) < 1000.f * rules::tables::kBar4AnswerProb[std::clamp ((int) Gaskin, 0, rules::tables::kStyles - 1)])
+    if (nb >= 8 && (float) (((seed ? seed : 1u) * 0xC2B2AE35u) % 1000u) < 1000.f * rules::tables::kBar4AnswerProb[std::clamp ((int) Jackin, 0, rules::tables::kStyles - 1)])
         answerJackinBar4 (lane, seed);
 }
 
@@ -1645,7 +1645,7 @@ void finishPhrase (Lane& lane, const Settings& s, std::uint32_t seed, bool pulse
         lane.count = w;
     }
 
-    if (dialect == Gaskin)
+    if (dialect == Jackin)
         styleJackinBass (lane, bars, seed, mode);
     else if (dialect == Long && deepIsDark (s.dark, seed))
         densifyDeepDark (lane, bars, seed, mode);
@@ -1750,7 +1750,7 @@ void writeStab (Lane& lane, const Lane& bass, const Settings& s, int mode)
 {
     const std::uint32_t seed = lane.seed ? lane.seed : 1u;
     clearLane (lane, seed);
-    int per = s.dialect == Pop ? 8 : s.dialect == Gaskin ? 6 : s.dialect == Long ? 3 : 1;
+    int per = s.dialect == Pop ? 8 : s.dialect == Jackin ? 6 : s.dialect == Long ? 3 : 1;
     if (s.styleIntensity <= 0.25f)
         per = std::min (per, 1);
     else if (s.styleIntensity >= 0.75f)
@@ -1774,10 +1774,10 @@ void writeStab (Lane& lane, const Lane& bass, const Settings& s, int mode)
     // Presence follows STAB too: 98 at the default.
     const int stabVel = clampi ((int) std::lround (70.f + 51.f * stabKnob), 60, 124);
 
-    const int flavour = s.dialect == Gaskin ? jackinFlavour (seed) : -1;
+    const int flavour = s.dialect == Jackin ? jackinFlavour (seed) : -1;
     float len = s.dialect == Pop ? 1.f : 2.f;
     // JACKIN's stab modes (SR stab modes): sustain counter, offbeat jab, dub.
-    if (s.dialect == Gaskin)
+    if (s.dialect == Jackin)
         len = flavour == 2 ? 6.5f : (flavour == 3 ? 1.f : 1.9f);
 
     const bool skipOdd = (s.busy < 0.25f && per <= 2) || stabSparse;
@@ -1795,7 +1795,7 @@ void writeStab (Lane& lane, const Lane& bass, const Settings& s, int mode)
     sp.length = len;
     sp.varyLength = s.dialect == UkMin;
     sp.vel = stabVel;
-    sp.repeatByParity = s.dialect == Gaskin;
+    sp.repeatByParity = s.dialect == Jackin;
     rules::composeStab (lane, bass, sp, seed);
     lane.seed = seed;
 }
@@ -1932,7 +1932,7 @@ void writePluck (Lane& lane, const Settings& s, Rng& rng, int mode)
     }
     if (s.styleIntensity >= 0.75f)
     {
-        const int step = s.dialect == Long ? 5 : (s.dialect == Gaskin ? 7 : 3);
+        const int step = s.dialect == Long ? 5 : (s.dialect == Jackin ? 7 : 3);
         for (int t = 2; t < s.bars * 16; t += step)
         {
             Ev e;
@@ -2145,7 +2145,7 @@ void writeDrums (DrumLane& drums, std::uint32_t seed, const Settings& s, Rng& rn
     }
     else if (s.styleIntensity >= 0.75f)
     {
-        const int step = s.dialect == Long ? 5 : (s.dialect == Gaskin ? 7 : 3);
+        const int step = s.dialect == Long ? 5 : (s.dialect == Jackin ? 7 : 3);
         for (int t = 1; t < steps; t += step)
         {
             if (kickSlot (t % 16))
@@ -2369,7 +2369,7 @@ float softPenalty (const Groove& g, float freedom, const char* plan, bool offPla
         sndLo = 0.28f; sndHi = 0.40f; kickSoft = 0.05f;
         stabLo = 9.f; stabHi = 11.f;
     }
-    else if (g.dialect == Gaskin)
+    else if (g.dialect == Jackin)
     {
         npbLo = 6.f; npbHi = 8.f; lenLo = 1.9f; lenHi = 2.3f;
         rootLo = 0.28f; rootHi = 0.40f; topLo = 0.55f; topHi = 0.70f;
@@ -2805,7 +2805,7 @@ constexpr int kClashTries = 8;
 // Bass b2 cap as a share of bass sounding time. Phrygian rolls may lean on the
 // b2 (their stab/pad never carry the natural 2: snapToMode moves 2 -> b3).
 // Outside phrygian the cap is per style: ROLLER (UkMin) 12%, DEEP (Long) 6%,
-// JACKIN (Gaskin) 6%, BOUNCY (Pop) 3%.
+// JACKIN (Jackin) 6%, BOUNCY (Pop) 3%.
 float b2Cap (int dialect, int mode) noexcept
 {
     // Genre model v1.2: ROLLER 6% (was 12), DEEP 6, JACKIN 6, BOUNCY 3; phrygian 30.
@@ -3009,7 +3009,7 @@ void fixBassClashes (Groove& g, int mode, float cap, std::uint32_t seed)
         // Resample: bounded, deterministic from the bass seed and the note.
         // JACKIN keys it on the note's place in its 2-bar loop, so the
         // repeats of one note take the same pitch.
-        const std::uint32_t key = g.dialect == Gaskin
+        const std::uint32_t key = g.dialect == Jackin
                                       ? 0x10000u + (std::uint32_t) (((int) std::lround (lane.notes[i].start) % 32 + 32) % 32)
                                       : (std::uint32_t) i;
         int chosen = -1;
@@ -3430,7 +3430,7 @@ float bassBreathShare (int dialect) noexcept
     switch (dialect)
     {
         case Long:   return 0.25f;
-        case Gaskin: return 0.45f;
+        case Jackin: return 0.45f;
         default:     return 0.35f;
     }
 }
@@ -3793,7 +3793,7 @@ void placeBassOnKicks (Lane& lane, int dialect, int bars, std::uint32_t seed)
         });
         // JACKIN repeats a 2-bar hook: once a position moves, its other repeats
         // (same key, same priority) move too, as long as the 35% cap holds.
-        const bool wholeGroups = dialect == Gaskin;
+        const bool wholeGroups = dialect == Jackin;
         bool haveLast = false;
         std::uint32_t lastPrio = 0;
         for (int m = 0; m < nm; ++m)
@@ -4162,7 +4162,7 @@ void holdBassNotes (Lane& lane, int dialect, int bars, std::uint32_t seed)
             continue;
         cand[nc] = i;
         // JACKIN's repeats breathe in the same places: keyed on the 2-bar position.
-        const std::uint32_t key = dialect == Gaskin
+        const std::uint32_t key = dialect == Jackin
                                       ? 0x10000u + (std::uint32_t) (((int) std::lround (lane.notes[i].start)) % 32)
                                       : (std::uint32_t) i;
         prio[i] = postHash (seed ^ 0x401Du, key);
@@ -4587,7 +4587,7 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
             ensureBar8Turn (g.lane[Bass], s.bars, bassSeed);
             anchorPopRoot (g.lane[Bass], bassSeed);
         }
-        else if (s.dialect == Gaskin)
+        else if (s.dialect == Jackin)
         {
             contrastCallAnswer (g.lane[Bass], s.bars);
             enforceMonophonic (g.lane[Bass]);
@@ -4734,7 +4734,7 @@ bool jackinRepeatOk (const Lane& lane, int bars)
 {
     if (bars < 4)
         return true;
-    const int st = std::clamp ((int) Gaskin, 0, rules::tables::kStyles - 1);
+    const int st = std::clamp ((int) Jackin, 0, rules::tables::kStyles - 1);
     const float r1 = bassRepeat (lane, bars, 16);
     const float r2 = bassRepeat (lane, bars, 32);
     return r1 <= rules::tables::kRepeatM1Max[st] + 1.0e-4f && (r2 < 0.f || r2 >= rules::tables::kRepeatM2Min[st] - 1.0e-4f);
@@ -4759,7 +4759,7 @@ static bool composeOriginal (Groove& g, const Groove& input, const Settings& set
         // one pitch class on four or fewer attacks in two or more bars is
         // composed again (the composer avoids it; the post passes can still
         // produce it).
-        if ((pitched & (1u << Bass)) != 0 && g.dialect == Gaskin && ! jackinRepeatOk (g.lane[Bass], g.bars)
+        if ((pitched & (1u << Bass)) != 0 && g.dialect == Jackin && ! jackinRepeatOk (g.lane[Bass], g.bars)
             && k + 1 < kOrigAttempts)
         {
             ++bump[Bass];

@@ -664,7 +664,7 @@ void testGenreTargets()
     expect (! mock.fromData && mock.lane (Style::Deep, Lane::Stab).centroidHz.hi < mock.lane (Style::Bouncy, Lane::Stab).centroidHz.hi
                 && mock.lane (Style::Deep, Lane::Pad).decayMs.hi > mock.lane (Style::Bouncy, Lane::Pad).decayMs.hi,
             "genre mock: DEEP is darker and longer than BOUNCY");
-    expect (std::string (laneName (Lane::HatC)) == "HAT_C" && laneFromName ("VOX") == Lane::Vox && styleFromId ("gaskin") == Style::Jackin,
+    expect (std::string (laneName (Lane::HatC)) == "HAT_C" && laneFromName ("VOX") == Lane::Vox && styleFromId ("jackin") == Style::Jackin,
             "genre names round-trip");
 
     SampleFeatures kick;
@@ -1213,8 +1213,8 @@ int main()
             if (rolla::pickPresetForRoll (factory, rolla::Bass, rolla::UkMin, seed) != first)
                 sameRecipe = false;
         expect (sameRecipe, "the dialect picks the recipe; the folder scan picks the file");
-        expect (rolla::pickPresetForRoll (factory, rolla::Drums, rolla::Gaskin, 3) == 1,
-                "gaskin roll stays on the sample kit");
+        expect (rolla::pickPresetForRoll (factory, rolla::Drums, rolla::Jackin, 3) == 1,
+                "jackin roll stays on the sample kit");
         for (int dialect = 0; dialect < rolla::NumDialects; ++dialect)
             for (std::uint32_t seed = 1; seed < 32; ++seed)
             {
@@ -1843,7 +1843,7 @@ int main()
         expect (rolla::sampleIndexCount (pools, rolla::Hits, hits) == 0, "LONG hits drop acid");
         hits.dialect = rolla::Pop;
         expect (rolla::sampleIndexCount (pools, rolla::Hits, hits) == 0, "BOUNCY hits drop acid");
-        hits.dialect = rolla::Gaskin;
+        hits.dialect = rolla::Jackin;
         expect (rolla::sampleIndexCount (pools, rolla::Hits, hits) == 0, "JACKIN hits drop acid");
 
         rolla::PoolFilter bass;
@@ -1946,10 +1946,10 @@ int main()
 
         const auto plucks = paths (fake, rolla::Pluck, rolla::Pop);
         expect (plucks.size() == 1 && plucks[0] == "PLUCK/Pluck_Chord_D5.wav", "pluck drops telephone and whoosh");
-        const auto stabs = paths (fake, rolla::Stab, rolla::Gaskin);
+        const auto stabs = paths (fake, rolla::Stab, rolla::Jackin);
         expect (stabs.size() == 1 && stabs[0] == "STAB/Stab_Chord_Fm.wav", "stab drops the uplifter sweep");
 
-        for (int dialect : { rolla::UkMin, rolla::Long, rolla::Pop, rolla::Gaskin })
+        for (int dialect : { rolla::UkMin, rolla::Long, rolla::Pop, rolla::Jackin })
         {
             const auto hitPaths = paths (fake, rolla::Hits, dialect);
             expect (has (hitPaths, "HITS/Chord_Stab_Cmin.wav"), "tonal chord stab stays");
@@ -1977,7 +1977,7 @@ int main()
         rolla::PoolFilter loose;
         loose.on = true;
         loose.lane = rolla::Hits;
-        loose.dialect = rolla::Gaskin;
+        loose.dialect = rolla::Jackin;
         expect (rolla::sampleIndexCount (pitchedOnly, rolla::Hits, loose) == 1, "a pitched same-lane file is the fallback");
         expect (std::string (rolla::sampleIndexAt (pitchedOnly, rolla::Hits, loose, 0)->path) == "HITS/Synth_One_Shot_C.wav",
                 "the fallback stays in the hits lane");
@@ -2008,7 +2008,7 @@ int main()
         muteParams.presets = &muteBank;
         muteParams.library = &muteLib;
         muteParams.sampleIndex = &emptyLane;
-        muteParams.dialect = rolla::Gaskin;
+        muteParams.dialect = rolla::Jackin;
         const auto muted = muteSampler.take (rolla::Hits, 64, 110, 4.f, muteBank, muteParams);
         expect (muted.kind == 1 && std::fabs (muted.synthGain) < 1.0e-6f,
                 "an empty pool mutes instead of synthesising");
@@ -2449,7 +2449,7 @@ int main()
         chopParams.presets = &chopBank;
         chopParams.library = &chopLib;
         chopParams.sampleIndex = chopSnap.get();
-        chopParams.dialect = rolla::Gaskin;
+        chopParams.dialect = rolla::Jackin;
         chopParams.bpm = 130.f;
         chopParams.samplePick[rolla::Hits] = 0;
         chopSampler.take (rolla::Hits, 60, 110, 1.0e9f, chopBank, chopParams);
@@ -2565,7 +2565,7 @@ int main()
             gp.presets = &gateBank;
             gp.library = &gateLib;
             gp.sampleIndex = gateSnap.get();
-            gp.dialect = rolla::Gaskin;
+            gp.dialect = rolla::Jackin;
             gp.bpm = 130.f;
             for (int i = 0; i < rolla::NumDrumVoices; ++i)
                 gp.drumDecay[i] = 0.5f;

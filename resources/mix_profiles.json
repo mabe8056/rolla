@@ -2700,7 +2700,7 @@
     }
    }
   },
-  "GASKIN": {
+  "JACKIN": {
    "output_trim_db": 0.0,
    "top_trim_db": 1.0,
    "default_lanes": [
@@ -3642,7 +3642,7 @@
     "comp.release_ms": 180,
     "src": "M REF_R4 180.5 / REF_R6 180"
    },
-   "STAB:GASKIN_RAVE": {
+   "STAB:JACKIN_RAVE": {
     "comp.release_ms": 250,
     "comp.target_gr_db": 7,
     "src": "M REF_J1/J2 decay 254, crest 16.8"
@@ -3692,7 +3692,7 @@
   },
   "equal_power_law": "g_old=cos(theta), g_new=sin(theta), theta 0..pi/2 raised-cosine, output /= sqrt(1 + 2*rho*sin(theta)*cos(theta)); rho = correlation of the two paths over the last 50 ms (rho~1 for dry vs saturated -> behaves like equal-gain; rho~0 -> plain equal-power)",
   "sources": {
-   "50 ms": "D: settles inside one 1/16 at 126 BPM (119 ms); peak slope pi/2 x 8.3 dB (largest lane-offset change, STAB LONG->GASKIN) / 50 ms is a ramp, not a step (self-test PASS)",
+   "50 ms": "D: settles inside one 1/16 at 126 BPM (119 ms); peak slope pi/2 x 8.3 dB (largest lane-offset change, STAB LONG->JACKIN) / 50 ms is a ramp, not a step (self-test PASS)",
    "120 ms": "D: about 1/16 at 126 BPM and inside the measured comp release range (45-250 ms)",
    "80 ms": "N"
   },

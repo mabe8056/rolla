@@ -85,7 +85,7 @@ inline IntensityPlan planIntensity (int dialect, int intensity, float stabKnob) 
     {
         const int part = kOrder[plan.dialect][i];
         // Pluck is a DEEP / BOUNCY lane. ROLLER and JACKIN do not bring it in.
-        if (part == Pluck && (plan.dialect == UkMin || plan.dialect == Gaskin))
+        if (part == Pluck && (plan.dialect == UkMin || plan.dialect == Jackin))
             continue;
         plan.comesInAt[part] = kEnter[i];
         plan.inLane[part] = plan.value >= kEnter[i];

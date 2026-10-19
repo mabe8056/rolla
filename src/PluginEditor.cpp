@@ -1324,7 +1324,7 @@ struct DialectBar : Component
         {
             GlyphArrangement glyphs;
             const auto pill = Theme::font (Theme::Role::pill);
-            glyphs.addLineOfText (pill, "GASKIN 90s", 0.f, 0.f);
+            glyphs.addLineOfText (pill, "JACKIN 90s", 0.f, 0.f);
             const float measured = glyphs.getBoundingBox (0, -1, true).getWidth();
             jassert (std::abs (measured - 71.4f) <= 0.5f);
             jassert (measured + 2.f * Theme::padPillLarge <= (float) Theme::segmentLarge);

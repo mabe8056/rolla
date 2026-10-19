@@ -382,7 +382,7 @@ void testEarReview()
                 const int st = (int) std::lround (g.lane[rolla::Stab].notes[i].start);
                 if (! stabAt.insert (st).second)
                     ++stackedStab;
-                if (style == rolla::Gaskin)
+                if (style == rolla::Jackin)
                 {
                     jackinLen += g.lane[rolla::Stab].notes[i].length;
                     ++jackinStabs;
@@ -407,7 +407,7 @@ void testEarReview()
             }
             pluck += g.lane[rolla::Pluck].count;
 
-            if (style == rolla::Gaskin)
+            if (style == rolla::Jackin)
             {
                 jackinRhythms.insert (rhythm);
                 const int flav = (int) (((seeds[rolla::Bass] ? seeds[rolla::Bass] : 1u) * 0x9E3779B9u) % 4u);
@@ -846,7 +846,7 @@ void testScorerV23()
                     expect (popPulseGrid (bass, g.bars), "BOUNCY roll " + std::to_string (roll) + " pulse is a steady grid");
                 }
             }
-            if (style == rolla::Gaskin)
+            if (style == rolla::Jackin)
             {
                 int match = 0;
                 const int slots = 112;
@@ -901,12 +901,12 @@ void testScorerV23()
                   << " med-len " << medLen;
         if (style == rolla::Pop)
             std::cout << " pulse " << pulse << "/20 turn " << turn << "/20";
-        if (style == rolla::Gaskin)
+        if (style == rolla::Jackin)
             std::cout << " call-answer " << callOk << "/20";
         std::cout << "\n";
         expect (answers >= 8 && answers <= 18, std::string (names[style]) + " bar 4 answers bar 2");
         expect (pairs <= 2, std::string (names[style]) + " near-identical rhythm pairs <= 2");
-        if (style == rolla::Gaskin)
+        if (style == rolla::Jackin)
             expect (gapPct >= 12.0 && gapPct <= 45.0, "JACKIN stabs land in bass gaps");
         else if (style == rolla::UkMin)
             expect (gapPct >= 10.0 && gapPct <= 28.0, "ROLLER stabs in bass gaps stay between the floor and the bonus");
@@ -923,7 +923,7 @@ void testScorerV23()
             expect (pulse >= 6 && pulse <= 8, "BOUNCY pulse mode is 30-40% of the batch (6-8 of 20), got " + std::to_string (pulse));
             expect (turn >= 14, "BOUNCY bar 8 turns around");
         }
-        if (style == rolla::Gaskin)
+        if (style == rolla::Jackin)
             expect (callOk >= 12, "JACKIN call and answer");
     }
 }
@@ -1158,7 +1158,7 @@ void testAr423Swing()
     rolla::RollaProcessor proc;
     proc.waitUntilReady();
     auto swingNow = [&] { return proc.apvts.getRawParameterValue ("swing")->load(); };
-    for (int d : { (int) rolla::Long, (int) rolla::Pop, (int) rolla::Gaskin, (int) rolla::UkMin })
+    for (int d : { (int) rolla::Long, (int) rolla::Pop, (int) rolla::Jackin, (int) rolla::UkMin })
     {
         setDenorm (proc, "dialect", (float) d);
         expect (pumpUntil ([&] { return std::abs (swingNow() - want[d]) < 0.0015f; }),
@@ -1447,7 +1447,7 @@ void testStabDensity()
     const char* names[] = { "ROLLER", "DEEP", "BOUNCY", "JACKIN" };
     const double lo[] = { 0.34, 0.05, 0.25, 0.34 };
     const double hi[] = { 4.5, 2.76, 2.97, 2.97 };
-    for (int style : { (int) rolla::UkMin, (int) rolla::Long, (int) rolla::Pop, (int) rolla::Gaskin })
+    for (int style : { (int) rolla::UkMin, (int) rolla::Long, (int) rolla::Pop, (int) rolla::Jackin })
     {
         const double at0 = stabHitsPerBar (style, 0.f, base);
         const double atDefault = stabHitsPerBar (style, 0.55f, base);
@@ -1619,7 +1619,7 @@ void testArGateBass()
             std::cout << " back-half moves " << backMoves << "/" << rolls << " stab-in-gap "
                       << (stabHits > 0 ? 100.0 * stabGaps / stabHits : 0.0) << "% rolls >= 15% " << gapRolls << "/" << rolls;
         std::cout << "\n";
-        if (style != rolla::Gaskin)
+        if (style != rolla::Jackin)
             expect (npb >= npbLo[style] && npb <= npbHi[style],
                     std::string (names[style]) + " mean bass onsets per bar " + std::to_string (npb) + " in "
                         + std::to_string (npbLo[style]) + "-" + std::to_string (npbHi[style]));
@@ -1822,7 +1822,7 @@ void testBatchBouncyModes()
 }
 
 // tools/score_rolls.py v2.2.1, read on the exported MIDI the way the A&R gate
-// does: LOOP_NO_REPEAT and the JACKIN ("gaskin") lane-fit features F1-F11
+// does: LOOP_NO_REPEAT and the JACKIN ("jackin") lane-fit features F1-F11
 // (F12 is the duck, which the scorer does not read on a full mix). A roll is
 // LANE_FIT_LOW when more than two measurable features miss.
 struct ScoreNote
@@ -2148,7 +2148,7 @@ JackinScore scoreJackin (const std::vector<ScoreNote>& bassIn, const std::vector
             hatSwing = roundTo (50.0 + 50.0 * (pyMedian (odd) - pyMedian (even)), 10.0);
     }
 
-    // LANE["gaskin"] (score_rolls.py): range membership per feature.
+    // LANE["jackin"] (score_rolls.py): range membership per feature.
     struct F { const char* id; bool measurable; bool ok; };
     const bool flav = dotted >= 55.0 || b2Pct >= 10.0 || stabDurMed >= 6.0
                    || (stabHits > 0 && stabDurMed <= 1.5 && stabOnbeat >= 0.0 && stabOnbeat <= 10.0);
@@ -2232,11 +2232,11 @@ std::set<std::pair<int, int>> stabBarTokens (const rolla::Lane& stab, int bar)
 void testBatchJackinLoop()
 {
     const std::uint32_t batch = 2026101852u;
-    const auto rolls = batchRolls (batch, rolla::Gaskin, 20);
+    const auto rolls = batchRolls (batch, rolla::Jackin, 20);
     auto bank = std::make_unique<rolla::PresetBank>();
     expect (rolla::loadPresetsFromJson (*bank, BinaryData::presets_json, BinaryData::presets_jsonSize),
             "presets.json loads for the JACKIN batch");
-    const float swing = bank->dialect[rolla::Gaskin].swing > 0.f ? bank->dialect[rolla::Gaskin].swing : 0.5f;
+    const float swing = bank->dialect[rolla::Jackin].swing > 0.f ? bank->dialect[rolla::Jackin].swing : 0.5f;
     int noRepeat = 0;
     int laneLow = 0;
     int f6Ok = 0;
@@ -2746,7 +2746,7 @@ void testRemovedTables()
         expect (! fs::exists (root / f, ec), std::string ("removed table file is back: ") + f);
     }
     const char* tokens[] = {
-        "kPhrase", "kLongPhrase", "kGaskinPhrase", "kDeg", "kLongDeg", "kGaskDeg", "PhraseBankData", "VocabCells",
+        "kPhrase", "kLongPhrase", "kJackinPhrase", "kDeg", "kLongDeg", "kGaskDeg", "PhraseBankData", "VocabCells",
         "baseSlots", "deepBook", "bouncyBook", "jackinBook", "kPrefer0", "kPrefer1", "kPrefer2",
         "pushJackinVariationBack", "lockFromBook", "lockPhrase", "makeBassPhrase", "phrase_bank", "rolesFor", "assignSemi",
     };

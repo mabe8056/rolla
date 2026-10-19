@@ -161,7 +161,7 @@ void readStyles (SampleSpec& spec, const juce::var& preset)
                 spec.styles = (std::uint8_t) (spec.styles | 2u);
             else if (s == "pop")
                 spec.styles = (std::uint8_t) (spec.styles | 4u);
-            else if (s == "gaskin")
+            else if (s == "jackin")
                 spec.styles = (std::uint8_t) (spec.styles | 8u);
         }
     }
@@ -379,8 +379,8 @@ void loadDefaultPresets (PresetBank& bank)
     // ROLLER 53.7 (was 52), DEEP 54, BOUNCY 56.7, JACKIN 56.5.
     fillDialect (bank.dialect[Long], "round", "swell", "dusty", "bright", "wide", "booth", "tight", true, 0.54f);
     fillDialect (bank.dialect[Pop], "click", "click", "rave", "soft", "air", "chop", "tight", true, 0.567f);
-    fillDialect (bank.dialect[Gaskin], "round", "swell", "warehouse", "hook", "dark", "chop", "room", false, 0.565f);
-    auto& g = bank.dialect[Gaskin];
+    fillDialect (bank.dialect[Jackin], "round", "swell", "warehouse", "hook", "dark", "chop", "room", false, 0.565f);
+    auto& g = bank.dialect[Jackin];
     g.bassDuck = true;
     g.bassGlide = true;
     g.bassDuckDb = 7.f;

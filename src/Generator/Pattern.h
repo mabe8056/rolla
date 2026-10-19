@@ -38,7 +38,7 @@ enum Dialect : int
     UkMin = 0,
     Long,
     Pop,
-    Gaskin,
+    Jackin,
     NumDialects
 };
 
@@ -175,7 +175,7 @@ inline const char* partName (int p) noexcept
 
 inline const char* dialectId (int d) noexcept
 {
-    static const char* ids[] = { "ukmin", "long", "pop", "gaskin" };
+    static const char* ids[] = { "ukmin", "long", "pop", "jackin" };
     return ids[d];
 }
 
@@ -215,7 +215,7 @@ inline const StyleCopy& styleCopy (int d) noexcept
           "Stab\tclick\n"
           "Pad\tair\n"
           "Plays\tbass, stab, pluck, pad, vox, drums" },
-        { kStyleLabels[Gaskin],
+        { kStyleLabels[Jackin],
           "Groove\tswing 56.5%\n"
           "Notes\t2 sixteenths\n"
           "Bass\tround\n"

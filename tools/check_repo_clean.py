@@ -77,7 +77,7 @@ GENERATOR_BANNED_PATHS = {
     "tools/extract_corpus.py", "tools/build_phrase_bank.py",
 }
 GENERATOR_BANNED_TOKENS = [
-    "kPhrase", "kLongPhrase", "kGaskinPhrase", "kDeg", "kLongDeg", "kGaskDeg", "PhraseBankData", "VocabCells",
+    "kPhrase", "kLongPhrase", "kJackinPhrase", "kDeg", "kLongDeg", "kGaskDeg", "PhraseBankData", "VocabCells",
     "baseSlots", "deepBook", "bouncyBook", "jackinBook", "kPrefer0", "kPrefer1", "kPrefer2",
     "pushJackinVariationBack", "lockFromBook", "lockPhrase", "makeBassPhrase", "phrase_bank", "rolesFor", "assignSemi",
 ]

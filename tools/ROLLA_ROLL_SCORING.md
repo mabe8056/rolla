@@ -19,7 +19,7 @@
 ---
 ## 1. How to run
 ```
-python3 tools/score_rolls.py <dir_of_rolls> --style ukmin|long|pop|gaskin [--out DIR] [--bars 8] [--bpm 130] [--no-orig] [--hard-profile maestro|gr_v2]
+python3 tools/score_rolls.py <dir_of_rolls> --style ukmin|long|pop|jackin [--out DIR] [--bars 8] [--bpm 130] [--no-orig] [--hard-profile maestro|gr_v2]
 python3 tools/score_rolls.py --tally <out>/scores_<style>.csv     # after the judges fill in their columns
 ```
 - **Originality check needs references:** pass `--refs DIR` or set `ROLLA_REFS=DIR` (a private folder of reference MIDI, one sub-folder per generic ref id). Without it, pass `--no-orig`.
@@ -73,14 +73,14 @@ python3 tools/score_rolls.py --tally <out>/scores_<style>.csv     # after the ju
 | **Technical** | MIDI: notes past loop end, stuck notes | | none | CHK §4.1/4.4, DES rule 24 |
 | | WAV: tail into bar 1 | first 16th after loop end vs bar 1's first 16th | ≤ −20 dB relative, and ≤ −40 dBFS if bar 1 starts silent | CHK §4.1 |
 | | WAV: clipping, clicks | samples ≥ 0.999; step discontinuity > 10× local RMS of Δ and > 0.02 | none | validated on synthetic faults |
-| | WAV: duck depth (bass-only WAV) | < 150 Hz level just after each beat vs the beat's loudest 40 ms | lane ≥ 17 dB (Gaskin ≤ 10) | CTR A5, REV §8.12 (approximate proxy) |
+| | WAV: duck depth (bass-only WAV) | < 150 Hz level just after each beat vs the beat's loudest 40 ms | lane ≥ 17 dB (Jackin ≤ 10) | CTR A5, REV §8.12 (approximate proxy) |
 | **Lane fit** | 12 features, range membership | F1 off-kick · F2 top-2 + pcs · F3 length + long-note share · F4 density + run + e/and/a beats · F5 register · F6 loop repeat · F7 octaves · F8 stab on-beat/pcs/mode/signposts · F9 stab vs bass · F10 kick 4/4 + clap 2&4 · F11 hats offbeat/not 16ths/swing · F12 duck | **≥ 10 of 12** (≤ 2 misses among the measurable ones) | REV §8; never reference similarity |
 | **Ear (REQUIRED)** | `MELAK_KEEP` (Y/N), `composer_ear_note`, `ar_ear_note`, `judgeA_total_of_38`, `judgeB_total_of_38` | Composer + A&R listen to every auto-passing WAV | Y = "Melak would keep and play this" | CHK §1 taste table, GR §8 rubric |
 
 **Style profiles** (overrides of ukmin):
 - **long** (REF_D2 anchor): note median 1.8–8.0 (lane 1.8–4.0), notes per bar 1.0–7.5, long notes allowed.
 - **pop** (REF_B1 anchor): off-kick ≥ 85, median length 0.8–1.6 (lane 0.9–1.4).
-- **gaskin** (CTR D):
+- **jackin** (CTR D):
   - hard rules: off-kick ≥ 65; GR match@1 ≤ 0.20 (CALL_ANSWER_MISSING); stab on-beat ≤ 50; stab clash not checked; sounding ≤ 0.97; swing up to 60 with no SWING_90S;
   - own lane envelope: top-2 ≥ 55, pcs 2–5, length 1.5–2.6; loop = rep1 ≤ 0.10 + rep2 ≥ 0.70 + dotted-grid share ≥ 55% + b2 ≥ 10% of time; sustained stabs ≥ 8 sixteenths; duck ≤ 10 dB.
 
@@ -111,7 +111,7 @@ A roll FAILS only on these codes (default `--hard-profile maestro`):
 ## 4. Reason codes (engineer actions)
 | Code | Hard? | Trigger | Engineer action |
 |---|---|---|---|
-| OUT_OF_KEY | **HARD** | GR v2 H1. Tonic = whichever of the 2 most-sounding bass pcs fits the dialect scale best (bass time + stab note-ons). FAIL if bass time out of scale > 5%, or out-of-scale bass notes that are **not** chromatic neighbours of an in-scale note > 2% of bass time. Scales: ukmin/long/pop {1 b2 2 b3 4 5 b6 6 b7}, gaskin {1 b2 2 b3 4 5 b6 b7}. `out_of_key_why` says which | keep the bass in the dialect scale; chromatic notes only as passing neighbours |
+| OUT_OF_KEY | **HARD** | GR v2 H1. Tonic = whichever of the 2 most-sounding bass pcs fits the dialect scale best (bass time + stab note-ons). FAIL if bass time out of scale > 5%, or out-of-scale bass notes that are **not** chromatic neighbours of an in-scale note > 2% of bass time. Scales: ukmin/long/pop {1 b2 2 b3 4 5 b6 6 b7}, jackin {1 b2 2 b3 4 5 b6 b7}. `out_of_key_why` says which | keep the bass in the dialect scale; chromatic notes only as passing neighbours |
 | EMPTY_BAR | **HARD** | GR v2 H3: a bar with no bass onset and no sounding bass note (`empty_bars` lists them); NO_BASS also counts | every bar needs a bass event |
 | *(batch)* SOFT-RECURRENCE GATE | **HARD (batch)** (v2.1) | one soft code on > 40% of rolls (n ≥ 10); excludes informational codes, REF_FLAG, STAB_OUT_OF_KEY | the generator has a systematic bias: fix the named code at its source |
 | *(batch)* BATCH SKELETON GATE | **HARD (batch)** | GR v2 §4.2: same-skeleton pair = skel_sim ≥ 0.55 (duplicates count); batch FAILS if > 2 pairs or > 3 rolls involved. Shown in the report verdict and the `batch_skeleton_gate` CSV column | more distinct skeletons per batch |
@@ -137,8 +137,8 @@ A roll FAILS only on these codes (default `--hard-profile maestro`):
 | SCALE_RUN | soft [v1: hard] | > 5 same-direction steps in a row | contour templates, not scale walks (CM "theory-generic") |
 | LOOP_NO_REPEAT | soft [v1: hard] | GR match@2 < 0.50 and match@4 < 0.47 | build bars from a repeated A/B cell plan (GR §2 P1–P5) |
 | STATIC_LOOP | soft [v1: hard] | every bar identical (match@1 > 0.95, grid rep1 > 0.90 or 1 distinct bar) | apply 1–3 safe mutations per derived bar; bar-8 turnaround |
-| CALL_ANSWER_MISSING | soft [v1: hard (gaskin)] | GR match@1 > 0.20 | make bar B answer bar A (♭7→1 / ♭2→♭3) |
-| STAB_ON_BEAT | soft [v1: hard] | stab on-beat > 33% (gaskin > 50) | move stabs to e/and/a |
+| CALL_ANSWER_MISSING | soft [v1: hard (jackin)] | GR match@1 > 0.20 | make bar B answer bar A (♭7→1 / ♭2→♭3) |
+| STAB_ON_BEAT | soft [v1: hard] | stab on-beat > 33% (jackin > 50) | move stabs to e/and/a |
 | STAB_TOO_THICK | soft [v1: hard] | median > 4 pcs per hit | 1–3 note voicings (quartal 4 ok) |
 | STAB_CLASH | soft [v1: hard] | > 80% of stab hits on bass attacks | offset stabs; use the bass's rests (bonus) |
 | PIANO_OFFBEAT_CHORDS | soft [v1: hard] | ≥ 4-pc hits on ≥ 3 offbeats per bar in > half the bars | that's piano house: use dub stabs or a riff |
@@ -148,7 +148,7 @@ A roll FAILS only on these codes (default `--hard-profile maestro`):
 | BASS_REESE_LONG | soft [v1: hard (not long)] | ≥ 15% of notes ≥ 6/16 | shorter notes, or use the LONG dialect |
 | OFFBEAT_PUMP_ONLY | soft [v1: hard] | ≥ 75% of beats "and"-only with one pitch | add e/a attacks and a partner pitch |
 | HAT_16THS | soft [v1: hard] | > 10 closed hats per bar | offbeat hats; 16ths read tech-house |
-| SWING_90S | soft [v1: hard (not gaskin)] | hat or bass swing 59.5–62% | straight to light swing (≤ 59); 62–66 only as a REF_R6/2-step mode |
+| SWING_90S | soft [v1: hard (not jackin)] | hat or bass swing 59.5–62% | straight to light swing (≤ 59); 62–66 only as a REF_R6/2-step mode |
 | BUILD_FX_IN_LOOP | soft [v1: hard] | crash/riser/sweep/FX part or GM 49/52/55/57 in the loop | FX belong to arrangement, not the 8-bar drop loop |
 | LATIN_PERC_BED | soft [v1: hard] | conga/bongo/timbale/clave hits ≥ 1 per bar, or a part named so | drop the Latin bed in UK mode |
 | LANE_FIT_LOW | **HARD** | > 2 lane features out of range | read `lane_miss` (F1…F12) and fix those features |
@@ -211,7 +211,7 @@ All the numbers below are this scorer's measurements of the 13 UK + 2 JACKIN + 2
 | §4/§5 LONG sounding 0.75–0.90 | REF_D2 0.93/0.97 | fails the LONG anchor itself | ≤ 0.975 |
 | §3.1 npb UK_pool 4.38–8.75 | 3.94–8.62 (REF_R3 b137 3.94) | small | 3.9–8.7 lane |
 | §7.2 diversity mean onset Jaccard ≤ 0.35 | v4 mockup POP batch: mean 0.30 (passes GR) yet p90 0.54 and 16/20 rolls share a skeleton | GR's mean target misses the v4 problem | per-pair skeleton test (≥ 0.55 = same) |
-| AV02, AV04, AV06, AV08, AV09, AV14, Gaskin match@1 ≤ 0.20 | refs pass (positions 3–4; sd 0.66–2.33 / range 2–7; root ≤ 67.9; match@1 ≤ 0.75; JACKIN refs 0.008/0.161) | agree | adopted as-is |
+| AV02, AV04, AV06, AV08, AV09, AV14, Jackin match@1 ≤ 0.20 | refs pass (positions 3–4; sd 0.66–2.33 / range 2–7; root ≤ 67.9; match@1 ≤ 0.75; JACKIN refs 0.008/0.161) | agree | adopted as-is |
 
 ## 6. Per-style summary format (report header + this block in the hand-off)
 ```

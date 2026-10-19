@@ -206,7 +206,7 @@ inline const SampleSpec& specAt (const PresetBank& bank, int part, int index) no
     return bank.bass[0].sample;
 }
 
-// styles 0 fits every dialect. Otherwise bit 0 is UK MIN, then LONG, POP, GASKIN.
+// styles 0 fits every dialect. Otherwise bit 0 is UK MIN, then LONG, POP, JACKIN.
 inline bool styleFits (std::uint8_t styles, int dialect) noexcept
 {
     if (styles == 0 || dialect < 0 || dialect >= NumDialects)

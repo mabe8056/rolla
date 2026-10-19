@@ -41,7 +41,7 @@ struct PoolFilter
     int loop = -1;
     char pack[64] {};
     char category[32] {};
-    // -1 does not gate by style. 0..3 is UK MIN, LONG, POP, GASKIN.
+    // -1 does not gate by style. 0..3 is UK MIN, LONG, POP, JACKIN.
     int dialect = -1;
 };
 
@@ -57,7 +57,7 @@ struct SampleZone
 // Preset sample block. Paths are relative to the samples root, with '/' separators.
 // pool entries are what ROLL/SHUFFLE rotates. zones are key-mapped multisamples.
 // voiceFile is the drum kit map (kick, snare, clap, rim, tomLow, tomMid, hatC, hatO, ride, perc).
-// styles is a dialect mask: bit 0 UK MIN, 1 LONG, 2 POP, 3 GASKIN. 0 fits every dialect.
+// styles is a dialect mask: bit 0 UK MIN, 1 LONG, 2 POP, 3 JACKIN. 0 fits every dialect.
 struct SampleSpec
 {
     static constexpr int kPool = 8;

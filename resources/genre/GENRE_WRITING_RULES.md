@@ -12,7 +12,7 @@ palette. It stores **no phrases**: no note sequences, rhythm cells, motifs,
 n-grams above first order, per-source tables, source counts or names. Every
 roll is composed fresh from these numbers, and nothing is cached between rolls.
 
-Style keys: ROLLER = `ukmin`, DEEP = `long`, BOUNCY = `pop`, JACKIN = `gaskin`.
+Style keys: ROLLER = `ukmin`, DEEP = `long`, BOUNCY = `pop`, JACKIN = `jackin`.
 Slots are 0-15 in the JSON (0 = beat 1; kick steps 0/4/8/12).
 
 ## Changelog

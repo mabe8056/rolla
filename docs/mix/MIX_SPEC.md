@@ -64,23 +64,23 @@ Test: `tests/mix_check.py` with `tests/targets.json`. Results are in `tests/resu
 
 **Kick level vs the stem sum** (drop window, [M] `mixrel.py`):
 - Kick ST max = mix ST max −4.7 dB, median (−6.6…−3.6).
-- By style: UK MIN −4.9, LONG −4.7, POP −5.5, GASKIN −3.6.
+- By style: UK MIN −4.9, LONG −4.7, POP −5.5, JACKIN −3.6.
 - The refs are mastered: mix PLR 7.1–9.3.
 
-**Mix tilt (stem sum, 100 Hz–10 kHz).** UK MIN −1.64, LONG −1.64, POP −1.65, GASKIN −1.66 dB/oct.
+**Mix tilt (stem sum, 100 Hz–10 kHz).** UK MIN −1.64, LONG −1.64, POP −1.65, JACKIN −1.66 dB/oct.
 - Overall median −1.64 (−2.22…−1.18) [M].
 - So the whole-mix tilt is the same across styles. Styles differ in how they spread it across lanes (below).
 
-### 1.1 Per-style medians (UK MIN = REF_R5, REF_R4, REF_R2, REF_R1; LONG = REF_D2; POP = REF_B1 + REF_R3; GASKIN 90s = REF_J1/J2; REF_R6 is an outlier and is excluded from the style rows)
+### 1.1 Per-style medians (UK MIN = REF_R5, REF_R4, REF_R2, REF_R1; LONG = REF_D2; POP = REF_B1 + REF_R3; JACKIN 90s = REF_J1/J2; REF_R6 is an outlier and is excluded from the style rows)
 
 | Style | Bass re kick | Stab re kick | Clap re kick | Hats re kick | Perc re kick | Vox re kick | Stab crest | Stab S/M | Stab tilt dB/oct | Hats tilt | Vox tilt | Bass sub+low % | Kick crest |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | UK MIN | +0.2 (−3.9…+1.9) | −3.2 | −2.5 | −4.3 | −7.6 | −5.0 | 21.2 | −5.2 | −4.4 | +0.2 | −0.2 | 94.9 | 9.6 |
 | LONG | −0.1 | −8.6 | −2.0 | −1.9 | −8.4 | −3.2 | 27.3 | −3.2 | −5.2 | +0.9 | +2.7 | 93.3 | 10.4 |
 | POP | −1.8 | −0.5 | −3.5 | −4.5 | −10.7 | +0.3 | 19.0 | −4.6 | −4.4 | +1.7 | −1.8 | 93.0 | 9.4 |
-| GASKIN 90s | **−4.2** | −1.6 | −6.2 | −6.8 | −12.3 | absent | 16.8 | −9.4 | −5.5 | −1.6 | n/a | 99.0 | 7.5 |
+| JACKIN 90s | **−4.2** | −1.6 | −6.2 | −6.8 | −12.3 | absent | 16.8 | −9.4 | −5.5 | −1.6 | n/a | 99.0 | 7.5 |
 
-**The refs disagree on the low end.** Bass re kick ranges from +0.2 (UK MIN) to −4.2 (GASKIN), a 4.4 dB spread. Per the brief, it is **clamped** (§2.1).
+**The refs disagree on the low end.** Bass re kick ranges from +0.2 (UK MIN) to −4.2 (JACKIN), a 4.4 dB spread. Per the brief, it is **clamped** (§2.1).
 
 ---
 
@@ -97,13 +97,13 @@ Test: `tests/mix_check.py` with `tests/targets.json`. Results are in `tests/resu
    - −19.0 − 4.65 = −23.65, rounded to −23.7.
 3. **BASS = KICK −1.0 dB (−24.7 LUFS-S) in every style, ±0.5** [D clamp].
    - −1.0 is the median of the 4 style medians (+0.18, −0.13, −1.77, −4.24) = −0.95.
-   - This departs from the GASKIN ref by +3.2 dB and from UK MIN by −1.2 dB. Flagged as the clamp the brief asks for. **DECIDED (Maestro, 2026-10-17): keep the clamp in every style, GASKIN 90s included, so the bus chain needs no re-tuning between styles.**
+   - This departs from the JACKIN ref by +3.2 dB and from UK MIN by −1.2 dB. Flagged as the clamp the brief asks for. **DECIDED (Maestro, 2026-10-17): keep the clamp in every style, JACKIN 90s included, so the bus chain needs no re-tuning between styles.**
 4. **Kick and bass must not differ by more than 1 dB across styles** in ST max, sub+low energy and <120 Hz energy. Both must hold corr <120 Hz ≥ 0.99.
    - Bass is mono to ≥ 220 Hz [M: mono point ≥ 224 Hz on 9/9].
    - Kick and bass presets may not change level, sub EQ or mono processing per style. Style colour on kick/bass is limited to crest (compression) and >200 Hz content.
 5. **Style differences live in the TOP lanes** (STAB, PLUCK, CLAP, SNARE, RIM, HATS, RIDE, PERC, VOX, PAD).
    - Each top lane uses its style's measured level re kick.
-   - One **per-style TOP trim** then holds the sum constant: **UK MIN 0.0, LONG −0.3, POP −1.8, GASKIN +1.0 dB** [D, `make_targets.py`].
+   - One **per-style TOP trim** then holds the sum constant: **UK MIN 0.0, LONG −0.3, POP −1.8, JACKIN +1.0 dB** [D, `make_targets.py`].
    - HITS are pinned to bass −3 LU [A&R] and are not trimmed.
    - The predicted sum is identical across styles by construction; the render test (`styles` mode) verifies it.
 6. **Per-style output trim** (MAIN out): 0 dB by design. It exists only to absorb a residual measured on the style test renders, kept within ±1 dB. The summed-ST spread must be ≤ 1.0 LU, and each style must be within −19 ±0.5.
@@ -143,7 +143,7 @@ How the cells are derived:
 - **Width** = style S/M median [M]; tested at ±2.5 dB.
 - **Saturation** is [N]. Its direction comes from measured proxies: bass >200 Hz share and stab centroid.
 
-| Lane | UK MIN | LONG | POP | GASKIN 90s |
+| Lane | UK MIN | LONG | POP | JACKIN 90s |
 |---|---|---|---|---|
 | KICK | 0 · 3 · soft-clip +3 dB · n/a · ≤ −28 | 0 · 2 · +3 · n/a · ≤ −31 | 0 · 3 · +3 · n/a · ≤ −38 | 0 · **5** (crest 7.5 vs 9.6) · +5 dB · n/a · ≤ −35 |
 | BASS | −1.0 · 4 · tape +4 dB / 50 % · n/a · ≤ −27 | −1.0 · 4 · +4 / 50 % · n/a · ≤ −44 | −1.0 · 5 (crest 11.8 vs 13.2) · +5 / 50 % · n/a · ≤ −35 | −1.0 · 6 (11.0 vs 13.2) · +2 / 20 % (sub+low 99.0 %) · n/a · ≤ −34 |
@@ -158,7 +158,7 @@ How the cells are derived:
 
 **Default lanes per style:**
 - UK MIN / LONG / POP: KICK, BASS, STAB, CLAP, HATS, PERC, VOX.
-- GASKIN: the same, minus VOX (absent in the ref) and plus HITS.
+- JACKIN: the same, minus VOX (absent in the ref) and plus HITS.
 
 ---
 
@@ -174,11 +174,11 @@ Compressor conventions:
 | Stage | Setting | Ref median (range) / basis |
 |---|---|---|
 | HPF | 28 Hz, 24 dB/oct | [D] about half of kick f0 50.1–55.9 Hz [M-melak IQR]; keeps f0 |
-| LPF | none on the body. Click level per PRESET_SPEC (UK −15 dB, GASKIN −8 dB re kick peak) | [M-melak] |
+| LPF | none on the body. Click level per PRESET_SPEC (UK −15 dB, JACKIN −8 dB re kick peak) | [M-melak] |
 | EQ 1 | +1.5 dB @ 55 Hz, Q 1.0 | [D] f0 A1 default; centroid target 80 Hz (75–86) [M] |
 | EQ 2 | −2 dB @ 250 Hz, Q 1.4 | [D] 200–800 Hz share ≤ 2 % (REF_R5 0.5 %) [M] |
-| Comp | thr −18 dBFS, 4:1, attack **15 ms**, release **160 ms**, knee 6 dB, target GR 3 dB (GASKIN 5) | attack: refs keep the body at +50 ms within 2.5 dB (−9.3…+0.2) of the hit peak [M], so the first 15 ms pass; release = decay to −20 dB, 166 ms (85–261) [M]; crest window 7.5–10.5 [M]; ratio/knee/GR [N] |
-| Sat | soft-clip (tanh), drive +3 dB (GASKIN +5), mix 100 % | [N]. Test: crest 5.5–14.5 dB, PLR 9.1–14.7 |
+| Comp | thr −18 dBFS, 4:1, attack **15 ms**, release **160 ms**, knee 6 dB, target GR 3 dB (JACKIN 5) | attack: refs keep the body at +50 ms within 2.5 dB (−9.3…+0.2) of the hit peak [M], so the first 15 ms pass; release = decay to −20 dB, 166 ms (85–261) [M]; crest window 7.5–10.5 [M]; ratio/knee/GR [N] |
+| Sat | soft-clip (tanh), drive +3 dB (JACKIN +5), mix 100 % | [N]. Test: crest 5.5–14.5 dB, PLR 9.1–14.7 |
 | Width | mono (sum to M below 141 Hz; S/M ≤ −19.2) | [M] mono point 141 Hz to ≥ 1 kHz |
 | Trim | → −23.7 LUFS-S | §2.1 |
 
@@ -190,8 +190,8 @@ Compressor conventions:
 | LPF | SUB/ROUND: 2.5 kHz, 12 dB/oct | [M] 800 Hz–5 kHz share ≤ 1.4 % ([CTR] ≤ 1.4 % above 400 Hz; REF_R5 0.09 %) |
 | EQ 1 | +1.5 dB @ 90 Hz, Q 0.9 | [M] centroid 89 Hz (77–102). The ROLLA render measures 62 Hz |
 | EQ 2 | low shelf −2 dB @ 45 Hz | [M/A&R] the render has 72.6 % below 60 Hz; A&R target about 50 %, REF_R5 53.4 % |
-| Comp | thr −20 dBFS, 4:1, attack **8 ms**, release **150 ms**, knee 6 dB, target GR 4 dB (POP 5, GASKIN 6) | attack 7.5 ms (0–23) [M]; release = decay to −20 dB, 157 ms (52–251) [M], inside [CTR] recovery 102–228; crest 12.5 (10.5–14.2); dyn range 22.9 [M]; GR [N] |
-| Sat | tape, drive +4 dB, mix 50 % (GASKIN +2 / 20 %) | [N]. Bounded by the test: mid ≤ 1.4 %, high ≤ 0.5 %; GASKIN ref sub+low 99.0 % vs UK 94.9 % [M] |
+| Comp | thr −20 dBFS, 4:1, attack **8 ms**, release **150 ms**, knee 6 dB, target GR 4 dB (POP 5, JACKIN 6) | attack 7.5 ms (0–23) [M]; release = decay to −20 dB, 157 ms (52–251) [M], inside [CTR] recovery 102–228; crest 12.5 (10.5–14.2); dyn range 22.9 [M]; GR [N] |
+| Sat | tape, drive +4 dB, mix 50 % (JACKIN +2 / 20 %) | [N]. Bounded by the test: mid ≤ 1.4 %, high ≤ 0.5 %; JACKIN ref sub+low 99.0 % vs UK 94.9 % [M] |
 | Width | mono below 220 Hz (hard), S/M ≤ −23.8 full band | [M] mono point ≥ 224 Hz on 9/9; corr ≥ 0.992 |
 | Trim | → −24.7 LUFS-S | §2.1 |
 
@@ -202,7 +202,7 @@ Compressor conventions:
 | SUB / ROUND (B1/B3) | as above | n/a |
 | REESE (sub layer + reese layer) | sub layer = BASS chain. Reese layer: HPF **220 Hz** 24 dB/oct; mono below 150 Hz (corr ≥ 0.98); comp 3:1, attack 10 ms, release 120 ms (1/16 at 126 BPM ≈ 119 ms); sat drive +6 dB / 40 %. Lane test: centroid 77–160 Hz, mid ≤ 6 % | [A&R] reese HPF 110→220, hoover low end mono; the rest [N] |
 | CLICK (gate DUCK) | release 100 ms | [M] POP bass decay to −20 dB = 96 ms |
-| GASKIN dialect | GR 6 dB, sat +2 dB / 20 %, release 160 ms | [M] REF_J1/J2 crest 11.0, dyn range 20.1, decay 163 ms |
+| JACKIN dialect | GR 6 dB, sat +2 dB / 20 %, release 160 ms | [M] REF_J1/J2 crest 11.0, dyn range 20.1, decay 163 ms |
 | LONG dialect | release 210 ms | [M] REF_D2 decay 214.5 ms |
 
 ### STAB (and PLUCK)
@@ -213,7 +213,7 @@ Compressor conventions:
 | LPF | 10 kHz, 12 dB/oct | [M] "other" tilt −5.0 dB/oct (−7.9…−0.7) |
 | EQ 1 | +1.5 dB @ 1.2 kHz, Q 0.8 | [M] centroid 674 Hz (432–1204); the ROLLA stab render measures 581 Hz; [A&R] stab centroid about 1–1.5 kHz |
 | EQ 2 | −1.5 dB @ 300 Hz, Q 1.0 | [D] the render has 84.7 % in 200–800 Hz |
-| Comp | thr −22 dBFS, 3:1, attack **12 ms**, release **170 ms**, knee 6 dB, target GR 3 (LONG 0, POP 5, GASKIN 7) | attack 12.8 (7–28) [M]; release = decay to −20 dB, 168 (98–254) [M]; crest 20.6 (16.7–27.3) [M] |
+| Comp | thr −22 dBFS, 3:1, attack **12 ms**, release **170 ms**, knee 6 dB, target GR 3 (LONG 0, POP 5, JACKIN 7) | attack 12.8 (7–28) [M]; release = decay to −20 dB, 168 (98–254) [M]; crest 20.6 (16.7–27.3) [M] |
 | Sat | tube (asymmetric), +3 dB / 30 % | [N] |
 | Width | S/M −5.9 (−9.4…−0.8), corr 0.59; mono below 120 Hz | [M]. [A&R] corr about 0.55 |
 | Trim | → §2.2/2.3 | n/a |
@@ -224,7 +224,7 @@ Compressor conventions:
 |---|---|---|
 | DUB / LONG stab | release 110 ms | [M] REF_D2 decay 106 ms |
 | CHORD / UK stab | release 180 ms | [M] REF_R4 180.5 ms, REF_R6 180 ms |
-| GASKIN rave stab | release 250 ms, GR 7 | [M] REF_J1/J2 decay 254 ms, crest 16.8, dyn range 15.0 |
+| JACKIN rave stab | release 250 ms, GR 7 | [M] REF_J1/J2 decay 254 ms, crest 16.8, dyn range 15.0 |
 | POP / CLICK stab | release 125 ms, GR 5 | [M] POP decay 126 ms, crest 19.0 |
 | [A&R] tail rule | −10 dB at about 850 ms | Applies to the long chord stab |
 
@@ -234,10 +234,10 @@ PLUCK uses the STAB chain with release 110 ms [M: shortest "other" decay group].
 
 | Voice | HPF / LPF | EQ | Comp (thr / ratio / attack / release / knee / GR) | Sat | Width | Basis |
 |---|---|---|---|---|---|---|
-| CLAP | 200 Hz 24 dB/oct; LPF 14 kHz 12 dB/oct | +2 dB @ 1.3 kHz Q 1.2 (GASKIN 1.5 kHz); −2 dB @ 400 Hz Q 1.5 | −20 dBFS / 4:1 / **3 ms** / **60 ms** / 3 dB / 4 | soft-clip +2 dB | S/M −10.6 | attack 2.3 (0–6), decay 58 (31–167) [M]; spectral peak 1195 / 1594 [M-melak]; HPF [M] <200 Hz = 0.0 % |
+| CLAP | 200 Hz 24 dB/oct; LPF 14 kHz 12 dB/oct | +2 dB @ 1.3 kHz Q 1.2 (JACKIN 1.5 kHz); −2 dB @ 400 Hz Q 1.5 | −20 dBFS / 4:1 / **3 ms** / **60 ms** / 3 dB / 4 | soft-clip +2 dB | S/M −10.6 | attack 2.3 (0–6), decay 58 (31–167) [M]; spectral peak 1195 / 1594 [M-melak]; HPF [M] <200 Hz = 0.0 % |
 | SNARE | 150 Hz 24; LPF 14 kHz | +2 dB @ 200 Hz Q 1.2 | −20 / 4:1 / 3 / 80 / 3 / 4 | soft-clip +2 | as clap | [N] |
 | RIM | 300 Hz 24 | +2 dB @ 1760 Hz Q 2 | −22 / 3:1 / 2 / **150** / 3 / 2 | none | mono-ish | [M-ref] ghost 1850 Hz, −20 dB @ 148 ms |
-| CH | 2 kHz 24 (bank HP) | high shelf +1.5 dB @ 10 kHz; −2 dB @ 4 kHz Q 2 | −24 / 3:1 / **2 ms** / **45 ms** / 3 / 2 | none (GASKIN tape +2 / 20 %) | S/M −8.2 | attack 1.5 (0–5.5), decay 44 (24–149) [M]; centroid 8726 (8091–9459) [M] |
+| CH | 2 kHz 24 (bank HP) | high shelf +1.5 dB @ 10 kHz; −2 dB @ 4 kHz Q 2 | −24 / 3:1 / **2 ms** / **45 ms** / 3 / 2 | none (JACKIN tape +2 / 20 %) | S/M −8.2 | attack 1.5 (0–5.5), decay 44 (24–149) [M]; centroid 8726 (8091–9459) [M] |
 | OH | 2 kHz 24 | as CH | −24 / 3:1 / **2 ms** / **145 ms** / 3 / 2 | as CH | S/M −8.2 | attack 1.0 (0–8.5), decay 144 (62–248) [M] (2 ms floor [N]) |
 | RIDE | 2 kHz 24 | high shelf +1 dB @ 8 kHz | −24 / 2:1 / 2 / **175** / 3 / 1 | none | S/M −8.2 | [M-melak] ride −20 dB @ 174 ms |
 | PERC | 250 Hz 24; LPF 12 kHz | +1.5 dB @ 2 kHz Q 1 | −22 / 3:1 / 3 / **75** / 3 / 2 | none | S/M −15.3 | centroid 1952 (1024–2937) [M LOW]; [M-melak] perc −20 dB @ 73 ms; attack [N] |
@@ -305,7 +305,7 @@ PLUCK uses the STAB chain with release 110 ms [M: shortest "other" decay group].
 Run with the scratch venv, or with any Python that has numpy, scipy, soundfile and pyloudnorm:
 
 ```
-mix_check.py render <wav> --lane LANE [--voice VOICE] [--style UKMIN|LONG|POP|GASKIN] [--kind loop|oneshot] [--json out.json]
+mix_check.py render <wav> --lane LANE [--voice VOICE] [--style UKMIN|LONG|POP|JACKIN] [--kind loop|oneshot] [--json out.json]
 mix_check.py sample <wav> --lane LANE [--voice VOICE]      # prepped one-shot: DC, lead silence, tail, TP, normalisation
 mix_check.py styles <dir>    # <dir>/<STYLE>/KICK.wav, BASS.wav, SUM.wav (+ optional STAB.wav, VOX.wav, DRUMS_OH.wav …)
 mix_check.py scan   <dir>    # render-check every wav, lane guessed from the path
@@ -314,7 +314,7 @@ mix_check.py stimulus <out.wav> [--seconds 8]                     # synthetic sw
 mix_check.py switch <wav> --switch-at S [--ramp-ms 50] [--dialect FROM>TO]   # dialect-switch click / gain-jump test (§9.3)
 mix_check.py combos [<dir>] [--dialect D] [--trim-table presets/main_sum_trim.json] [--json out.json]
 #   verify the MAIN auto-trim table (§9.4); with <dir>, also gate <dir>/<D>/COMBO_<mask>.wav renders (SUM gate, any lane set)
-# --dialect is an alias of --style: UKMIN | LONG | POP | GASKIN (also accepts "UK MIN", UK_MIN, "GASKIN 90s")
+# --dialect is an alias of --style: UKMIN | LONG | POP | JACKIN (also accepts "UK MIN", UK_MIN, "JACKIN 90s")
 python3 validate_profiles.py   # mix_profiles.json parses, equals the block embedded in §8, and matches targets.json and the §2.2/§2.3/§3 tables
 ```
 
@@ -422,13 +422,13 @@ The 3 files in `ar-backup/rolla_mockup_v4_received/` are byte-identical to `mock
 | …/stem_pad.wav | PAD | −26.3 | −14.8 | 6.4 dB hot; TP |
 | …/stem_vox.wav | VOX | −21.1 | −10.0 | 7.6 dB hot; S/M −28.8 (mono); centroid 659 < 759; crest 13.4 < 15.0 |
 | mockup_v4/demo_vox_cuts.wav | VOX | −19.2 | −5.2 | 9.5 dB hot; S/M −41.4 (mono) |
-| mockup_v4/demo_90s_hits.wav | HITS (GASKIN) | −18.7 | −0.6 | 9.0 dB hot; TP; corr <120 0.89 < 0.98 |
-| stem_hit0 … hit7 | HITS (GASKIN) | −17.2…−24.6 | −7.1…−0.5 | all hot vs −27.7 ±1; corr <120 0.80 / 0.979 / 0.97 (hit2/4/5); S/M too narrow on hit1/5/6/7 |
+| mockup_v4/demo_90s_hits.wav | HITS (JACKIN) | −18.7 | −0.6 | 9.0 dB hot; TP; corr <120 0.89 < 0.98 |
+| stem_hit0 … hit7 | HITS (JACKIN) | −17.2…−24.6 | −7.1…−0.5 | all hot vs −27.7 ±1; corr <120 0.80 / 0.979 / 0.97 (hit2/4/5); S/M too narrow on hit1/5/6/7 |
 | leaky_mute/stem_bass.wav | BASS | −18.4 | −2.4 | 6.3 dB hot; TP; centroid 67 Hz < 77 |
 | leaky_mute/stem_stab.wav | STAB | −22.5 | −3.1 | 4.3 dB hot; TP |
 | leaky_mute/stem_pad.wav | PAD | −26.1 | −11.5 | 6.6 dB hot; TP |
 | leaky_mute/stem_vox.wav | VOX | −21.6 | −8.3 | 7.1 dB hot; centroid 662 < 759 |
-| leaky_mute/stem_hits.wav | HITS (GASKIN) | −18.1 | −2.9 | 9.6 dB hot; TP |
+| leaky_mute/stem_hits.wav | HITS (JACKIN) | −18.1 | −2.9 | 9.6 dB hot; TP |
 
 **leaky_mute vs the earlier stems** (same length, 17.77 s). These are sample-aligned differences, a measurement only. The residual (leaky − earlier) sits below each earlier stem's RMS by: bass −20.6 dB, stab −9.4 dB, pad −7.4 dB, vox −9.3 dB. The waveform correlation is 0.996 / 0.947 / 0.914 / 0.946. The leaky stems therefore carry extra material at about −7…−21 dB re the lane, which fits a mute that leaks. **The §5.1 mute test confirms the leak (§6.4).** The leaky_mute stab and vox pass S/M where the earlier ones failed, so the leak adds width.
 
@@ -496,9 +496,9 @@ All 10 pass the click, DC and lead checks: last sample ≤ −165 dBFS, last 10 
 - **Saturation type and drive are [N].** No reference measurement isolates harmonics. The measured guards are bass mid/high share and centroid/tilt windows.
 - **Pre-master assumption.** The refs are mastered stems (mix PLR 7.1–9.3); ROLLA output is pre-master. That is why PLR and crest windows allow +4 dB above the ref max.
 - **The "other" stem mixes stab, pad and lead,** so STAB/PLUCK levels are a combined budget.
-- **Clamp: DECIDED (Maestro, 2026-10-17).** GASKIN bass sits 3.2 dB louder vs kick than its ref; kept at kick −1 dB in every style so the bus chain behaves the same across styles.
+- **Clamp: DECIDED (Maestro, 2026-10-17).** JACKIN bass sits 3.2 dB louder vs kick than its ref; kept at kick −1 dB in every style so the bus chain behaves the same across styles.
 - **The PRESET_SPEC absolute anchors conflict with −6 dBTP summed (§2.2).** Maestro should re-target the PRESET_SPEC §5 trims.
-- **E21 gate: DECIDED (Maestro, 2026-10-17), option (a).** ±0.5 for ≥ 3 lanes, −20.5…−18.5 for 1–2 (drums-only treated as sparse), −5 dBTP cap everywhere, no sum limiter. 20 of 256 combos are still predicted to miss, by 0.03–0.18 LU: 16 in LONG, 2 in POP, 2 in GASKIN (§9.4). These are open until real COMBO renders exist; the fix is the set's PLR, not the trim.
+- **E21 gate: DECIDED (Maestro, 2026-10-17), option (a).** ±0.5 for ≥ 3 lanes, −20.5…−18.5 for 1–2 (drums-only treated as sparse), −5 dBTP cap everywhere, no sum limiter. 20 of 256 combos are still predicted to miss, by 0.03–0.18 LU: 16 in LONG, 2 in POP, 2 in JACKIN (§9.4). These are open until real COMBO renders exist; the fix is the set's PLR, not the trim.
 - **Mute leak (P0).** The existing leaky_mute renders fail by about 50 dB (§6.4). The engine team must fix it and deliver the §5.1 render set.
 
 ## 8. `mix_profiles.json` (machine-readable dialect profiles)
@@ -507,7 +507,7 @@ All 10 pass the click, DC and lead checks: last sample ≤ −165 dBFS, last 10 
 - Generated by `mixeng-scratch/tools/make_profiles.py` from `tests/targets.json` and the reference data. Do not hand-edit it; regenerate it.
 - Validated by `tests/validate_profiles.py`.
 
-**Shape:** `dialects.<UKMIN|LONG|POP|GASKIN>`
+**Shape:** `dialects.<UKMIN|LONG|POP|JACKIN>`
 - `.output_trim_db`, `.top_trim_db`, `.default_lanes`
 - `.lanes.<BASS|STAB|PLUCK|HITS|PAD|VOX>` → parameters
 - `.lanes.DRUMS.voices.<KICK|CLAP|SNARE|RIM|CH|OH|RIDE|PERC>` → parameters
@@ -3242,7 +3242,7 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
     }
    }
   },
-  "GASKIN": {
+  "JACKIN": {
    "output_trim_db": 0.0,
    "top_trim_db": 1.0,
    "default_lanes": [
@@ -4184,7 +4184,7 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
     "comp.release_ms": 180,
     "src": "M REF_R4 180.5 / REF_R6 180"
    },
-   "STAB:GASKIN_RAVE": {
+   "STAB:JACKIN_RAVE": {
     "comp.release_ms": 250,
     "comp.target_gr_db": 7,
     "src": "M REF_J1/J2 decay 254, crest 16.8"
@@ -4234,7 +4234,7 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
   },
   "equal_power_law": "g_old=cos(theta), g_new=sin(theta), theta 0..pi/2 raised-cosine, output /= sqrt(1 + 2*rho*sin(theta)*cos(theta)); rho = correlation of the two paths over the last 50 ms (rho~1 for dry vs saturated -> behaves like equal-gain; rho~0 -> plain equal-power)",
   "sources": {
-   "50 ms": "D: settles inside one 1/16 at 126 BPM (119 ms); peak slope pi/2 x 8.3 dB (largest lane-offset change, STAB LONG->GASKIN) / 50 ms is a ramp, not a step (self-test PASS)",
+   "50 ms": "D: settles inside one 1/16 at 126 BPM (119 ms); peak slope pi/2 x 8.3 dB (largest lane-offset change, STAB LONG->JACKIN) / 50 ms is a ramp, not a step (self-test PASS)",
    "120 ms": "D: about 1/16 at 126 BPM and inside the measured comp release range (45-250 ms)",
    "80 ms": "N"
   },
@@ -4346,7 +4346,7 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
 ```
 
 ### 8.1 Validation result
-`python3 tests/validate_profiles.py` → **pass = true, 328 checks, 0 fails** (17 Oct 2026, about 1:14 PM ET, schema 1.2.0). The checks now include the E21 option (a) gate (profiles vs targets), the trim table's default-mask zero, the P0 mute-leak contract, and the §5.1 / §9.4 text. The first run on 17 Oct (311 checks) caught 2 mismatches, both since fixed: a GASKIN PERC rounding difference (0.1 LU) and a §2.3 VOX LONG tilt-setting typo (+2.9 → +2.8).
+`python3 tests/validate_profiles.py` → **pass = true, 328 checks, 0 fails** (17 Oct 2026, about 1:14 PM ET, schema 1.2.0). The checks now include the E21 option (a) gate (profiles vs targets), the trim table's default-mask zero, the P0 mute-leak contract, and the §5.1 / §9.4 text. The first run on 17 Oct (311 checks) caught 2 mismatches, both since fixed: a JACKIN PERC rounding difference (0.1 LU) and a §2.3 VOX LONG tilt-setting typo (+2.9 → +2.8).
 
 ## 9. Preset override layering and dialect-switch crossfade
 
@@ -4369,13 +4369,13 @@ Lanes are **fully expanded** per dialect, so the engine never has to resolve inh
 1. Recompute `effective()` with the new dialect, keeping the same preset.
 2. Ramp every changed value per §9.2.
 
-The preset therefore stays on top of whichever dialect is active. Example: `STAB:GASKIN_RAVE` keeps release 250 ms and GR 7 on any dialect, while its level follows the dialect's STAB offset.
+The preset therefore stays on top of whichever dialect is active. Example: `STAB:JACKIN_RAVE` keeps release 250 ms and GR 7 on any dialect, while its level follows the dialect's STAB offset.
 
 ### 9.2 Crossfade on dialect switch (no instantaneous coefficient swaps)
 
 | Parameter group | Ramp | Curve / method | Source |
 |---|---|---|---|
-| Gains: `output_trim_db`, `top_trim_db`, `lufs_offset_vs_kick_db`, `eq.gain_db`, `click_db_re_kick` | **50 ms** | raised-cosine, linear in dB | [D] settles inside one 1/16 at 126 BPM (119 ms). The largest per-lane jump (STAB LONG −8.9 → GASKIN −0.6, 8.3 dB) is still a ramp; the self-test passes |
+| Gains: `output_trim_db`, `top_trim_db`, `lufs_offset_vs_kick_db`, `eq.gain_db`, `click_db_re_kick` | **50 ms** | raised-cosine, linear in dB | [D] settles inside one 1/16 at 126 BPM (119 ms). The largest per-lane jump (STAB LONG −8.9 → JACKIN −0.6, 8.3 dB) is still a ramp; the self-test passes |
 | Filter / EQ frequencies (`hpf/lpf/eq.freq_hz`) | **50 ms** | linear in log2 f (exponential in Hz). **TPT/SVF topology**, cutoff recomputed every sample (or per 16-sample block with per-sample coefficient interpolation). DF1/DF2 biquads may not be modulated | [D] self-test: an SVF log-sweep shows no click; a biquad or SVF hard swap clicks |
 | Q | 50 ms | linear in ln Q | [N] |
 | Tilt, width S/M | 50 ms | linear | [N] |
@@ -4427,13 +4427,13 @@ Run it for every lane/voice × every dialect pair, both directions. Also run it 
 
 **What it is.** A fixed trim at the MAIN output, looked up from `presets/main_sum_trim.json` (`dialects.<D>.by_mask.<mask>.trim_db`).
 - The key is dialect × the 6-lane active mask. The bit order is BASS, STAB, PLUCK, HITS, PAD, VOX, which gives 64 entries per dialect. Drums are always on.
-- The trim is **0 dB at each dialect's default set**: UKMIN / LONG / POP use BASS+STAB+VOX (mask 35), and GASKIN uses BASS+STAB+HITS (mask 11).
+- The trim is **0 dB at each dialect's default set**: UKMIN / LONG / POP use BASS+STAB+VOX (mask 35), and JACKIN uses BASS+STAB+HITS (mask 11).
 - The table is generated from `mix_profiles.json` `st_target_lufs`: trim = model(default) − model(active), with a power-sum of the lane targets plus the per-style TOP trims. When STAB and PLUCK are both on, each is −3 dB.
 - The profile pointer is `mix_profiles.json` → `main_auto_trim`.
 
 **Layering.** `MAIN out = Σ lanes → dialect output_trim_db → E21 trim → (limiter, GR must stay 0)`.
 - `output_trim_db` alone lands the default set at −19.0 from renders. E21 adds 0 there, so nothing is counted twice.
-- The table's `default_model_residual_db` field (PRESET_SPEC v1.3c; UKMIN −0.04, LONG +0.33, POP −0.35, GASKIN −0.51) is the model's residual. It is informational and **never applied** by the engine.
+- The table's `default_model_residual_db` field (PRESET_SPEC v1.3c; UKMIN −0.04, LONG +0.33, POP −0.35, JACKIN −0.51) is the model's residual. It is informational and **never applied** by the engine.
 - E21 moves every lane equally, so the kick/bass invariants (§2.1, including the DECIDED clamp) and the lane balance are untouched.
 
 **Timing.**
@@ -4461,7 +4461,7 @@ Run it for every lane/voice × every dialect pair, both directions. Also run it 
 | UKMIN | 32 | **0** | none |
 | LONG | 32 | **16** | the 3–5-lane sets with STAB/PLUCK/HITS/PAD and no BASS: 5 sets at −19.53 (TP_pre −4.47) and 11 sets with VOX at −19.58 (TP_pre −4.42), vs ≥ −19.5 |
 | POP | 19 | **2** | drums-only −20.68, VOX alone −20.54, vs ≥ −20.5 |
-| GASKIN | 4 | **2** | drums-only −20.58, VOX alone −20.57, vs ≥ −20.5 |
+| JACKIN | 4 | **2** | drums-only −20.58, VOX alone −20.57, vs ≥ −20.5 |
 
 **Total: 20 of 256 combos fail; under the old ±0.5 gate it was 40.** Every remaining fail misses by 0.03–0.18 LU. Each one is a peak-limited set: its ST is set by the −5 dBTP cap minus the set's PLR, and the trim cannot fix that. A fix has to lower the PLR of those sets (for example, transient control on the top lanes in LONG) or come from real renders that show a lower PLR than the reference stems.
 **Caveat:** the PLRs come from mastered reference stems. These are estimates, and real `COMBO_*.wav` renders decide (`mix_check.py combos <dir>` gates them with the lane-count window).

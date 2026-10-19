@@ -14,7 +14,7 @@ environment variable: one sub-folder per generic ref id (REF_R1, REF_D1, ref2, .
 originality check is skipped (same as --no-orig).
 
 Usage:
-  python3 score_rolls.py <dir_of_rolls> --style ukmin|long|pop|gaskin [--out DIR] [--bars N] [--bpm 130]
+  python3 score_rolls.py <dir_of_rolls> --style ukmin|long|pop|jackin [--out DIR] [--bars N] [--bpm 130]
                          [--refs DIR | env ROLLA_REFS] [--no-orig] [--exclude-self]
                          [--hard-profile maestro|gr_v2]
 
@@ -68,7 +68,7 @@ LANE_REFS = {
                    spectral_refs=["REF_D1", "REF_D2", "REF_R2", "ref2"],
                    pending=[]),
     "pop":    dict(name="BOUNCY", modes={"bounce": ["REF_B1"], "pulse": ["REF_B2"]}, pending=[]),
-    "gaskin": dict(name="JACKIN", refs=["REF_J1", "REF_J2", "ref1"],
+    "jackin": dict(name="JACKIN", refs=["REF_J1", "REF_J2", "ref1"],
                    support=["REF_J3"],   # radio edit; 4-bar sparse loop: groove/production support, not in bands
                    pending=[]),
 }
@@ -115,7 +115,7 @@ STYLES = {
     "ukmin":  dict(BASE),
     "long":   dict(BASE, len_med=(1.8, 8.0), notes_bar=(1.0, 7.5), allow_long=True),            # REF_D2 anchor: DESIGN §4 LONG 2-8/16; measured 6.9-7.1 attacks/bar
     "pop":    dict(BASE, offkick_min=65.0, len_med=(0.8, 1.6)),        # GR v2 H2: on-kick > 35% fails in every style                # REF_B1 98% off kick, 1.12/16
-    "gaskin": dict(BASE, offkick_min=65.0, gr_match1_max=0.20, swing_mode=True, len_med=(1.5, 2.6), stab_onbeat_max=50.0, stab_clash_max=100.0,
+    "jackin": dict(BASE, offkick_min=65.0, gr_match1_max=0.20, swing_mode=True, len_med=(1.5, 2.6), stab_onbeat_max=50.0, stab_clash_max=100.0,
                    sounding_max=0.97, kick4_min=0.85, swing_max=60.0, top2_min=45.0),   # CTR D1-D6; v2.2 top2 45 (ref1 49.3, REF_J1/J2 56-66)
 }
 STYLES["long"]["root_band"] = (40.0, 70.0)
@@ -125,8 +125,8 @@ STYLES["pop_pulse"] = dict(BASE, offkick_min=65.0, len_med=(1.8, 3.2), static_ma
 # v2.2 DEEP 'dark' flavour (REF_D1 + REF_D2): deep through darkness and a constant pad, not sparseness.
 # Busier, shorter bass allowed (REF_D1 8.0-8.6 attacks/bar, median 1.68/16); pad re-attacks may sit on the beat (REF_D1 52-57%).
 STYLES["long_dark"] = dict(STYLES["long"], len_med=(1.4, 8.0), notes_bar=(1.0, 9.5), stab_onbeat_max=60.0)
-STYLE_CHOICES = ["gaskin", "long", "pop", "ukmin"]          # *_pulse / *_dark are modes, chosen per roll inside score_dir
-# A&R review §8 lane-fit envelopes (UK reference ranges; LONG/POP = their anchors; GASKIN its own). Range membership,
+STYLE_CHOICES = ["jackin", "long", "pop", "ukmin"]          # *_pulse / *_dark are modes, chosen per roll inside score_dir
+# A&R review §8 lane-fit envelopes (UK reference ranges; LONG/POP = their anchors; JACKIN its own). Range membership,
 # never similarity to a reference. A roll fits the lane when <= 2 of the measurable features miss (">= 10 of 12").
 LANE_UK = dict(offkick=(70, 100), top2=58, pcs=(2, 6), len=(1.0, 2.4), long6=8, npb=(3.9, 8.7), run=7, eaa=20,
                reg=(25, 36), rep=0.50, rep1=0.70, oct_ok=((0, 8.5), (15, 26)), stab_beat=30, signpost=50,
@@ -137,13 +137,13 @@ LANE_UK = dict(offkick=(70, 100), top2=58, pcs=(2, 6), len=(1.0, 2.4), long6=8, 
 LANE = {"ukmin": LANE_UK,
         "long": dict(LANE_UK, len=(1.8, 4.0)),                                   # REF_D2 2.25-2.31 (+DESIGN LONG 2-8)
         "pop": dict(LANE_UK, offkick=(85, 100), len=(0.9, 1.4)),                 # REF_B1 97.7-98.8 off kick, 1.07-1.11
-        "gaskin": dict(LANE_UK, offkick=(65, 100), top2=45, pcs=(2, 5), len=(1.5, 2.6), dotted=55, rep1=0.10, rep2g=0.60,
+        "jackin": dict(LANE_UK, offkick=(65, 100), top2=45, pcs=(2, 5), len=(1.5, 2.6), dotted=55, rep1=0.10, rep2g=0.60,
                        b2=10, stab_sus=6, duck=(3, 36), hat_sw=(50, 57), stab_beat=50, clash=100)}
 HEAVY_SWING_BAND = (50, 68)   # --swing-heavy (soft, optional 90s switch): JACKIN hats may swing up to 68%
 # v2.2: JACKIN = REF_J2 + REF_J1 (lead) + ref1; REF_J3 = support (not in bands).
 # Hat swing 50-57 (Transcriber hat swing 50.6-55.3 across the JACKIN refs; our MIDI 51.8-53.6), --swing-heavy widens to 50-68.
 # top2 >= 45 (ref1 49.3), rep2 >= 0.60 (REF_J1 0.62-0.66), duck 3-36 dB wide (REF_J2 3.6 .. ref1 33), stab on-beat <= 50,
-# stab/bass clash unbounded (= STYLES gaskin). Flavour (F6) needs ONE of: dotted >= 55% / flat-2nd >= 10% / sustained stabs
+# stab/bass clash unbounded (= STYLES jackin). Flavour (F6) needs ONE of: dotted >= 55% / flat-2nd >= 10% / sustained stabs
 # (median >= 6/16; REF_J1 organ-pad stabs 6.4-8.1) / short off-beat counter-stab.
 # DEEP (long): held_ge4 cap 30 (ref3 23.1-ish, REF_D2 0-6) replaces long6 in F3.
 LANE["long"]["held4"] = 30.0
@@ -172,7 +172,7 @@ HARD_PROFILES = {
 }
 HARD = set(HARD_PROFILES["maestro"])
 SCALE = {"ukmin": {0, 1, 2, 3, 5, 7, 8, 9, 10}, "long": {0, 1, 2, 3, 5, 7, 8, 9, 10}, "pop": {0, 1, 2, 3, 5, 7, 8, 9, 10},
-         "gaskin": {0, 1, 2, 3, 5, 7, 8, 10}}            # GR v2 H1 (degrees rel. tonic: 1 b2 2 b3 4 5 b6 (6) b7)
+         "jackin": {0, 1, 2, 3, 5, 7, 8, 10}}            # GR v2 H1 (degrees rel. tonic: 1 b2 2 b3 4 5 b6 (6) b7)
 for _k in STYLES: STYLES[_k]["scale"] = SCALE[_k.split("_")[0]]
 FX_RE = re.compile(r"riser|sweep|uplift|downlift|crash|whoosh|impact|noise ?fx|\bfx\b|build", re.I)
 LATIN_RE = re.compile(r"clave|conga|bongo|timbal|latin", re.I)
@@ -190,7 +190,7 @@ def lane_fit(m, style, winfo):
         res["F3_length"] = None if g("len_med16") is None else (rng(g("len_med16"), *E["len"]) and g("long_ge6_pct") <= E["long6"])
     res["F4_density"] = None if g("notes_per_bar") is None else (rng(g("notes_per_bar"), *E["npb"]) and g("max_16th_run") <= E["run"] and g("beats_eaa_pct") <= E["eaa"])
     res["F5_register"] = rng(g("bass_median_pitch"), *E["reg"])
-    if style == "gaskin":
+    if style == "jackin":
         flav = (g("dotted_share_pct") >= E["dotted"] or g("b2_time_pct") >= E["b2"] or (g("stab_dur_med16") or 0) >= E["stab_sus"]
                 or (bool(g("stab_hits")) and (g("stab_dur_med16") or 99) <= 1.5 and (g("stab_onbeat_pct") or 100) <= 10))
         res["F6_loop"] = None if g("rep1") is None else (g("rep1") <= E["rep1"] and (g("rep2") or 0) >= E["rep2g"] and flav)
@@ -204,7 +204,7 @@ def lane_fit(m, style, winfo):
         res["F9_stab_vs_bass"] = g("stab_on_bass_attack_pct") <= E["clash"]
     elif g("stab_hits") and g("stab_onbeat_pct") is not None:
         ok = g("stab_onbeat_pct") <= E["stab_beat"] and E["stab_pcs"][0] <= g("stab_pcs_med") <= E["stab_pcs"][1]
-        if style == "gaskin": pass          # v2.2: sustained stabs are one JACKIN flavour option (F6), not required
+        if style == "jackin": pass          # v2.2: sustained stabs are one JACKIN flavour option (F6), not required
         else: ok = ok and g("stab_mode") in ("dub", "riff") and (g("stab_mode") == "dub" or g("stab_signpost_bars_pct") >= E["signpost"])
         res["F8_stab"] = ok
         res["F9_stab_vs_bass"] = g("stab_on_bass_attack_pct") <= E["clash"]
@@ -965,11 +965,11 @@ def main():
     ap.add_argument("--hard-profile", default="maestro", choices=sorted(HARD_PROFILES),
                     help="maestro (default) = GR v2 four hard rules + LANE_FIT_LOW + duplicates; gr_v2 = also the GR v2 §5 technical list")
     ap.add_argument("--exclude-self", action="store_true", help="skip refs whose folder name (under --refs) prefixes the roll name (validation)")
-    ap.add_argument("--swing-heavy", action="store_true", help="v2.2 optional JACKIN heavier-swing switch: gaskin hat swing band 50-68 instead of 50-57")
+    ap.add_argument("--swing-heavy", action="store_true", help="v2.2 optional JACKIN heavier-swing switch: jackin hat swing band 50-68 instead of 50-57")
     a = ap.parse_args()
     if not a.no_orig and not a.refs:
         ap.error("the originality check needs --refs DIR or ROLLA_REFS=DIR (private reference MIDI); or pass --no-orig")
-    if a.swing_heavy: LANE["gaskin"]["hat_sw"] = HEAVY_SWING_BAND
+    if a.swing_heavy: LANE["jackin"]["hat_sw"] = HEAVY_SWING_BAND
     HARD.clear(); HARD.update(HARD_PROFILES[a.hard_profile]); HARD_PROFILE_NAME[0] = a.hard_profile
     rows, s = score_dir(a.dir, a.style, a.out, a.bars, a.bpm, a.refs, a.no_orig, a.exclude_self)
     print(f"{s['style']}: {s['passed']}/{s['rolls']} pass ({100*s['pass_rate']:.0f}%) -> {s['verdict']}  [solo {s['solo_passed']}/{s['rolls']}]")

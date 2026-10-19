@@ -869,7 +869,7 @@ int composeOnce (Lane& lane, const BassParams& p, const BassTables& t, Rng& r, b
     {
         float w[kBar];
         int from = 0;
-        if (st == styleOf (Gaskin))
+        if (st == styleOf (Jackin))
         {
             for (int s = 0; s < kBar; ++s)
                 w[s] = t.grid[0][s] * (call.on[s] ? kAnswerCallSlotWeight[st] : kAnswerSilentBoost[st]);

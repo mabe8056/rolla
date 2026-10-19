@@ -419,7 +419,7 @@ void writeStats (const std::filesystem::path& path,
     row ("STAB 0→1", stab);
     out << "\nTwenty rolls per style are under tools/out/<style>/roll_XX/ as type-0 lane MIDIs, "
            "one type-1 combined MIDI, and a 48 kHz 24-bit WAV at 130 BPM. "
-           "Swing is 53.7% UK MIN, 54% LONG, 56.7% POP and 56.5% GASKIN (genre model v1.2 band 53-57%). "
+           "Swing is 53.7% UK MIN, 54% LONG, 56.7% POP and 56.5% JACKIN (genre model v1.2 band 53-57%). "
            "Each roll folder has a roll.json with its seeds and originality redraws. WAV files are gitignored.\n";
 }
 
@@ -429,7 +429,7 @@ int styleId (const std::string& name)
     if (s == "ukmin" || s == "roller" || s == "0") return rolla::UkMin;
     if (s == "long" || s == "deep" || s == "1") return rolla::Long;
     if (s == "pop" || s == "bouncy" || s == "2") return rolla::Pop;
-    if (s == "gaskin" || s == "jackin" || s == "3") return rolla::Gaskin;
+    if (s == "jackin" || s == "3") return rolla::Jackin;
     if (s == "all") return -2;
     return -1;
 }
@@ -569,7 +569,7 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
             std::cerr << "sample index did not finish; WAV energy may be missing\n";
     }
 
-    const int styles[4] = { rolla::UkMin, rolla::Long, rolla::Pop, rolla::Gaskin };
+    const int styles[4] = { rolla::UkMin, rolla::Long, rolla::Pop, rolla::Jackin };
     const int nStyles = one == -2 ? 4 : 1;
     int wavs = 0;
     int silent = 0;
@@ -711,7 +711,7 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
 
 const char* usageText()
 {
-    return "rolla-rolls --samples DIR --style ukmin|long|pop|gaskin|all --count N --seed S [--out DIR] [--stems] [--stem-lanes DRUMS,BASS]\n"
+    return "rolla-rolls --samples DIR --style ukmin|long|pop|jackin|all --count N --seed S [--out DIR] [--stems] [--stem-lanes DRUMS,BASS]\n"
            "            [--knob DARK=0.55] [--knob BUSY=0.40] [--knob BOUNCE=0.45] [--knob STAB=0.55]\n"
            "            [--knob TONE=0.5] [--knob PUNCH=0.5] [--knob LEVEL=0] [--knob INTENSITY=75]\n"
            "            [--knob BASS.TONE=0.5] [--knob BASS.PUNCH=0.5] [--knob BASS.LEVEL=0]\n"

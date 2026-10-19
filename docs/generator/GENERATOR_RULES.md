@@ -22,7 +22,7 @@ units:
 ```
 
 **Source keys.**
-- **MD**: private measured-drop table. It covers 16 drop windows from 9 tracks, made by a private aggregation script from the private per-track drop transcriptions. "UK pool" = REF_R3, REF_R1, REF_D2, REF_R4, REF_B1 and REF_R2 (12 windows); the GASKIN-dialect refs (REF_J1/J2) and REF_R6 are kept separate.
+- **MD**: private measured-drop table. It covers 16 drop windows from 9 tracks, made by a private aggregation script from the private per-track drop transcriptions. "UK pool" = REF_R3, REF_R1, REF_D2, REF_R4, REF_B1 and REF_R2 (12 windows); the JACKIN-dialect refs (REF_J1/J2) and REF_R6 are kept separate.
 - **CTR**: private cross-track rules (CTR) (rule ids A1–A11, B, C, D1–D7, E1–E8).
 - **SA**: private style analysis (4 Beatport previews).
 - **PB**: `rulebook/house-master-playbook.md`. §12 is the measured full-WAV REF_R5; §14.x are the writing rules.
@@ -64,13 +64,13 @@ phrase:
     P1: [A, B, A, B', A, B, A, C]        # DA, PB12 REF_R5 (4-bar loop + bar-8 dropout)
     P2: [A, B, A, B', A, B, A', C]       # DES 5 rule plan A B A' B''
     P3: [A, A', A, A'', A, A', A, C]     # 1-bar loops: REF_R1/REF_R4/REF_B1 match@1 0.58-0.75 [MD]
-    P4: [A, B, A, B, A, B, A, C]         # Gaskin 2-bar call/answer, match@1 0.01-0.16, match@2 0.86-0.92 [MD, CTR D2]
+    P4: [A, B, A, B, A, B, A, C]         # Jackin 2-bar call/answer, match@1 0.01-0.16, match@2 0.86-0.92 [MD, CTR D2]
     P5: [A, B, C, D, A, B, C, D']        # REF_R5 4-bar loop A B C D [PB12]; REF_R6/REF_R3 match@4 > match@2 [MD]
   plan_weights: {UK_MIN: {P1: .35, P2: .25, P3: .15, P5: .25}, LONG: {P1: .4, P2: .3, P3: .3},
-                 POP: {P3: .6, P2: .4}, GASKIN_90S: {P4: .8, P2: .2}}   # ESTIMATE (weights), plan shapes measured
+                 POP: {P3: .6, P2: .4}, JACKIN_90S: {P4: .8, P2: .2}}   # ESTIMATE (weights), plan shapes measured
   repetition_targets:          # main-drop windows, bass lane [MD]; DA in brackets
-    match_at_1: {UK_pool: [0.05, 0.75], GASKIN: [0.01, 0.16]}            # [DA 0.35]
-    match_at_2: {UK_pool: [0.51, 0.86], GASKIN: [0.86, 0.93]}            # [DA 0.80]
+    match_at_1: {UK_pool: [0.05, 0.75], JACKIN: [0.01, 0.16]}            # [DA 0.35]
+    match_at_2: {UK_pool: [0.51, 0.86], JACKIN: [0.86, 0.93]}            # [DA 0.80]
     match_at_4: {UK_pool: [0.47, 0.85], CTR_A6_main_loop_min: 0.77}       # [DA 0.88]
   variation_zone:
     default: last 2-4 sixteenths of the bar (slots 13-16)                 # CTR A7
@@ -93,7 +93,7 @@ phrase:
 ```yaml
 bass:
   register_midi: {min: 21, max: 52, home_octave: [24, 35]}     # MD measured A0(21)-C#3(49); DA D1-F1 (26-29); PB14.1#3 35-60 Hz fundamentals
-  pitch_range_semitones_per_8bars: {UK_pool: [8, 23], median: 13, GASKIN: [5, 16], DA: 3}   # MD; DA
+  pitch_range_semitones_per_8bars: {UK_pool: [8, 23], median: 13, JACKIN: [5, 16], DA: 3}   # MD; DA
   density:
     npb: {UK_pool: [4.38, 8.75], median: 7.14, DA: 4.5, hard_max: 9}  # MD; DES rule 1 cap 7 (UK MIN); hard_max = MD max per-bar mean
     npb_per_bar_range: [3, 11]                                 # MD per-bar min/max across windows (REF_B1 4, REF_R1 11)
@@ -122,7 +122,7 @@ bass:
     off_8th_pump:    {slots: [3,7,11,15], len16: [1,1.5], src: "REF_B1 3/6/8/12 family, CTR B; REF_R1"}
     syncop_pair:     {slots_within_2beats: [[2,4],[3,6],[6,8]], src: "REF_R4 1,3,6,8 [CTR C]"}
     answer_tag:      {slots: [14,15,16] subset, len16: [1,2], src: "CTR A7, REF_D2 tag 15-16"}
-    dotted_grid:     {slots: [1,4,7,10,13,16], ghost: 12, only_dialect: GASKIN_90S, src: "CTR D1"}
+    dotted_grid:     {slots: [1,4,7,10,13,16], ghost: 12, only_dialect: JACKIN_90S, src: "CTR D1"}
     rest_cell:       {slots: [], len_slots: [4, 8], src: "PB14.1#8 holes"}
     cell_combination: {per_bar_cells: [2, 4], rest_cell_per_8bars_min: 2}   # rest-cell minimum = ESTIMATE (DA has 3: bars 2,6,8)
   pitch:
@@ -132,13 +132,13 @@ bass:
     distinct_pitches_per_bar: {UK_pool: [1.94, 5.0], median: 3.25, DA: "1-3"}            # MD
     distinct_pitch_classes_per_8bars: [2, 6]                    # SA 2-6 per bar; PB14.1#2; CM triviality >=2
     allowed_partner_degrees: [b7, b3, "5", "2", "4", b2]        # MD degree shares; b2 = chromatic neighbour only (SA habit 4)
-    b2_rule: "only as a neighbour (approach/leave by 1 semitone to/from root); time share <= 5% (GASKIN <= 30%)"  # MD UK b2 1.2%; CTR D REF_J1/J2 26%
+    b2_rule: "only as a neighbour (approach/leave by 1 semitone to/from root); time share <= 5% (JACKIN <= 30%)"  # MD UK b2 1.2%; CTR D REF_J1/J2 26%
     interval_distribution_targets:   # non-zero moves, UK pool [MD bass_intervals]
       same_pitch_repeat_share_of_all_moves: [0.15, 0.62]       # MD rep 15.2-62.4%
       step_1_2: [0.25, 0.60]       # MD pooled +-1/+-2 = 43%
       third_3_4: [0.0, 0.20]       # pooled 11%
       fourth_fifth_5_7: [0.0, 0.40]  # pooled 19%; REF_R4 38% (CTR C)
-      octave_12: {UK_MIN: [0, 0.10], LONG: 0, POP: [0.10, 0.30], GASKIN: [0, 0.10], pooled_ref: 0.14}   # MD oct 0-25.6%
+      octave_12: {UK_MIN: [0, 0.10], LONG: 0, POP: [0.10, 0.30], JACKIN: [0, 0.10], pooled_ref: 0.14}   # MD oct 0-25.6%
       other_6_8_9_10_11: [0.0, 0.12]  # pooled 10.7%
     max_leap_semitones: 15                                      # SA REF_R2 +15
     contour_templates:          # per bar or per 2-bar cell; pitch path over the onsets
@@ -147,7 +147,7 @@ bass:
       - ladder_down: [5, 2?, b7, b3?, 1]                        # DES DARK ladder
       - fifth_pop: [1, 5, 1, 5(+12?)]                           # REF_B1 98% root+5 [MD]
       - step_up: [1, 2, b3]                                     # REF_R3 [CTR]
-      - call_answer_2bar: {barA: [b7, 1], barB: [b2, b3]}       # GASKIN only [CTR D2]
+      - call_answer_2bar: {barA: [b7, 1], barB: [b2, b3]}       # JACKIN only [CTR D2]
   velocity: {levels: [112, 80], ghost_share: [0.15, 0.40]}      # DES; PB14.1#10 ghosts 6-7 dB down; share ESTIMATE
   glide: {share_of_notes: {UK_pool: [0, 0.20], DES: [0.02, 0.11]}, time_ms: [30, 40]}   # MD glide 0-20.3%; PB12
 ```
@@ -156,13 +156,13 @@ bass:
 
 ```yaml
 interlock:
-  bass_onset_on_kick_slot_pct_max: {UK_MIN: 10, LONG: 30, POP: 5, GASKIN_90S: 35}   # MD: DA 0, REF_R5 ~2, REF_D2 26, REF_B1 2.3, REF_J1/J2 17-34 (grid includes slot 1)
+  bass_onset_on_kick_slot_pct_max: {UK_MIN: 10, LONG: 30, POP: 5, JACKIN_90S: 35}   # MD: DA 0, REF_R5 ~2, REF_D2 26, REF_B1 2.3, REF_J1/J2 17-34 (grid includes slot 1)
   bass_onset_off_kick_pct_min: 72                     # CTR A1 (72-98%)
   held_through_kick_allowed: true                     # PB14.1#5 (sidechain does the ducking)
-  sidechain_db: {UK_pool: [17, 54], REF_R5: 12, DA: 13, GASKIN: [3.6, 8.1], REF_R6: [3.6, 8]}   # MD sidechain_bass; PB12; CTR E
+  sidechain_db: {UK_pool: [17, 54], REF_R5: 12, DA: 13, JACKIN: [3.6, 8.1], REF_R6: [3.6, 8]}   # MD sidechain_bass; PB12; CTR E
   sidechain_recovery_ms: [100, 160]                   # PB12 ~100; MD 140-157 (REF_D2)
   kick_fundamental_hz: [49, 55]                       # PATCH6, PB14.5#1
-  first_bass_onset_in_bar_slot: {prefer: [2, 3, 4], allow: [1] only GASKIN_90S or POP}   # PB12, DA (slot 3), CTR D1
+  first_bass_onset_in_bar_slot: {prefer: [2, 3, 4], allow: [1] only JACKIN_90S or POP}   # PB12, DA (slot 3), CTR D1
 ```
 
 ### 3.3 STAB (chord hits; PB14.2, 14.3)
@@ -178,7 +178,7 @@ stab:
   density:
     hits_per_bar: {UK_pool: [2.75, 10.38], median: 5.25, DA: 0.75, UK_MIN_default: [0.5, 3]}   # MD; DA; default ESTIMATE between DA and REF_D2 2.8
     on_beat_pct_max: 30                                               # CTR E (<=30%); MD 2.5-29.9
-    len16: {UK_pool_median: [2.16, 34.3], typical: [1, 3], GASKIN_sustained: [6.8, 14.5]}   # MD (34 = REF_R1 pad-like); SA 0.9-1.9
+    len16: {UK_pool_median: [2.16, 34.3], typical: [1, 3], JACKIN_sustained: [6.8, 14.5]}   # MD (34 = REF_R1 pad-like); SA 0.9-1.9
   rhythm:
     onset_slot_weights_pct:  # UK pool mean, MD stab_onset_slot (CQT LOW-MED confidence)
       [4.0, 4.1, 5.8, 8.3, 2.7, 5.1, 6.6, 8.4, 3.8, 8.6, 6.1, 4.0, 5.7, 6.3, 14.4, 6.1]
@@ -226,7 +226,7 @@ pluck:
 pad:
   in_drop: {default: off, allowed_as: "one swell per 2-4 bars"}   # PB14.3#5 (no pad under drop), PB14.2#1 swell every ~4 bars, DES15.1 every 2 bars
   entry_slot: 2                          # DES15.1 ("e" of beat 1)
-  len16: {swell: [12, 32], GASKIN_chord: [12, 16]}   # CTR D (REF_J1/J2 bVI/bVII ~14/16), MD REF_R1 stab len 34
+  len16: {swell: [12, 32], JACKIN_chord: [12, 16]}   # CTR D (REF_J1/J2 bVI/bVII ~14/16), MD REF_R1 stab len 34
   voicing: same rules as stab.voicing; changes <= 2 per 8 bars   # SA habit 8
   must_gate_before_barline_of_section_end: true      # CM render rule, A&R B1
   level_db_vs_bass_note: -14             # DES
@@ -258,7 +258,7 @@ drums:
     open_hat_offbeat: {share_of_offbeat_hits_with_decay_gt_90ms: [0, 1.0]}   # MD (REF_R2 ~0, REF_R4/REF_R3/REF_B1 0.8-1.0)
   hat_decay_ms_median: [52, 162]                     # MD (UK pool); PATCH6 -20 dB @140 ms
   swing_pct:
-    hats: {UK_pool: [49.7, 57.9], REF_R6: [64.7, 65.3], REF_R5: 50, GASKIN: "~67 (SA; MD unmeasurable)"}   # MD, PB12, SA
+    hats: {UK_pool: [49.7, 57.9], REF_R6: [64.7, 65.3], REF_R5: 50, JACKIN: "~67 (SA; MD unmeasurable)"}   # MD, PB12, SA
     clap_snare: {UK_pool: [52.9, 63.2]}               # MD
     bass_and_stabs: "near grid, <= 58"                 # CTR, PB14.5#4
   per_bar_variation: "4/4 kick fixed; hat/perc vary in slots 13-16 of bars 4/8 only; open hat on 'and' of 4 every 2nd or 4th bar"   # PATCH6, CTR A7
@@ -268,7 +268,7 @@ drums:
 ---
 ## 4. Dialect table (main-drop targets; generator presets)
 
-| param | UK MIN (REF_R5 + DA + UK pool) | LONG (REF_D2) | POP (REF_B1) | GASKIN 90s |
+| param | UK MIN (REF_R5 + DA + UK pool) | LONG (REF_D2) | POP (REF_B1) | JACKIN 90s |
 |---|---|---|---|---|
 | bass npb | 4.5–7.5 (DA 4.5; pool median 7.1) [DA, MD] | 7.1–7.2 [MD] | 5.3–5.4 [MD] | 6.0–7.6 [MD] |
 | bass len16 median | 1.4–2.2 [MD, DA 2.0] | 2.2–2.3 [MD] | 1.0–1.2 [MD] | 2.0–2.2 [MD] |
@@ -296,7 +296,7 @@ dialects:
   UK_MIN:  {bass_npb: [4.5, 7.5], len16_med: [1.4, 2.2], on_kick_max: 0.10, root: [0.35, 0.76], top2: [0.63, 0.98], oct_max: 0.10, sounding: [0.50, 0.85], match2_min: 0.60, match4_min: 0.77, stab_pb: [0.5, 3], stab_beat_max: 0.10, vox_pb: [0.25, 1.5], hat_swing: [50, 58]}
   LONG:    {bass_npb: [4.6, 6.7], len16_med: [2.0, 2.4], on_kick_max: 0.30, root: [0.30, 0.45], top2: [0.75, 0.85], oct_max: 0.0, sounding: [0.75, 0.82], match2_min: 0.75, match4_min: 0.78, stab_pb: [2.5, 4.5], stab_beat_max: 0.15, vox_pb: [1.0, 2.0], hat_swing: [50, 53]}
   POP:     {bass_npb: [4.5, 6.0], len16_med: [1.0, 1.25], on_kick_max: 0.05, root: [0.30, 0.42], top2: [0.94, 0.99], oct: [0.15, 0.30], sounding: [0.28, 0.40], match2_min: 0.50, match4_min: 0.75, stab_pb: [9, 11], stab_beat_max: 0.20, vox_pb: [0, 0.5], hat_swing: [49, 51]}
-  GASKIN_90S: {bass_npb: [6.0, 8.0], len16_med: [1.9, 2.3], on_kick_max: 0.35, root: [0.28, 0.40], top2: [0.55, 0.70], oct_max: 0.05, sounding: [0.75, 0.85], match1_max: 0.20, match2_min: 0.85, stab_pb: [5.5, 6.5], stab_len16: [7, 15], stab_beat_max: 0.20, hat_swing: [62, 68], sidechain_db: [3.6, 8], b2_share_max: 0.30}
+  JACKIN_90S: {bass_npb: [6.0, 8.0], len16_med: [1.9, 2.3], on_kick_max: 0.35, root: [0.28, 0.40], top2: [0.55, 0.70], oct_max: 0.05, sounding: [0.75, 0.85], match1_max: 0.20, match2_min: 0.85, stab_pb: [5.5, 6.5], stab_len16: [7, 15], stab_beat_max: 0.20, hat_swing: [62, 68], sidechain_db: [3.6, 8], b2_share_max: 0.30}
 ```
 
 ### 5.1 Generator targets after the A&R MIDI gate
@@ -309,10 +309,10 @@ generator_targets:
     UK_MIN: 5.0                   # style_rules ROLLER target 5.0, band 3.62-7.44
     LONG:   4.9                   # plus the back-half contour (~+0.4); style_rules DEEP target 5.21, band 3.53-6.69
     POP:    5.0                   # bounce mode only; pulse keeps its 5-8 grid. style_rules BOUNCY target 5.0, band 3.56-6.03
-    GASKIN: unchanged             # style_rules JACKIN target 4.44
+    JACKIN: unchanged             # style_rules JACKIN target 4.44
   fill_rules: "same lift in every bar (keeps the bar-to-bar shape and the 2-bar repetition); never on a kick step, never in the bar-8 turn rest, no run of three 16ths; 'and' 16ths first, then e/a (BOUNCY: e/a first)"
   deep_back_half: "bars 5-7 move against bars 1-3 on a seeded contour: +0..2 a bar on a sparse line, -0..2 on a line already 1+ over the target; bar 8 keeps its turn"
-  held_sounding: {UK_MIN: 0.80, LONG: 0.80, GASKIN: 0.80, pickup_rolls: 0.78, POP_pulse: [0.85, 0.975], POP_bounce: [0.29, 0.49]}   # 0.78 leaves room for the bar-8 pickup's three 16ths
+  held_sounding: {UK_MIN: 0.80, LONG: 0.80, JACKIN: 0.80, pickup_rolls: 0.78, POP_pulse: [0.85, 0.975], POP_bounce: [0.29, 0.49]}   # 0.78 leaves room for the bar-8 pickup's three 16ths
   deep_stab_in_gap: "one stab hit in three per bar moves to the nearest bass rest (style_rules DEEP stab_in_gap target 25%, max 44%); hits per bar stay under the STAB cap"
 ```
 
@@ -493,4 +493,4 @@ All rubric thresholds are ESTIMATE. Set them from the first test set: today's ge
   - pluck register and density outside POP;
   - all hits-lane numbers except slots and bars;
   - every diversity metric (§7.2), mutation budgets, and rubric thresholds;
-  - GASKIN-dialect hat swing (MD unmeasurable) and GASKIN-dialect octave share (SA 25% vs MD 0–1%: conflict).
+  - JACKIN-dialect hat swing (MD unmeasurable) and JACKIN-dialect octave share (SA 25% vs MD 0–1%: conflict).

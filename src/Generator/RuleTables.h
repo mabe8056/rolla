@@ -8,7 +8,7 @@
 // weights, density curves, conditional stab-vs-bass weights and a chord-quality
 // palette. No row, cell or value is a note sequence, rhythm cell or voicing of
 // any one source. Style order is the Dialect enum: ROLLER (ukmin), DEEP (long),
-// BOUNCY (pop), JACKIN (gaskin).
+// BOUNCY (pop), JACKIN (jackin).
 
 namespace rolla::rules::tables
 {

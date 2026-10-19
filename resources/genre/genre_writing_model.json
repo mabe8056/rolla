@@ -2738,7 +2738,7 @@
    }
   },
   "JACKIN": {
-   "internal_key": "gaskin",
+   "internal_key": "jackin",
    "modes": {
     "weights": {
      "Aeolian": 0.5833,
