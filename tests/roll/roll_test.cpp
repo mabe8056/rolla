@@ -343,7 +343,7 @@ void testEarReview()
 
     for (int style = 0; style < 4; ++style)
     {
-        int reaction = 0;
+        int rootTwoFour = 0;
         int stackedBass = 0;
         int stackedStab = 0;
         int pluck = 0;
@@ -395,7 +395,7 @@ void testEarReview()
                         s3 = true;
                 }
                 if (s1 && s3)
-                    ++reaction;
+                    ++rootTwoFour;
             }
             pluck += g.lane[rolla::Pluck].count;
 
@@ -457,10 +457,10 @@ void testEarReview()
             }
         }
         std::cout << names[style] << " stacked bass " << stackedBass << " stacked stab " << stackedStab
-                  << " reaction bars " << reaction << " pluck notes " << pluck << "\n";
+                  << " root 2&4 bars " << rootTwoFour << " pluck notes " << pluck << "\n";
         expect (stackedBass == 0, std::string (names[style]) + " bass is monophonic");
         expect (stackedStab == 0, std::string (names[style]) + " stabs do not stack");
-        expect (reaction == 0, std::string (names[style]) + " avoids the reaction figure");
+        expect (rootTwoFour == 0, std::string (names[style]) + " avoids the banned 2&4 root figure");
         if (style == rolla::Long || style == rolla::Pop)
             expect (pluck > 0, std::string (names[style]) + " plays pluck");
         else

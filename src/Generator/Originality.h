@@ -7,7 +7,7 @@
 //
 //   1. Built in, always on, no reference data: the banned figures that
 //      GENERATOR_RULES H4 already names (the root on 16ths 2 and 4 that
-//      avoidReaction guards, the b3 tied over the barline from 16th 15, and the dotted-pulse
+//      avoidRootTwoFour guards, the b3 tied over the barline from 16th 15, and the dotted-pulse
 //      skeleton the A&R synthesised from its key-free description). These are
 //      rules from the repo, not transcriptions.
 //   2. Optional: a hashed fingerprint index built on the owner's box from the

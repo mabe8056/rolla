@@ -643,8 +643,8 @@ void enforceMonophonic (Lane& lane)
     lane.count = w;
 }
 
-// The banned stock figure: a root on the 2nd and 4th 16th of the bar.
-void avoidReaction (Lane& lane)
+// Banned REF_R5 figure: a root on the 2nd and 4th 16th of the bar.
+void avoidRootTwoFour (Lane& lane)
 {
     for (int b = 0; b < 8; ++b)
     {
@@ -670,7 +670,7 @@ void avoidReaction (Lane& lane)
 void finishBass (Lane& lane)
 {
     enforceMonophonic (lane);
-    avoidReaction (lane);
+    avoidRootTwoFour (lane);
 }
 
 int octaveMoves (const Lane& lane) noexcept
@@ -2868,8 +2868,8 @@ float bassSounding (const Lane& lane, int i) noexcept
     return std::max (0.f, len);
 }
 
-// Root on slot 1 and slot 3 of one bar is the banned reaction figure.
-bool makesReaction (const Lane& lane, int idx, int semi) noexcept
+// Root on slot 1 and slot 3 of one bar is the banned 2&4 root figure.
+bool makesRootTwoFour (const Lane& lane, int idx, int semi) noexcept
 {
     if (pcOf (semi) != 0)
         return false;
@@ -2951,7 +2951,7 @@ void conformBass (Lane& lane, int mode, float cap)
             continue;
         }
         int to = semi - 1; // root
-        if (makesReaction (lane, i, to))
+        if (makesRootTwoFour (lane, i, to))
             to = semi + 2; // b3
         lane.notes[i].chord[0] = (std::int8_t) to;
     }
@@ -3021,7 +3021,7 @@ void fixBassClashes (Groove& g, int mode, float cap, std::uint32_t seed)
             // Outside phrygian the fixer never adds a b2; inside, only within the cap.
             if (pc == 1 && (mode != phrase::Phrygian || b2Used - (wasB2 ? t : 0.f) + t > budget + 1e-4f))
                 return false;
-            return ! makesReaction (lane, i, retarget (semi, pc));
+            return ! makesRootTwoFour (lane, i, retarget (semi, pc));
         };
         // Resample: bounded, deterministic from the bass seed and the note.
         // JACKIN keys it on the note's place in its 2-bar loop, so the
@@ -3099,7 +3099,7 @@ void settleStrandedB2 (Groove& g, int mode)
         {
             if (! phrase::inMode (pc, mode) || (bad & (1u << pc)) != 0)
                 continue;
-            if (makesReaction (lane, i, retarget (semi, pc)))
+            if (makesRootTwoFour (lane, i, retarget (semi, pc)))
                 continue;
             chosen = pc;
             break;
@@ -4566,7 +4566,7 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
     {
         separateTwinRhythm (g.lane[Bass], s.dialect, bassSeed);
         enforceMonophonic (g.lane[Bass]);
-        avoidReaction (g.lane[Bass]);
+        avoidRootTwoFour (g.lane[Bass]);
         if (s.dialect == Pop)
         {
             ensureBar8Turn (g.lane[Bass], s.bars, bassSeed);
@@ -4581,7 +4581,7 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
             loopJackinBass (g.lane[Bass], s.bars, bassSeed);
         }
         enforceMonophonic (g.lane[Bass]);
-        avoidReaction (g.lane[Bass]);
+        avoidRootTwoFour (g.lane[Bass]);
     }
     // A&R msg 423 #1 and #2: some bass on the kick, then hold the notes. Runs
     // before the stab rewrite so stabs see the bass that ships. BOUNCE keeps

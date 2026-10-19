@@ -150,6 +150,60 @@ def main():
     code, res = run(root)
     check(code == 0 and res["names_checked"] == 0, "no names file: name check is off")
 
+    # Built-in reference names (refname). Planted names are decoded from the guard's own shifted
+    # list at run time, so this file never holds one in plain text.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("check_repo_clean", GUARD)
+    G = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(G)
+    names = [G.unshift(s) for s in G.REFERENCE_SHIFTED_NAMES]
+    check(len(names) >= 15 and all(n == n.lower() for n in names), "refname: shifted list decodes")
+    artist = names[G.REFERENCE_SHIFTED_NAMES.index("mjhiumfbl")]
+    two_words = names[G.REFERENCE_SHIFTED_NAMES.index("mpdbm!evc")]
+    style_track = names[G.REFERENCE_SHIFTED_NAMES.index("hbtljo!dmptfs")].split(" ")
+    pack_artist = names[G.REFERENCE_SHIFTED_NAMES.index("tufg!ebwjetf")]
+    snake = two_words.replace(" ", "_") + "_some_title"
+    quoted = style_track[0].capitalize() + ' "' + style_track[1].capitalize() + '"'
+    for rel, content, what in [
+        ("tools/score.py", f"REFS = ['{snake}']\n", "snake_case ref id in code"),
+        ("docs/notes.md", f"Measured from {artist.upper()} main drop.\n", "artist in Markdown prose (fails, not a warning)"),
+        ("docs/rules.md", f"dark lead = {quoted}\n", "artist + quoted title"),
+        ("src/a.h", f"// {two_words.title().replace(' ', '')} counter-riff\n", "joined CamelCase name"),
+    ]:
+        code, res = run(make_repo(dict(CLEAN, **{rel: content})))
+        check(code == 1 and flagged(res, "refname", rel), f"refname: {what}")
+        check(not any(n in json.dumps(res).lower() for n in names), f"refname: report for {rel} does not print the name")
+    for rel in ("tools/notes.html", "tools/Makefile", "tools/run.zsh", "docs/page.svg"):   # any text type, no extension too
+        code, res = run(make_repo(dict(CLEAN, **{rel: f"<!-- {artist} -->\n"})))
+        check(code == 1 and flagged(res, "refname", rel), f"refname: any text file type ({rel})")
+    code, res = run(make_repo(dict(CLEAN, **{f"refs/{snake}/bass.txt": "x\n"})))
+    check(code == 1 and flagged(res, "refname", "path holds"), "refname: name in a file path")
+    # Not a reference: the style id on its own, ordinary English, the owner's own sample names.
+    manifest = json.dumps({"samples": [{"file": "Vox_Get_Closer_To_Me_Cm.wav", "artist": pack_artist.title()},
+                                       {"file": "Get Closer To Me.wav"}]})
+    code, res = run(make_repo(dict(CLEAN, **{
+        "src/style.cpp": f"// {style_track[0]} dialect: the stab sits closer to the kick.\nint {style_track[0]}Swing = 56;\nfloat d = (v - line) / span;\n",
+        "resources/SAMPLE_MANIFEST.json": manifest,
+        "docs/x.md": "The bass gets closer to the root on bar 8. A 2&4 root figure is banned.\n"})))
+    check(code == 0, "refname: style id, ordinary 'closer', and the sample manifest's own names pass")
+    code, res = run(make_repo(dict(CLEAN, **{"docs/pack.md": f"Pack by {pack_artist.title()}.\n"})))
+    check(code == 1 and flagged(res, "refname", "docs/pack.md"), "refname: the manifest-only skip does not apply elsewhere")
+    code, res = run(make_repo(dict(CLEAN, **{"docs/notes.md": f"{artist}\n", "tools/repo_guard_allow.txt": "refname docs/notes.md  # test\n"})))
+    check(code == 0, "refname: allowlist category works")
+
+    # Private A&R gate bundle and originality indexes: tracked anywhere fails.
+    for rel in ("tools/orig_index_ukmin.json", "rolla-gates/README.txt", "x/rolla-gates-private/a.py", "run_all_gates.sh",
+                "tools/candidate_gate.sh", "tools/measure_renders.py", "docs/AR_REVIEW_genre_writing_model_v2.md"):
+        code, res = run(make_repo(dict(CLEAN, **{rel: "x\n"})))
+        check(code == 1 and flagged(res, "private", rel), f"private: tracked {rel}")
+    # ... and so does an untracked or git-ignored copy sitting in the checkout.
+    code, res = run(make_repo(dict(CLEAN, **{"rolla-gates-private/run.sh": "x\n", "tools/orig_index_long.json": "{}"}),
+                              gitignore="rolla-gates-private/\norig_index_*.json\n"))
+    check(code == 1 and flagged(res, "private", "rolla-gates-private/") and flagged(res, "private", "orig_index_long.json"),
+          "private: git-ignored gate bundle in the checkout fails")
+    code, res = run(make_repo(dict(CLEAN, **{"tools/measure_render.py": "x\n", "docs/gates.md": "Gate notes.\n"})))
+    check(code == 0, "private: similar but different names pass")
+
     # Audio fixtures: allowlisted under tests/fixtures, but never over 64 KB.
     allow_audio = "audio tests/fixtures/*.wav  # tiny decoder fixture\n"
     small = b"RIFF" + b"\x00" * 1000

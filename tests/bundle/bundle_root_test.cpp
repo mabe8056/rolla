@@ -17,6 +17,10 @@
 //  (c) empty bundle, no saved root: every lane is silent (< -90 dBFS), nothing
 //      falls back to a synth, and samplesStatus() reports the error
 //  (d) setSamplesRoot (a temp folder) plays it but leaves ROLLA.settings as it was
+//  (e) fidelity: a stereo kick, closed hat and stab at default knobs, rendered
+//      solo through the sampler, match their files: every 1/3-octave band from
+//      50 Hz to 16 kHz within 1.5 dB (after level match) and the same L/R
+//      correlation (within 0.02)
 
 #include "PluginProcessor.h"
 #include "Engine/RollaSettings.h"
@@ -25,11 +29,14 @@
 #include "../common/ScratchProfile.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
+#include <juce_dsp/juce_dsp.h>
 #include <juce_events/juce_events.h>
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <functional>
+#include <random>
 #include <iostream>
 #include <set>
 #include <string>
@@ -175,9 +182,26 @@ rolla::EngineParams paramsFor (rolla::RollaProcessor& proc, const rolla::PresetB
     params.library = &proc.sampleLibrary();
     params.sampleIndex = index;
     params.bpm = (float) kBpm;
+    params.sampleShaping = true; // as RollaProcessor sets it
+    auto raw = [&] (const juce::String& id, float fallback)
+    {
+        auto* v = proc.apvts.getRawParameterValue (id);
+        return v != nullptr ? v->load() : fallback;
+    };
     for (int p = 0; p < rolla::NumParts; ++p)
-        if (auto* v = proc.apvts.getRawParameterValue (juce::String (rolla::partId (p)) + "Preset"))
-            params.preset[p] = (int) v->load();
+    {
+        const juce::String id (rolla::partId (p));
+        params.preset[p] = (int) raw (id + "Preset", 0.f);
+        params.tone[p] = raw (id + "Tone", 0.5f);
+        params.punch[p] = raw (id + "Punch", 0.5f);
+    }
+    for (int v = 0; v < rolla::NumDrumVoices; ++v)
+    {
+        const juce::String id (v);
+        params.drumTuneSt[v] = raw ("dTune" + id, 0.f);
+        params.drumDecay[v] = raw ("dDecay" + id, 0.5f);
+        params.drumLevelDb[v] = raw ("dLevel" + id, 0.f);
+    }
     if (auto* v = proc.apvts.getRawParameterValue ("dialect"))
         params.dialect = (int) v->load();
     return params;
@@ -474,6 +498,334 @@ void testEmpty (const juce::File& scratch, const juce::File& tonePack)
     expect (fileBytes (settingsFile) == before, "(d) ROLLA.settings is unchanged");
     expect (rolla::settings::open()->getValue ("samplesRoot").isEmpty(), "(d) no samplesRoot saved");
 }
+
+// (e) ------------------------------------------------------------------------
+
+struct Stereo
+{
+    std::vector<float> l, r;
+};
+
+void writeStereo (const juce::File& file, const Stereo& x)
+{
+    file.getParentDirectory().createDirectory();
+    juce::WavAudioFormat wav;
+    auto fileStream = std::make_unique<juce::FileOutputStream> (file);
+    if (fileStream == nullptr || ! fileStream->openedOk())
+        return;
+    std::unique_ptr<juce::OutputStream> stream (fileStream.release());
+    const auto options = juce::AudioFormatWriterOptions().withSampleRate (kRate)
+                                                          .withNumChannels (2)
+                                                          .withBitsPerSample (24);
+    auto writer = wav.createWriterFor (stream, options);
+    if (writer == nullptr)
+        return;
+    const int n = (int) x.l.size();
+    juce::AudioBuffer<float> buf (2, n);
+    for (int i = 0; i < n; ++i)
+    {
+        buf.setSample (0, i, x.l[(size_t) i]);
+        buf.setSample (1, i, x.r[(size_t) i]);
+    }
+    writer->writeFromAudioSampleBuffer (buf, 0, n);
+}
+
+// Kick: a 150 -> 45 Hz sweep with a long tail and a short noise click,
+// the click different per side.
+Stereo makeKick()
+{
+    std::mt19937 rng (7);
+    std::normal_distribution<float> noise (0.f, 1.f);
+    const int n = (int) (0.9 * kRate);
+    Stereo x { std::vector<float> ((size_t) n), std::vector<float> ((size_t) n) };
+    double phase = 0.0;
+    for (int i = 0; i < n; ++i)
+    {
+        const double t = i / kRate;
+        const double hz = 45.0 + 105.0 * std::exp (-t / 0.04);
+        phase += 2.0 * juce::MathConstants<double>::pi * hz / kRate;
+        const float body = (float) (0.7 * std::exp (-t / 0.22) * std::sin (phase));
+        const float clickEnv = (float) std::exp (-t / 0.004);
+        x.l[(size_t) i] = body + 0.25f * clickEnv * noise (rng);
+        x.r[(size_t) i] = body + 0.25f * clickEnv * noise (rng);
+    }
+    return x;
+}
+
+// Closed hat: bright noise, half shared and half per side, 70 ms decay.
+Stereo makeHat()
+{
+    std::mt19937 rng (11);
+    std::normal_distribution<float> noise (0.f, 1.f);
+    const int n = (int) (0.35 * kRate);
+    Stereo x { std::vector<float> ((size_t) n), std::vector<float> ((size_t) n) };
+    float prevC = 0.f, prevL = 0.f, prevR = 0.f;
+    for (int i = 0; i < n; ++i)
+    {
+        const float env = (float) std::exp (-(i / kRate) / 0.07);
+        const float c = noise (rng), a = noise (rng), b = noise (rng);
+        // First differences: a gentle high-pass tilt, as a hat has.
+        const float hc = c - prevC, ha = a - prevL, hb = b - prevR;
+        prevC = c;
+        prevL = a;
+        prevR = b;
+        x.l[(size_t) i] = 0.12f * env * (hc + 0.8f * ha);
+        x.r[(size_t) i] = 0.12f * env * (hc + 0.8f * hb);
+    }
+    return x;
+}
+
+// Stab: a D minor triad (D4 F4 A4), 8 partials each, R detuned 4 cents, 0.8 s.
+// Under 0.9 s: longer STAB files are chopped to a short slice on purpose (SampleChop).
+Stereo makeStab()
+{
+    const int n = (int) (0.8 * kRate);
+    Stereo x { std::vector<float> ((size_t) n), std::vector<float> ((size_t) n) };
+    const double roots[] = { 293.66, 349.23, 440.0 };
+    const double detune = std::pow (2.0, 4.0 / 1200.0);
+    for (int i = 0; i < n; ++i)
+    {
+        const double t = i / kRate;
+        const double env = std::exp (-t / 0.35) * std::min (1.0, t / 0.002);
+        double l = 0.0, r = 0.0;
+        for (double f0 : roots)
+            for (int k = 1; k <= 8; ++k)
+            {
+                const double a = 0.05 / k;
+                l += a * std::sin (2.0 * juce::MathConstants<double>::pi * f0 * k * t);
+                r += a * std::sin (2.0 * juce::MathConstants<double>::pi * f0 * k * detune * t + 0.3 * k);
+            }
+        x.l[(size_t) i] = (float) (env * l);
+        x.r[(size_t) i] = (float) (env * r);
+    }
+    return x;
+}
+
+constexpr double kBands[] = { 50, 63, 80, 100, 125, 160, 200, 250, 315, 400, 500, 630, 800, 1000, 1250,
+                              1600, 2000, 2500, 3150, 4000, 5000, 6300, 8000, 10000, 12500, 16000 };
+
+std::vector<double> bandsDb (const std::vector<float>& x)
+{
+    int order = 10;
+    while ((1 << order) < (int) x.size() && order < 20)
+        ++order;
+    const int n = 1 << order;
+    juce::dsp::FFT fft (order);
+    std::vector<float> buf ((size_t) n * 2, 0.f);
+    std::copy (x.begin(), x.begin() + std::min ((int) x.size(), n), buf.begin());
+    fft.performFrequencyOnlyForwardTransform (buf.data());
+    std::vector<double> out;
+    for (double fc : kBands)
+    {
+        const double lo = fc / std::pow (2.0, 1.0 / 6.0);
+        const double hi = fc * std::pow (2.0, 1.0 / 6.0);
+        double e = 0.0;
+        for (int k = (int) std::ceil (lo * n / kRate); k <= (int) std::floor (hi * n / kRate) && k <= n / 2; ++k)
+            e += (double) buf[(size_t) k] * (double) buf[(size_t) k];
+        out.push_back (10.0 * std::log10 (e + 1.0e-30));
+    }
+    return out;
+}
+
+double energyDb (const std::vector<float>& x)
+{
+    double e = 0.0;
+    for (float v : x)
+        e += (double) v * (double) v;
+    return 10.0 * std::log10 (e + 1.0e-30);
+}
+
+double correlation (const Stereo& x)
+{
+    double ll = 0.0, rr = 0.0, lr = 0.0;
+    for (size_t i = 0; i < x.l.size(); ++i)
+    {
+        ll += (double) x.l[i] * x.l[i];
+        rr += (double) x.r[i] * x.r[i];
+        lr += (double) x.l[i] * x.r[i];
+    }
+    return lr / std::sqrt (ll * rr + 1.0e-30);
+}
+
+// Worst band difference (dB) after matching each channel's level, over bands
+// within 60 dB of the source's loudest band.
+double worstBandDb (const Stereo& src, const Stereo& out, double& atHz, std::string* detail = nullptr)
+{
+    double worst = 0.0;
+    atHz = 0.0;
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        const auto& a = ch == 0 ? src.l : src.r;
+        const auto& b = ch == 0 ? out.l : out.r;
+        const auto sa = bandsDb (a);
+        const auto sb = bandsDb (b);
+        const double match = energyDb (b) - energyDb (a);
+        const double top = *std::max_element (sa.begin(), sa.end());
+        for (size_t k = 0; k < sa.size(); ++k)
+        {
+            if (sa[k] < top - 60.0)
+                continue;
+            const double d = std::fabs (sb[k] - sa[k] - match);
+            if (detail != nullptr && d > 1.0)
+                *detail += (ch == 0 ? " L" : " R") + juce::String (kBands[k], 0).toStdString() + ":"
+                           + juce::String (sb[k] - sa[k] - match, 1).toStdString() + "dB@"
+                           + juce::String (sa[k] - top, 0).toStdString();
+            if (d > worst)
+            {
+                worst = d;
+                atHz = kBands[k];
+            }
+        }
+    }
+    return worst;
+}
+
+// Plays one note or hit to its end through the sampler and returns that lane's output.
+Stereo renderSolo (const rolla::PresetBank& bank, const rolla::EngineParams& params,
+                   int part, int drumVoice, int note, int frames, std::string& picked)
+{
+    rolla::Sampler sampler;
+    sampler.prepare (kRate);
+    const auto start = juce::Time::getMillisecondCounter();
+    picked.clear();
+    while (picked.empty() && juce::Time::getMillisecondCounter() - start < 8000)
+    {
+        sampler.reset();
+        if (drumVoice >= 0)
+            sampler.takeDrum (drumVoice, 127, bank, params);
+        else
+            sampler.take (part, note, 127, 1.0e9f, bank, params);
+        picked = sampler.lastPickedFile (part, drumVoice);
+        if (picked.empty())
+            juce::Thread::sleep (5);
+    }
+    Stereo out { std::vector<float> ((size_t) frames), std::vector<float> ((size_t) frames) };
+    for (int i = 0; i < frames; ++i)
+    {
+        float laneL[rolla::NumParts] {};
+        float laneR[rolla::NumParts] {};
+        sampler.render (laneL, laneR, 0.f, 0.f, false);
+        out.l[(size_t) i] = laneL[part];
+        out.r[(size_t) i] = laneR[part];
+    }
+    return out;
+}
+
+void testFidelity (const juce::File& scratch)
+{
+    const auto root = scratch.getChildFile ("fidelity-pack");
+    const auto kick = makeKick();
+    const auto hat = makeHat();
+    const auto stab = makeStab();
+    writeStereo (root.getChildFile ("DRUMS/KICK/kick_fid.wav"), kick);
+    writeStereo (root.getChildFile ("DRUMS/CH/ch_fid.wav"), hat);
+    writeStereo (root.getChildFile ("STAB/stab_fid_D4.wav"), stab);
+
+    rolla::RollaProcessor proc;
+    proc.waitUntilReady();
+    const auto bank = proc.sharePresets();
+    expect (bank != nullptr, "(e) presets are published");
+    if (bank == nullptr)
+        return;
+
+    rolla::SampleLibrary library;
+    library.setRoot (root);
+    const char* manifest = R"JSON({"count": 0, "files": []})JSON";
+    library.startIndex (manifest, (int) std::strlen (manifest));
+    pumpUntil ([&] { return library.indexedFound() >= 0; });
+    const auto index = library.index();
+    expect (index != nullptr && library.indexedFound() == 3, "(e) the three source files are indexed");
+    if (index == nullptr)
+        return;
+
+    auto params = paramsFor (proc, bank.get(), index.get());
+    params.library = &library;
+    params.sampleIndex = index.get();
+    expect (std::fabs (params.tone[rolla::Stab] - 0.5f) < 1.0e-6f && std::fabs (params.tone[rolla::Drums] - 0.5f) < 1.0e-6f
+                && std::fabs (params.drumDecay[rolla::Kick] - 0.5f) < 1.0e-6f && std::fabs (params.drumDecay[rolla::HatC] - 0.5f) < 1.0e-6f,
+            "(e) knobs are at their defaults (TONE 0.5, DECAY 0.5)");
+
+    struct Case { const char* name; const Stereo* src; int part; int voice; int note; const char* file; };
+    const Case cases[] = {
+        { "kick", &kick, rolla::Drums, rolla::Kick, 60, "DRUMS/KICK/kick_fid.wav" },
+        { "closed hat", &hat, rolla::Drums, rolla::HatC, 60, "DRUMS/CH/ch_fid.wav" },
+        { "stab", &stab, rolla::Stab, -1, 62, "STAB/stab_fid_D4.wav" },
+    };
+    for (const auto& c : cases)
+    {
+        std::string picked;
+        const int frames = (int) c.src->l.size() + (int) (0.1 * kRate);
+        auto out = renderSolo (*bank, params, c.part, c.voice, c.note, frames, picked);
+        const std::string tag = std::string ("(e) ") + c.name;
+        expect (picked == c.file, tag + " plays " + c.file + (picked == c.file ? std::string() : " (got " + picked + ")"));
+        // Compare the file's length; what follows it must be silence. 3% of slack:
+        // #40 retunes a tonal file to its measured pitch, a few cents off 1:1.
+        float after = 0.f;
+        for (size_t i = c.src->l.size() + c.src->l.size() * 3 / 100; i < out.l.size(); ++i)
+            after = std::max ({ after, std::fabs (out.l[i]), std::fabs (out.r[i]) });
+        out.l.resize (c.src->l.size());
+        out.r.resize (c.src->r.size());
+        double atHz = 0.0;
+        std::string detail;
+        const double worst = worstBandDb (*c.src, out, atHz, &detail);
+        if (! detail.empty())
+            std::cout << "  " << c.name << " bands off by > 1 dB (diff @ level re loudest band):" << detail << "\n";
+        const double cs = correlation (*c.src);
+        const double co = correlation (out);
+        std::cout << "  " << c.name << ": worst band " << juce::String (worst, 2) << " dB at " << atHz
+                  << " Hz, L/R corr source " << juce::String (cs, 3) << " / played " << juce::String (co, 3)
+                  << ", tail after the file " << dbfs (after) << "\n";
+        expect (worst <= 1.5, tag + " spectrum within 1.5 dB of the file, 50 Hz-16 kHz (worst " + juce::String (worst, 2).toStdString() + " dB)");
+        expect (std::fabs (co - cs) <= 0.02, tag + " L/R correlation matches the file (" + juce::String (cs, 3).toStdString()
+                                               + " vs " + juce::String (co, 3).toStdString() + ")");
+        expect (after < kSilent, tag + " ends with the file");
+    }
+
+    // TONE off neutral is the one thing that filters a sample: darker pulls a
+    // lowpass down to the kit's cutoff, brighter raises a highpass.
+    // How much one band moved against a reference band (a change of tilt).
+    auto bandShift = [&] (const Stereo& src, const Stereo& out, double hz, double refHz)
+    {
+        const auto a = bandsDb (src.l);
+        const auto b = bandsDb (out.l);
+        auto at = [] (double f)
+        {
+            size_t k = 0;
+            while (kBands[k] < f)
+                ++k;
+            return k;
+        };
+        const size_t k = at (hz), r = at (refHz);
+        return (b[k] - b[r]) - (a[k] - a[r]);
+    };
+    {
+        auto dark = params;
+        dark.tone[rolla::Drums] = 0.f;
+        std::string picked;
+        const auto out = renderSolo (*bank, dark, rolla::Drums, rolla::HatC, 60, (int) hat.l.size(), picked);
+        const double drop = bandShift (hat, out, 12500.0, 1000.0);
+        expect (drop < -6.0, "(e) drums TONE 0 darkens the hat (12.5 kHz vs 1 kHz " + juce::String (drop, 1).toStdString() + " dB)");
+    }
+    {
+        auto bright = params;
+        bright.tone[rolla::Drums] = 1.f;
+        std::string picked;
+        const auto out = renderSolo (*bank, bright, rolla::Drums, rolla::Kick, 60, (int) kick.l.size(), picked);
+        const double drop = bandShift (kick, out, 50.0, 2000.0);
+        expect (drop < -6.0, "(e) drums TONE 1 thins the kick (50 Hz vs 2 kHz " + juce::String (drop, 1).toStdString() + " dB)");
+    }
+    {
+        auto shortHit = params;
+        shortHit.drumDecay[rolla::Kick] = 0.f;
+        std::string picked;
+        const int frames = (int) kick.l.size();
+        const auto out = renderSolo (*bank, shortHit, rolla::Drums, rolla::Kick, 60, frames, picked);
+        float late = 0.f;
+        for (size_t i = (size_t) (frames / 4); i < out.l.size(); ++i)
+            late = std::max (late, std::fabs (out.l[i]));
+        expect (late < kSilent, "(e) kick DECAY 0 ends within an eighth of the file (" + dbfs (late) + " after a quarter)");
+    }
+}
 } // namespace
 
 int main()
@@ -502,6 +854,7 @@ int main()
     testResolve (scratch, bundle, savedTemp);
     testBundled (bundle, savedTemp);
     testEmpty (scratch, bundle);
+    testFidelity (scratch);
 
     scratch.deleteRecursively();
     std::cout << (fails == 0 ? "bundle tests passed\n" : std::to_string (fails) + " bundle test failure(s)\n");

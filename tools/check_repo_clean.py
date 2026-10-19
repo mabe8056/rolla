@@ -20,7 +20,17 @@ tree holds anything the public repo must not carry:
               The public genre model (resources/genre/*) also may not carry
               provenance, source ids / counts, names, files or raw grids as JSON
               keys, nor a reference name or reference id anywhere.
-  large       data files over 512 KB (.json .h .hpp .inc .csv) unless allowlisted
+  private     the private A&R gate bundle and originality indexes, at any depth:
+              rolla-gates/, rolla-gates-private/, run_all_gates.sh, candidate_gate.sh,
+              measure_renders.py, orig_index_*.json, AR_REVIEW_genre_writing_model*
+  refname     built-in list of the private reference artists / tracks and their
+              provenance paths (always on: every tracked path, and the content of
+              every tracked non-binary file of any type, tools/ and Markdown included). Stored shifted by one character so the plain
+              names never live in the repo. Whole names only (artist, artist +
+              title, or a distinctive title), never a single common word, so
+              ordinary English and the owner's own sample names don't trip it.
+              Between words: up to two of space, _, -, / or quotes, or none.
+  large      data files over 512 KB (.json .h .hpp .inc .csv) unless allowlisted
   audio, hard cap: an allowlisted audio fixture still fails over 64 KB. Real packs
               go into a built bundle (tools/inject_pack.sh), never the repo.
 
@@ -76,6 +86,39 @@ GENERATOR_SHIFTED_NAMES = ["N.Ijhi", "NIJHI", "NIjhi", "W!Mjof", "WMJOF", "WMjof
 # The sample-library manifest lists pack file names, not references.
 GENERATOR_NAME_SKIP = {"resources/SAMPLE_MANIFEST.json"}
 GENERATOR_SCOPES = ("src/", "resources/")
+
+# Private A&R gate bundle and originality indexes: never part of a checkout, at any depth.
+PRIVATE_BUNDLE_DIRS = {"rolla-gates", "rolla-gates-private"}
+PRIVATE_BUNDLE_FILES = ["orig_index_*.json", "run_all_gates.sh", "candidate_gate.sh", "measure_renders.py",
+                        "AR_REVIEW_genre_writing_model*"]
+
+
+def private_bundle_hit(rel):
+    parts = rel.split("/")
+    for d in parts[:-1]:
+        if d.lower() in PRIVATE_BUNDLE_DIRS:
+            return f"inside private gate bundle folder '{d}/'"
+    base = parts[-1]
+    for g in PRIVATE_BUNDLE_FILES:
+        if fnmatch.fnmatch(base.lower(), g.lower()):
+            return f"private gate bundle / originality index file ({g})"
+    return None
+
+
+# Private reference artists / tracks and their provenance paths, each character shifted up by one
+# (decoded at run time; lowercase, space between words). Public docs and code use generic labels
+# (REF_R1.., REF_D1.., REF_B1.., REF_J1..) instead. Add new names here shifted the same way.
+REFERENCE_SHIFTED_NAMES = [
+    "mbjembx", "ipvtf!pg!evc", "tufg!ebwjetf", "kpti!cblfs", "mpdbm!evc", "dsvj{b", "w!mjof",
+    "fmmjb", "fmjzb!kbzb", "mpwfst!jo!uif!ebodf", "mjhiumfbl", "n!ijhi", "b!gsfti!fofshz",
+    "xby!nbtufs", "hbtljo!dmptfs", "sbohfs!usvddp", "lzmf!xbmlfs",
+    "nfmbl!dmjqt", "nvtjd!ufbn!usbotdsjqujpot",
+]
+# Files where a listed name is something else. The sample-library manifest credits the owner's own
+# sample pack, whose artist shares one listed name; every other name is still checked there.
+REFERENCE_NAME_SKIP = {"resources/SAMPLE_MANIFEST.json": {"tufg!ebwjetf"}}
+# At most two separator characters between words: covers "A B", "A_B", "AB", 'A "B"', not "a - b" math.
+REF_SEP = r"[\s_\-/\"'‘’“”]{0,2}"
 
 
 def unshift(s):
@@ -133,6 +176,29 @@ def genre_hits(rel, text):
         if m:
             out.append(f"{rel}:{text.count(chr(10), 0, m.start()) + 1}: {what} in the public genre model")
     return out
+
+def reference_re(shifted):
+    words = unshift(shifted).split(" ")
+    return re.compile(r"(?<![A-Za-z0-9])" + REF_SEP.join(re.escape(w) for w in words) + r"(?![A-Za-z0-9])", re.I)
+
+
+REFERENCE_RES = [(s, reference_re(s)) for s in REFERENCE_SHIFTED_NAMES]
+
+
+def reference_name_hit(rel, text):
+    """First built-in reference name in the path or text: (line, index into the list) or None."""
+    skip = REFERENCE_NAME_SKIP.get(rel, set())
+    for i, (s, rx) in enumerate(REFERENCE_RES):
+        if s in skip:
+            continue
+        if rx.search(rel):
+            return 0, i
+        if text is not None:
+            m = rx.search(text)
+            if m:
+                return text.count("\n", 0, m.start()) + 1, i
+    return None
+
 
 SECRETS = [
     ("private key block", r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY(?: BLOCK)?-----"),
@@ -257,13 +323,24 @@ def code_reference_hits(text, path, out):
 
 
 def scan(root, names, allow_rules):
-    fails = {k: [] for k in ("audio", "midi", "secret", "dump", "reference", "generator", "large")}
+    fails = {k: [] for k in ("audio", "midi", "secret", "dump", "reference", "generator", "refname", "private", "large")}
     warns = []
     for rel in git_files(root):
         full = os.path.join(root, rel)
         base = os.path.basename(rel)
         ext = os.path.splitext(base)[1].lower()
         low = rel.lower()
+
+        # Reference names in the path itself (any file type, binary included).
+        if not allowed(allow_rules, "refname", rel):
+            hit = reference_name_hit(rel, None)
+            if hit:
+                fails["refname"].append(f"{rel}: path holds private reference name #{hit[1] + 1}")
+
+        why = private_bundle_hit(rel)
+        if why and not allowed(allow_rules, "private", rel):
+            fails["private"].append(f"{rel}: {why}")
+            continue
 
         if ext in AUDIO:
             if not allowed(allow_rules, "audio", rel):
@@ -297,9 +374,16 @@ def scan(root, names, allow_rules):
         if ext in DATA_EXT and size > LARGE_BYTES and not allowed(allow_rules, "large", rel):
             fails["large"].append(f"{rel}: {size // 1024} KB data file")
 
+        # Reference names in the content: every tracked non-binary file, whatever its extension.
+        text = read_text(full)
+        if text is not None and not allowed(allow_rules, "refname", rel):
+            hit = reference_name_hit(rel, text)
+            if hit and hit[0] > 0:   # path hits were reported above
+                fails["refname"].append(f"{rel}:{hit[0]}: private reference name #{hit[1] + 1} "
+                                        f"(use a generic label such as REF_R1)")
+
         if ext not in TEXT_EXT and base not in (".gitignore", "CMakeLists.txt"):
             continue
-        text = read_text(full)
         if text is None:
             continue
 
@@ -354,6 +438,27 @@ def scan(root, names, allow_rules):
     return fails, warns
 
 
+def scan_worktree_private(root, allow_rules):
+    """The private gate bundle must not sit anywhere in the checkout, tracked, untracked or git-ignored."""
+    out = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        rel_dir = os.path.relpath(dirpath, root).replace(os.sep, "/")
+        rel_dir = "" if rel_dir == "." else rel_dir + "/"
+        dirnames[:] = [d for d in dirnames if d != ".git"]
+        for d in list(dirnames):
+            if d.lower() in PRIVATE_BUNDLE_DIRS:
+                rel = rel_dir + d + "/"
+                if not allowed(allow_rules, "private", rel):
+                    out.append(f"{rel}: private gate bundle folder in the checkout")
+                dirnames.remove(d)
+        for f in filenames:
+            rel = rel_dir + f
+            why = private_bundle_hit(rel)
+            if why and not allowed(allow_rules, "private", rel):
+                out.append(f"{rel}: {why}")
+    return out
+
+
 def main(argv=None):
     here = os.path.dirname(os.path.abspath(__file__))
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -366,7 +471,9 @@ def main(argv=None):
     root = os.path.abspath(a.root)
     allow_path = a.allow or os.path.join(root, "tools", "repo_guard_allow.txt")
     names = load_names(a.names)
-    fails, warns = scan(root, names, load_allow(allow_path))
+    allow_rules = load_allow(allow_path)
+    fails, warns = scan(root, names, allow_rules)
+    fails["private"].extend(x for x in scan_worktree_private(root, allow_rules) if x not in fails["private"])
     total = sum(len(v) for v in fails.values())
     if a.json:
         print(json.dumps({"pass": total == 0, "fails": fails, "warnings": warns, "names_checked": len(names)}, indent=1))
