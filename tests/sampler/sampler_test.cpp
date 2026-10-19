@@ -4,6 +4,7 @@
 #include "Engine/Sampler.h"
 #include "Drums/DrumMachine.h"
 #include "GenreBrain/GenreTargetsJson.h"
+#include "GenreBrain/Treatment.h"
 #include "GenreBrain/KitMeshJson.h"
 #include "GenreBrain/LanePools.h"
 #include "GenreBrain/SampleFeaturesJson.h"
@@ -1886,6 +1887,232 @@ void testGenreTargets()
     expect (std::fabs (box.style (Style::Jackin).groove.swing.hi - 0.646f) < 1.0e-4f, "genre json: ext swing percent becomes a ratio band");
 }
 
+// Adaptive per-sample treatment (GenreBrain/Treatment.h): decisions against the mock
+// targets, then the Sampler seam on synthetic files.
+void testTreatment()
+{
+    using namespace rolla::genre;
+    const auto mock = GenreTargets::mock();
+    const double bpm = 124.0;
+
+    // A short pad under a one-bar chord: it dies at 300 ms, the lane wants 400 ms or
+    // more, the note lasts ~1.9 s. Loop its body.
+    SampleFeatures pad;
+    pad.lane = Lane::Pad;
+    pad.centroidHz = 900.f;
+    pad.tiltDbPerOct = -5.f;
+    pad.attackMs = 4.f;
+    pad.decay20Ms = 250.f;
+    pad.subRatio = 0.05f;
+    pad.lengthMs = 300.f;
+    const auto& padLane = mock.lane (Style::Roller, Lane::Pad);
+    const auto padT = decideTreatment (pad, padLane, bpm, 16.f);
+    expect (padT.loop && padT.loopStartMs >= pad.attackMs && padT.loopEndMs <= pad.lengthMs
+                && padT.loopEndMs - padT.loopStartMs >= 20.f && padT.xfadeMs >= 5.f
+                && padT.xfadeMs <= 0.5f * (padT.loopEndMs - padT.loopStartMs),
+            "treatment: a short pad under a long note gets a crossfaded loop past its attack");
+    expect (padT.decayTrimMs == 0.f && ! padT.wantsLayer, "treatment: a looped pad is not trimmed or layered");
+    expect (! decideTreatment (pad, padLane, bpm, 2.f).loop, "treatment: a pad that outlasts its note is not looped");
+
+    // A stab inside every band plays as recorded.
+    SampleFeatures stab;
+    stab.lane = Lane::Stab;
+    stab.centroidHz = 1200.f;
+    stab.tiltDbPerOct = -5.f;
+    stab.attackMs = 4.f;
+    stab.decay20Ms = 220.f;
+    stab.subRatio = 0.05f;
+    stab.loudnessDb = -18.f;
+    stab.lengthMs = 400.f;
+    const auto& stabLane = mock.lane (Style::Roller, Lane::Stab);
+    const auto stabT = decideTreatment (stab, stabLane, bpm, 4.f);
+    expect (! stabT.changesVoice() && ! stabT.loop && stabT.decayTrimMs == 0.f && stabT.attackMs == 0.f
+                && stabT.gainDb == 0.f && ! stabT.wantsLayer && stabT.stretch == 1.f && ! stabT.stretchMarked,
+            "treatment: an in-band stab is left as recorded");
+
+    // A closed hat ringing 600 ms against a 10..120 ms band: trimmed to the band's edge.
+    SampleFeatures hat;
+    hat.lane = Lane::HatC;
+    hat.centroidHz = 8000.f;
+    hat.tiltDbPerOct = -3.f;
+    hat.attackMs = 1.f;
+    hat.decay20Ms = 600.f;
+    hat.subRatio = 0.01f;
+    hat.lengthMs = 900.f;
+    const auto& hatLane = mock.lane (Style::Roller, Lane::HatC);
+    const auto hatT = decideTreatment (hat, hatLane, bpm, 1.f);
+    expect (hatT.decayTrimMs >= hatLane.decayMs.hi && hatT.decayTrimMs <= hatLane.decayMs.hi + hat.attackMs + 0.01f,
+            "treatment: a long-tailed hat is trimmed to its decay band (" + std::to_string (hatT.decayTrimMs) + " ms)");
+    expect (hatT.releaseMs >= 5.f && hatT.releaseMs < hatT.decayTrimMs && ! hatT.loop,
+            "treatment: the trim fades out, inside the trim");
+    hat.decay20Ms = 80.f;
+    expect (decideTreatment (hat, hatLane, bpm, 1.f).decayTrimMs == 0.f, "treatment: an in-band hat is not trimmed");
+    // The same long hat in a style with longer hats gets a longer trim: the number is the band's.
+    hat.decay20Ms = 600.f;
+    expect (decideTreatment (hat, mock.lane (Style::Deep, Lane::HatC), bpm, 1.f).decayTrimMs > hatT.decayTrimMs,
+            "treatment: the trim follows the style's band, not a per-sound constant");
+
+    // A kick with no sub: flag a layer and say why.
+    SampleFeatures kick;
+    kick.lane = Lane::Kick;
+    kick.centroidHz = 300.f;
+    kick.tiltDbPerOct = -6.f;
+    kick.attackMs = 2.f;
+    kick.decay20Ms = 200.f;
+    kick.subRatio = 0.05f;
+    kick.lengthMs = 400.f;
+    const auto& kickLane = mock.lane (Style::Roller, Lane::Kick);
+    const auto kickT = decideTreatment (kick, kickLane, bpm, 1.f);
+    expect (kickT.wantsLayer && kickT.reason == LayerReason::Sub && kickT.layerMiss > 0.25f,
+            std::string ("treatment: a kick with no sub wants a layer (reason ") + layerReasonName (kickT.reason) + ")");
+    expect (! kickT.changesVoice(), "treatment: a layer call does not touch the voice");
+    kick.subRatio = 0.6f;
+    expect (! decideTreatment (kick, kickLane, bpm, 1.f).wantsLayer, "treatment: a kick with sub needs no layer");
+
+    // Loudness: the stab's slot is -8 dB under the kick. Pull toward it, bounded.
+    TreatmentOptions level;
+    level.referenceDb = -10.f;
+    stab.loudnessDb = -5.f; // +5 over the kick, 13 dB hot
+    const auto hot = decideTreatment (stab, stabLane, bpm, 4.f, level);
+    expect (hot.gainDb < 0.f && hot.gainDb >= -treatment::kGainMaxDb, "treatment: a hot stab is turned down, bounded");
+    stab.loudnessDb = -21.f; // -11 under the kick, 3 dB quiet
+    const auto quiet = decideTreatment (stab, stabLane, bpm, 4.f, level);
+    expect (quiet.gainDb > 0.f && quiet.gainDb < 3.f, "treatment: a quiet stab moves toward the slot, not past it");
+    stab.loudnessDb = -18.5f; // -8.5 under: inside the deadband
+    expect (decideTreatment (stab, stabLane, bpm, 4.f, level).gainDb == 0.f, "treatment: a stab in its slot keeps its level");
+    expect (decideTreatment (stab, stabLane, bpm, 4.f).gainDb == 0.f, "treatment: no reference level, no level move");
+
+    // Attack: a lane whose pads swell from 40 ms softens a 2 ms pad onset.
+    LaneTargets swell = padLane;
+    swell.attackMs.lo = 40.f;
+    swell.attackMs.hi = 300.f;
+    pad.attackMs = 2.f;
+    pad.decay20Ms = 900.f;
+    pad.lengthMs = 3000.f;
+    const auto soft = decideTreatment (pad, swell, bpm, 16.f);
+    expect (soft.attackMs == 40.f && ! soft.loop, "treatment: a sharp pad gets the band's attack");
+    expect (decideTreatment (pad, padLane, bpm, 16.f).attackMs == 0.f, "treatment: an attack inside the band is kept");
+
+    // Tempo: a tagged phrase loop reports the sampler's stretch; an untagged one is marked.
+    TreatmentOptions phrase;
+    phrase.phraseLoop = true;
+    phrase.fileBpm = 120;
+    const auto fit = decideTreatment (stab, stabLane, bpm, 16.f, phrase);
+    expect (std::fabs (fit.stretch - 124.f / 120.f) < 1.0e-4f && ! fit.stretchMarked && ! fit.loop && fit.decayTrimMs == 0.f,
+            "treatment: a tagged phrase loop is tempo-fit by the sampler");
+    phrase.fileBpm = 0;
+    expect (decideTreatment (stab, stabLane, bpm, 16.f, phrase).stretchMarked, "treatment: an untagged phrase loop is marked");
+
+    // ---- Through the Sampler ----------------------------------------------------
+    const auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("rolla-treatment-test");
+    root.deleteRecursively();
+    writeTone (root.getChildFile ("PAD/tail.wav"), 1.0, 0.4f, 440.f, false);
+    writeTone (root.getChildFile ("PAD/short.wav"), 0.3, 0.4f, 440.f, false);
+    rolla::SampleLibrary lib;
+    lib.setRoot (root);
+    lib.preload ({ "PAD/tail.wav", "PAD/short.wav" });
+    expect (waitUntil ([&] { return lib.ready ("PAD/tail.wav") && lib.ready ("PAD/short.wav"); }), "treatment files load");
+
+    rolla::PresetBank bank;
+    rolla::loadDefaultPresets (bank);
+    bank.count[rolla::Pad] = 1;
+    auto& spec = bank.pad[0].sample;
+    spec.mode = rolla::SampleMode::Sample;
+    spec.filter.on = false;
+    spec.loop = {};
+    spec.poolCount = 0;
+    spec.zoneCount = 0;
+    spec.start = 0.f;
+    spec.reverse = false;
+    spec.slice = false;
+    rolla::EngineParams params;
+    params.presets = &bank;
+    params.library = &lib;
+
+    auto renderPad = [&] (const char* file, const rolla::TreatmentSet* set, int frames)
+    {
+        std::snprintf (spec.file, sizeof spec.file, "%s", file);
+        rolla::EngineParams p = params;
+        p.treatments = set;
+        rolla::Sampler s;
+        s.prepare (48000.0);
+        s.take (rolla::Pad, 69, 110, 1.0e9f, bank, p);
+        std::vector<float> out ((size_t) frames);
+        for (auto& x : out)
+        {
+            float laneL[rolla::NumParts] {};
+            float laneR[rolla::NumParts] {};
+            s.render (laneL, laneR, 0.f, 0.f, false);
+            x = laneL[rolla::Pad];
+        }
+        return out;
+    };
+    auto lastAudible = [] (const std::vector<float>& v)
+    {
+        int last = -1;
+        for (int i = 0; i < (int) v.size(); ++i)
+            if (std::fabs (v[(size_t) i]) > 1.0e-4f)
+                last = i;
+        return last;
+    };
+    auto energy = [] (const std::vector<float>& v, int from, int to)
+    {
+        double e = 0.0;
+        for (int i = from; i < to && i < (int) v.size(); ++i)
+            e += (double) v[(size_t) i] * (double) v[(size_t) i];
+        return e;
+    };
+
+    const int frames = 60000;
+    const auto plain = renderPad ("PAD/tail.wav", nullptr, frames);
+    rolla::TreatmentSet none;
+    expect (plain == renderPad ("PAD/tail.wav", &none, frames), "treatment seam: an empty set renders identically");
+
+    Treatment trim;
+    trim.decayTrimMs = 200.f;
+    trim.releaseMs = 50.f;
+    rolla::TreatmentSet trimmed;
+    trimmed.set (rolla::Pad, trim, "PAD/tail.wav");
+    const auto cut = renderPad ("PAD/tail.wav", &trimmed, frames);
+    const int plainEnd = lastAudible (plain);
+    const int cutEnd = lastAudible (cut);
+    expect (plainEnd > 45000, "treatment seam: the untreated 1 s pad rings to its end (" + std::to_string (plainEnd) + ")");
+    expect (cutEnd > 0 && cutEnd <= (int) (0.2 * 48000.0) + 64 && cutEnd < plainEnd,
+            "treatment seam: a trimmed voice ends at its trim (" + std::to_string (cutEnd) + " vs " + std::to_string (plainEnd) + ")");
+    expect (energy (cut, 0, 4800) > 0.0 && std::fabs (energy (cut, 0, 4800) - energy (plain, 0, 4800)) < 1.0e-9,
+            "treatment seam: before the trim fade the voice is untouched");
+
+    rolla::TreatmentSet otherFile;
+    otherFile.set (rolla::Pad, trim, "PAD/other.wav");
+    expect (renderPad ("PAD/tail.wav", &otherFile, frames) == plain, "treatment seam: a treatment for another file is ignored");
+
+    // The short pad, looped by the decision for a style whose pads run long.
+    SampleFeatures shortPad;
+    shortPad.lane = Lane::Pad;
+    shortPad.centroidHz = 440.f;
+    shortPad.tiltDbPerOct = -5.f;
+    shortPad.attackMs = 4.f;
+    shortPad.decay20Ms = 290.f;
+    shortPad.subRatio = 0.f;
+    shortPad.lengthMs = 300.f;
+    const auto loopT = decideTreatment (shortPad, mock.lane (Style::Deep, Lane::Pad), bpm, 16.f);
+    expect (loopT.loop, "treatment: the short test pad gets a loop");
+    rolla::TreatmentSet looped;
+    looped.set (rolla::Pad, loopT);
+    const auto held = renderPad ("PAD/short.wav", &looped, frames);
+    const auto once = renderPad ("PAD/short.wav", nullptr, frames);
+    expect (lastAudible (once) < (int) (0.32 * 48000.0), "treatment seam: the untreated short pad stops at its end");
+    expect (energy (held, 28800, 38400) > 1.0e-3, "treatment seam: the looped short pad still sounds at 0.6 - 0.8 s");
+
+    Treatment louder;
+    louder.gainDb = 6.f;
+    rolla::TreatmentSet gained;
+    gained.set (rolla::Pad, louder);
+    const auto up = renderPad ("PAD/tail.wav", &gained, 9600);
+    const double ratio = energy (up, 0, 9600) / std::max (1.0e-12, energy (plain, 0, 9600));
+    expect (std::fabs (ratio - std::pow (10.0, 0.6)) < 0.05, "treatment seam: gainDb scales the voice");
+
+    root.deleteRecursively();
 // Made-up samples with numbers typical of the mock bands; never real files or a profile.
 rolla::genre::SampleFeatures mockSample (rolla::genre::Lane lane, const std::string& id, const std::string& pack, bool onTarget)
 {
@@ -2258,6 +2485,7 @@ int main()
     testFingerprint();
     testFingerprintTool();
     testGenreTargets();
+    testTreatment();
     testSoundSelector();
     testKitMesh();
     testKickKeyFollow();

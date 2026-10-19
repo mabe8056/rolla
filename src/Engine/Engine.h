@@ -50,6 +50,9 @@ struct EngineParams
     const SampleIndex* sampleIndex = nullptr;
     // Published by UserSlots. Null keeps the preset sample block only.
     const UserSlotView* userSlots = nullptr;
+    // Adaptive per-sample treatments set at roll time (Sampler.h). Null plays
+    // every sample as recorded, exactly as before.
+    const TreatmentSet* treatments = nullptr;
     int samplePick[NumParts] {};
     // Retune guard, key locked: no file in the lane's pool survives the key, so the
     // sampler stays silent on that lane (its MIDI still goes out). Set off the audio thread.
