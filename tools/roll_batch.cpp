@@ -3,6 +3,7 @@
 #include "Generator/Generator.h"
 #include "Generator/Intensity.h"
 #include "Generator/MidiFile.h"
+#include "Generator/OriginalityJson.h"
 #include "Generator/Presets.h"
 #include "Mix/MixProgram.h"
 
@@ -18,6 +19,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -31,14 +33,84 @@ const char* usageText();
 namespace
 {
 
+// Fallback 16th swing when the preset bank has none: the genre model v1.2
+// style targets, clamped to its 53-57% hat band.
 float swingFor (int dialect)
 {
     switch (dialect)
     {
-        case rolla::UkMin: return 0.52f;
-        case rolla::Long: return 0.51f;
-        default: return 0.50f;
+        case rolla::UkMin: return 0.537f;
+        case rolla::Long: return 0.54f;
+        case rolla::Pop: return 0.567f;
+        default: return 0.565f;
     }
+}
+
+// Redraws behind one written roll: the originality / thin-cell redraws of
+// every generate() call that roll took, plus the batch skeleton redraws.
+struct RollRedraws
+{
+    int orig = 0;
+    int guard = 0;
+    int skeleton = 0;
+    std::vector<rolla::Groove::RedrawEntry> log;
+
+    int total() const { return orig + guard + skeleton; }
+
+    void take (const rolla::Groove& g)
+    {
+        orig += g.origRedraws;
+        guard += g.guardRedraws;
+        for (int i = 0; i < g.redrawLogCount && i < rolla::Groove::kMaxRedrawLog; ++i)
+            log.push_back (g.redrawLog[i]);
+    }
+};
+
+const char* laneName (int lane)
+{
+    if (lane >= 0 && lane < rolla::NumParts)
+        return rolla::partId (lane);
+    return lane == -1 ? "merged_low" : "none";
+}
+
+const char* metricText (int metric)
+{
+    return metric >= rolla::orig::MetricNone && metric <= rolla::orig::MetricBannedFigure ? rolla::orig::metricName (metric) : "other";
+}
+
+std::string redrawJson (const RollRedraws& r)
+{
+    std::ostringstream out;
+    out << std::fixed << std::setprecision (3);
+    out << "\"redraws\": " << r.total() << ",\n  \"redraws_orig\": " << r.orig << ",\n  \"redraws_guard\": " << r.guard
+        << ",\n  \"redraws_skeleton\": " << r.skeleton << ",\n  \"redraw_log\": [";
+    for (size_t i = 0; i < r.log.size(); ++i)
+    {
+        const auto& e = r.log[i];
+        out << (i ? ", " : "") << "{\"lane\": \"" << laneName (e.lane) << "\", \"ref\": \"" << e.ref
+            << "\", \"metric\": \"" << metricText (e.metric) << "\", \"score\": " << e.score << "}";
+    }
+    out << "]";
+    return out.str();
+}
+
+// Always written, also when the WAV is skipped (no sample energy deletes the sidecar).
+void writeRollJson (const std::filesystem::path& dir, int style, const std::string& name,
+                    const std::uint32_t seeds[rolla::NumParts], const RollRedraws& r)
+{
+    std::ofstream out (dir / "roll.json");
+    out << "{\n  \"style\": \"" << rolla::dialectId (style) << "\",\n  \"roll\": \"" << name << "\",\n  \"seeds\": [";
+    for (int p = 0; p < rolla::NumParts; ++p)
+        out << (p ? ", " : "") << seeds[p];
+    out << "],\n  " << redrawJson (r) << "\n}\n";
+    // Every redraw behind the roll, one stderr line each (count, reference
+    // stream id and score), so a gate log shows what the guard caught.
+    for (std::size_t i = 0; i < r.log.size(); ++i)
+        std::cerr << "REDRAW " << rolla::dialectId (style) << " " << name << " #" << (i + 1) << "/" << r.total()
+                  << " lane=" << laneName (r.log[i].lane) << " metric=" << metricText (r.log[i].metric)
+                  << " ref=" << (r.log[i].ref[0] ? r.log[i].ref : "-") << " score=" << r.log[i].score << "\n";
+    if (r.skeleton > 0)
+        std::cerr << "REDRAW " << rolla::dialectId (style) << " " << name << " skeleton=" << r.skeleton << " (batch twin)\n";
 }
 
 struct Knobs
@@ -348,10 +420,11 @@ void writeStats (const std::filesystem::path& path,
     row ("STAB 0→1", stab);
     out << "\nTwenty rolls per style are under tools/out/<style>/roll_XX/ as type-0 lane MIDIs, "
            "one type-1 combined MIDI, and a 48 kHz 24-bit WAV at 130 BPM. "
-           "Swing is 52% UK MIN, 51% LONG, 50% POP and GASKIN 90s. WAV files are gitignored.\n";
+           "Swing is 53.7% UK MIN, 54% LONG, 56.7% POP and 56.5% JACKIN (genre model v1.2 band 53-57%). "
+           "Each roll folder has a roll.json with its seeds and originality redraws. WAV files are gitignored.\n";
 }
 
-// Old ids (ukmin|long|pop|gaskin), the style names (roller|deep|bouncy|jackin),
+// Old ids (ukmin|long|pop|jackin), the style names (roller|deep|bouncy|jackin),
 // or 0-3, in any case.
 int styleId (const std::string& name)
 {
@@ -360,7 +433,7 @@ int styleId (const std::string& name)
     if (s == "ukmin" || s == "roller" || s == "0") return rolla::UkMin;
     if (s == "long" || s == "deep" || s == "1") return rolla::Long;
     if (s == "pop" || s == "bouncy" || s == "2") return rolla::Pop;
-    if (s == "gaskin" || s == "jackin" || s == "3") return rolla::Gaskin;
+    if (s == "jackin" || s == "3") return rolla::Jackin;
     if (s == "all") return -2;
     return -1;
 }
@@ -434,11 +507,12 @@ void waitReady (rolla::SampleLibrary& library, const std::vector<std::string>& p
 void writeSidecar (const juce::File& wav, int style, const Knobs& knobs, bool hitsMute, float swing,
                    const rolla::PresetBank& bank, const int preset[rolla::NumParts],
                    const int samplePick[rolla::NumParts], const std::string fileOf[rolla::NumParts],
-                   const std::string drumOf[rolla::NumDrumVoices], int kickMidi)
+                   const std::string drumOf[rolla::NumDrumVoices], int kickMidi, const RollRedraws& redraws)
 {
     std::ostringstream out;
     out << std::fixed << std::setprecision (3);
     out << "{\n  \"style\": \"" << rolla::dialectId (style) << "\",\n";
+    out << "  " << redrawJson (redraws) << ",\n";
     out << "  \"intensity\": " << knobs.intensity << ",\n";
     out << "  \"hitsMute\": " << (hitsMute ? "true" : "false") << ",\n";
     out << "  \"swing\": " << swing << ",\n";
@@ -507,10 +581,11 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
             std::cerr << "sample index did not finish; WAV energy may be missing\n";
     }
 
-    const int styles[4] = { rolla::UkMin, rolla::Long, rolla::Pop, rolla::Gaskin };
+    const int styles[4] = { rolla::UkMin, rolla::Long, rolla::Pop, rolla::Jackin };
     const int nStyles = one == -2 ? 4 : 1;
     int wavs = 0;
     int silent = 0;
+    int origFails = 0;
     for (int s = 0; s < nStyles; ++s)
     {
         const int style = one == -2 ? styles[s] : one;
@@ -529,7 +604,17 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
             for (int p = 0; p < rolla::NumParts; ++p)
                 seeds[p] = seed + (std::uint32_t) roll * 0x9E3779B9u + (std::uint32_t) p * 17u + (std::uint32_t) style * 101u;
             rolla::Groove groove {};
-            rolla::generate (groove, settings, seeds, 0x7fu);
+            RollRedraws redraws;
+            // The originality floor refuses a roll it cannot clear (generate() returns
+            // false and leaves the groove alone). A refused roll is never written.
+            if (! rolla::generate (groove, settings, seeds, 0x7fu))
+            {
+                ++origFails;
+                std::cerr << "ORIG_REFUSED " << rolla::dialectId (style) << " " << name.str()
+                          << ": no composition cleared the originality floor; roll not written\n";
+                continue;
+            }
+            redraws.take (groove);
             // v2.1 skeleton cap is a runtime redraw, not a constant fitted to the gate seeds.
             for (int guard = 0; guard < 8; ++guard)
             {
@@ -540,8 +625,18 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
                 if (! close)
                     break;
                 seeds[rolla::Bass] ^= 0x6D2B79F5u * (std::uint32_t) (guard + 1);
-                rolla::generate (groove, settings, seeds, 0x7fu);
+                ++redraws.skeleton;
+                if (! rolla::generate (groove, settings, seeds, 0x7fu))
+                {
+                    // Refused: groove still holds the last roll that cleared.
+                    ++origFails;
+                    std::cerr << "ORIG_REFUSED " << rolla::dialectId (style) << " " << name.str()
+                              << " (skeleton redraw " << guard << "): kept the last original draw\n";
+                    break;
+                }
+                redraws.take (groove);
             }
+            writeRollJson (dir, style, name.str(), seeds, redraws);
             seen.push_back (groove);
             rolla::Groove arranged;
             const auto plan = rolla::planIntensity (style, knobs.intensity, settings.stab);
@@ -591,11 +686,12 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
                 wav.withFileExtension (".json").deleteFile();
                 ++silent;
                 std::cout << "SKIPPED clicks tails loudness " << rolla::dialectId (style) << " " << name.str()
-                          << " (no sample energy)\n";
+                          << " redraws=" << redraws.total() << " (no sample energy)\n";
             }
             else
             {
-                writeSidecar (wav, style, knobs, row.hitsMute, swing, bank, preset, samplePick, fileOf, drumOf, rendered.kickMidiSample);
+                writeSidecar (wav, style, knobs, row.hitsMute, swing, bank, preset, samplePick, fileOf, drumOf, rendered.kickMidiSample,
+                              redraws);
                 if (knobs.stems)
                 {
                     for (int part = 0; part < rolla::NumParts; ++part)
@@ -609,6 +705,7 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
                 }
                 ++wavs;
                 std::cout << rolla::dialectId (style) << " " << name.str()
+                          << " redraws=" << redraws.total()
                           << " peak=" << rendered.peak
                           << " kickMidi=" << rendered.kickMidiSample
                           << " bass=" << presetName (bank, rolla::Bass, preset[rolla::Bass])
@@ -616,24 +713,94 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
             }
         }
     }
-    std::cout << "wav files " << wavs << " skipped " << silent << "\n";
+    std::cout << "wav files " << wavs << " skipped " << silent << " orig_refused " << origFails << "\n";
     if (! samples.empty() && wavs == 0)
         return 1;
-    return 0;
+    return origFails > 0 ? 1 : 0;
 }
 
 } // namespace
 
 const char* usageText()
 {
-    return "rolla-rolls --samples DIR --style roller|deep|bouncy|jackin|ukmin|long|pop|gaskin|all --count N --seed S\n"
+    return "rolla-rolls --samples DIR --style roller|deep|bouncy|jackin|ukmin|long|pop|all --count N --seed S\n"
            "            [--out DIR] [--stems] [--stem-lanes DRUMS,BASS] [--folder-names ids|styles]\n"
-           "            (style is case-insensitive; folders default to the ids ukmin/long/pop/gaskin,\n"
+           "            (style is case-insensitive; folders default to the ids ukmin/long/pop/jackin,\n"
            "            'styles' names them roller/deep/bouncy/jackin)\n"
            "            [--knob DARK=0.55] [--knob BUSY=0.40] [--knob BOUNCE=0.45] [--knob STAB=0.55]\n"
            "            [--knob TONE=0.5] [--knob PUNCH=0.5] [--knob LEVEL=0] [--knob INTENSITY=75]\n"
-           "            [--knob BASS.TONE=0.5] [--knob BASS.PUNCH=0.5] [--knob BASS.LEVEL=0]\n";
+           "            [--knob BASS.TONE=0.5] [--knob BASS.PUNCH=0.5] [--knob BASS.LEVEL=0]\n"
+           "            [--orig-index FILE|none]   hashed reference index (default: $ROLLA_ORIG_INDEX, else\n"
+           "                                       <ROLLA settings folder>/Originality/orig_index.json if present)\n"
+           "rolla-rolls --build-orig-index DIR [--orig-out FILE]\n"
+           "            hash every .mid/.midi under DIR into an index (default out: the default index path);\n"
+           "            prints the id -> file list, which stays out of the index\n";
 }
+
+namespace
+{
+
+// The external index for this run: an explicit file, "none", or the default path if it exists.
+// The shipped banned-skeleton index loads as in the plugin ($ROLLA_GENRE_DATA_DIR/orig_builtin.json).
+bool loadOrigIndex (const std::string& choice)
+{
+    {
+        juce::String why;
+        auto shipped = rolla::orig::loadIndex (rolla::orig::builtinIndexFile(), &why);
+        std::cout << "originality: shipped banned-skeleton index "
+                  << (shipped != nullptr ? juce::String ((int) shipped->refs.size()) + " streams" : "absent (" + why + ")") << "\n";
+        rolla::orig::setBuiltinIndex (std::move (shipped));
+    }
+    if (choice == "none")
+    {
+        rolla::orig::setIndex (nullptr);
+        std::cout << "originality: built-in guard only (--orig-index none)\n";
+        return true;
+    }
+    const juce::File file = choice.empty() ? rolla::orig::defaultIndexFile() : juce::File::getCurrentWorkingDirectory().getChildFile (juce::String (choice));
+    juce::String error;
+    auto index = rolla::orig::loadIndex (file, &error);
+    if (index == nullptr)
+    {
+        rolla::orig::setIndex (nullptr);
+        if (! choice.empty())
+        {
+            std::cerr << "FAIL --orig-index " << choice << ": " << error << "\n";
+            return false;
+        }
+        std::cout << "originality: built-in guard only (" << error << ")\n";
+        return true;
+    }
+    std::cout << "originality: built-in guard + " << index->refs.size() << " reference streams from "
+              << file.getFullPathName() << "\n";
+    rolla::orig::setIndex (std::move (index));
+    return true;
+}
+
+int buildOrigIndex (const std::string& folder, const std::string& outPath)
+{
+    const juce::File dir = juce::File::getCurrentWorkingDirectory().getChildFile (juce::String (folder));
+    if (folder.empty() || ! dir.isDirectory())
+    {
+        std::cerr << "FAIL --build-orig-index needs a folder of reference MIDI\n";
+        return 2;
+    }
+    rolla::orig::Index index;
+    const auto report = rolla::orig::buildIndex (dir, index);
+    const juce::File out = outPath.empty() ? rolla::orig::defaultIndexFile() : juce::File::getCurrentWorkingDirectory().getChildFile (juce::String (outPath));
+    if (! rolla::orig::writeIndex (index, out))
+    {
+        std::cerr << "FAIL could not write " << out.getFullPathName() << "\n";
+        return 1;
+    }
+    for (const auto& row : report.idToPath)
+        std::cout << row.first << "  " << row.second << "\n";
+    std::cout << "wrote " << out.getFullPathName() << ": " << report.files << " files, "
+              << report.streams << " reference streams (hashes only)\n";
+    return report.streams > 0 ? 0 : 1;
+}
+
+} // namespace
 
 int main (int argc, char** argv)
 {
@@ -642,6 +809,7 @@ int main (int argc, char** argv)
     std::string samples, style = "all", out = "rolls";
     int count = 20;
     std::uint32_t seed = 1;
+    std::string origIndex, buildFrom, origOut;
     bool batch = false;
     Knobs knobs;
     for (int i = 1; i < argc; ++i)
@@ -688,6 +856,9 @@ int main (int argc, char** argv)
             knobs.styleFolders = v == "styles";
             batch = true;
         }
+        else if (take ("--orig-index")) { origIndex = value; }
+        else if (take ("--build-orig-index")) { buildFrom = value; }
+        else if (take ("--orig-out")) { origOut = value; }
         else if (take ("--knob"))
         {
             if (! parseKnob (value, knobs))
@@ -698,10 +869,14 @@ int main (int argc, char** argv)
             batch = true;
         }
     }
+    if (! buildFrom.empty())
+        return buildOrigIndex (buildFrom, origOut);
+    if (! loadOrigIndex (origIndex))
+        return 2;
     if (batch)
         return renderBatch (samples, style, count, seed, out, knobs);
 
-    const std::filesystem::path root = argc > 1 ? argv[1] : "tools/out";
+    const std::filesystem::path root = argc > 1 && argv[1][0] != '-' ? argv[1] : "tools/out";
     std::filesystem::create_directories (root);
 
     rolla::StyleStat stats[rolla::NumDialects] {};
@@ -750,7 +925,14 @@ int main (int argc, char** argv)
             std::uint32_t seeds[rolla::NumParts];
             seedsFor (dialect, roll, seeds);
             rolla::Groove groove {};
-            rolla::generate (groove, settings, seeds, 0x7fu);
+            RollRedraws redraws;
+            if (! rolla::generate (groove, settings, seeds, 0x7fu))
+            {
+                std::cerr << "FAIL ORIG_REFUSED " << rolla::dialectId (dialect) << " " << name.str() << "\n";
+                ++failures;
+                continue;
+            }
+            redraws.take (groove);
             for (int guard = 0; guard < 16; ++guard)
             {
                 bool close = false;
@@ -760,9 +942,18 @@ int main (int argc, char** argv)
                 if (! close)
                     break;
                 seeds[rolla::Bass] ^= 0x9E3779B9u + (std::uint32_t) guard * 0x85EBCA6Bu;
-                rolla::generate (groove, settings, seeds, 0x7fu);
+                ++redraws.skeleton;
+                if (! rolla::generate (groove, settings, seeds, 0x7fu))
+                {
+                    std::cerr << "FAIL ORIG_REFUSED " << rolla::dialectId (dialect) << " " << name.str()
+                              << " (skeleton redraw " << guard << ")\n";
+                    ++failures;
+                    break;
+                }
+                redraws.take (groove);
             }
             seen[dialect].push_back (groove);
+            writeRollJson (dir, dialect, name.str(), seeds, redraws);
 
             std::vector<std::string> written;
             std::string error;
@@ -796,6 +987,7 @@ int main (int argc, char** argv)
                       << " bass=" << groove.lane[rolla::Bass].count
                       << " stab=" << groove.lane[rolla::Stab].count
                       << " guard=" << groove.guardRef
+                      << " redraws=" << redraws.total()
                       << " peak=" << peak << "\n";
         }
     }

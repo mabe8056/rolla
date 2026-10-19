@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <fstream>
 
 namespace rolla
@@ -86,7 +87,8 @@ bool noteOnTaken (const std::vector<Event>& ev, std::uint32_t tick, int pitch)
     return false;
 }
 
-std::vector<std::uint8_t> trackBytes (const std::vector<Event>& events, double bpm, int bars, bool withTempo)
+std::vector<std::uint8_t> trackBytes (const std::vector<Event>& events, double bpm, int bars, bool withTempo,
+                                      const char* text = nullptr)
 {
     std::vector<Event> ev = events;
     std::sort (ev.begin(), ev.end());
@@ -117,6 +119,17 @@ std::vector<std::uint8_t> trackBytes (const std::vector<Event>& events, double b
         pushByte (trk, 5);
         for (int i = 0; i < 5; ++i)
             pushByte (trk, (std::uint8_t) marker[i]);
+    }
+    // BOUNCY bass mode as a text event at tick 0 ("mode:bounce" / "mode:pulse").
+    if (text != nullptr)
+    {
+        const auto len = (std::uint32_t) std::strlen (text);
+        pushByte (trk, 0);
+        pushByte (trk, 0xff);
+        pushByte (trk, 0x01);
+        pushVlq (trk, len);
+        for (std::uint32_t i = 0; i < len; ++i)
+            pushByte (trk, (std::uint8_t) text[i]);
     }
     constexpr int ppq = 480;
     const std::uint32_t endTick = (std::uint32_t) (bars * 4 * ppq);
@@ -302,7 +315,8 @@ bool MidiExport::writePart (const std::string& path,
         error = "bad lane";
         return false;
     }
-    auto bytes = smf ({ trackBytes (laneEvents (groove, part, key, swing), bpm, groove.bars, true) });
+    auto bytes = smf ({ trackBytes (laneEvents (groove, part, key, swing), bpm, groove.bars, true,
+                                    part == Bass ? bassModeText (groove) : nullptr) });
     return writeFile (path, bytes, error);
 }
 
@@ -319,7 +333,8 @@ bool MidiExport::writeMultitrack (const std::string& path,
         tracks.push_back (trackBytes (none, bpm, groove.bars, true));
     }
     for (int part = 0; part < NumParts; ++part)
-        tracks.push_back (trackBytes (laneEvents (groove, part, key, swing), bpm, groove.bars, false));
+        tracks.push_back (trackBytes (laneEvents (groove, part, key, swing), bpm, groove.bars, false,
+                                      part == Bass ? bassModeText (groove) : nullptr));
     return writeFile (path, smf (tracks), error);
 }
 
@@ -350,12 +365,13 @@ bool MidiExport::writeAll (const std::string& directory,
         if (p != Drums && groove.lane[p].count <= 0)
             continue;
         const auto ev = laneEvents (groove, p, key, swing);
-        auto bytes = smf ({ trackBytes (ev, bpm, groove.bars, true) });
+        const char* modeText = p == Bass ? bassModeText (groove) : nullptr;
+        auto bytes = smf ({ trackBytes (ev, bpm, groove.bars, true, modeText) });
         const auto path = pathFor (partId (p));
         if (! writeFile (path, bytes, error))
             return false;
         writtenPaths.push_back (path);
-        combined.push_back (trackBytes (ev, bpm, groove.bars, false));
+        combined.push_back (trackBytes (ev, bpm, groove.bars, false, modeText));
     }
 
     auto all = smf (combined);

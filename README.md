@@ -69,19 +69,34 @@ codesign --force --deep --sign - ~/Library/Audio/Plug-Ins/Components/ROLLA.compo
 - **EXPORT MIDI** writes `.mid` files (480 PPQ, per lane plus a type-1 combined file) to `~/Documents/ROLLA/`. **DRAG MIDI** drags those files out. FL likes `.mid`, not `.midi`. If the clip does not sit on the bar, use Realign — the file starts with a ROLLA marker and a 1-tick anchor.
 - Drum voices accept a dropped WAV (kick, snare, clap, rim, low tom, mid tom, closed hat, open hat, ride). Click a loaded voice to clear it and return to the model. Samples are remembered in the plugin state. They are never bundled.
 
-Dialects: UK MIN, LONG, POP, GASKIN 90s. Key defaults to D. Macros DARK, BUSY, BOUNCE, and STAB shape the next roll. TONE, PUNCH, and level shape the sound of the current preset without writing a new pattern.
+Dialects: UK MIN, LONG, POP, JACKIN 90s. Key defaults to D. Macros DARK, BUSY, BOUNCE, and STAB shape the next roll. TONE, PUNCH, and level shape the sound of the current preset without writing a new pattern.
 
 The editor is the locked D-simple dark layout. Seven lane rows (colour, pattern strip, mute, shuffle, keep) sit above one shared SOUND panel for the lane you click: preset, TONE, PUNCH, LEVEL. DRUMS adds seven kit voices — kick, snare, clap, closed hat, open hat, ride, low tom — plus rim and mid tom, so a dropped WAV can still replace those two models. The right column is the ROLL face (space does the same thing), the four macros shown on a 0–10 scale, swing and duck, then DRAG MIDI and EXPORT. Colours and the face are provisional in `src/UiTokens.h` and `paintRollFace()` (`src/RollFace.h`). When HANDOFF.md and face.svg arrive, those two files take the skin. The geometry stays where it is.
 
 ## Samples
 
-Presets stay on the synth until a preset's `sample.mode` is `SAMPLE` or `LAYER` and the file is actually on disk. A missing file keeps the synth and draws a small warning triangle on that lane. Audio is never embedded and never committed.
+The plugin plays samples only. No preset, saved state or missing file brings back a synth, an arp or a test tone: a lane with nothing loaded is silent, and a red banner reads `Samples not loaded: <path> (<n> files)`. The logo menu shows the active folder and its file count. Audio is never committed.
 
-Default folder (overridable from the ROLLA logo menu, stored as `samplesRoot` in `ROLLA.settings`):
+Samples play as recorded. At the default knobs (TONE 0.5, drum DECAY 0.5) there is no filter, no synth envelope and no saturation: each hit or note runs its file's natural length, L and R take the same path, and a note that starts on the file's first sample keeps the file's own attack. TONE below 0.5 sweeps a lowpass down to the lane preset's cutoff, above 0.5 raises a highpass to 320 Hz. Drum DECAY below 0.5 cuts the hit short (an eighth of its length at 0). A preset's start offset and loop points apply only to its own file; a file drawn from a pool plays from its first sample, once.
 
-- macOS: `~/Music/ROLLA/Samples/`
-- Windows: `%USERPROFILE%\Music\ROLLA\Samples\`
-- Linux: `~/Music/ROLLA/Samples/`
+Where ROLLA looks, in order:
+
+1. The pack built into the plugin: `ROLLA.vst3/Contents/Resources/Samples` (or `ROLLA.component/…`). Nothing is ever written there.
+2. The folder saved as `samplesRoot` in `ROLLA.settings` (logo menu **Samples folder…**), if it exists, holds audio and is not under a temp folder.
+3. `~/Music/ROLLA/Samples/` (Windows `%USERPROFILE%\Music\ROLLA\Samples\`).
+
+Building a pack into the plugin (the pack stays outside the repo):
+
+```
+cmake -B build -DROLLA_SAMPLE_PACK_DIR=/path/to/pack     # copied into the bundles after every build
+tools/inject_pack.sh build/ROLLA_artefacts/Release/VST3/ROLLA.vst3 /path/to/pack   # or into one built bundle
+```
+
+On macOS both re-sign the bundle ad hoc. `Samples/.rolla-pack.json` records the file count and the manifest hash. A `SAMPLE_MANIFEST_v2.json` at the pack root replaces the embedded manifest.
+
+Tests never touch a real profile: `tests/common/ScratchProfile.h` points `ROLLA_SETTINGS_DIR`, `ROLLA_CACHE_DIR`, `ROLLA_DEFAULT_ROOT` and `ROLLA_BUNDLE_ROOT` at a temp folder (on macOS `$HOME` alone does not move JUCE's files). The last two are ignored by plugin builds.
+
+Folder layout:
 
 ```
 BASS/  STAB/  HITS/  PLUCK/  PAD/  VOX/
@@ -89,7 +104,7 @@ DRUMS/KICK  DRUMS/CLAP  DRUMS/SNARE  DRUMS/RIM
 DRUMS/CH    DRUMS/OH    DRUMS/RIDE   DRUMS/PERC
 ```
 
-`CH` is the closed hat, `OH` the open hat, `PERC` is storage for one-shots you reference from `pool` or `file`. Paths in `presets.json` are relative to that root and use forward slashes, for example `BASS/pluck_d1.wav`. Pitch names are scientific, C4 = 60, so D1 = 26. `start` and `loop` times are seconds. `loop.end` of 0 means the end of the file. `layerMix` is 0 (synth) to 1 (sample). `pool` is what SHUFFLE / ROLL rotates. `zones` is an optional multisample map. `slice: true` (meant for vox) starts each note on the next detected transient. Drum kits use `voices.kick` and the other eight voice keys. Loading happens on a background thread. The audio thread only reads a published buffer and resamples with a 16-tap windowed sinc. See `resources/presets.json` for the block on every preset (factory blocks are `SYNTH`, so the synth sound does not change until you point a preset at a file).
+`CH` is the closed hat, `OH` the open hat, `PERC` is storage for one-shots you reference from `pool` or `file`. Paths in `presets.json` are relative to that root and use forward slashes, for example `BASS/pluck_d1.wav`. Pitch names are scientific, C4 = 60, so D1 = 26. `start` and `loop` times are seconds. `loop.end` of 0 means the end of the file. `layerMix` is 0 (synth) to 1 (sample). `pool` is what SHUFFLE / ROLL rotates. `zones` is an optional multisample map. `slice: true` (meant for vox) starts each note on the next detected transient. Drum kits use `voices.kick` and the other eight voice keys. Loading happens on a background thread. The audio thread only reads a published buffer and resamples with a 16-tap windowed sinc. See `resources/presets.json` for the block on every preset. `SYNTH`, and the synth half of `LAYER`, only sound in the headless tools and tests; the plugin plays the sample.
 
 ## Parameter IDs
 
@@ -98,7 +113,7 @@ All of these are host-automatable except `roll` and `*Shuffle`, which are trigge
 | ID | Range | Default |
 | --- | --- | --- |
 | `dark` `busy` `bounce` `stab` | 0–1 | 0.55, 0.40, 0.45, 0.55 |
-| `dialect` | UK MIN, LONG, POP, GASKIN 90s | UK MIN |
+| `dialect` | UK MIN, LONG, POP, JACKIN 90s | UK MIN |
 | `key` | C … B | D |
 | `swing` | 0.50–0.57 | 0.52 |
 | `length` | 2, 4, 8 | 8 |
@@ -133,9 +148,9 @@ Top level:
 | --- | --- |
 | `schemaVersion` | `2` |
 | `parts.<part>.presets[]` | Three presets. `part` is `bass`, `stab`, `hits`, `pluck`, `pad`, `vox`, `drums` |
-| `dialects.<id>` | `ukmin`, `long`, `pop`, `gaskin`. Each names a preset id per lane, plus `hitsMute`, `swing` (0.50–0.57), and optional `overrides.bass` |
+| `dialects.<id>` | `ukmin`, `long`, `pop`, `jackin`. Each names a preset id per lane, plus `hitsMute`, `swing` (0.50–0.57), and optional `overrides.bass` |
 
-`overrides.bass` applies only when the loaded bass preset id equals `whenPreset`. Gaskin on Round uses duck **7 dB / 110 ms** and glide **0**. Changing Dialect in the UI loads that row (preset, swing, hits mute). It does not reroll the pattern.
+`overrides.bass` applies only when the loaded bass preset id equals `whenPreset`. Jackin on Round uses duck **7 dB / 110 ms** and glide **0**. Changing Dialect in the UI loads that row (preset, swing, hits mute). It does not reroll the pattern.
 
 Shared synth keys (preset root, or an `ex` object that overrides the root):
 
@@ -213,7 +228,7 @@ Plugin code in this repo is the project source. JUCE 8 is AGPLv3, or a commercia
 
 - macOS universal and Windows binaries are not built in this environment. There is no MinGW toolchain here (`x86_64-w64-mingw32-g++` is absent), and JUCE's VST3 GUI build is not a reliable MinGW target. The Windows job in GitHub Actions uses Visual Studio 2022 x64, which is the path that should produce `ROLLA-Windows-x64`.
 - The macOS job (macos-14, universal VST3+AU, ad-hoc codesign, pluginval, `auval -v aumu Roll Rola`, artifact `ROLLA-macOS-universal`) is in the workflow but has not gone green, because this environment cannot push to `https://github.com/mabe8056/rolla`.
-- LONG and GASKIN can flag a demo fingerprint (`Way Back`, `Wax Master`) when the score sits between 0.40 and 0.55. A score at or above 0.55 is rerolled. Gaskin is not held to the UK off-kick rule; it uses its own dotted grid.
+- LONG and JACKIN can flag a demo fingerprint against a reference when the score sits between 0.40 and 0.55. A score at or above 0.55 is rerolled. Jackin is not held to the UK off-kick rule; it uses its own dotted grid.
 - Chorus, mono-below, per-lane reverb time, vowel morph, and the two general-purpose LFOs are in the schema and not yet in the mix. PWM on Hoover, 2-op FM on Piano Hit, stab chord memory, unison stacks, the bar-line tail gate, and the dialect table are in.
 - Pluck's centroid lands at 155 Hz, with 49% of the energy under 60 Hz. That is inside the 73–200 Hz reference window and under the 70% sub cap. It is brighter than the 90 Hz reference median: on this ladder the open filter, not the sine sub, carries the note.
 - The panel is the D-simple dark layout with a provisional skin. `src/UiTokens.h` and `src/RollFace.h` are the seam for the designer's HANDOFF.md and face.svg, which have not arrived. `drumsToMain` and `drumsAccent` stay host-only.

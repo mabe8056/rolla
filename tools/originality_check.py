@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-originality_check.py  --  A&R originality gate for Melak's Music team.
+originality_check.py  --  A&R originality gate.
 
 Usage:  python3 originality_check.py candidate.mid [--refs DIR] [--json]
-        (DIR default /workspace/music-team/transcriptions, scanned recursively for .mid/.midi)
+        (DIR default $ROLLA_REFS, a private folder of reference MIDI kept outside the repo;
+         scanned recursively for .mid/.midi. One of the two is required.)
 
 Compares the candidate against every reference MIDI and flags borrowed material.
 Everything is TRANSPOSITION-INVARIANT and works on a 16th-note grid in 4/4
@@ -50,7 +51,7 @@ try:
 except ImportError:
     sys.exit("needs mido:  pip install mido")
 
-DEFAULT_REFS = "/workspace/music-team/transcriptions"
+DEFAULT_REFS = os.environ.get("ROLLA_REFS", "")   # private reference MIDI dir; never a path in the repo
 MIN_EVENTS = 6
 MIN_NGRAMS = 5         # containment denominators never go below this (distinctiveness weight)
 MAX_BARS = 64          # longer files are truncated (loops/sketches are 4-32 bars)
@@ -405,9 +406,11 @@ def fmt(rep):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("candidate")
-    ap.add_argument("--refs", default=DEFAULT_REFS)
+    ap.add_argument("--refs", default=DEFAULT_REFS, help="reference MIDI dir (default: $ROLLA_REFS); required")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args()
+    if not a.refs:
+        ap.error("needs --refs DIR or ROLLA_REFS=DIR (private reference MIDI)")
     rep = run(a.candidate, a.refs)
     print(json.dumps(rep, indent=1, default=str) if a.json else fmt(rep))
     sys.exit(RANK[rep["verdict"]])

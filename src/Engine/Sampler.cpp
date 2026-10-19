@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 namespace rolla
 {
@@ -12,11 +13,6 @@ namespace
 {
 
 constexpr float kSincPi = 3.14159265358979323846f;
-
-float midiHz (int note) noexcept
-{
-    return 440.f * std::pow (2.f, (note - 69) / 12.f);
-}
 
 float ampDb (float db) noexcept
 {
@@ -49,6 +45,20 @@ int presetOf (const EngineParams& params, int part) noexcept
 
 enum class FileState { Ready, Pending, Absent };
 
+// Plugin builds play samples only: no preset or saved state can hand a lane
+// (or a drum voice) to the synth, and a LAYER preset drops its synth half.
+// Tools and tests keep SYNTH presets so they can render without a sample pack.
+#if ROLLA_PLUGIN_BUILD
+constexpr bool kSamplesOnly = true;
+#else
+constexpr bool kSamplesOnly = false;
+#endif
+
+inline bool synthMode (const SampleSpec& spec) noexcept
+{
+    return ! kSamplesOnly && spec.mode == SampleMode::Synth;
+}
+
 FileState probeFile (const SampleLibrary* library, const char* file, const SampleAudio*& audio) noexcept
 {
     audio = nullptr;
@@ -76,6 +86,18 @@ FileState peekFile (const SampleLibrary* library, const char* file, const Sample
     if (library->missing (file))
         return FileState::Absent;
     return FileState::Pending;
+}
+
+// Bass may move a full octave from its file (octave bounces); other lanes 7 st.
+// Vox one-shots and chops keep the voice they were recorded with.
+ShiftRule shiftRuleFor (int part) noexcept
+{
+    ShiftRule rule;
+    if (part == Bass)
+        rule.cap = 12.0;
+    else if (part == Vox)
+        rule.retune = false;
+    return rule;
 }
 
 struct LaneHit
@@ -174,7 +196,7 @@ bool readyFromIndex (const SampleLibrary* library, const SampleIndex* index, int
 bool readyChoice (const SampleLibrary* library, const SampleSpec& spec, int midiNote,
                   int pick, int sliceIndex, LaneHit& hit) noexcept
 {
-    if (spec.mode == SampleMode::Synth)
+    if (synthMode (spec))
         return false;
     const SampleAudio* audio = nullptr;
     const auto choice = chooseSample (spec, midiNote, pick, sliceIndex);
@@ -218,6 +240,104 @@ bool readyChoice (const SampleLibrary* library, const SampleSpec& spec, int midi
     return false;
 }
 
+// The chop gate (SampleChop.h) for one loaded file, with the inputs take() uses.
+ChopPlan chopPlanFor (int part, const SampleAudio& audio, const char* file, const EngineParams& params) noexcept
+{
+    const bool hardName = sampleTextListed (file, kHardBroadband, 6);
+    const bool padBed = part == Pad && sampleTextListed (file, kSoftPadBed, 4);
+    const auto seed = (std::uint32_t) std::max (0, params.samplePick[part]);
+    return planSampleChop (part, audio.frames, audio.rate, params.bpm, seed,
+                           audio.slices, audio.sliceCount, audio.loudStart,
+                           audio.flatness, hardName, padBed);
+}
+
+// HITS / STAB: a blocked chop drops that file, not the note. The next loaded
+// file in the same pool whose chop is not blocked plays instead, the way a
+// missing file swaps within its pool. The first still-loading neighbour is
+// requested so a later note can use it. False when nothing usable is loaded.
+bool unblockedSwap (const SampleLibrary* library, const SampleIndex* index, const SampleSpec& spec,
+                    bool recipe, int part, const EngineParams& params, const char* blockedFile,
+                    SampleChoice& choice, const SampleAudio*& audio, ChopPlan& chop) noexcept
+{
+    if (library == nullptr || (part != Hits && part != Stab))
+        return false;
+    bool requested = false;
+    // Returns true when `file` is loaded and its chop plays (or it is a phrase loop, which is not chopped).
+    auto usable = [&] (const char* file, bool phraseLoop, int fileBpm, const SampleAudio*& got, ChopPlan& plan) noexcept
+    {
+        got = nullptr;
+        plan = ChopPlan {};
+        if (file == nullptr || file[0] == 0)
+            return false;
+        if (blockedFile != nullptr && std::strcmp (file, blockedFile) == 0)
+            return false;
+        const auto state = peekFile (library, file, got);
+        if (state == FileState::Pending && ! requested)
+        {
+            library->request (file);
+            requested = true;
+        }
+        if (state != FileState::Ready || got == nullptr)
+            return false;
+        if (! (phraseLoop && fileBpm > 0))
+            plan = chopPlanFor (part, *got, file, params);
+        return ! plan.blocked;
+    };
+
+    if (recipe && index != nullptr)
+    {
+        const PoolFilter filter = poolFilterWithFiles (*index, spec, part, spec.filter.voice, params.dialect);
+        const int n = sampleIndexCount (*index, part, filter);
+        if (n <= 1)
+            return false;
+        const int start = std::max (0, params.samplePick[part]) % n;
+        const int limit = n < 64 ? n : 64;
+        for (int i = 1; i < limit; ++i)
+        {
+            const auto* entry = sampleIndexAt (*index, part, filter, (start + i) % n);
+            if (entry == nullptr)
+                continue;
+            const SampleAudio* got = nullptr;
+            ChopPlan plan;
+            if (! usable (entry->path, entry->phraseLoop, entry->fileBpm, got, plan))
+                continue;
+            choice.file = entry->path;
+            choice.root = entry->root > 0 ? entry->root : 60;
+            choice.phraseLoop = entry->phraseLoop;
+            choice.fileBpm = entry->fileBpm;
+            choice.slice = false;
+            audio = got;
+            chop = plan;
+            return true;
+        }
+        return false;
+    }
+
+    // A preset's own file list: its file, its pool, its zones.
+    const char* extras[SampleSpec::kPool + SampleSpec::kZones + 1] {};
+    int n = 0;
+    if (spec.file[0] != 0)
+        extras[n++] = spec.file;
+    for (int i = 0; i < spec.poolCount && i < SampleSpec::kPool; ++i)
+        if (spec.pool[i][0] != 0)
+            extras[n++] = spec.pool[i];
+    for (int i = 0; i < spec.zoneCount && i < SampleSpec::kZones && n < SampleSpec::kPool + SampleSpec::kZones + 1; ++i)
+        if (spec.zones[i].file[0] != 0)
+            extras[n++] = spec.zones[i].file;
+    for (int i = 0; i < n; ++i)
+    {
+        const SampleAudio* got = nullptr;
+        ChopPlan plan;
+        if (! usable (extras[i], false, 0, got, plan))
+            continue;
+        choice.file = extras[i];
+        audio = got;
+        chop = plan;
+        return true;
+    }
+    return false;
+}
+
 // The chosen preset wins. A confirmed-missing file tries the rest of the lane.
 // A file that is still loading does not get replaced by another sample.
 // If nothing is ready, take() plays the matching synth instead of silence.
@@ -227,7 +347,7 @@ LaneHit resolveLane (const PresetBank& bank, const EngineParams& params, int par
     LaneHit hit;
     const int current = presetOf (params, part);
     const auto& currentSpec = specAt (bank, part, current);
-    if (currentSpec.mode == SampleMode::Synth)
+    if (synthMode (currentSpec))
         return hit;
     const int pick = params.samplePick[part];
     if (readyChoice (params.library, currentSpec, midiNote, pick, sliceIndex, hit))
@@ -263,6 +383,12 @@ void Sampler::Voice::Env::start (float aMs, float dMs, float sGain, float rMs, f
     amp = 0.f;
     sustain = std::clamp (sGain, 0.f, 1.f);
     attInc = 1.f / std::max (1.f, aMs * 0.001f * sr);
+    // No attack: full level from the first sample (a sample's own attack is in the file).
+    if (aMs <= 0.f)
+    {
+        amp = 1.f;
+        stage = 2;
+    }
     decC = coefFromMs (std::max (5.f, dMs) / 3.f, sr);
     // At least a 4 ms time constant: a shorter release clicks on square or saw samples.
     relC = coefFromMs (std::max (12.f, rMs) / 3.f, sr);
@@ -295,7 +421,17 @@ bool Sampler::Voice::Env::tick() noexcept
         }
     }
     else if (stage == 3)
+    {
         amp = sustain;
+        // A drum hit (sustain 0) that has decayed is silent: free the voice. Silent
+        // voices held to the end of a long file filled the pool and forced steals.
+        if (sustain <= 0.f)
+        {
+            amp = 0.f;
+            stage = 0;
+            return false;
+        }
+    }
     else if (stage == 4)
     {
         amp += (0.f - amp) * relC;
@@ -325,11 +461,41 @@ void Sampler::reset() noexcept
         v = {};
     for (int& c : sliceCursor)
         c = 0;
+    stepEst = 0.f;
+}
+
+bool Sampler::opensOnStep (const SampleAudio& a) noexcept
+{
+    const int n = std::min (a.frames, (int) a.left.size());
+    if (n < 2)
+        return false;
+    const bool stereo = (int) a.right.size() >= n;
+    const int span = std::clamp ((int) (0.001 * a.rate), 8, n - 1);
+    double first = 0.0, moves = 0.0;
+    for (int c = 0; c < (stereo ? 2 : 1); ++c)
+    {
+        const auto& x = c == 0 ? a.left : a.right;
+        first = std::max (first, (double) std::fabs (x[0]));
+        double sum = 0.0;
+        for (int k = 1; k <= span; ++k)
+            sum += std::fabs ((double) x[(size_t) k] - (double) x[(size_t) k - 1]);
+        moves = std::max (moves, sum / (double) span);
+    }
+    return first > 1.0e-3 && first > 4.0 * moves;
 }
 
 void Sampler::armAttack (Voice& v) noexcept
 {
-    v.attackN = std::max (8, (int) (0.003 * sr));
+    // A note that starts mid-file (slice, start offset, vox lead-in, reverse)
+    // fades in over 3 ms so the cut does not click. One that starts on the
+    // file's first sample fades in over 0.5 ms when the file opens on a step
+    // (opensOnStep: trimmed onto a non-zero sample, like most pack kicks, rims
+    // and bass stabs), so it no longer opens on a full-level step. A file that
+    // opens into noise or rises from zero plays as recorded: fading it moved
+    // a noisy kick's attack bands by up to 4 dB.
+    const bool fileStart = ! v.reverse && ! v.tempoSync && v.pos < 0.5;
+    const bool fade = ! fileStart || (v.audio != nullptr && opensOnStep (*v.audio));
+    v.attackN = fade ? std::max (8, (int) ((fileStart ? 0.0005 : 0.003) * sr)) : 0;
     v.attackLeft = v.attackN;
     v.fade = 1.f;
     v.fadeInc = 0.f;
@@ -337,6 +503,24 @@ void Sampler::armAttack (Voice& v) noexcept
     v.releaseN = 0;
     v.noteEdge = 1.f;
     v.stopping = false;
+}
+
+float Sampler::audibleLevel (const Voice& v) noexcept
+{
+    if (! v.on)
+        return 0.f;
+    // Born this sample, or still in its attack: about to be loud, whatever env.amp says.
+    if (v.born)
+        return 1.0e9f;
+    float g = v.env.stage == 1 ? 1.f : v.env.amp;
+    if (v.attackN > 0 && v.attackLeft > 0)
+        g = std::max (g, 1.f);
+    if (v.stopping && v.releaseN > 0)
+    {
+        const float t = std::clamp ((float) v.releaseLeft / (float) v.releaseN, 0.f, 1.f);
+        g *= 0.5f * (1.f - std::cos (kSincPi * t));
+    }
+    return g * std::fabs (v.gain) * v.fade * v.noteEdge;
 }
 
 void Sampler::park (const Voice& dying) noexcept
@@ -351,7 +535,7 @@ void Sampler::park (const Voice& dying) noexcept
             dest = &t;
             break;
         }
-        const float g = t.env.amp * (t.releaseN > 0 ? (float) t.releaseLeft / (float) std::max (1, t.releaseN) : t.fade);
+        const float g = audibleLevel (t);
         if (g < quietG)
         {
             quietG = g;
@@ -363,11 +547,30 @@ void Sampler::park (const Voice& dying) noexcept
     if (dest == nullptr)
         return;
     *dest = dying;
-    dest->attackLeft = 0;
-    dest->releaseN = std::max (8, (int) (0.004 * sr));
-    dest->releaseLeft = dest->releaseN;
+    // Keep the attack edge running: zeroing it mid-attack stepped the voice up
+    // to full level. The release multiplies on top, so both edges stay smooth.
+    // A voice already releasing keeps its own release: restarting at 1 is a step.
+    if (! (dying.stopping && dying.releaseN > 0))
+    {
+        dest->releaseN = std::max (8, (int) (0.004 * sr));
+        dest->releaseLeft = dest->releaseN;
+    }
     dest->stopping = true;
     dest->fadeInc = 0.f;
+}
+
+void Sampler::chokeDrum (int drumVoice) noexcept
+{
+    const int n = std::max (8, (int) (0.005 * sr));
+    for (auto& v : voices)
+    {
+        if (! v.on || v.part != Drums || v.drumVoice != drumVoice || v.born || v.stopping)
+            continue;
+        v.releaseN = n;
+        v.releaseLeft = n;
+        v.stopping = true;
+        v.fadeInc = 0.f;
+    }
 }
 
 void Sampler::releaseNote (int part, int midiNote) noexcept
@@ -384,19 +587,29 @@ void Sampler::releaseAll() noexcept
             v.env.release();
 }
 
-Sampler::Voice* Sampler::allocate (int) noexcept
+Sampler::Voice* Sampler::allocate (int part) noexcept
 {
     Voice* free = nullptr;
     Voice* quiet = nullptr;
-    for (auto& v : voices)
+    float quietG = 1.0e8f;
+    Voice* const first = part == Drums ? voices : voices + kDrumVoices;
+    Voice* const last = part == Drums ? voices + kDrumVoices : voices + kDrumVoices + kMelodicVoices;
+    for (Voice* p = first; p != last; ++p)
     {
+        Voice& v = *p;
         if (! v.on)
         {
             free = &v;
             break;
         }
-        if (quiet == nullptr || v.env.amp < quiet->env.amp)
+        // env.amp alone picked a voice born this same sample (amp still 0): the
+        // kick was parked 4 ms after it started and the hat took its slot.
+        const float g = audibleLevel (v);
+        if (g < quietG)
+        {
+            quietG = g;
             quiet = &v;
+        }
     }
     Voice* slot = free != nullptr ? free : quiet;
     if (slot == nullptr)
@@ -440,7 +653,16 @@ void Sampler::readVoice (Voice& v, float& l, float& r) noexcept
         v.on = false;
         return;
     }
+    // The release has reached zero. This used to be noticed only after the edge
+    // was computed, so the last sample of every steal, choke or relocate fade
+    // played at full level: a one-sample spike 4 ms after the hit.
+    if (v.stopping && v.releaseN > 0 && v.releaseLeft <= 0)
+    {
+        v.on = false;
+        return;
+    }
 
+    const double readAt = v.pos;
     const double n = (double) v.audio->frames;
     auto filePos = [&] (double p) noexcept -> double
     {
@@ -515,25 +737,36 @@ void Sampler::readVoice (Voice& v, float& l, float& r) noexcept
     }
     else
         v.pos += v.ratio;
+    if (v.chopEnd > v.chopStart && v.pos >= v.chopEnd)
+        v.on = false;
     if (! v.loop && v.pos >= n - 1.0)
         v.on = false;
-    if (v.releaseN > 0 && v.releaseLeft <= 0 && v.stopping)
-        v.on = false;
-
+    // The file as recorded unless TONE moved: no ladder, no HPF, and L and R
+    // always through the same path (the old path filtered L only and folded
+    // 15% of it into R, which made stereo samples lopsided and partly mono).
     const float srF = (float) sr;
-    if (v.fEnv > 0.f)
-        v.fEnv *= v.fCoef;
-    const float fc = std::clamp (v.cut * std::pow (2.f, v.envOct * v.fEnv), 40.f, srF * 0.45f);
-    ls = v.ladder.process (ls, fc, v.res, srF);
-    if (v.hpfHz > 25.f)
+    if (v.lowpass)
+    {
+        if (v.fEnv > 0.f)
+            v.fEnv *= v.fCoef;
+        const float fc = std::clamp (v.cut * std::pow (2.f, v.envOct * v.fEnv), 40.f, srF * 0.45f);
+        ls = v.ladder.process (ls, fc, v.res, srF);
+        rs = v.ladderR.process (rs, fc, v.res, srF);
+    }
+    if (v.hpfHz > 0.f)
     {
         const float c = std::exp (-2.f * kSincPi * v.hpfHz / srF);
         v.hpState = c * v.hpState + (1.f - c) * ls;
+        v.hpStateR = c * v.hpStateR + (1.f - c) * rs;
         ls -= v.hpState;
+        rs -= v.hpStateR;
     }
-    rs = ls + (rs - ls) * 0.85f;
+    if (v.gateLeft > 0 && --v.gateLeft == 0)
+        v.env.release();
 
     float edge = v.noteEdge;
+    if (v.chopFade > 0 && v.chopEnd > v.chopStart)
+        edge *= chopEdge ((int) readAt, (int) v.chopStart, (int) v.chopEnd, v.chopFade);
     if (v.attackN > 0 && v.attackLeft > 0)
     {
         const float t = 1.f - (float) v.attackLeft / (float) v.attackN;
@@ -606,8 +839,13 @@ Amp ampFor (const PresetBank& bank, int part, int preset)
     }
     else if (part == Vox)
     {
-        const auto& p = bank.vox[i];
-        a = { 3.f, p.decayMs, 0.f, 30.f, 4000.f * p.brightness, 0.05f, 0.2f, 40.f, 200.f, ampDb (p.trimDb) * 0.25f };
+        // A vox sample plays as recorded. The preset's decayMs / brightness / trimDb
+        // shape the formant synth (Engine.cpp), not a file the loader already set to
+        // -24 LUFS: sustain 0 with a 140 ms decay faded a 278 ms shot out (~-11 dB,
+        // shape lost), the 4-pole at 4.6 kHz is -3 dB near 2 kHz, the 200 Hz HPF ate
+        // the fundamental and ampDb (-8) * 0.25 was another -20 dB (issue #68).
+        // TONE still darkens it (cut / 4 at 0); PUNCH still moves the attack.
+        a = { 3.f, 200.f, 1.f, 30.f, 20000.f, 0.f, 0.f, 40.f, 40.f, 1.f };
     }
     else
     {
@@ -615,6 +853,87 @@ Amp ampFor (const PresetBank& bank, int part, int preset)
         a = { 1.f, 180.f, 0.f, 20.f, 8000.f, 0.02f, 0.f, 20.f, 30.f, ampDb (p.trimDb) * 0.5f };
     }
     return a;
+}
+
+// Samples play the file as recorded. TONE away from neutral (0.5) is the only
+// thing that filters them: darker sweeps a lowpass from 20 kHz down to the lane
+// preset's cutoff at 0 (with the preset's filter envelope), brighter raises a
+// highpass up to 320 Hz at 1.
+struct SampleFilter
+{
+    bool lowpass = false;
+    float cut = 20000.f;
+    float envOct = 0.f;
+    float hpf = 0.f;
+};
+
+SampleFilter sampleFilter (const EngineParams& params, int part, const Amp& amp) noexcept
+{
+    SampleFilter f;
+    if (! params.sampleShaping || part < 0 || part >= NumParts)
+        return f;
+    const float t = std::clamp (params.tone[part], 0.f, 1.f) - 0.5f;
+    if (t <= -0.01f)
+    {
+        const float k = std::min (1.f, -t * 2.f);
+        f.lowpass = true;
+        f.cut = 20000.f * std::pow (std::max (40.f, amp.cut) / 20000.f, k);
+        f.envOct = amp.envOct * k;
+    }
+    else if (t >= 0.01f)
+        f.hpf = 20.f * std::pow (2.f, 4.f * std::min (1.f, t * 2.f));
+    return f;
+}
+
+// A template so it can take the sampler's private Voice.
+template <typename VoiceT>
+void applyFilter (VoiceT& v, const SampleFilter& f) noexcept
+{
+    v.lowpass = f.lowpass;
+    v.cut = f.cut;
+    v.envOct = f.envOct;
+    v.hpfHz = f.hpf;
+    v.hpState = v.hpStateR = 0.f;
+    v.ladder.reset();
+    v.ladderR.reset();
+}
+
+// PUNCH on samples: 0.5 (the default) is the file as recorded. Below, a slower
+// attack (up to 40 ms at 0, round). Above, the note decays away instead of
+// sustaining (about 50 ms at 1, snappy).
+struct SamplePunch
+{
+    float aMs = 0.f;
+    float dMs = 5.f;
+    float s = 1.f;
+};
+
+SamplePunch samplePunch (const EngineParams& params, int part) noexcept
+{
+    SamplePunch e;
+    if (! params.sampleShaping || part < 0 || part >= NumParts)
+        return e;
+    const float p = std::clamp (params.punch[part], 0.f, 1.f) - 0.5f;
+    if (p <= -0.01f)
+        e.aMs = 40.f * std::min (1.f, -p * 2.f);
+    else if (p >= 0.01f)
+    {
+        e.s = 0.f;
+        e.dMs = 1500.f * std::pow (2.f, -5.f * std::min (1.f, p * 2.f));
+    }
+    return e;
+}
+
+// DECAY 0.5 (the default) and up plays a drum hit's whole length. Below 0.5 the
+// hit is cut at a fraction of what is left of the file (1/8 at 0) and released
+// over 12 ms. -1 means no gate.
+int drumGate (float decayKnob, const SampleAudio& audio, double startFrame, double ratio) noexcept
+{
+    const float d = std::clamp (decayKnob, 0.f, 1.f);
+    if (d >= 0.5f)
+        return -1;
+    const double left = std::max (8.0, ((double) audio.frames - startFrame) / std::max (1.0e-3, ratio));
+    return std::max (8, (int) (left * std::pow (2.0, (double) (d - 0.5f) * 6.0)));
 }
 
 } // namespace
@@ -685,6 +1004,7 @@ bool Sampler::playUserSlot (int part, int drumVoice, int midiNote, int velocity,
     fresh.midiNote = midiNote;
     fresh.age = serial++;
     fresh.audio = pod.audio;
+    notePicked (voicePart, drumVoice, pod.audio);
     fresh.reverse = decision.reverse;
     fresh.ratio = std::clamp (std::pow (2.0, semis / 12.0) * (pod.audio->rate / sr), ratioMin, ratioMax);
     fresh.end16 = end16;
@@ -693,27 +1013,30 @@ bool Sampler::playUserSlot (int part, int drumVoice, int midiNote, int velocity,
     fresh.stopping = false;
     float trim = amp.trim * std::clamp (velocity / 127.f, 0.05f, 1.f);
     if (drumVoice >= 0)
-        trim *= ampDb (params.drumLevelDb[drumVoice]);
+        trim *= ampDb (params.drumLevelDb[drumVoice]) * drumGain;
     fresh.gain = trim * decision.sampleMix * ampDb (decision.gainDb);
     fresh.pan = (part == Stab || part == Pad) ? 0.15f : 0.f;
-    fresh.cut = amp.cut;
     fresh.res = amp.res;
-    fresh.envOct = drumVoice >= 0 ? 0.f : amp.envOct;
     fresh.fEnv = 1.f;
     fresh.fCoef = expDecay (std::max (4.f, drumVoice >= 0 ? 30.f : amp.tau), srF);
-    fresh.hpfHz = drumVoice >= 0 ? 30.f : amp.hpf;
-    fresh.hpState = 0.f;
-    fresh.ladder.reset();
-    if (drumVoice >= 0)
+    applyFilter (fresh, sampleFilter (params, voicePart, amp));
+    // Natural length: the file's own envelope, released at the note end (melodic)
+    // or by the DECAY gate (drums). The 3 ms raised-cosine attack is armAttack.
     {
-        const float decay = 80.f * std::pow (2.f, (params.drumDecay[drumVoice] - 0.5f) * 2.f);
-        fresh.env.start (0.5f, decay, 0.f, 12.f, srF);
+        const auto pe = samplePunch (params, voicePart);
+        fresh.env.start (pe.aMs, pe.dMs, pe.s, drumVoice >= 0 ? 12.f : amp.r, srF);
     }
-    else
-        fresh.env.start (amp.a, amp.d, amp.s, amp.r, srF);
 
-    const double startFrame = std::min (std::clamp ((double) decision.startSec, 0.0, 60.0) * pod.audio->rate,
-                                         (double) pod.audio->frames - 1.0);
+    double startFrame = std::min (std::clamp ((double) decision.startSec, 0.0, 60.0) * pod.audio->rate,
+                                   (double) pod.audio->frames - 1.0);
+    // A dropped vox file left at start 0 opens on its voice, not its lead-in.
+    // A start the user set is kept.
+    if (part == Vox && drumVoice < 0 && decision.startSec <= 0.f && ! decision.reverse && pod.audio->voicedCount > 0)
+        startFrame = (double) voxStart (0, false, 0, pod.audio->voiced, pod.audio->voicedCount, pod.audio->voicedFloor,
+                                        pod.audio->left.data(), pod.audio->right.empty() ? nullptr : pod.audio->right.data(),
+                                        pod.audio->frames, pod.audio->rate);
+    if (drumVoice >= 0)
+        fresh.gateLeft = drumGate (params.drumDecay[drumVoice], *pod.audio, startFrame, fresh.ratio);
     fresh.pos = startFrame;
     fresh.loop = decision.loop;
     SampleLoop loop;
@@ -736,7 +1059,7 @@ bool Sampler::playUserSlot (int part, int drumVoice, int midiNote, int velocity,
 }
 
 Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
-                             const PresetBank& bank, const EngineParams& params) noexcept
+                             const PresetBank& bank, const EngineParams& params, ChordAsk ask) noexcept
 {
     Take result;
     if (part < 0 || part >= Drums)
@@ -745,7 +1068,7 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     if (playUserSlot (part, -1, midiNote, velocity, end16, bank, params, result, drumKeep))
         return result;
     const auto& spec = sampleSpecFor (bank, part, presetOf (params, part));
-    if (spec.mode == SampleMode::Synth)
+    if (synthMode (spec))
         return result;
     // No library: the factory file cannot load. Same-pool swap needs a library,
     // and a missing sample never falls through to the lane synth.
@@ -830,6 +1153,29 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
         return result;
     }
 
+    // Slice in memory. A blocked chop is broadband: that file is not played.
+    // HITS and STAB swap to another file in the same pool whose chop plays, so
+    // one broadband file cannot silence the lane for the whole roll. Only when
+    // no such file is loaded does the note stay silent (a PAD bed always does).
+    ChopPlan chop;
+    const bool phrase = choice.phraseLoop && choice.fileBpm > 0;
+    if (! fromPack && ! phrase && choice.file != nullptr && choice.file[0] != 0
+        && (part == Hits || part == Stab || part == Pad))
+    {
+        const bool padBed = part == Pad && sampleTextListed (choice.file, kSoftPadBed, 4);
+        chop = chopPlanFor (part, *audio, choice.file, params);
+        if (chop.blocked && (part == Hits || part == Stab)
+            && unblockedSwap (params.library, params.sampleIndex, played, recipe, part, params,
+                              choice.file, choice, audio, chop))
+            chop.blocked = false;
+        if (chop.blocked && (part == Hits || part == Stab || padBed))
+        {
+            result.kind = 1;
+            result.synthGain = 0.f;
+            return result;
+        }
+    }
+
     Voice* slot = allocate (part);
     if (slot == nullptr)
         return result;
@@ -842,28 +1188,41 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     fresh.midiNote = midiNote;
     fresh.age = serial++;
     fresh.audio = audio;
+    notePicked (part, -1, audio);
     fresh.reverse = played.reverse;
-    fresh.ratio = std::clamp ((midiHz (midiNote) / std::max (20.f, midiHz (choice.root))) * (audio->rate / sr), 0.05, 16.0);
+    // Pitch comes from the measured root (PitchProbe.h), not the manifest or a
+    // default C: unpitched, low-confidence and vox files play as recorded.
+    const auto& pitch = audio->pitch;
+    const bool chordFile = pitch.isChord && pitch.conf >= kPitchConfMin && part != Bass && part != Vox;
+    const int toward = midiNote + (chordFile ? ask.rootDelta + chordFileOffset (pitch.quality, ask.quality) : 0);
+    const double semis = tonalShift (pitch, audio->namedRoot, (double) toward, shiftRuleFor (part));
+    fresh.ratio = std::clamp (std::pow (2.0, semis / 12.0) * (audio->rate / sr), 0.05, 16.0);
     fresh.end16 = end16;
     fresh.fade = 0.f;
     fresh.fadeInc = 1.f / 64.f;
     fresh.stopping = false;
     fresh.gain = amp.trim * std::clamp (velocity / 127.f, 0.05f, 1.f);
-    const bool layered = &played == &spec && played.mode == SampleMode::Layer;
+    // A factory LAYER preset keeps its synth half only outside the plugin.
+    const bool layered = &played == &spec && played.mode == SampleMode::Layer && ! kSamplesOnly;
     if (layered)
         fresh.gain *= std::clamp (played.layerMix, 0.f, 1.f);
     fresh.pan = (part == Stab || part == Pad) ? 0.15f : 0.f;
-    fresh.cut = amp.cut;
     fresh.res = amp.res;
-    fresh.envOct = amp.envOct;
     fresh.fEnv = 1.f;
     fresh.fCoef = expDecay (std::max (4.f, amp.tau), srF);
-    fresh.hpfHz = amp.hpf;
-    fresh.hpState = 0.f;
-    fresh.ladder.reset();
-    fresh.env.start (amp.a, amp.d, amp.s, amp.r, srF);
+    applyFilter (fresh, sampleFilter (params, part, amp));
+    // Natural length: no synth ADSR on a sample. It sustains at full level and
+    // releases at the note end with the preset's release.
+    {
+        const auto pe = samplePunch (params, part);
+        fresh.env.start (pe.aMs, pe.dMs, pe.s, amp.r, srF);
+    }
 
-    double startFrame = fromPack ? 0.0 : std::clamp ((double) played.start, 0.0, 16.0) * audio->rate;
+    // A preset's start offset and loop points were set for its own file. A file
+    // drawn from a pool or a recipe plays from its first sample, once.
+    const bool ownFile = ! fromPack && choice.file != nullptr && played.file[0] != 0
+                         && std::strcmp (choice.file, played.file) == 0;
+    double startFrame = ownFile ? std::clamp ((double) played.start, 0.0, 16.0) * audio->rate : 0.0;
     if (choice.slice && audio->sliceCount > 1)
     {
         const int s = (choice.sliceIndex % audio->sliceCount + audio->sliceCount) % audio->sliceCount;
@@ -872,8 +1231,13 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     // A vox chop that would start in the file's lead-in silence starts at the first word.
     if (part == Vox && startFrame < (double) audio->lead)
         startFrame = (double) audio->lead;
+    // VOX chops start on the voice, not on a lead-in or a breath (in memory).
+    if (part == Vox && ! fromPack && ! phrase && audio->voicedCount > 0)
+        startFrame = (double) voxStart ((int) startFrame, choice.slice, choice.sliceIndex, audio->voiced, audio->voicedCount,
+                                        audio->voicedFloor, audio->left.data(),
+                                        audio->right.empty() ? nullptr : audio->right.data(), audio->frames, audio->rate);
     fresh.pos = startFrame;
-    fresh.loop = ! fromPack && played.loop.on && part != Hits && part != Vox;
+    fresh.loop = ownFile && played.loop.on && part != Hits && part != Vox;
     const auto region = makeLoopRegion (played.loop, audio->rate, audio->frames, startFrame);
     fresh.loopA = region.a;
     fresh.loopB = region.b;
@@ -896,6 +1260,27 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
         fresh.anchor = fresh.pos;
         fresh.spliceLeft = 0;
     }
+    else if (! fromPack && ! played.reverse && chopPlanOn (chop))
+    {
+        fresh.pos = (double) chop.start;
+        if (chop.hold)
+        {
+            fresh.loop = true;
+            fresh.loopA = (double) chop.start;
+            fresh.loopB = (double) std::max (chop.start + 1, chop.end - 1);
+            fresh.xfade = (double) chop.fade;
+        }
+        else
+        {
+            fresh.loop = false;
+            fresh.loopA = 0.0;
+            fresh.loopB = 0.0;
+            fresh.xfade = 0.0;
+            fresh.chopStart = (double) chop.start;
+            fresh.chopEnd = (double) chop.end;
+            fresh.chopFade = chop.fade;
+        }
+    }
 
     armAttack (fresh);
     fresh.born = true;
@@ -910,20 +1295,30 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
         result.kind = 1;
         result.synthGain = 0.f;
     }
+    result.chordFile = chordFile && ! fresh.tempoSync;
     return result;
 }
 
-float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const EngineParams& params) noexcept
+float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const EngineParams& params,
+                         float gainScale) noexcept
 {
     if (voice < 0 || voice >= NumDrumVoices || velocity <= 0)
         return 1.f;
+    // Choke group: the closed hat releases a ringing open hat over 5 ms.
+    if (voice == HatC)
+        chokeDrum (HatO);
+    if (! params.sampleShaping || ! (gainScale > 0.f))
+        gainScale = 1.f;
     Take taken;
     float keep = 1.f;
-    if (playUserSlot (Drums, voice, 60, velocity, 1.0e9f, bank, params, taken, keep))
+    drumGain = gainScale;
+    const bool slotOwned = playUserSlot (Drums, voice, 60, velocity, 1.0e9f, bank, params, taken, keep);
+    drumGain = 1.f;
+    if (slotOwned)
         return keep;
     const int preset = presetOf (params, Drums);
     const auto& spec = sampleSpecFor (bank, Drums, preset);
-    if (spec.mode == SampleMode::Synth)
+    if (synthMode (spec))
         return 1.f;
     // No library: there is no pool to swap from, and the 909 is not a fallback.
     if (params.library == nullptr)
@@ -1041,24 +1436,29 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
     fresh.drumVoice = voice;
     fresh.age = serial++;
     fresh.audio = audio;
+    notePicked (Drums, voice, audio);
     fresh.reverse = spec.reverse;
     fresh.ratio = std::clamp (tune * (audio->rate / sr), 0.25, 4.0);
     fresh.end16 = 1.0e9f;
     fresh.fade = 0.f;
     fresh.fadeInc = 1.f / std::max (8.f, 0.002f * (float) sr);
-    fresh.gain = amp.trim * std::clamp (velocity / 127.f, 0.05f, 1.f) * ampDb (params.drumLevelDb[voice]);
+    fresh.gain = amp.trim * std::clamp (velocity / 127.f, 0.05f, 1.f) * ampDb (params.drumLevelDb[voice]) * gainScale;
     if (spec.mode == SampleMode::Layer)
         fresh.gain *= std::clamp (spec.layerMix, 0.f, 1.f);
-    fresh.cut = amp.cut;
     fresh.res = amp.res;
-    fresh.envOct = 0.f;
     fresh.fEnv = 1.f;
     fresh.fCoef = expDecay (30.f, (float) sr);
-    fresh.hpfHz = 30.f;
-    fresh.ladder.reset();
-    const float decay = 80.f * std::pow (2.f, (params.drumDecay[voice] - 0.5f) * 2.f);
-    fresh.env.start (0.5f, decay, 0.f, 12.f, (float) sr);
+    SampleFilter filter = sampleFilter (params, Drums, amp);
+    filter.envOct = 0.f;
+    applyFilter (fresh, filter);
+    // Natural length at DECAY 0.5: the hit's own tail (the old 80 ms decay with
+    // no sustain cut kick, clap and open-hat tails). Lower DECAY gates it shorter.
+    {
+        const auto pe = samplePunch (params, Drums);
+        fresh.env.start (pe.aMs, pe.dMs, pe.s, 12.f, (float) sr);
+    }
     fresh.pos = std::clamp ((double) spec.start, 0.0, 4.0) * audio->rate;
+    fresh.gateLeft = drumGate (params.drumDecay[voice], *audio, fresh.pos, fresh.ratio);
     fresh.loop = spec.loop.on;
     const auto region = makeLoopRegion (spec.loop, audio->rate, audio->frames, fresh.pos);
     fresh.loopA = region.a;
@@ -1080,6 +1480,19 @@ void Sampler::render (float* laneL, float* laneR, float prev16, float pos16, boo
     for (int v = 0; v < NumDrumVoices; ++v)
         drumOutL[v] = drumOutR[v] = 0.f;
 
+    // The loop-end edge's length comes from the playhead step. pos16 is a float,
+    // so near 16th 128 its sample-to-sample step jitters by a few percent; a
+    // window built from the raw step moved every voice's edge by that much each
+    // sample, a click just before the wrap. A tempo change resets the estimate.
+    const float rawStep = pos16 - prev16;
+    if (playing && rawStep > 0.f)
+    {
+        if (stepEst <= 0.f || std::fabs (rawStep - stepEst) > 0.25f * stepEst)
+            stepEst = rawStep;
+        else
+            stepEst += (1.f / 64.f) * (rawStep - stepEst);
+    }
+
     auto renderOne = [&] (Voice& v)
     {
         if (! v.on)
@@ -1088,6 +1501,7 @@ void Sampler::render (float* laneL, float* laneR, float prev16, float pos16, boo
         // the downbeat. That wrap is how step 0 is reached, not the end of the note.
         const bool born = v.born;
         v.born = false;
+        const float prevEdge = v.noteEdge;
         v.noteEdge = 1.f;
         if (playing && loopEnd16 > 1.f)
         {
@@ -1095,7 +1509,8 @@ void Sampler::render (float* laneL, float* laneR, float prev16, float pos16, boo
             const float step = pos16 - prev16;
             if (step > 0.f)
             {
-                const float window = std::max (step, step * (float) (0.010 * sr));
+                const float est = stepEst > 0.f ? stepEst : step;
+                const float window = std::max (est, est * (float) (0.010 * sr));
                 const float remain = stop - pos16;
                 if (remain <= 0.f)
                 {
@@ -1105,13 +1520,21 @@ void Sampler::render (float* laneL, float* laneR, float prev16, float pos16, boo
                 if (remain < window)
                     v.noteEdge = 0.5f * (1.f - std::cos (kSincPi * remain / window));
             }
-            else if (! born && prev16 < stop && pos16 + 1.0e-3f < prev16 && ! v.stopping)
+            else if (! born && prev16 < stop && pos16 + 1.0e-3f < prev16)
             {
                 // Loop wrap or a host relocate cut the note: fade it over 4 ms, never a hard cut.
-                v.attackLeft = 0;
-                v.releaseN = std::max (8, (int) (0.004 * sr));
-                v.releaseLeft = v.releaseN;
-                v.stopping = true;
+                // A voice still in its attack keeps that edge (zeroing it stepped up to full).
+                // One already fading (stolen, choked) keeps its own release.
+                if (! v.stopping)
+                {
+                    v.releaseN = std::max (8, (int) (0.004 * sr));
+                    v.releaseLeft = v.releaseN;
+                    v.stopping = true;
+                }
+                // The loop-end edge already faded this voice. Release from that
+                // level: snapping back to 1 stepped every tail still ringing on beat 1,
+                // stolen voices parked inside the loop-end fade included.
+                v.gain *= std::clamp (prevEdge, 0.f, 1.f);
             }
         }
         else if (playing && v.end16 < 1.0e8f)
@@ -1138,6 +1561,16 @@ void Sampler::render (float* laneL, float* laneR, float prev16, float pos16, boo
         renderOne (v);
     for (auto& v : tails)
         renderOne (v);
+}
+
+std::string Sampler::lastPickedFile (int part, int drumVoice) const
+{
+    const SampleAudio* a = nullptr;
+    if (drumVoice >= 0 && drumVoice < NumDrumVoices)
+        a = lastDrumAudio[drumVoice].load (std::memory_order_relaxed);
+    else if (part >= 0 && part < NumParts)
+        a = lastAudio[part].load (std::memory_order_relaxed);
+    return a != nullptr ? a->path : std::string();
 }
 
 } // namespace rolla

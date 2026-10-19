@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """rolla-rolls style names: --style takes roller|deep|bouncy|jackin and the old
-ukmin|long|pop|gaskin ids in any case, folders keep the old ids by default, and
+ukmin|long|pop|jackin ids in any case, folders keep the old ids by default, and
 --folder-names styles names them after the styles. No samples needed.
 
   python3 tests/roll/style_alias_check.py --rolls ./build/rolla-rolls
@@ -12,8 +12,8 @@ import subprocess
 import sys
 import tempfile
 
-PAIRS = [("ROLLER", "ukmin", "roller"), ("deep", "long", "deep"), ("Bouncy", "pop", "bouncy"), ("JACKIN", "gaskin", "jackin"),
-         ("UKMIN", "ukmin", "roller"), ("gaskin", "gaskin", "jackin")]
+PAIRS = [("ROLLER", "ukmin", "roller"), ("deep", "long", "deep"), ("Bouncy", "pop", "bouncy"), ("JACKIN", "jackin", "jackin"),
+         ("UKMIN", "ukmin", "roller"), ("Jackin", "jackin", "jackin")]
 
 
 def run(rolls, out, style, extra=()):

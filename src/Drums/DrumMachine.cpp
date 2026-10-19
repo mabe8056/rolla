@@ -363,25 +363,28 @@ struct DrumMachine::Core
         return std::clamp (hit.decayScale * hit.patchDecay * punch, 0.08f, 6.f);
     }
 
+    // Retrigger restarts the voice, so the old waveform stops here. Hold its
+    // last output and let it decay (~8 ms) under the new hit. This must happen
+    // on every retrigger: the old 0.015 gate skipped quiet tails, and a long
+    // kick tail under 0.015 stepped straight to zero on the next kick.
     void armRing (float& last, float& ring) const noexcept
     {
-        if (std::fabs (last) > 0.015f)
-            ring = last;
+        ring = last;
     }
 
     void triggerKick (const DrumHit& hit) noexcept
     {
-        const bool gaskin = hit.dialect == Gaskin;
+        const bool jackin = hit.dialect == Jackin;
         float hz = DrumMachine::kickHzForKey (hit.key) * hit.tuneRatio;
         hz *= std::pow (2.f, hit.tone * 0.12f);
-        // The key follow sits near 55 Hz. Tune is ±12 st, so the body has to
+        // The key follow sits at 46-62 Hz (near 52.8 Hz). Tune is ±12 st, so the body has to
         // be allowed about an octave either side or the knob barely moves.
         hz = std::clamp (hz, 30.f, 120.f);
         armRing (kick.last, kick.ring);
         kick.on = true;
         kick.f0 = hz;
-        kick.semis = gaskin ? 25.f : 21.f;
-        const float tauMs = gaskin ? 30.f : 25.f;
+        kick.semis = jackin ? 25.f : 21.f;
+        const float tauMs = jackin ? 30.f : 25.f;
         kick.pitch = 1.f;
         kick.pitchC = std::exp (-1.f / std::max (1.f, tauMs * 0.001f * sr));
         kick.hold = (int) (0.006f * sr);
@@ -389,11 +392,11 @@ struct DrumMachine::Core
         kick.fadeInc = 1.f / std::max (1.f, 0.0011f * sr);
         kick.body.strike (0.92f);
         const float scale = decayOf (hit);
-        if (gaskin)
+        if (jackin)
             kick.env.start (sr, 60.f, -6.f, 110.f, -20.f, 150.f, -40.f, scale);
         else
             kick.env.start (sr, 68.f, -6.f, 242.f, -20.f, 455.f, -40.f, scale);
-        float clickDb = (gaskin ? -8.f : -15.f) + hit.punch * 6.f;
+        float clickDb = (jackin ? -8.f : -15.f) + hit.punch * 6.f;
         if (hit.clickScale > 1.0e-4f)
             clickDb += 20.f * std::log10 (hit.clickScale);
         const float click = kClickAtMinus15 * dbAmp (clickDb - (-15.f));
@@ -425,26 +428,26 @@ struct DrumMachine::Core
 
     void triggerClap (const DrumHit& hit) noexcept
     {
-        const bool gaskin = hit.dialect == Gaskin;
+        const bool jackin = hit.dialect == Jackin;
         if (clap.on || std::fabs (clap.last) > 1.0e-4f)
             clap.ring = clap.last;
         clap.on = true;
         clap.age = 0;
         const float ms = sr / 1000.f;
-        const float space = gaskin ? 10.5f : 10.f;
-        clap.nBurst = gaskin ? 3 : 4;
-        clap.burstW = std::max (4, (int) ((gaskin ? 5.5f : 6.2f) * ms));
+        const float space = jackin ? 10.5f : 10.f;
+        clap.nBurst = jackin ? 3 : 4;
+        clap.burstW = std::max (4, (int) ((jackin ? 5.5f : 6.2f) * ms));
         const float ampsK1[4] = { 1.f, 0.66f, 0.36f, 0.22f };
         const float ampsK2[4] = { 1.f, 0.78f, 0.58f, 0.f };
         for (int i = 0; i < 4; ++i)
         {
             clap.burstAt[i] = (int) (space * (float) i * ms);
-            clap.burstAmp[i] = gaskin ? ampsK2[i] : ampsK1[i];
+            clap.burstAmp[i] = jackin ? ampsK2[i] : ampsK1[i];
         }
         clap.tailAt = clap.burstAt[clap.nBurst - 1];
         clap.tail = 0.f;
-        clap.tailAmp = gaskin ? 0.62f : 0.30f;
-        const float tailMs = (gaskin ? 90.f : 36.f) * decayOf (hit);
+        clap.tailAmp = jackin ? 0.62f : 0.30f;
+        const float tailMs = (jackin ? 90.f : 36.f) * decayOf (hit);
         clap.tailC = std::exp (-1.f / std::max (1.f, tailMs * 0.001f * sr));
         clap.bp.reset();
         clap.tune = std::clamp (hit.tuneRatio, 0.5f, 2.f);
@@ -474,7 +477,7 @@ struct DrumMachine::Core
 
     void triggerMetal (Metal& m, const DrumHit& hit, bool open, bool rideVoice) noexcept
     {
-        const bool gaskin = hit.dialect == Gaskin;
+        const bool jackin = hit.dialect == Jackin;
         const float toneOct = (bank == HatBank::Model808) ? (hit.tone * 2.f) : (hit.tone * 0.35f);
         const float tune = hit.tuneRatio * std::pow (2.f, toneOct);
         const float hpScale = std::clamp (hit.hatHpScale, 0.5f, 2.f);
@@ -482,7 +485,7 @@ struct DrumMachine::Core
         m.on = true;
         m.choking = false;
         m.choke = 1.f;
-        const float* partials = rideVoice ? kRideHz : (gaskin ? kGasHat : kUkHat);
+        const float* partials = rideVoice ? kRideHz : (jackin ? kGasHat : kUkHat);
         float hp = 5000.f;
         float lp = 10500.f;
         if (rideVoice)
@@ -490,7 +493,7 @@ struct DrumMachine::Core
             hp = 4000.f;
             lp = 14000.f;
         }
-        else if (gaskin)
+        else if (jackin)
         {
             hp = 2000.f;
             lp = 7000.f;
@@ -499,11 +502,11 @@ struct DrumMachine::Core
         const float scale = decayOf (hit);
         if (rideVoice)
             m.env.start (sr, 40.f, -6.f, 440.f, -20.f, 760.f, -40.f, scale);
-        else if (open && gaskin)
+        else if (open && jackin)
             m.env.start (sr, 50.f, -6.f, 230.f, -20.f, 420.f, -40.f, scale);
         else if (open)
             m.env.start (sr, 15.f, -6.f, 135.f, -20.f, 180.f, -30.f, scale);
-        else if (gaskin)
+        else if (jackin)
             m.env.start (sr, 25.f, -6.f, 60.f, -20.f, 110.f, -40.f, scale);
         else
             m.env.start (sr, 13.f, -6.f, 45.f, -20.f, 85.f, -40.f, scale);
@@ -528,7 +531,7 @@ struct DrumMachine::Core
         perc.gain = kPercOut * velGain (hit.velocity) * hit.synthKeep * hit.levelGain;
     }
 
-    void triggerRimTom (RimTom& v, const DrumHit& hit, float hz, float semis, float t20, float pan, float out) noexcept
+    void triggerRimTom (RimTom& v, const DrumHit& hit, float hz, float semis, float decay20Ms, float pan, float out) noexcept
     {
         armRing (v.last, v.ring);
         v.on = true;
@@ -537,7 +540,7 @@ struct DrumMachine::Core
         v.pitch = semis > 0.f ? 1.f : 0.f;
         v.pitchC = std::exp (-1.f / std::max (1.f, 0.040f * sr));
         v.body.strike (0.8f);
-        const float ms = t20 * decayOf (hit);
+        const float ms = decay20Ms * decayOf (hit);
         v.env = 1.f;
         v.envC = std::exp (std::log (0.1f) / std::max (1.f, ms * 0.001f * sr));
         v.click = 0.22f;
@@ -563,7 +566,10 @@ struct DrumMachine::Core
             else
                 kick.pitch *= kick.pitchC;
             kick.fade = std::min (1.f, kick.fade + kick.fadeInc);
-            raw = (body * kick.fade + kick.click.tick (sr)) * kick.gain;
+            // Raised cosine, 1.1 ms. The strike leaves the body at its peak, so
+            // a linear ramp still opened on a visible first-sample step.
+            const float fadeG = kick.fade >= 1.f ? 1.f : 0.5f * (1.f - std::cos (kPi * kick.fade));
+            raw = (body * fadeG + kick.click.tick (sr)) * kick.gain;
             if (! kick.env.on && kick.click.env < 1.0e-5f)
                 kick.on = false;
         }
@@ -621,8 +627,8 @@ struct DrumMachine::Core
                 env += clap.tail * fade;
                 clap.tail *= clap.tailC;
             }
-            const bool gaskin = clap.nBurst == 3;
-            const float fc = (gaskin ? 1500.f : 1300.f) * std::max (0.5f, clap.tune);
+            const bool jackin = clap.nBurst == 3;
+            const float fc = (jackin ? 1500.f : 1300.f) * std::max (0.5f, clap.tune);
             const float nz = clap.bp.bandpass (clap.noise.next() * 4.28f, fc, 1.7f, sr);
             raw = nz * env * clap.gain;
             ++clap.age;
@@ -737,26 +743,34 @@ float DrumMachine::kickHzForKey (int key) noexcept
     float bestHz = 55.f;
     float bestDist = 1.0e9f;
     int bestDeg = -1;
-    for (int midi = 24; midi <= 48; ++midi)
+    // Pass 0: the preferred 49-56 Hz window. Keys F, F#, A# and B have no
+    // root / 4th / 5th there, so pass 1 widens to 40-70 Hz (still nearest
+    // 52.8 Hz) instead of dropping to a 55 Hz that is out of key.
+    const float lo[2] = { 48.95f, 40.f };
+    const float hi[2] = { 56.05f, 70.f };
+    for (int pass = 0; pass < 2 && bestDeg < 0; ++pass)
     {
-        const int pc = midi % 12;
-        int deg = -1;
-        for (int i = 0; i < 3; ++i)
-            if (pc == (key + degree[i]) % 12)
-                deg = i;
-        if (deg < 0)
-            continue;
-        const float hz = 440.f * std::pow (2.f, (midi - 69) / 12.f);
-        if (hz < 48.95f || hz > 56.05f)
-            continue;
-        const float dist = std::fabs (hz - 52.8f);
-        const bool closer = dist + 0.03f < bestDist;
-        const bool tieToFifth = std::fabs (dist - bestDist) <= 0.05f && deg == 2 && bestDeg != 2;
-        if (bestDeg < 0 || closer || tieToFifth)
+        for (int midi = 24; midi <= 48; ++midi)
         {
-            bestHz = hz;
-            bestDist = dist;
-            bestDeg = deg;
+            const int pc = midi % 12;
+            int deg = -1;
+            for (int i = 0; i < 3; ++i)
+                if (pc == (key + degree[i]) % 12)
+                    deg = i;
+            if (deg < 0)
+                continue;
+            const float hz = 440.f * std::pow (2.f, (midi - 69) / 12.f);
+            if (hz < lo[pass] || hz > hi[pass])
+                continue;
+            const float dist = std::fabs (hz - 52.8f);
+            const bool closer = dist + 0.03f < bestDist;
+            const bool tieToFifth = std::fabs (dist - bestDist) <= 0.05f && deg == 2 && bestDeg != 2;
+            if (bestDeg < 0 || closer || tieToFifth)
+            {
+                bestHz = hz;
+                bestDist = dist;
+                bestDeg = deg;
+            }
         }
     }
     return bestHz;
@@ -776,16 +790,16 @@ void DrumMachine::trigger (const DrumHit& hit) noexcept
             break;
         case TomLow:
         {
-            const bool gaskin = hit.dialect == Gaskin;
-            core->triggerRimTom (core->tomL, hit, gaskin ? 196.f : 146.83f, 5.f,
-                                 gaskin ? 160.f : 200.f, -0.30f, kTomOut);
+            const bool jackin = hit.dialect == Jackin;
+            core->triggerRimTom (core->tomL, hit, jackin ? 196.f : 146.83f, 5.f,
+                                 jackin ? 160.f : 200.f, -0.30f, kTomOut);
             break;
         }
         case TomMid:
         {
-            const bool gaskin = hit.dialect == Gaskin;
-            core->triggerRimTom (core->tomM, hit, gaskin ? 246.94f : 196.f, 5.f,
-                                 gaskin ? 140.f : 170.f, -0.18f, kTomOut);
+            const bool jackin = hit.dialect == Jackin;
+            core->triggerRimTom (core->tomM, hit, jackin ? 246.94f : 196.f, 5.f,
+                                 jackin ? 140.f : 170.f, -0.18f, kTomOut);
             break;
         }
         case HatC:

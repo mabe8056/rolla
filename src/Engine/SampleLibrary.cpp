@@ -1,4 +1,5 @@
 #include "SampleLibrary.h"
+#include "RollaSettings.h"
 
 #include <iostream>
 #include "../Generator/Presets.h"
@@ -107,11 +108,8 @@ void gatherReferenced (std::vector<std::string>& paths, const PresetBank& bank)
 // ROLLA_CACHE_DIR overrides the folder (tests, headless renders).
 juce::File sampleCacheFor (const juce::File& sampleRoot, const char* kind)
 {
-    juce::File dir;
-    const auto env = juce::SystemStats::getEnvironmentVariable ("ROLLA_CACHE_DIR", {});
-    if (env.isNotEmpty() && juce::File::isAbsolutePath (env))
-        dir = juce::File (env);
-    else
+    juce::File dir = settings::cacheOverride();
+    if (dir == juce::File())
         dir = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
                   .getChildFile ("ROLLA")
                   .getChildFile ("Cache");
@@ -127,13 +125,64 @@ juce::File loudnessCacheFor (const juce::File& sampleRoot)
 
 juce::File SampleLibrary::defaultRoot()
 {
+    if (const auto over = settings::testFolder ("ROLLA_DEFAULT_ROOT"); over != juce::File())
+        return over;
     return juce::File::getSpecialLocation (juce::File::userMusicDirectory)
         .getChildFile ("ROLLA")
         .getChildFile ("Samples");
 }
 
+juce::File SampleLibrary::bundledRoot()
+{
+    if (const auto over = settings::testFolder ("ROLLA_BUNDLE_ROOT"); over != juce::File())
+        return over;
+    // .../ROLLA.vst3/Contents/<arch>/ROLLA(.so|.vst3), .../ROLLA.component/Contents/MacOS/ROLLA,
+    // .../ROLLA.app/Contents/MacOS/ROLLA: Contents is two levels up from the binary.
+    const auto binary = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
+    return binary.getParentDirectory().getParentDirectory().getChildFile ("Resources").getChildFile ("Samples");
+}
+
+static bool directoryHasAudio (const juce::File& dir)
+{
+    if (! dir.isDirectory())
+        return false;
+    for (const auto& entry : juce::RangedDirectoryIterator (dir, true, "*.wav;*.aif;*.aiff;*.flac", juce::File::findFiles))
+    {
+        juce::ignoreUnused (entry);
+        return true;
+    }
+    return false;
+}
+
+juce::File SampleLibrary::resolveSampleRoot (const juce::String& savedRoot)
+{
+    const auto bundle = bundledRoot();
+    if (directoryHasAudio (bundle))
+        return bundle;
+    if (savedRoot.isNotEmpty())
+    {
+        const juce::File saved (savedRoot);
+        if (! settings::isTempLocation (saved) && directoryHasAudio (saved))
+            return saved;
+    }
+    return defaultRoot();
+}
+
+bool SampleLibrary::isBundledRoot (const juce::File& root)
+{
+    const auto bundle = bundledRoot();
+    return root.getFullPathName().isNotEmpty() && (root == bundle || root.isAChildOf (bundle));
+}
+
+juce::File SampleLibrary::userSlotRootFor (const juce::File& sampleRoot)
+{
+    return isBundledRoot (sampleRoot) ? defaultRoot() : sampleRoot;
+}
+
 void ensureSampleFolders (const juce::File& root)
 {
+    if (SampleLibrary::isBundledRoot (root))
+        return;
     const char* parts[] = { "BASS", "STAB", "HITS", "PLUCK", "PAD", "VOX" };
     const char* drums[] = { "KICK", "CLAP", "SNARE", "RIM", "CH", "OH", "RIDE", "PERC" };
     root.createDirectory();
@@ -501,6 +550,7 @@ void SampleLibrary::loadOne (const std::string& relative)
     }
 
     auto audio = std::make_unique<SampleAudio>();
+    audio->path = relative;
     audio->frames = cap;
     audio->rate = reader->sampleRate;
     audio->left.resize ((size_t) cap);
@@ -530,6 +580,22 @@ void SampleLibrary::loadOne (const std::string& relative)
         }
     }
     findSlices (*audio);
+    {
+        // Lane from the first path component ("STAB/foo.wav"): stabs, hits, plucks
+        // and pads get an 80 Hz floor so sub rumble is not read as the root.
+        const auto cut = relative.find_first_of ("/\\");
+        const std::string head = cut == std::string::npos ? std::string() : relative.substr (0, cut);
+        const int part = partFromLaneName (head.c_str());
+        const bool tonalLane = part == Stab || part == Hits || part == Pluck || part == Pad;
+        audio->pitch = probePitch (audio->left.data(), audio->right.data(), audio->frames, audio->rate,
+                                   tonalLane ? kPitchFloorTonalHz : kPitchFloorHz);
+    }
+    audio->namedRoot = midiFromFilename (relative.c_str());
+    audio->flatness = spectralFlatness (audio->left.data(), audio->frames);
+    audio->loudStart = loudestRegionStart (audio->left.data(), audio->frames, audio->rate);
+    audio->voicedCount = voicedOnsets (audio->left.data(), audio->right.empty() ? nullptr : audio->right.data(),
+                                       audio->frames, audio->rate, audio->slices, audio->sliceCount, audio->loudStart,
+                                       audio->voiced, 24, audio->voicedFloor);
 
     {
         std::lock_guard<std::mutex> lock (slotMu);
@@ -762,7 +828,7 @@ std::uint8_t stylesFromTags (const juce::var& presets)
                 styles = (std::uint8_t) (styles | 2u);
             else if (second == "pop")
                 styles = (std::uint8_t) (styles | 4u);
-            else if (second == "gaskin")
+            else if (second == "jackin")
                 styles = (std::uint8_t) (styles | 8u);
         }
     }
@@ -887,6 +953,7 @@ SampleEntry entryFromCache (const juce::var& item)
     entry.altVoice = (int) item.getProperty ("altVoice", -1);
     entry.fileBpm = (int) item.getProperty ("fileBpm", 0);
     entry.phraseLoop = (bool) item.getProperty ("phraseLoop", false);
+    entry.flatness = (float) (double) item.getProperty ("flatness", -1.0);
     return entry;
 }
 
@@ -907,7 +974,44 @@ juce::var entryToVar (const SampleEntry& entry)
     obj->setProperty ("altVoice", entry.altVoice);
     obj->setProperty ("fileBpm", entry.fileBpm);
     obj->setProperty ("phraseLoop", entry.phraseLoop);
+    obj->setProperty ("flatness", entry.flatness);
     return juce::var (obj);
+}
+
+// A short read used only to classify a soft PAD name. The wav on disk is not written.
+float readFlatness (const juce::File& file, juce::AudioFormatManager& formats)
+{
+    if (! file.existsAsFile())
+        return -1.f;
+    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
+    if (reader == nullptr || reader->sampleRate < 1000.0 || reader->lengthInSamples < 256)
+        return -1.f;
+    const auto total = reader->lengthInSamples;
+    const int win = (int) std::min<juce::int64> (total, (juce::int64) std::llround (reader->sampleRate * 0.5));
+    if (win < 256)
+        return -1.f;
+    juce::int64 origins[3] = { 0, 0, 0 };
+    int windows = 1;
+    if (total > (juce::int64) win * 2)
+    {
+        origins[windows++] = std::max<juce::int64> (0, (total - win) / 2);
+        origins[windows++] = std::max<juce::int64> (0, total - win);
+    }
+    float best = 1.f;
+    bool any = false;
+    for (int w = 0; w < windows; ++w)
+    {
+        juce::AudioBuffer<float> buf (1, win);
+        if (! reader->read (&buf, 0, win, origins[w], true, true))
+            continue;
+        const float measured = spectralFlatness (buf.getReadPointer (0), win);
+        if (measured < 0.f)
+            continue;
+        any = true;
+        if (measured < best)
+            best = measured;
+    }
+    return any ? best : -1.f;
 }
 
 } // namespace
@@ -944,7 +1048,7 @@ void SampleLibrary::buildIndex()
     }
 
     std::uint64_t signature = 14695981039346656037ull;
-    signature = fnv1a (signature, "rolla-index-v3");
+    signature = fnv1a (signature, "rolla-index-v4");
     for (const auto& path : disk)
         signature = fnv1a (signature, path);
     signature = fnv1a (signature, manifestText);
@@ -1043,6 +1147,8 @@ void SampleLibrary::buildIndex()
 
     auto snap = std::make_shared<SampleIndex>();
     snap->entries.reserve (disk.size() + meta.size());
+    juce::AudioFormatManager flatnessFormats;
+    flatnessFormats.registerBasicFormats();
     std::map<std::string, bool> seen;
     for (const auto& path : disk)
     {
@@ -1114,6 +1220,11 @@ void SampleLibrary::buildIndex()
             if (! mid.empty())
                 copyField (entry.category, 32, juce::String (mid).toLowerCase());
         }
+        if (sampleOnlySoftPad (entry.path, entry.category))
+        {
+            const auto file = folder.getChildFile (juce::String (entry.path).replaceCharacter ('\\', '/'));
+            entry.flatness = readFlatness (file, flatnessFormats);
+        }
         snap->entries.push_back (entry);
         ++snap->found;
         seen[path] = true;
@@ -1177,18 +1288,6 @@ void SampleLibrary::buildIndex()
 namespace
 {
 
-bool directoryHasAudio (const juce::File& dir)
-{
-    if (! dir.isDirectory())
-        return false;
-    for (const auto& entry : juce::RangedDirectoryIterator (dir, true, "*.wav;*.aif;*.aiff;*.flac", juce::File::findFiles))
-    {
-        juce::ignoreUnused (entry);
-        return true;
-    }
-    return false;
-}
-
 void requestOrdinal (SampleLibrary& library, const SampleIndex& index, int part, int voice, std::vector<std::string>& paths)
 {
     PoolFilter filter;
@@ -1207,7 +1306,7 @@ void requestOrdinal (SampleLibrary& library, const SampleIndex& index, int part,
 InstalledPack openInstalledPack (const char* manifestJson, int manifestSize)
 {
     InstalledPack pack;
-    const auto root = SampleLibrary::defaultRoot();
+    const auto root = SampleLibrary::resolveSampleRoot ({});
     if (! directoryHasAudio (root) || manifestJson == nullptr || manifestSize <= 0)
         return pack;
     pack.library = std::make_unique<SampleLibrary>();

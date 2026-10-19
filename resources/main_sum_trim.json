@@ -55,7 +55,7 @@
    "DOV": 0.51,
    "DBOV": 0.6
   },
-  "GASKIN": {
+  "JACKIN": {
    "D": 0.59,
    "DB": 0.4,
    "DO": 0.7,
@@ -2789,7 +2789,7 @@
     }
    }
   },
-  "GASKIN": {
+  "JACKIN": {
    "default_main_lanes": [
     "BASS",
     "STAB",
