@@ -22,10 +22,10 @@ units:
 ```
 
 **Source keys.**
-- **MD**: private measured-drop table. It covers 16 drop windows from 9 tracks, made by a private aggregation script from the private per-track drop transcriptions. "UK pool" = REF_R3, REF_R1, REF_D2, REF_R4, REF_B1 and REF_R2 (12 windows); the JACKIN-dialect refs (REF_J1/J2) and REF_R6 are kept separate.
+- **MD**: private measured-drop table. It covers 16 drop windows from 9 tracks, made by a private aggregation script from the private per-track drop transcriptions. "UK pool" = 12 windows from 6 of the tracks, pooled; the JACKIN-dialect refs and one outlier track are kept separate.
 - **CTR**: private cross-track rules (CTR) (rule ids A1–A11, B, C, D1–D7, E1–E8).
 - **SA**: private style analysis (4 Beatport previews).
-- **PB**: `rulebook/house-master-playbook.md`. §12 is the measured full-WAV REF_R5; §14.x are the writing rules.
+- **PB**: `rulebook/house-master-playbook.md`. §12 is a measured full-WAV reference (private); §14.x are the writing rules.
 - **SI**: `rulebook/structure-and-instrumentation.md`.
 - **DES**: `plugin-design/DESIGN.md`.
 - **OC**: `tools/originality_check.py` (the A&R gate).
@@ -33,7 +33,7 @@ units:
 - **DA**: Direction A ("Hold & Lean"), passed by A&R; numbers re-measured today: match@1/2/4 = 0.35/0.80/0.88, sounding 0.53, npb per bar [5,3,5,6,5,3,5,4].
 - **PATCH**: `writing/sketch_v1/PATCHES.md` §6.
 
-**Measurement caveat (SA, CTR).** Every number apart from REF_R5 comes from automatic transcription of previews or stems. Treat values as tendencies. Bar phase is less reliable than in-beat position, so checks prefer in-beat stats where possible.
+**Measurement caveat (SA, CTR).** Every number apart from PB §12 comes from automatic transcription of previews or stems. Treat values as tendencies. Bar phase is less reliable than in-beat position, so checks prefer in-beat stats where possible.
 
 ---
 ## 1. Why the current output has too little variation (read of `mockup_v4/index.html` genBass)
@@ -61,11 +61,11 @@ The diversity targets are in §7.2.
 phrase:
   length_bars: 8
   plans:                      # bar-level labels; ' = small variation (<= 4 slots changed), " = larger (5-8 slots)
-    P1: [A, B, A, B', A, B, A, C]        # DA, PB12 REF_R5 (4-bar loop + bar-8 dropout)
+    P1: [A, B, A, B', A, B, A, C]        # DA, PB12 (4-bar loop + bar-8 dropout)
     P2: [A, B, A, B', A, B, A', C]       # DES 5 rule plan A B A' B''
-    P3: [A, A', A, A'', A, A', A, C]     # 1-bar loops: REF_R1/REF_R4/REF_B1 match@1 0.58-0.75 [MD]
+    P3: [A, A', A, A'', A, A', A, C]     # 1-bar loops: pooled refs match@1 0.58-0.75 [MD]
     P4: [A, B, A, B, A, B, A, C]         # Jackin 2-bar call/answer, match@1 0.01-0.16, match@2 0.86-0.92 [MD, CTR D2]
-    P5: [A, B, C, D, A, B, C, D']        # REF_R5 4-bar loop A B C D [PB12]; REF_R6/REF_R3 match@4 > match@2 [MD]
+    P5: [A, B, C, D, A, B, C, D']        # 4-bar loop A B C D [PB12]; some refs match@4 > match@2 [MD]
   plan_weights: {UK_MIN: {P1: .35, P2: .25, P3: .15, P5: .25}, LONG: {P1: .4, P2: .3, P3: .3},
                  POP: {P3: .6, P2: .4}, JACKIN_90S: {P4: .8, P2: .2}}   # ESTIMATE (weights), plan shapes measured
   repetition_targets:          # main-drop windows, bass lane [MD]; DA in brackets
@@ -96,7 +96,7 @@ bass:
   pitch_range_semitones_per_8bars: {UK_pool: [8, 23], median: 13, JACKIN: [5, 16], DA: 3}   # MD; DA
   density:
     npb: {UK_pool: [4.38, 8.75], median: 7.14, DA: 4.5, hard_max: 9}  # MD; DES rule 1 cap 7 (UK MIN); hard_max = MD max per-bar mean
-    npb_per_bar_range: [3, 11]                                 # MD per-bar min/max across windows (REF_B1 4, REF_R1 11)
+    npb_per_bar_range: [3, 11]                                 # MD per-bar min/max across windows (pooled 4-11)
     npb_sd_across_8_bars: {min: 0.5, ref: [0.9, 2.67]}          # MD (DA 1.0); min 0.5 = ESTIMATE floor ("constant density" check)
     sounding_fraction: {UK_pool: [0.30, 0.89], median: 0.70, DA: 0.53}   # MD
     silent_slot_fraction_min: 0.10                              # ESTIMATE from MD (lowest UK sounding 0.89 -> 0.11 silent)
@@ -111,42 +111,42 @@ bass:
   rhythm:
     onset_slot_weights_pct:     # UK pool mean, MD bass_onset_slot_pct; use as PRIOR, not a fixed table
       [8.0, 3.6, 8.3, 4.0, 4.0, 8.6, 4.7, 11.4, 4.2, 8.7, 5.7, 4.9, 6.4, 4.8, 10.2, 2.6]
-    on_kick_pct: {UK_pool: [1.2, 28.0], median: 24.4, DA: 0, REF_R5: "~2", hard_max: 30}   # MD, PB12; CTR A1 (72-98% off kick)
+    on_kick_pct: {UK_pool: [1.2, 28.0], median: 24.4, DA: 0, hard_max: 30}   # MD, PB12; CTR A1 (72-98% off kick)
     max_consecutive_16th_onsets: 3                              # DES rule (no runs >3)
     in_beat_spread_min_positions: 3                             # ESTIMATE; MD: every UK window uses >=3 of e/and/a at >=10%
   cells:                        # cell = onset set within 4 or 8 slots + lengths; bars are made of 2-4 cells. Measured exemplars:
     # Cells are TYPES. The engine may transpose them in time by +-1 slot and change lengths within the bucket targets,
     # but never copy a full exemplar bar (see the originality gate, §7.3).
-    beat1_signature: {slots_within_beat: [[2,4],[3],[2],[3,4]], src: "PB12 REF_R5 2&4 root figure (banned verbatim, CM5.7); DA slot 3; REF_R4 1,3"}
-    hold_lean:       {pattern: "onset at e/and, held 3-8 sixteenths through the next kick", src: "REF_D2 root 1-6 [CTR], DA bar 1 slot 3->6"}
-    off_8th_pump:    {slots: [3,7,11,15], len16: [1,1.5], src: "REF_B1 3/6/8/12 family, CTR B; REF_R1"}
-    syncop_pair:     {slots_within_2beats: [[2,4],[3,6],[6,8]], src: "REF_R4 1,3,6,8 [CTR C]"}
-    answer_tag:      {slots: [14,15,16] subset, len16: [1,2], src: "CTR A7, REF_D2 tag 15-16"}
+    beat1_signature: {slots_within_beat: [[2,4],[3],[2],[3,4]], src: "PB12 (the 2&4 root figure is banned verbatim, CM5.7); DA slot 3; pooled refs"}
+    hold_lean:       {pattern: "onset at e/and, held 3-8 sixteenths through the next kick", src: "LONG refs [CTR], DA bar 1 slot 3->6"}
+    off_8th_pump:    {slots: [3,7,11,15], len16: [1,1.5], src: "POP and UK refs, CTR B"}
+    syncop_pair:     {slots_within_2beats: [[2,4],[3,6],[6,8]], src: "UK refs [CTR C]"}
+    answer_tag:      {slots: [14,15,16] subset, len16: [1,2], src: "CTR A7, LONG refs"}
     dotted_grid:     {slots: [1,4,7,10,13,16], ghost: 12, only_dialect: JACKIN_90S, src: "CTR D1"}
     rest_cell:       {slots: [], len_slots: [4, 8], src: "PB14.1#8 holes"}
     cell_combination: {per_bar_cells: [2, 4], rest_cell_per_8bars_min: 2}   # rest-cell minimum = ESTIMATE (DA has 3: bars 2,6,8)
   pitch:
     degree_time_share_UK_mean: {"1": 40.5, "2": 14.2, "5": 13.3, "b7": 13.1, "b3": 11.8, "4": 3.4, "b2": 1.2, "6": 1.0}  # MD
-    root_share: {UK_pool: [28.6, 60.2], REF_R5: 68, DA: 76, hard_range: [28, 80]}    # MD, PB12, DA
+    root_share: {UK_pool: [28.6, 60.2], DA: 76, hard_range: [28, 80]}    # MD, PB12, DA
     top2_share: {UK_pool: [58.1, 98.4], median: 93.9, CTR_E: [63, 98], root_in_top2: required}   # MD, CTR
     distinct_pitches_per_bar: {UK_pool: [1.94, 5.0], median: 3.25, DA: "1-3"}            # MD
     distinct_pitch_classes_per_8bars: [2, 6]                    # SA 2-6 per bar; PB14.1#2; CM triviality >=2
     allowed_partner_degrees: [b7, b3, "5", "2", "4", b2]        # MD degree shares; b2 = chromatic neighbour only (SA habit 4)
-    b2_rule: "only as a neighbour (approach/leave by 1 semitone to/from root); time share <= 5% (JACKIN <= 30%)"  # MD UK b2 1.2%; CTR D REF_J1/J2 26%
+    b2_rule: "only as a neighbour (approach/leave by 1 semitone to/from root); time share <= 5% (JACKIN <= 30%)"  # MD UK b2 1.2%; CTR D JACKIN refs up to about 26%
     interval_distribution_targets:   # non-zero moves, UK pool [MD bass_intervals]
       same_pitch_repeat_share_of_all_moves: [0.15, 0.62]       # MD rep 15.2-62.4%
       step_1_2: [0.25, 0.60]       # MD pooled +-1/+-2 = 43%
       third_3_4: [0.0, 0.20]       # pooled 11%
-      fourth_fifth_5_7: [0.0, 0.40]  # pooled 19%; REF_R4 38% (CTR C)
+      fourth_fifth_5_7: [0.0, 0.40]  # pooled 19% (max 38%, CTR C)
       octave_12: {UK_MIN: [0, 0.10], LONG: 0, POP: [0.10, 0.30], JACKIN: [0, 0.10], pooled_ref: 0.14}   # MD oct 0-25.6%
       other_6_8_9_10_11: [0.0, 0.12]  # pooled 10.7%
-    max_leap_semitones: 15                                      # SA REF_R2 +15
+    max_leap_semitones: 15                                      # SA refs max +15
     contour_templates:          # per bar or per 2-bar cell; pitch path over the onsets
-      - pedal: [1, 1, 1, ..., partner_tag_end]                  # REF_D2/REF_R2 [CTR]
-      - neighbour: [1, x, 1] with x in {b7 below, 2, b2}         # REF_R1 1<->2, REF_J1/J2 b2 [CTR]
+      - pedal: [1, 1, 1, ..., partner_tag_end]                  # pooled refs [CTR]
+      - neighbour: [1, x, 1] with x in {b7 below, 2, b2}         # pooled refs: 1<->2, b2 in JACKIN [CTR]
       - ladder_down: [5, 2?, b7, b3?, 1]                        # DES DARK ladder
-      - fifth_pop: [1, 5, 1, 5(+12?)]                           # REF_B1 98% root+5 [MD]
-      - step_up: [1, 2, b3]                                     # REF_R3 [CTR]
+      - fifth_pop: [1, 5, 1, 5(+12?)]                           # POP refs mostly root+5 [MD]
+      - step_up: [1, 2, b3]                                     # pooled refs [CTR]
       - call_answer_2bar: {barA: [b7, 1], barB: [b2, b3]}       # JACKIN only [CTR D2]
   velocity: {levels: [112, 80], ghost_share: [0.15, 0.40]}      # DES; PB14.1#10 ghosts 6-7 dB down; share ESTIMATE
   glide: {share_of_notes: {UK_pool: [0, 0.20], DES: [0.02, 0.11]}, time_ms: [30, 40]}   # MD glide 0-20.3%; PB12
@@ -156,11 +156,11 @@ bass:
 
 ```yaml
 interlock:
-  bass_onset_on_kick_slot_pct_max: {UK_MIN: 10, LONG: 30, POP: 5, JACKIN_90S: 35}   # MD: DA 0, REF_R5 ~2, REF_D2 26, REF_B1 2.3, REF_J1/J2 17-34 (grid includes slot 1)
+  bass_onset_on_kick_slot_pct_max: {UK_MIN: 10, LONG: 30, POP: 5, JACKIN_90S: 35}   # MD: per-style pooled refs, DA 0 (grid includes slot 1)
   bass_onset_off_kick_pct_min: 72                     # CTR A1 (72-98%)
   held_through_kick_allowed: true                     # PB14.1#5 (sidechain does the ducking)
-  sidechain_db: {UK_pool: [17, 54], REF_R5: 12, DA: 13, JACKIN: [3.6, 8.1], REF_R6: [3.6, 8]}   # MD sidechain_bass; PB12; CTR E
-  sidechain_recovery_ms: [100, 160]                   # PB12 ~100; MD 140-157 (REF_D2)
+  sidechain_db: {UK_pool: [17, 54], DA: 13, JACKIN: [3.6, 8.1]}   # MD sidechain_bass; PB12; CTR E
+  sidechain_recovery_ms: [100, 160]                   # PB12 ~100; MD 140-157 (LONG refs)
   kick_fundamental_hz: [49, 55]                       # PATCH6, PB14.5#1
   first_bass_onset_in_bar_slot: {prefer: [2, 3, 4], allow: [1] only JACKIN_90S or POP}   # PB12, DA (slot 3), CTR D1
 ```
@@ -176,19 +176,19 @@ stab:
     allowed_types: [quartal/sus no-3rd, "5th+octave", "minor triad over other root (iv, bVI, b7 triad -> m11/9sus)"]   # PB14.3#1-3, SA habit 7
     voicing_changes_per_8_bars: [1, 3]                                 # SA habit 8 (colour every 2-4 bars), DA (QA/QB)
   density:
-    hits_per_bar: {UK_pool: [2.75, 10.38], median: 5.25, DA: 0.75, UK_MIN_default: [0.5, 3]}   # MD; DA; default ESTIMATE between DA and REF_D2 2.8
+    hits_per_bar: {UK_pool: [2.75, 10.38], median: 5.25, DA: 0.75, UK_MIN_default: [0.5, 3]}   # MD; DA; default ESTIMATE between DA and the LONG refs
     on_beat_pct_max: 30                                               # CTR E (<=30%); MD 2.5-29.9
-    len16: {UK_pool_median: [2.16, 34.3], typical: [1, 3], JACKIN_sustained: [6.8, 14.5]}   # MD (34 = REF_R1 pad-like); SA 0.9-1.9
+    len16: {UK_pool_median: [2.16, 34.3], typical: [1, 3], JACKIN_sustained: [6.8, 14.5]}   # MD (the 34 top is pad-like); SA 0.9-1.9
   rhythm:
     onset_slot_weights_pct:  # UK pool mean, MD stab_onset_slot (CQT LOW-MED confidence)
       [4.0, 4.1, 5.8, 8.3, 2.7, 5.1, 6.6, 8.4, 3.8, 8.6, 6.1, 4.0, 5.7, 6.3, 14.4, 6.1]
-    preferred_in_beat: [and, e]                                       # SA (REF_R2 "and" 55%, REF_J1/J2 "e" 45%)
+    preferred_in_beat: [and, e]                                       # SA (pooled refs: "and" up to 55%, JACKIN "e" up to 45%)
   placement_vs_bass:
     same_slot_as_bass_onset: {UK_MIN: forbidden, others: "<= 25% of stab hits"}   # DA 0/8; refs overlap 0.50-0.78 histogram-wise [MD] -> allowed outside UK MIN
     min_gap_after_bass_onset_16ths: {hard: 1, prefer: 2}             # DA min gap 2 (115-230 ms @130); hard = ESTIMATE
     over_sounding_bass_note_pct_max: 25                              # DA 2/8 hits over a held tail (A&R noted as polish); ESTIMATE ceiling
     call_response: "stab hits fall in bass rest cells or the last 3 slots of a bass hold"   # DA (6/8 in clear rests), PB14.1#8
-    dialect_counter_riff: {REF_R4_style: "stab may double bass rhythm (overlap 0.78)", only: LONG/POP opt-in}   # MD
+    dialect_counter_riff: {counter_riff_style: "stab may double bass rhythm (overlap up to 0.78)", only: LONG/POP opt-in}   # MD
   phrase: {placement_bars_default: [2, 4, 6, 8], bar8_extra_hits: [1, 3]}   # DA bars 2/4/6/8; ESTIMATE that this generalises
 ```
 
@@ -210,13 +210,13 @@ hits:
 ```yaml
 pluck:
   default: off                           # DES15.1; PB14.1#1 "bass is the hook, no lead in the drops"
-  on_dialects: [POP]                     # REF_B1 lead riff 9.6-10.4 hits/bar on e/a, louder than bass [MD, CTR B]
+  on_dialects: [POP]                     # POP refs: lead riff about 10 hits/bar on e/a, louder than bass [MD, CTR B]
   motif_len_bars: 2                      # DES15.1
-  register_midi: [60, 84]                # ESTIMATE (above stab range; REF_B1 riff C4-C6 per CTR is LOW-MED confidence)
-  hits_per_bar: {POP: [6, 10], other: [2, 5]}   # MD (REF_B1); other ESTIMATE
+  register_midi: [60, 84]                # ESTIMATE (above stab range; the POP refs' riff register per CTR is LOW-MED confidence)
+  hits_per_bar: {POP: [6, 10], other: [2, 5]}   # MD (POP refs); other ESTIMATE
   pitch_classes_per_motif: [2, 4]; scale: tonic minor pentatonic + 2   # ESTIMATE from bass degree shares
   clearance_16ths_from_other_lanes: 1    # DES15.1 (+-1 sixteenth clear)
-  len16: [0.5, 1.5]                      # ESTIMATE (staccato like REF_B1 bass 1.07-1.12)
+  len16: [0.5, 1.5]                      # ESTIMATE (staccato like the POP refs' bass)
   level_db_vs_bass_note: -9              # DES
 ```
 
@@ -226,7 +226,7 @@ pluck:
 pad:
   in_drop: {default: off, allowed_as: "one swell per 2-4 bars"}   # PB14.3#5 (no pad under drop), PB14.2#1 swell every ~4 bars, DES15.1 every 2 bars
   entry_slot: 2                          # DES15.1 ("e" of beat 1)
-  len16: {swell: [12, 32], JACKIN_chord: [12, 16]}   # CTR D (REF_J1/J2 bVI/bVII ~14/16), MD REF_R1 stab len 34
+  len16: {swell: [12, 32], JACKIN_chord: [12, 16]}   # CTR D (JACKIN refs bVI/bVII ~14/16), MD pooled stab len up to 34
   voicing: same rules as stab.voicing; changes <= 2 per 8 bars   # SA habit 8
   must_gate_before_barline_of_section_end: true      # CM render rule, A&R B1
   level_db_vs_bass_note: -14             # DES
@@ -236,9 +236,9 @@ pad:
 
 ```yaml
 vox:
-  chops_per_bar: {UK_pool: [0.25, 3.0], median: 1.43, REF_R6: [2.4, 5.25]}   # MD chops
+  chops_per_bar: {UK_pool: [0.25, 3.0], median: 1.43}   # MD chops
   len16_median: {UK_pool: [2.16, 16.7], median: 5.78}                         # MD
-  call_bars: [1, 3, 5, 7] (alternate bars)                                    # PB14.4#1 (REF_R5), DES15.1
+  call_bars: [1, 3, 5, 7] (alternate bars)                                    # PB14.4#1, DES15.1
   positions: "same slot set every call bar (+-0); typical slots 3,5,7,13-15"  # PB14.4#1 (16ths 2.5, 4.5, 6.5, 13-15)
   cuts_per_call: [1, 3]                                                       # DES15.1
   phrase: "one phrase per track, unpitched; pitch shift |st| <= 5"            # PB14.4#1, #4 (6 st 'useless')
@@ -252,13 +252,13 @@ vox:
 ```yaml
 drums:
   hit_prob_by_slot:   # UK pool ranges, MD drums hit_frac_by_slot (stem detection: kick bleed inflates slots 1/5/9/13 in other rows)
-    kick:   {slots_1_5_9_13: [0.69, 1.0], other_slots_max: 0.31, exceptions: "REF_R4 slot 7 0.81, REF_R6 slot 8 0.75"}
+    kick:   {slots_1_5_9_13: [0.69, 1.0], other_slots_max: 0.31, exceptions: "a few refs place an extra kick (slot 7 or 8, up to 0.81)"}
     clap:   {slots_5_13: [0.94, 1.0], ghost_slots: {8: [0, 0.71], 16: [0, 1.0]}, ghost_db: -5}   # MD; PATCH6, PB14.5#2
-    hats:   {offbeat_3_7_11_15: [0.25, 1.0] (typ >= 0.85), e_slots_2_10: [0, 1.0], a_slots_4_8_12_16: [0, 0.12] (REF_R4 up to 1.0)}
-    open_hat_offbeat: {share_of_offbeat_hits_with_decay_gt_90ms: [0, 1.0]}   # MD (REF_R2 ~0, REF_R4/REF_R3/REF_B1 0.8-1.0)
+    hats:   {offbeat_3_7_11_15: [0.25, 1.0] (typ >= 0.85), e_slots_2_10: [0, 1.0], a_slots_4_8_12_16: [0, 0.12] (pooled max 1.0)}
+    open_hat_offbeat: {share_of_offbeat_hits_with_decay_gt_90ms: [0, 1.0]}   # MD (pooled refs 0 to 1.0)
   hat_decay_ms_median: [52, 162]                     # MD (UK pool); PATCH6 -20 dB @140 ms
   swing_pct:
-    hats: {UK_pool: [49.7, 57.9], REF_R6: [64.7, 65.3], REF_R5: 50, JACKIN: "~67 (SA; MD unmeasurable)"}   # MD, PB12, SA
+    hats: {UK_pool: [49.7, 57.9], JACKIN: "~67 (SA; MD unmeasurable)"}   # MD, PB12, SA
     clap_snare: {UK_pool: [52.9, 63.2]}               # MD
     bass_and_stabs: "near grid, <= 58"                 # CTR, PB14.5#4
   per_bar_variation: "4/4 kick fixed; hat/perc vary in slots 13-16 of bars 4/8 only; open hat on 'and' of 4 every 2nd or 4th bar"   # PATCH6, CTR A7
@@ -268,12 +268,12 @@ drums:
 ---
 ## 4. Dialect table (main-drop targets; generator presets)
 
-| param | UK MIN (REF_R5 + DA + UK pool) | LONG (REF_D2) | POP (REF_B1) | JACKIN 90s |
+| param | UK MIN (UK pool + DA) | LONG (LONG refs) | POP (POP refs) | JACKIN 90s |
 |---|---|---|---|---|
 | bass npb | 4.5–7.5 (DA 4.5; pool median 7.1) [DA, MD] | 7.1–7.2 [MD] | 5.3–5.4 [MD] | 6.0–7.6 [MD] |
 | bass len16 median | 1.4–2.2 [MD, DA 2.0] | 2.2–2.3 [MD] | 1.0–1.2 [MD] | 2.0–2.2 [MD] |
-| on-kick onset % max | 10 (DA 0, REF_R5 ~2) [DA, PB12] | 30 (26) [MD] | 5 (1.2–2.3) [MD] | 35 (grid on 1) [MD, CTR D1] |
-| root share % | 35–76 (pool 29–60, REF_R5 68, DA 76) [MD, PB12, DA] | 30–45; b7 may lead (CTR) [MD 34–36] | 35–40; 5th 55–65 [MD, CTR] | 28–40 [MD 30–37] |
+| on-kick onset % max | 10 (DA 0) [DA, PB12] | 30 (26) [MD] | 5 (1.2–2.3) [MD] | 35 (grid on 1) [MD, CTR D1] |
+| root share % | 35–76 (pool 29–60, DA 76) [MD, PB12, DA] | 30–45; b7 may lead (CTR) [MD 34–36] | 35–40; 5th 55–65 [MD, CTR] | 28–40 [MD 30–37] |
 | top-2 share % | 63–98 [CTR E, MD] | 75–85 [MD 80–82] | 94–99 [MD 95–98] | 55–70 [MD 56–66] |
 | distinct pitches/bar | 1.5–4 [DA, MD] | 3.5–4.5 [MD 4.1–4.3] | 1.8–2.2 [MD] | 2.5–3.5 [MD 2.9–3.1] |
 | octave jumps % | 0–10 [PB14.1#11, MD] | 0 [MD] | 15–30 [MD 20–26] | 0–5 (SA says 25; MD 0–1 → ESTIMATE) |
@@ -282,7 +282,7 @@ drums:
 | bass swing % | 50–56 | 50–54 | 50 | 50 (straight per CTR D5) |
 | hat swing % | 50–58 [MD, PB12] | 50–52 [MD] | 49.7–50.4 [MD] | ~65–67 [SA; ESTIMATE] |
 | match@2 / @4 | ≥0.6 / ≥0.77 [MD, CTR A6] | ≥0.75 / ≥0.78 [MD] | ≥0.5 / ≥0.75 [MD] | ≥0.85 / ≥0.85, match@1 ≤0.2 [MD] |
-| stab hits/bar | 0.5–3 [DA, MD REF_D2; ESTIMATE] | 2.5–4.5 [MD] | 9–11 lead riff [MD] | 5.5–6.5, sustained len 7–15 [MD] |
+| stab hits/bar | 0.5–3 [DA, MD LONG refs; ESTIMATE] | 2.5–4.5 [MD] | 9–11 lead riff [MD] | 5.5–6.5, sustained len 7–15 [MD] |
 | stab on-beat % max | 10 (DA 0) | 15 [MD 9–13] | 20 [MD 6.5–18.7] | 20 [MD 9.5–18] |
 | vox chops/bar | 0.25–1.5 [MD, PB14.4] | 1.5–2 [MD 1.69] | 0–0.5 (none measured) | 0–1 (ESTIMATE) |
 | plan weights | P1/P2/P3/P5 | P1/P2/P3 | P3/P2 | P4/P2 |
@@ -334,7 +334,7 @@ Soft: slot weights, density ranges, stab-vs-bass placement, phrase plans, contou
 avoid:
   - id: AV01_theory_generic          # scale-run / arpeggio lines
     test: "run of consecutive same-direction steps (|int|<=2) > 5 moves (FAIL) / > 4 (FLAG)  OR  pitch set == triad arpeggio played in order over >= 4 onsets in >= 4 bars"
-    fail: true; src: "MD measured max same-direction step run per window: 1-5 moves (REF_R2 1, REF_R4/REF_B1 2, REF_R3/REF_J1/J2 5); arpeggio clause ESTIMATE (CM ban list)"
+    fail: true; src: "MD measured max same-direction step run per window: 1-5 moves pooled; arpeggio clause ESTIMATE (CM ban list)"
   - id: AV02_grid_locked
     test: "bass onsets: in-beat positions used at >= 10% < 3  OR  onset set of any bar in OC GENERIC_BAR_RHYTHMS (all 16ths / all 8ths / all offbeats)  OR  velocity levels == 1"
     fail: true; src: "MD (all UK windows use >= 3 positions), OC GENERIC_BAR_RHYTHMS, PB14.1#10"
@@ -352,7 +352,7 @@ avoid:
     fail: true; src: "DA 76% (max passed), CM triviality >= 2 pcs, MD min npb 3"
   - id: AV07_wandering_pitch
     test: "top-2 share < 0.55  OR  distinct pitches per bar > 5  OR  any |leap| > 15  OR  root not in top-2  OR  b2 used as non-neighbour"
-    fail: true; src: "MD top2 >= 0.556 (REF_J1/J2), distinct <= 5.0, SA +15, CTR E"
+    fail: true; src: "MD top2 >= 0.556 (pooled low), distinct <= 5.0, SA +15, CTR E"
   - id: AV08_identical_bars
     test: "all 8 bars identical (match@1 > 0.95 across all lags)  OR  bar 8 identical to bar 4  OR  match@4 > 0.97 including bar 8"
     fail: true; src: "MD match@1 max 0.75; PB12 bar-8 change; threshold ESTIMATE"
@@ -372,8 +372,8 @@ avoid:
     test: "OC gate vs all private reference transcriptions: skel_win >= 0.55 OR skel_ngram >= 0.45 OR voicing >= 0.75 OR (int_ngram >= 0.60 AND rhythm_cov >= 0.70) -> FAIL; skel_win >= 0.40 / skel_ngram >= 0.30 / int_ngram >= 0.50 / pc_ngram >= 0.60 / voicing >= 0.50 -> FLAG"
     fail: true; src: OC TH dict
   - id: AV14_banned_figures
-    test: "bass root on slots 2 AND 4 in > 4 of 8 bars (REF_R5 2&4 root figure)  OR  b3 on slot 15 tied over barline in > 4 of 8 bars"
-    fail: true; src: "DES rule (REF_R4/R5 bans), CM5.7"
+    test: "bass root on slots 2 AND 4 in > 4 of 8 bars (the 2&4 root figure)  OR  b3 on slot 15 tied over barline in > 4 of 8 bars"
+    fail: true; src: "DES rule (banned figures), CM5.7"
   - id: AV15_machinegun
     test: "> 3 consecutive 16th onsets  OR  bass npb > 9  OR  len16 median < 0.9"
     fail: true; src: "DES, MD max 8.75, MD min median 1.07"
