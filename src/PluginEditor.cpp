@@ -1324,7 +1324,7 @@ struct DialectBar : Component
         {
             GlyphArrangement glyphs;
             const auto pill = Theme::font (Theme::Role::pill);
-            glyphs.addLineOfText (pill, "GASKIN 90s", 0.f, 0.f);
+            glyphs.addLineOfText (pill, "JACKIN 90s", 0.f, 0.f);
             const float measured = glyphs.getBoundingBox (0, -1, true).getWidth();
             jassert (std::abs (measured - 71.4f) <= 0.5f);
             jassert (measured + 2.f * Theme::padPillLarge <= (float) Theme::segmentLarge);
@@ -2227,6 +2227,7 @@ struct LogoButton : QuietButton
 struct StatusStrip : Component
 {
     String text { "Hover a control." };
+    String notice; // sticky processor notice (a refused roll), shown in place of hover help
 
     void setHelp (const String& next)
     {
@@ -2237,10 +2238,24 @@ struct StatusStrip : Component
         repaint();
     }
 
+    void setNotice (const String& next)
+    {
+        if (next == notice)
+            return;
+        notice = next;
+        repaint();
+    }
+
     void paint (Graphics& g) override
     {
-        g.setColour (col (kInk2));
         g.setFont (Theme::font (Theme::Role::meta));
+        if (notice.isNotEmpty())
+        {
+            g.setColour (col (kWarn));
+            g.drawText (notice, getLocalBounds(), Justification::centredLeft, true);
+            return;
+        }
+        g.setColour (col (kInk2));
         g.drawText (text, getLocalBounds(), Justification::centredLeft, false);
     }
 };
@@ -2465,6 +2480,11 @@ struct RollaEditor::Content : Component
     void showStatus (const String& text)
     {
         status.setHelp (text);
+    }
+
+    void showNotice (const String& text)
+    {
+        status.setNotice (text);
     }
 
     void notifyRoll()
@@ -3443,11 +3463,32 @@ void RollaEditor::timerCallback()
     if (rollPulse.exchange (false))
         content->notifyRoll();
     content->sync();
+    refreshRollNotice();
 
     if (++samplesBannerTick >= 15)
     {
         samplesBannerTick = 0;
         refreshSamplesBanner();
+    }
+}
+
+void RollaEditor::refreshRollNotice()
+{
+    if (content == nullptr)
+        return;
+    const auto now = juce::Time::getMillisecondCounter();
+    const auto n = proc.rollNotice();
+    if (n.serial != appliedNoticeSerial)
+    {
+        appliedNoticeSerial = n.serial;
+        noticeVisible = n.text.isNotEmpty();
+        noticeShownAt = now;
+        content->showNotice (n.text);
+    }
+    else if (noticeVisible && now - noticeShownAt > 8000u)
+    {
+        noticeVisible = false;
+        content->showNotice ({});
     }
 }
 

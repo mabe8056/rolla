@@ -55,7 +55,7 @@ inline bool pitchedLane (Lane lane) noexcept
     return lane == Lane::Bass || lane == Lane::Stab || lane == Lane::Pluck || lane == Lane::Pad || lane == Lane::Hits;
 }
 
-// Style ids as in Pattern.h: ROLLER = ukmin, DEEP = long, BOUNCY = pop, JACKIN = gaskin.
+// Style ids as in Pattern.h: ROLLER = ukmin, DEEP = long, BOUNCY = pop, JACKIN = jackin.
 enum class Style : std::uint8_t
 {
     Roller, Deep, Bouncy, Jackin, Count
@@ -64,12 +64,12 @@ inline constexpr int kStyles = (int) Style::Count;
 
 inline const char* styleId (Style s) noexcept
 {
-    static const char* const ids[] = { "ukmin", "long", "pop", "gaskin" };
+    static const char* const ids[] = { "ukmin", "long", "pop", "jackin" };
     const int i = (int) s;
     return i >= 0 && i < kStyles ? ids[i] : "";
 }
 
-// Accepts the internal ids (ukmin, long, pop, gaskin) and the style names the box
+// Accepts the internal ids (ukmin, long, pop, jackin) and the style names the box
 // writes (roller, deep, bouncy, jackin), in any case.
 inline Style styleFromId (const std::string& id) noexcept
 {

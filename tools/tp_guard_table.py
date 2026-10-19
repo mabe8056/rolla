@@ -24,7 +24,7 @@ STYLE_OF = {
     "ukmin": "ROLLER", "uk_min": "ROLLER", "roller": "ROLLER",
     "long": "DEEP", "deep": "DEEP",
     "pop": "BOUNCY", "bouncy": "BOUNCY",
-    "gaskin": "JACKIN", "jackin": "JACKIN",
+    "jackin": "JACKIN",
 }
 ORDER = ["ROLLER", "DEEP", "BOUNCY", "JACKIN", "?"]
 FIELD = "tp_guard_gr_db_max"

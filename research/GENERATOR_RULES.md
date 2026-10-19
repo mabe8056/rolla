@@ -26,17 +26,17 @@ Written by the Composer on 2026-10-17 ET. v1 is kept in `GENERATOR_RULES_v1.md`;
 | Consecutive 16ths | 3 | band ≤ 7 |
 | Rest of 4+ sixteenths | required | soft (refs 1–37); "≥ 1 silent 16th" is part of the hard broken-bar rule |
 | Leap cap | 15 | band ≤ 19 |
-| Octave share | UK MIN 10% | band 0–26% (REF_R2 16–21%) |
+| Octave share | UK MIN 10% | band 0–26% (pooled refs) |
 | 4-bar repeat floor | 0.77 | band ≥ 0.47 |
 | 2-bar repeat floor | — | band ≥ 0.50 |
-| LONG sounding fraction | — | band 0.75–0.975 (REF_D2 0.93–0.97) |
+| LONG sounding fraction | — | band 0.75–0.975 (pooled LONG refs up to 0.97) |
 | Notes per bar | — | band 3.9–8.7 |
 
 **Diversity.**
 - The mean onset-Jaccard target is replaced by a **same-skeleton-pairs batch gate** (§4.2).
 - A "skeleton" is now defined exactly, using A&R's measure.
 
-**Kept as agreed, now soft with high stickiness:** grid-locked, constant density, root drone, identical bars, too random, Gaskin 1-bar repeat ≤ 0.20. Banned figures are kept and moved into HARD rule 4.
+**Kept as agreed, now soft with high stickiness:** grid-locked, constant density, root drone, identical bars, too random, Jackin 1-bar repeat ≤ 0.20. Banned figures are kept and moved into HARD rule 4.
 
 **Rubric.**
 - Same R1–R9 and the same weights (38 points), so totals compare roll by roll with A&R's sheet.
@@ -75,9 +75,9 @@ hard:
       UK_MIN: [1, b2, 2, b3, 4, 5, b6, 6, b7]    # aeolian + dorian 6 + phrygian b2 [MD: every UK window's bass time sits >= 95.6% inside this set]
       LONG:   [1, b2, 2, b3, 4, 5, b6, 6, b7]
       POP:    [1, b2, 2, b3, 4, 5, b6, 6, b7]
-      GASKIN_90S: [1, b2, 2, b3, 4, 5, b6, b7]   # CTR D (phrygian colour, b2 = 17-26% [MD])
+      JACKIN_90S: [1, b2, 2, b3, 4, 5, b6, b7]   # CTR D (phrygian colour, b2 = 17-26% [MD])
     checks:
-      - "bass: time share on degrees outside scale_set <= 5%"       # MD max 4.4% (REF_R3 b49: 7 + 3 + b5); one 1/16 passing note per 2 bars = 3.1%
+      - "bass: time share on degrees outside scale_set <= 5%"       # MD pooled max 4.4%; one 1/16 passing note per 2 bars = 3.1%
       - "every out-of-set bass note is a chromatic neighbour (|interval| = 1 to an in-set note before or after)"   # SA habit 4
       - "tonic is one of the two most-sounding bass pitch classes"  # CTR E (root always in top-2), MD 16/16 windows
       - "stab/pad/pluck: pitch classes outside scale_set <= 5% of note-ons; never on a downbeat hit"   # ESTIMATE (no measured outliers)
@@ -98,7 +98,7 @@ hard:
     checks:
       - "OC vs every transcription: no FAIL (skel_win >= 0.55, skel_ngram >= 0.45, voicing >= 0.75, or int_ngram >= 0.60 AND rhythm_cov >= 0.70)"   # OC TH; ARS downgrades skeleton-only FAIL vs LOW-confidence CQT streams to FLAG
       - "Composer metric: NOT (onset Jaccard >= 0.50 OR degree-seq sim >= 0.70) and NOT both >= 0.40 / 0.60"   # CM §5
-      - "banned figures: root on slots 2 AND 4 in > 4 of 8 bars; b3 on slot 15 tied over the barline in > 4 of 8 bars"   # CM 5.7, DES (REF_R5 2&4 root figure)
+      - "banned figures: root on slots 2 AND 4 in > 4 of 8 bars; b3 on slot 15 tied over the barline in > 4 of 8 bars"   # CM 5.7, DES (the 2&4 root figure)
       - "triviality guard: streams < 6 onsets or < 2 pcs are exempt from OC"   # OC
 ```
 
@@ -147,7 +147,7 @@ freedom:
 ```
 
 **Stickiness classes.**
-- **Sticky (0.6–0.7):** the agreed groove anchors. These are grid-locked, constant density, root drone, identical bars, too random, Gaskin call/answer, and on-kick inside the soft zone.
+- **Sticky (0.6–0.7):** the agreed groove anchors. These are grid-locked, constant density, root drone, identical bars, too random, Jackin call/answer, and on-kick inside the soft zone.
 - **Normal (0.3):** pitch and density shape.
 - **Loose (0.1):** surface habits such as variation position, the bar-8 rest, velocity layers and hat swing.
 
@@ -155,11 +155,11 @@ freedom:
 
 ```yaml
 soft_global:
-  - {id: S_match2,      metric: gr_match2, target: [0.50, 0.93], tol: 0.10, w: 1.5, stick: 0.6}   # ARS refs 0.536-0.863 (REF_J1/J2 0.92)
+  - {id: S_match2,      metric: gr_match2, target: [0.50, 0.93], tol: 0.10, w: 1.5, stick: 0.6}   # ARS refs 0.536-0.92 pooled
   - {id: S_match4,      metric: gr_match4, target: [0.47, 0.95], tol: 0.10, w: 1.0, stick: 0.3}   # ARS refs 0.469-0.917 (v1 floor 0.77 dropped)
   - {id: S_too_random,  metric: "match2<0.50 AND match4<0.47", target: false, tol: 0.10, w: 3, stick: 0.7}   # ARS AV09 (agreed); d = distance of the closer of the two below its floor
   - {id: S_identical_bars, metric: gr_match1, target: [0.0, 0.95], tol: 0.03, w: 3, stick: 0.7, also: "distinct_bass_bars >= 2"}   # ARS refs <= 0.75 (agreed)
-  - {id: S_gaskin_call_answer, dialect: GASKIN_90S, metric: gr_match1, target: [0.0, 0.20], tol: 0.15, w: 2, stick: 0.6}   # ARS/MD 0.008/0.161 (agreed, soft; only H3 if a bar is empty)
+  - {id: S_jackin_call_answer, dialect: JACKIN_90S, metric: gr_match1, target: [0.0, 0.20], tol: 0.15, w: 2, stick: 0.6}   # ARS/MD 0.008/0.161 (agreed, soft; only H3 if a bar is empty)
   - {id: S_bar8_turnaround, metric: "bar8 rest16 >= 4 OR bar8 != bar4", target: true, w: 0.5, stick: 0.1, bonus_if_true: 0.3}   # PB12, DA; ARS soft NO_BAR8_TURNAROUND
   - {id: S_var_back_half, metric: var_backhalf_pct, target: [50, 100], tol: 20, w: 0.5, stick: 0.1}   # ARS refs median 63 (32-88)
   - {id: S_plan, metric: "phrase plan in dialect plan set (v1 §2 P1-P5)", target: true, w: 0.5, stick: 0.1}   # v1 §2; any other plan just costs 0.5
@@ -169,28 +169,28 @@ soft_global:
 
 ```yaml
 bass_soft:
-  - {id: B_on_kick, metric: onkick_pct, target: {UK_MIN: [0, 28], LONG: [0, 30], POP: [0, 10], GASKIN_90S: [0, 35]}, tol: 5, w: 2, stick: 0.6}   # ARS lane <=28 (refs 1.2-31.6); hard at >35 is H2
-  - {id: B_npb, metric: notes_per_bar, target: {UK_MIN: [3.9, 8.7], LONG: [3.9, 7.5], POP: [4.0, 6.0], GASKIN_90S: [6.0, 8.0]}, tol: 1.0, w: 1, stick: 0.3}   # ARS refs 3.94-8.62; MD per dialect
+  - {id: B_on_kick, metric: onkick_pct, target: {UK_MIN: [0, 28], LONG: [0, 30], POP: [0, 10], JACKIN_90S: [0, 35]}, tol: 5, w: 2, stick: 0.6}   # ARS lane <=28 (refs 1.2-31.6); hard at >35 is H2
+  - {id: B_npb, metric: notes_per_bar, target: {UK_MIN: [3.9, 8.7], LONG: [3.9, 7.5], POP: [4.0, 6.0], JACKIN_90S: [6.0, 8.0]}, tol: 1.0, w: 1, stick: 0.3}   # ARS refs 3.94-8.62; MD per dialect
   - {id: B_const_density, metric: "npb_sd, npb_range", target: "sd >= 0.5 and range >= 2", tol: 0.3, w: 2.5, stick: 0.7}   # ARS refs sd 0.66-2.33, range 2-7 (agreed)
-  - {id: B_len_med, metric: len_med16, target: {UK_MIN: [1.0, 2.4], LONG: [1.8, 4.0], POP: [0.9, 1.4], GASKIN_90S: [1.5, 2.6]}, tol: 0.4, w: 1, stick: 0.3}   # ARS lane bands
+  - {id: B_len_med, metric: len_med16, target: {UK_MIN: [1.0, 2.4], LONG: [1.8, 4.0], POP: [0.9, 1.4], JACKIN_90S: [1.5, 2.6]}, tol: 0.4, w: 1, stick: 0.3}   # ARS lane bands
   - {id: B_long_notes, metric: long_ge6_pct, target: {default: [0, 15], LONG: [0, 40]}, tol: 10, w: 0.7, stick: 0.3}   # ARS BASS_REESE_LONG
-  - {id: B_run, metric: max_16th_run, target: [0, 7], tol: 2, w: 1, stick: 0.3}   # ARS refs max 7 (REF_R1)
+  - {id: B_run, metric: max_16th_run, target: [0, 7], tol: 2, w: 1, stick: 0.3}   # ARS refs max 7
   - {id: B_grid_locked, metric: "inbeat_pos_ge10 >= 3 AND generic_bars <= 4", tol: 1, w: 3, stick: 0.7}   # ARS AV02 refs 3-4 positions (agreed)
-  - {id: B_sounding, metric: sounding_frac, target: {UK_MIN: [0.36, 0.95], LONG: [0.75, 0.975], POP: [0.28, 0.45], GASKIN_90S: [0.70, 0.95]}, tol: 0.1, w: 1, stick: 0.3}   # ARS refs 0.36-0.97; MD per dialect; >0.975 is H3
+  - {id: B_sounding, metric: sounding_frac, target: {UK_MIN: [0.36, 0.95], LONG: [0.75, 0.975], POP: [0.28, 0.45], JACKIN_90S: [0.70, 0.95]}, tol: 0.1, w: 1, stick: 0.3}   # ARS refs 0.36-0.97; MD per dialect; >0.975 is H3
   - {id: B_rest4, metric: longest_rest16, target: [4, 64], tol: 2, w: 0.5, stick: 0.1}   # PB14.1#8 taste; refs 1-37 so light only
   - {id: B_root_drone, metric: root_pct, target: [0, 80], tol: 5, w: 3, stick: 0.7}   # ARS refs <= 67.9, DA 76 (agreed)
-  - {id: B_root_share, metric: root_pct, target: {UK_MIN: [28, 76], LONG: [28, 45], POP: [30, 42], GASKIN_90S: [28, 40]}, tol: 8, w: 0.7, stick: 0.3}   # MD, PB12, DA
-  - {id: B_top2, metric: top2_pct, target: {default: [57, 99], GASKIN_90S: [55, 70]}, tol: 8, w: 1.5, stick: 0.3}   # ARS refs 57.3-98.4
+  - {id: B_root_share, metric: root_pct, target: {UK_MIN: [28, 76], LONG: [28, 45], POP: [30, 42], JACKIN_90S: [28, 40]}, tol: 8, w: 0.7, stick: 0.3}   # MD, PB12, DA
+  - {id: B_top2, metric: top2_pct, target: {default: [57, 99], JACKIN_90S: [55, 70]}, tol: 8, w: 1.5, stick: 0.3}   # ARS refs 57.3-98.4
   - {id: B_pcs, metric: "pitch classes >= 5% time", target: [2, 6], tol: 1, w: 1, stick: 0.3}   # ARS refs 2-6
   - {id: B_pitches_bar, metric: pitches_per_bar, target: {default: [1.3, 5.2], POP: [1.5, 2.5]}, tol: 0.8, w: 1, stick: 0.3}   # ARS, MD
-  - {id: B_octave, metric: octave_move_pct, target: {UK_MIN: [0, 26], LONG: [0, 8], POP: [15, 30], GASKIN_90S: [0, 26]}, tol: 6, w: 0.7, stick: 0.3}   # ARS refs 0-25.6 (REF_R2 16-21); MD REF_D2 0, REF_B1 20-26
+  - {id: B_octave, metric: octave_move_pct, target: {UK_MIN: [0, 26], LONG: [0, 8], POP: [15, 30], JACKIN_90S: [0, 26]}, tol: 6, w: 0.7, stick: 0.3}   # ARS refs 0-25.6 pooled; MD LONG refs about 0, POP refs 20-26
   - {id: B_leap, metric: max_leap, target: [0, 19], tol: 5, w: 0.7, stick: 0.3}   # ARS refs 17/19
   - {id: B_scale_run, metric: step_run_moves, target: [0, 5], tol: 2, w: 1.5, stick: 0.5}   # MD/ARS refs <= 5 ("theory-generic")
   - {id: B_swing, metric: bass_swing_pct, target: [46, 58.5], tol: 3, w: 1, stick: 0.3}   # ARS
   - {id: B_vel_layers, metric: vel_layers, target: [2, 4], tol: 1, w: 0.4, stick: 0.1}   # PB14.1#10
   - {id: B_glide, metric: glide_pct, target: [0, 20], tol: 8, w: 0.3, stick: 0.1}   # MD 0-20.3
-  - {id: B_b2, metric: b2_time_pct, target: {default: [0, 5], GASKIN_90S: [10, 30]}, tol: 5, w: 0.7, stick: 0.3}   # MD; ARS gaskin b2 >= 10
-  - {id: B_dotted, dialect: GASKIN_90S, metric: dotted_share_pct, target: [55, 100], tol: 15, w: 1, stick: 0.5}   # ARS gaskin profile, CTR D1
+  - {id: B_b2, metric: b2_time_pct, target: {default: [0, 5], JACKIN_90S: [10, 30]}, tol: 5, w: 0.7, stick: 0.3}   # MD; ARS jackin b2 >= 10
+  - {id: B_dotted, dialect: JACKIN_90S, metric: dotted_share_pct, target: [55, 100], tol: 15, w: 1, stick: 0.5}   # ARS jackin profile, CTR D1
   - {id: B_organ_8ths, metric: "eighths_attacked_med >= 6 AND onkick >= 40", target: false, w: 1.5, stick: 0.3}   # ARS BASS_ORGAN_8THS (soft now)
   - {id: B_offbeat_pump_only, metric: beats_offbeat_only_pct, target: [0, 75], tol: 10, w: 1, stick: 0.3}   # ARS OFFBEAT_PUMP_ONLY
   - {id: B_16th_roll, metric: beats_eaa_pct, target: [0, 25], tol: 10, w: 1, stick: 0.3}   # ARS BASS_16TH_ROLL
@@ -202,14 +202,14 @@ The v1 generator priors still drive *sampling*, and they aren't penalties: slot 
 
 ```yaml
 stab_soft:
-  - {id: ST_on_beat, metric: stab_onbeat_pct, target: {default: [0, 30], GASKIN_90S: [0, 50]}, tol: 10, w: 1, stick: 0.3}   # ARS refs 3.6-28.4; CTR A9
+  - {id: ST_on_beat, metric: stab_onbeat_pct, target: {default: [0, 30], JACKIN_90S: [0, 50]}, tol: 10, w: 1, stick: 0.3}   # ARS refs 3.6-28.4; CTR A9
   - {id: ST_density_mode, metric: stab_hits_per_bar, target: "dub [0.5, 3] OR riff [4, 10]", tol: 1.0, w: 0.8, stick: 0.3,
-     mode_default: {UK_MIN: dub, LONG: dub, POP: riff, GASKIN_90S: riff}}   # ARS/REV §0.2 refs 0.5-10.38; 3-4 = "generic" zone pays d from the nearer mode
+     mode_default: {UK_MIN: dub, LONG: dub, POP: riff, JACKIN_90S: riff}}   # ARS/REV §0.2 refs 0.5-10.38; 3-4 = "generic" zone pays d from the nearer mode
   - {id: ST_pcs, metric: stab_pcs_med, target: [1, 4], tol: 1, w: 0.8, stick: 0.3}   # CTR A9, DES quartal 4
   - {id: ST_on_bass_attack, metric: stab_on_bass_attack_pct, target: [0, 80], tol: 10, w: 0.5, stick: 0.3}   # ARS refs 23.9-74.8; v1 "never" rule DROPPED
   - {id: ST_in_rests_bonus, dialect: UK_MIN, metric: stab_in_bass_rest_pct, bonus: "-0.5 if >= 50"}   # ARS BONUS_STABS_IN_RESTS (refs median 25): taste, never required
   - {id: ST_piano_offbeat, metric: "4-pc hits on >= 3 offbeats per bar in > half the bars", target: false, w: 1.5, stick: 0.5}   # ARS PIANO_OFFBEAT_CHORDS
-  - {id: ST_gaskin_sustain, dialect: GASKIN_90S, metric: stab_dur_med16, target: [8, 16], tol: 4, w: 0.7, stick: 0.3}   # ARS, MD 6.8-14.5
+  - {id: ST_jackin_sustain, dialect: JACKIN_90S, metric: stab_dur_med16, target: [8, 16], tol: 4, w: 0.7, stick: 0.3}   # ARS, MD 6.8-14.5
   - {id: ST_register, metric: "stab notes MIDI", target: [45, 79], tol: 5, w: 0.5, stick: 0.3}   # DA, v1 (ESTIMATE band)
 ```
 
@@ -221,14 +221,14 @@ other_soft:
   pluck: [{id: PL_off_default, target: "off unless POP or user on", w: 0.3, stick: 0.1}, {id: PL_clear, target: ">= 1 sixteenth from bass/stab onsets", w: 0.5, stick: 0.3}]   # DES15.1
   pad:   [{id: PD_under_drop, metric: pad_sounding_frac, target: [0, 0.5], tol: 0.2, w: 1, stick: 0.3}, {id: PD_swell_rate, target: "1 per 2-4 bars", w: 0.4, stick: 0.1}]   # PB14.3#5, PB14.2#1
   vox:   [{id: VX_rate, metric: chops_per_bar, target: {default: [0.25, 3.0]}, tol: 1, w: 0.5, stick: 0.3}, {id: VX_same_slots, target: "call bars reuse slot set", w: 0.4, stick: 0.1}, {id: VX_pitch, target: "|shift| <= 5 st", tol: 2, w: 0.8, stick: 0.3}]   # MD, PB14.4
-  drums: [{id: DR_kick_4x4, metric: kick_quarter_cov, target: [0.8, 1.0], tol: 0.1, w: 2, stick: 0.7}, {id: DR_hat_swing, metric: hat_swing_pct, target: {default: [49, 59.5], GASKIN_90S: [60, 68]}, tol: 3, w: 0.7, stick: 0.3},
+  drums: [{id: DR_kick_4x4, metric: kick_quarter_cov, target: [0.8, 1.0], tol: 0.1, w: 2, stick: 0.7}, {id: DR_hat_swing, metric: hat_swing_pct, target: {default: [49, 59.5], JACKIN_90S: [60, 68]}, tol: 3, w: 0.7, stick: 0.3},
           {id: DR_hat_16ths, metric: closed_hat_per_bar, target: [0, 10], tol: 2, w: 0.8, stick: 0.3}, {id: DR_latin_bed, target: "no conga/bongo bed in UK modes", w: 0.8, stick: 0.3}, {id: DR_fx_in_loop, target: "no riser/crash in drop loop", w: 0.8, stick: 0.3}]   # ARS
 ```
 
 ---
 ## 3. Dialect targets (band centres used to sample; band edges = §2 targets)
 
-| param | UK MIN | LONG | POP | GASKIN 90s | source |
+| param | UK MIN | LONG | POP | JACKIN 90s | source |
 |---|---|---|---|---|---|
 | bass on-kick % (soft / HARD) | ≤ 28 / > 35 | ≤ 30 / > 35 | ≤ 10 / > 35 | ≤ 35 / > 35 | ARS, MD |
 | bass notes/bar | 3.9–8.7 | 3.9–7.5 | 4–6 | 6–8 | ARS, MD |

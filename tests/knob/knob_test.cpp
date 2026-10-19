@@ -578,9 +578,9 @@ void testGeneratorControls()
 
     setDenorm (proc, "bassKeep", 0.f);
     const auto uk = hashAll (proc.copyGroove());
-    expect (reshapeTo (proc, "dialect", (float) rolla::Gaskin), "style reshape");
+    expect (reshapeTo (proc, "dialect", (float) rolla::Jackin), "style reshape");
     expect (hashAll (proc.copyGroove()) != uk, "STYLE pattern changes");
-    expect ((int) rawOf (proc, "dialect") == rolla::Gaskin, "style parameter landed");
+    expect ((int) rawOf (proc, "dialect") == rolla::Jackin, "style parameter landed");
 
     for (const char* id : { "dark", "busy", "bounce", "stab", "styleIntensity", "swing", "duck", "key", "dialect",
                             "bassTone", "bassPunch", "bassLevel", "dTune0", "dDecay0", "dLevel0" })

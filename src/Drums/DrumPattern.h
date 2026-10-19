@@ -15,7 +15,7 @@ namespace rolla
 // Swing stays in the engine (swungStart). Kick and clap sit on even 16ths, so
 // they stay straight. Hats on "e" / "a", the shaker's "e" / "a", the ghost,
 // and the fill land on odd 16ths and take the swing delay. "&" (open hat, and
-// the shaker accent) is an even 16th and stays put. Gaskin has no shaker.
+// the shaker accent) is an even 16th and stays put. Jackin has no shaker.
 void writeDrumPattern (Groove& groove, const Settings& settings, Rng& rng);
 
 } // namespace rolla
