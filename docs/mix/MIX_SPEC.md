@@ -97,7 +97,7 @@ Test: `tests/mix_check.py` with `tests/targets.json`. Results are in `tests/resu
    - −19.0 − 4.65 = −23.65, rounded to −23.7.
 3. **BASS = KICK −1.0 dB (−24.7 LUFS-S) in every style, ±0.5** [D clamp].
    - −1.0 is the median of the 4 style medians (+0.18, −0.13, −1.77, −4.24) = −0.95.
-   - This departs from the JACKIN ref by +3.2 dB and from UK MIN by −1.2 dB. Flagged as the clamp the brief asks for. **DECIDED (Maestro, 2026-10-17): keep the clamp in every style, JACKIN 90s included, so the bus chain needs no re-tuning between styles.**
+   - This departs from the JACKIN style median by +3.2 dB and from UK MIN by −1.2 dB. Flagged as the clamp the brief asks for. **DECIDED (Maestro, 2026-10-17): keep the clamp in every style, JACKIN 90s included, so the bus chain needs no re-tuning between styles.**
 4. **Kick and bass must not differ by more than 1 dB across styles** in ST max, sub+low energy and <120 Hz energy. Both must hold corr <120 Hz ≥ 0.99.
    - Bass is mono to ≥ 220 Hz [M: mono point ≥ 224 Hz on 9/9].
    - Kick and bass presets may not change level, sub EQ or mono processing per style. Style colour on kick/bass is limited to crest (compression) and >200 Hz content.
