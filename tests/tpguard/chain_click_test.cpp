@@ -54,7 +54,7 @@ constexpr int kPercBars = 4;
 constexpr int kKickLane = 6, kRimLane = 9, kPercLane = 13;
 constexpr float kDrumAmp = 0.5f;          // Sampler ampFor(Drums): ampDb (trimDb 0) * 0.5
 constexpr float kVel = 110.f / 127.f;
-const char* const kDialectNames[rolla::kMixDialects] = { "UKMIN", "LONG", "POP", "GASKIN" };
+const char* const kDialectNames[rolla::kMixDialects] = { "UKMIN", "LONG", "POP", "JACKIN" };
 
 int failures = 0;
 double worstGrowth = 0.0;
