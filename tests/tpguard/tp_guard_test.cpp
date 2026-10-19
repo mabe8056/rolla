@@ -11,7 +11,10 @@
 // Kaiser-9 meter is printed alongside for information. Neither is the guard's
 // own 24-tap detector. Factory presets are sample-only, so part B forces every
 // lane to SYNTH; no sample pack is needed.
+// Part C checks the DRUMS bus mono-below-120 Hz: a hard-panned stereo kick
+// through MonoBelow, and JACKIN rolls whose DRUMS stem must correlate >= 0.99 below 120 Hz.
 
+#include "DspUtil.h"
 #include "Engine/Engine.h"
 #include "Generator/Generator.h"
 #include "Generator/Intensity.h"
@@ -423,12 +426,122 @@ void partB()
     std::printf ("INFO worst over styles x intensity: guard on %.2f dBTP, guard off %.2f dBTP (synth voices, no sample pack)\n",
                  worstOn, worstOff);
 }
+
+// Part C: the DRUMS bus is mono below 120 Hz. L/R correlation of both channels
+// through an LR4 low-pass at 120 Hz (Pearson, zero lag), the Mix Engineer's metric.
+double lowCorr (const std::vector<float>& l, const std::vector<float>& r, size_t skip)
+{
+    rolla::Svf aL, bL, aR, bR;
+    const float srF = (float) kSr;
+    double ab = 0.0, aa = 0.0, bb = 0.0;
+    for (size_t i = 0; i < l.size(); ++i)
+    {
+        const float x = bL.lowpass (aL.lowpass (l[i], 120.f, 0.70710678f, srF), 120.f, 0.70710678f, srF);
+        const float y = bR.lowpass (aR.lowpass (r[i], 120.f, 0.70710678f, srF), 120.f, 0.70710678f, srF);
+        if (i < skip)
+            continue;
+        ab += (double) x * y;
+        aa += (double) x * x;
+        bb += (double) y * y;
+    }
+    const double den = std::sqrt (aa * bb);
+    return den < 1.0e-12 ? 1.0 : ab / den;
+}
+
+void partC()
+{
+    {
+        // A hard-panned 50 Hz kick (left only, the right a quieter copy 1.6 ms late)
+        // through the same MonoBelow the DRUMS bus runs.
+        const int n = (int) (4.0 * kSr);
+        const int lag = (int) std::lround (0.0016 * kSr);
+        std::vector<float> kick ((size_t) n, 0.f);
+        const int period = (int) (0.5 * kSr), attack = (int) (0.005 * kSr);
+        for (int i = 0; i < n; ++i)
+        {
+            const int t = i % period;
+            const double env = (t < attack ? 0.5 - 0.5 * std::cos (kPi * t / attack) : 1.0) * std::exp (-(double) t / (0.1 * kSr));
+            kick[(size_t) i] = (float) (0.8 * env * std::sin (2.0 * kPi * 50.0 * t / kSr));
+        }
+        Stereo in { kick, std::vector<float> ((size_t) n, 0.f) };
+        for (int i = lag; i < n; ++i)
+            in.r[(size_t) i] = 0.1f * kick[(size_t) (i - lag)];
+        Stereo out = in;
+        rolla::MonoBelow mono;
+        double sumErr = 0.0;
+        for (int i = 0; i < n; ++i)
+        {
+            mono.process (out.l[(size_t) i], out.r[(size_t) i], 120.f, (float) kSr);
+            sumErr = std::max (sumErr, (double) std::fabs ((out.l[(size_t) i] + out.r[(size_t) i]) - (in.l[(size_t) i] + in.r[(size_t) i])));
+        }
+        const size_t skip = (size_t) (0.1 * kSr);
+        const double before = lowCorr (in.l, in.r, skip), after = lowCorr (out.l, out.r, skip);
+        check (after >= 0.99, "hard-panned stereo kick: drums-bus L/R correlation below 120 Hz >= 0.99",
+               fmt ("before %.3f, after %.4f", before, after));
+        check (sumErr < 1.0e-5, "drums-bus mono-below keeps L+R (flat sum)", fmt ("max |dSum| %.2e", sumErr));
+    }
+
+    // JACKIN rolls through the engine: the DRUMS stem and the main mix. Synth voices,
+    // so no sample pack is needed (same gating as part B).
+    rolla::PresetBank bank;
+    rolla::MixProgram mix;
+    if (! (rolla::loadPresetsFromJson (bank, BinaryData::presets_json, BinaryData::presets_jsonSize) && loadProgram (mix)))
+    {
+        check (false, "part C: presets and mix program load");
+        return;
+    }
+    forceSynth (bank);
+    constexpr int kJackin = 3;
+    const int total = (int) std::llround (8 * 4.0 * 60.0 / kBpm * kSr);
+    double worstDrum = 1.0, worstMain = 1.0;
+    for (std::uint32_t roll = 0; roll < 6; ++roll)
+    {
+        rolla::Settings st;
+        st.dialect = kJackin;
+        st.bars = 8;
+        st.fill = true;
+        const std::uint32_t seeds[rolla::NumParts] = { 0x0B17u + roll * 101u, 0x51ABu + roll * 7u, 0x19C3u + roll, 0x77E1u, 0x0A11u, 0xBEEFu, 0x0909u + roll * 977u };
+        rolla::Groove g {};
+        rolla::generate (g, st, seeds, 0x7fu);
+        const auto params = makeParams (bank, mix, kJackin);
+        Stereo master { std::vector<float> ((size_t) total), std::vector<float> ((size_t) total) };
+        Stereo drum = master;
+        rolla::Engine engine;
+        engine.prepare (kSr, kBlock);
+        double ppq = 0.0;
+        for (int done = 0; done < total; done += kBlock)
+        {
+            const int n = std::min (kBlock, total - done);
+            rolla::Transport t;
+            t.playing = true;
+            t.bpm = kBpm;
+            t.ppqStart = ppq;
+            t.sampleRate = kSr;
+            juce::MidiBuffer midi;
+            engine.process (g, params, t, master.l.data() + done, master.r.data() + done,
+                            drum.l.data() + done, drum.r.data() + done, n, midi, true);
+            ppq += (double) n * kBpm / (60.0 * kSr);
+        }
+        double drumEnergy = 0.0;
+        for (float v : drum.l)
+            drumEnergy += (double) v * v;
+        const double dc = lowCorr (drum.l, drum.r, 0), mc = lowCorr (master.l, master.r, 0);
+        worstDrum = std::min (worstDrum, dc);
+        worstMain = std::min (worstMain, mc);
+        check (drumEnergy > 1.0e-6 && dc >= 0.99,
+               "JACKIN roll " + std::to_string (roll) + ": DRUMS stem L/R correlation below 120 Hz >= 0.99",
+               fmt ("drums %.4f, main %.4f", dc, mc));
+    }
+    std::printf ("INFO JACKIN low-end correlation, worst of 6 rolls: DRUMS stem %.4f, main %.4f (synth voices)\n",
+                 worstDrum, worstMain);
+}
 } // namespace
 
 int main()
 {
     partA();
     partB();
+    partC();
     std::printf ("%s: %d failure(s)\n", failures == 0 ? "OK" : "FAILED", failures);
     return failures == 0 ? 0 : 1;
 }
