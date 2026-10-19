@@ -531,7 +531,7 @@ struct DrumMachine::Core
         perc.gain = kPercOut * velGain (hit.velocity) * hit.synthKeep * hit.levelGain;
     }
 
-    void triggerRimTom (RimTom& v, const DrumHit& hit, float hz, float semis, float t20, float pan, float out) noexcept
+    void triggerRimTom (RimTom& v, const DrumHit& hit, float hz, float semis, float decay20Ms, float pan, float out) noexcept
     {
         armRing (v.last, v.ring);
         v.on = true;
@@ -540,7 +540,7 @@ struct DrumMachine::Core
         v.pitch = semis > 0.f ? 1.f : 0.f;
         v.pitchC = std::exp (-1.f / std::max (1.f, 0.040f * sr));
         v.body.strike (0.8f);
-        const float ms = t20 * decayOf (hit);
+        const float ms = decay20Ms * decayOf (hit);
         v.env = 1.f;
         v.envC = std::exp (std::log (0.1f) / std::max (1.f, ms * 0.001f * sr));
         v.click = 0.22f;

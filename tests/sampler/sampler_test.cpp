@@ -629,19 +629,19 @@ void testFingerprintTool()
     expect (fp::nonIdString (juce::var (leaky)) == "path", "privacy: a path string is caught");
 
     const auto oneJson = base.getChildFile ("one.json");
-    expect (runTool ({ "scan-stems", base.getChildFile ("stems/trackA").getFullPathName(), "--track-id", "t01", "--style", "pop",
+    expect (runTool ({ "scan-stems", base.getChildFile ("stems/trackA").getFullPathName(), "--track-id", "x01", "--style", "pop",
                        "--min-conf", "0.55", "--out", oneJson.getFullPathName() }) == 0,
             "fingerprint tool: scan-stems runs on one track");
     const auto one = fp::entriesFromJson (juce::JSON::parse (oneJson));
     bool idsOk = ! one.empty();
     for (const auto& e : one)
-        idsOk = idsOk && e.track == "t01" && e.style == "pop";
+        idsOk = idsOk && e.track == "x01" && e.style == "pop";
     expect (idsOk, "fingerprint tool: scan-stems keys slices by the given track id and style");
     expect (one.size() <= sliced.size(), "fingerprint tool: --min-conf only drops slices");
 
-    base.getChildFile ("ids.csv").replaceWithText ("folder,track_id,style\ntrackA,t07,long\n");
+    base.getChildFile ("ids.csv").replaceWithText ("folder,track_id,style\ntrackA,x07,long\n");
     const auto idMap = fp::readStyles (base.getChildFile ("ids.csv"));
-    expect (idMap.count ("trackA") == 1 && idMap.at ("trackA").id == "t07" && idMap.at ("trackA").style == "long",
+    expect (idMap.count ("trackA") == 1 && idMap.at ("trackA").id == "x07" && idMap.at ("trackA").style == "long",
             "fingerprint tool: a folder,track_id,style CSV writes the id, not the folder");
 
     const auto targetsJson = base.getChildFile ("targets.json");
