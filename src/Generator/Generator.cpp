@@ -3292,6 +3292,11 @@ void fixUpperClashes (Groove& g, int part)
             }
             keep[w++] = (std::int8_t) retarget (n.chord[0], (target - bias + 12) % 12);
         }
+        // The engine's stab chord memory turns a one-tone stab back into a full chord,
+        // which would put the clashing tones back (and play notes the MIDI file lacks).
+        // A lone surviving tone gets its octave, so the stab plays as written.
+        if (part == Stab && w == 1)
+            keep[w++] = (std::int8_t) (keep[0] + (keep[0] <= 36 ? 12 : -12));
         n.nChord = (std::uint8_t) w;
         for (int c = 0; c < 4; ++c)
             n.chord[c] = c < w ? keep[c] : 0;
