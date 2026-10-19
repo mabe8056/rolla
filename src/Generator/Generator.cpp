@@ -1905,17 +1905,23 @@ void writeHits (Lane& lane, const Groove& g, const Settings& s, Rng& rng, int mo
     // the stab draws them, whose pitch-class sets differ by two notes or more; the
     // hits cycle through them in time order. One chord on every hit lined up with
     // a reference's offbeat stab within one note (the originality voicing match).
+    // The first chord takes the lane's own draw (as before the cycle); the others
+    // come from a side stream, so hit placement and count are untouched, and keep
+    // the first chord's note count where the palette allows (same weight per hit).
     struct Chord { int tones[4]; int n; unsigned mask; };
     Chord chords[3] {};
     int nChords = 0;
-    const int wantChords = 2 + (rng.next() < 0.35 ? 1 : 0);
+    Rng side (rng.s ^ 0x5EC0C4D5u);
+    const int wantChords = 2 + (side.next() < 0.35 ? 1 : 0);
     for (int tries = 0; tries < 24 && nChords < wantChords; ++tries)
     {
         Chord c {};
-        rules::stabVoicing (s.dialect, mode, rng.nextU() | 1u, c.tones, c.n);
+        rules::stabVoicing (s.dialect, mode, (nChords == 0 ? rng.nextU() : side.nextU()) | 1u, c.tones, c.n);
         c.n = clampi (c.n, 1, 3);
         for (int k = 0; k < c.n; ++k)
             c.mask |= 1u << (unsigned) (((c.tones[k] % 12) + 12) % 12);
+        if (nChords > 0 && c.n != chords[0].n && tries < 16)
+            continue;
         bool distinct = true;
         for (int j = 0; j < nChords && distinct; ++j)
         {
