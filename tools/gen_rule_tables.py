@@ -78,11 +78,13 @@ inline constexpr int kBarCountHi = 8;
 // Bar 2 against bar 1 (the call): keep the call's front half with this P and
 // redraw the back half; JACKIN instead draws bar 2 into the call's silence so
 // the 1-bar repeat stays under its cap.
-inline constexpr float kAnswerKeepFront[kStyles] = { 0.50f, 0.60f, 0.55f, 0.0f };
+inline constexpr float kAnswerKeepFront[kStyles] = { 0.85f, 0.60f, 0.85f, 0.0f };
 inline constexpr float kAnswerCallSlotWeight[kStyles] = { 0.45f, 0.50f, 0.50f, 0.12f };
 inline constexpr float kAnswerSilentBoost[kStyles] = { 1.0f, 1.0f, 1.0f, 1.8f };
 // P(bar 5 or 6 restates with a back-half mutation).
-inline constexpr float kBackHalfVariation[kStyles] = { 0.55f, 0.65f, 0.60f, 0.40f };
+inline constexpr float kBackHalfVariation[kStyles] = { 0.35f, 0.65f, 0.60f, 0.40f };
+// Smallest density change (notes) that redraws a restated bar's back half (bars 5-7).
+inline constexpr int kRestateDeltaMin[kStyles] = { 2, 1, 1, 1 };
 // P(the call's first onset is the root): an anchor for the tonic guard.
 inline constexpr float kFirstRoot[kStyles] = { 0.65f, 0.70f, 0.80f, 0.55f };
 // DARK tilt: bright boosts the 5th, dark the b3 and the 2nd / b2.

@@ -346,6 +346,9 @@ void testEarReview()
     int pulseN = 0;
     double popOct = 0;
     int popN = 0;
+    double bounceOct = 0;
+    int bounceN = 0;
+    double pulseOctMax = 0;
     std::set<std::string> jackinRhythms;
     double jackinLen = 0;
     int jackinStabs = 0;
@@ -445,6 +448,14 @@ void testEarReview()
                 }
                 if (moves > 0)
                     popOct += 100.0 * oct / moves;
+                // A&R lane F7 per roll: bounce 15-26% octave moves, pulse 0-8.5%.
+                if (moves > 0 && g.bassMode == rolla::BassModePulse)
+                    pulseOctMax = std::max (pulseOctMax, 100.0 * oct / moves);
+                else if (moves > 0)
+                {
+                    bounceOct += 100.0 * oct / moves;
+                    ++bounceN;
+                }
                 if (g.bassMode == rolla::BassModePulse)
                 {
                     ++pulseN;
@@ -485,8 +496,13 @@ void testEarReview()
     if (brightN > 0)
         std::cout << "DEEP bright " << brightN << "/20 npb " << (brightNpb / brightN) << "\n";
     if (popN > 0)
-        std::cout << "BOUNCY octave moves " << (popOct / popN) << "%  pulse-length rolls " << pulseN << "/20\n";
-    expect (popN > 0 && popOct / popN >= 15.0 && popOct / popN <= 30.0, "BOUNCY octaves land in 15-30%");
+        std::cout << "BOUNCY octave moves " << (popOct / popN) << "% (bounce mean "
+                  << (bounceN > 0 ? bounceOct / bounceN : 0.0) << "%, pulse max " << pulseOctMax
+                  << "%)  pulse-length rolls " << pulseN << "/20\n";
+    // Per mode, as the A&R lane F7 reads a roll: bounce 15-26%, pulse 0-8.5%.
+    expect (bounceN > 0 && bounceOct / bounceN >= 15.0 && bounceOct / bounceN <= 26.0,
+            "BOUNCY bounce octaves land in 15-26%");
+    expect (pulseOctMax <= 8.5, "BOUNCY pulse octaves stay at or under 8.5%");
     expect (pulseN >= 3, "BOUNCY has a pulse mode");
     expect (jackinRhythms.size() >= 18, "JACKIN 8-bar rhythms are almost all distinct");
     expect (flavour[0] > 0 && flavour[1] > 0 && flavour[2] > 0 && flavour[3] > 0, "JACKIN uses all four flavours");

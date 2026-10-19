@@ -48,6 +48,12 @@ struct Rng
 // as passed in (the caller keeps its previous roll) and returns false.
 bool generate (Groove& g, const Settings& settings, const std::uint32_t seeds[NumParts], std::uint32_t partMask);
 
+// After anything that moves lanes against each other (the INTENSITY arrangement,
+// odd loops): every upper lane not in skipMask gives way to the bass again (no
+// m2 / m9 / M7 over a sounding bass note), then one note-on per pitch and no
+// same-pitch overlaps. The bass is not touched.
+void giveWayToBass (Groove& g, std::uint32_t skipMask) noexcept;
+
 // Originality floor budget: rolls per composition, compositions per generate().
 inline constexpr int kOrigAttempts = 12;
 inline constexpr int kOrigRounds = 3;

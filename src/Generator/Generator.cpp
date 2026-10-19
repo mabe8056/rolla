@@ -1703,7 +1703,7 @@ void finishPhrase (Lane& lane, const Settings& s, std::uint32_t seed, bool pulse
     }
     // Bounce carries the style's octave moves (pulse stays near zero and is 30-40%
     // of a batch), so the BOUNCY average lands in the 15-30% lane.
-    paintPhraseVariety (lane, dialect, seed, pulse ? 0.f : 0.30f);
+    paintPhraseVariety (lane, dialect, seed, pulse ? 0.f : 0.25f);
     differBar4 (lane, bars, seed);
     finishBass (lane);
     if (dialect == Pop)
@@ -4691,6 +4691,8 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
             // A&R / model v1.2: bounce mean note length 0.9-1.4 sixteenths (its own
             // band; the gap ratio is for the other modes).
             fitBounceMeanLength (g, s.bars, 0.9f, 1.4f, bassSeed);
+            // A&R lane F7: octave moves 15-26% of the moves (OCTAVE_PUMP over 26).
+            capPulseOctaves (g.lane[Bass], 0.25f);
         }
         else if (popMode == BassModePulse)
         {
@@ -4700,8 +4702,12 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
             guardGapRatio (g.lane[Bass], s.bars, 0.90f, 0.95f);
         }
         else
+        {
+            // A&R lane F7: octave moves stay at or under 24% (OCTAVE_PUMP over 26).
+            capPulseOctaves (g.lane[Bass], 0.24f);
             // Model v1.2: 0.79-0.83 of the gap to the next note.
             guardGapRatio (g.lane[Bass], s.bars, 0.79f, 0.83f);
+        }
         // The length guard changes how long each pitch sounds: the b2 cap (and
         // the mode snap) are checked again on the final lengths.
         conformBass (g.lane[Bass], mode, b2Cap (s.dialect, mode));
@@ -4884,6 +4890,18 @@ std::uint32_t originalityRecomposeSeed (std::uint32_t seed, int part, int round)
 // generate() logs it, leaves g exactly as it was passed in and returns false.
 // Only the seeds feed the result, so the same seeds and the same index give
 // the same roll (or the same refusal). The caller seeds land on the lanes.
+void giveWayToBass (Groove& g, std::uint32_t skipMask) noexcept
+{
+    for (int part : { (int) Stab, (int) Pad, (int) Pluck, (int) Hits, (int) Vox })
+    {
+        if ((skipMask & (1u << (unsigned) part)) != 0)
+            continue;
+        fixUpperClashes (g, part);
+        dedupeNoteOns (g.lane[part]);
+        trimSamePitchOverlaps (g.lane[part]);
+    }
+}
+
 bool generate (Groove& g, const Settings& settings, const std::uint32_t seeds[NumParts], std::uint32_t partMask)
 {
     const auto external = orig::currentIndex();

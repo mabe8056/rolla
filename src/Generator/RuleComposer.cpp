@@ -905,7 +905,9 @@ int composeOnce (Lane& lane, const BassParams& p, const BassTables& t, Rng& r, b
         for (int j = 0; j < 3; ++j)
         {
             const int b = 4 + j;
-            const int delta = std::clamp (drawCount (st, b, scale, r) - barCountOf (bars[b]), -2, 2);
+            int delta = std::clamp (drawCount (st, b, scale, r) - barCountOf (bars[b]), -2, 2);
+            if (std::abs (delta) < kRestateDeltaMin[st])
+                delta = 0;
             const bool vary = j < 2 && r.next() < (double) kBackHalfVariation[st];
             if (delta == 0 && ! vary)
                 continue;
