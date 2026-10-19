@@ -303,7 +303,6 @@ add_executable(rolla-tp-test
     src/Generator/Generator.cpp
     src/Generator/Presets.cpp
     src/Generator/RuleComposer.cpp
-    src/Generator/Arrangement.cpp
     src/Drums/DrumMachine.cpp
     src/Drums/DrumPattern.cpp
     src/Mix/MixProgram.cpp
