@@ -231,8 +231,8 @@ Every lane preset has a **`sample` block in Maestro's format**:
 | **DRUMS** | DRUMS | 2 kits | on by default [R]. **The generator writes the drum part** from rules, with SHUFFLE / KEEP [Maestro] (§9.6) |
 
 **POP HITS: muted (my choice)** [R]:
-1. **No measured basis.** Neither POP reference (REF_B1, REF_R3), nor any of the 9 refs, contains a rave hit [M].
-2. **The POP mid/high space is already full.** CLICK STAB and TICK are the hottest stab and pluck (v1.3: −26.0 LUFS-S each, POP kick −2.3 [MIX §2.3]). REF_B1's lead riff equals the bass level [M sum], so a hit would fight it.
+1. **No measured basis.** None of the 9 refs, the POP ones included, contains a rave hit [M].
+2. **The POP mid/high space is already full.** CLICK STAB and TICK are the hottest stab and pluck (v1.3: −26.0 LUFS-S each, POP kick −2.3 [MIX §2.3]). In the POP refs the lead riff sits at the bass level [M sum], so a hit would fight it.
 3. **Melak's brief is "not 90s-house"** [A&R].
 
 Unmuting HITS in POP loads PIANO HIT, POP's own HITS preset.
@@ -254,7 +254,7 @@ Unmuting HITS in POP loads PIANO HIT, POP's own HITS preset.
   - both are near-sine with the energy in h1/h2 (ROUND h2 −11 dB, ORGAN h2 −3 dB);
   - both are low-passed close together (110 vs 130 Hz).
 
-  PLUCK is a saw (odd emphasis −0.6 dB [M]) and CLICK rests at 350 Hz, so both are further away. On JACKIN 90s the **dialect overrides** (engine E17) apply: DUCK **7 dB / 110 ms** [M REF_J1/J2 7.3 / 110] instead of 18 / 180, and **glide 0**, so octave jumps snap.
+  PLUCK is a saw (odd emphasis −0.6 dB [M]) and CLICK rests at 350 Hz, so both are further away. On JACKIN 90s the **dialect overrides** (engine E17) apply: DUCK **7 dB / 110 ms** [M JACKIN-style refs] instead of 18 / 180, and **glide 0**, so octave jumps snap.
 - **JACKIN STAB → SWELL STAB.** The dialect's stab is a sustained ♭VI/♭VII (about 14/16 [M CTR D6]). SWELL STAB is the only slow-attack stab, and the generator supplies the ♭VI/♭VII voicing.
 - **JACKIN PLUCK → HOLLOW.** It is short (−20 dB in about 120 ms), so it sits in the 2/16 dotted-8th grid [M CTR D1]. BLOOM's 2–8/16 notes would smear that grid [D].
 - **JACKIN VOX → AH UH.** The JACKIN ref preview has no vocal (stem −60 dB [M]). AH UH's 1–2/16 cuts fit the 2/16 grid [D].
@@ -265,7 +265,7 @@ Unmuting HITS in POP loads PIANO HIT, POP's own HITS preset.
 | # | Part | Name | Dialect | One line |
 |---|---|---|---|---|
 | B1 | BASS | **PLUCK** | UK MIN | Locked Direction A bass: saw MID 12 dB over the sine SUB, LP24 170 Hz, +24 st env τ 25 ms, duck 13 dB / 115 ms. |
-| B2 | BASS | **CLICK** | POP | Short gated saw pluck: LP24 rest 350 Hz, τ 17 ms env, about 1.1/16 notes, gate duck. Mid-bass weighted, like REF_B1. |
+| B2 | BASS | **CLICK** | POP | Short gated saw pluck: LP24 rest 350 Hz, τ 17 ms env, about 1.1/16 notes, gate duck. Mid-bass weighted, like the POP refs. |
 | B3 | BASS | **ROUND** | LONG | Triangle plus sine sub, LP24 110 Hz, slower bloom, 50 ms glide, 18 dB / 180 ms pump. JACKIN's default via overrides. |
 | S1 | STAB | **DUB STAB** | UK MIN | Quartal A3–D4–G4–C5, no 3rd, LP12 2.2 kHz, 3/16 dub delay plus 1.2 s plate, about 875 ms tail, corr about 0.55. |
 | S2 | STAB | **SWELL STAB** | LONG | 5+2 colour (A4+E5), 4-voice unison, 90 ms swell attack played 1/32 early, LP12 1.4 kHz, 1.8 s plate. |
@@ -274,9 +274,9 @@ Unmuting HITS in POP loads PIANO HIT, POP's own HITS preset.
 | H2 | HITS | **PIANO HIT** | POP | 90s house piano chord, M1-style: 2-op FM with a velocity-driven index plus hammer noise, rootless ♭3–5–♭7. |
 | H3 | HITS | **HOOVER** | LONG | PWM pulse plus a saw an octave down, 5-voice unison plus heavy ensemble, −7 st pitch dive, 150 ms glide. |
 | P1 | PLUCK | **HOLLOW** | UK MIN | Square-led hook pluck, −20 dB in about 120 ms, 3/16 ping-pong. |
-| P2 | PLUCK | **TICK** | POP | Click pluck (τ 12 ms, like REF_B1's 1374→352 Hz), staccato about 1.1/16, gated. |
-| P3 | PLUCK | **BLOOM** | LONG | Delayed filter bloom (peak at 10–50 ms, like REF_D2), 2–8/16 notes, 1/4 delay plus 2.4 s hall. |
-| A1 | PAD | **SUS SWELL** | UK MIN | REF_R5 breakdown swell: saw ×3 unison plus an octave sine, LP12 1.8 kHz, A 150 / R 700, ensemble plus width for corr about 0.6. |
+| P2 | PLUCK | **TICK** | POP | Click pluck (τ 12 ms, a fast centroid drop like the POP refs), staccato about 1.1/16, gated. |
+| P3 | PLUCK | **BLOOM** | LONG | Delayed filter bloom (peak at 10–50 ms, like the LONG refs), 2–8/16 notes, 1/4 delay plus 2.4 s hall. |
+| A1 | PAD | **SUS SWELL** | UK MIN | Breakdown swell: saw ×3 unison plus an octave sine, LP12 1.8 kHz, A 150 / R 700, ensemble plus width for corr about 0.6. |
 | A2 | PAD | **WIDE SWELL** | LONG | Second-breakdown atmos: 3 s-plus decay, corr about 0.38 from ensemble plus width, centroid about 2.4 kHz, 1-bar filter rise. |
 | A3 | PAD | **SWELL PAD** | JACKIN 90s | Sustained ♭VI/♭VII: saw plus pulse ×2 unison, ensemble, LP12 1.8 kHz, about 14/16 long. |
 | V1 | VOX CUTS | **HEY** | UK MIN | Spoken, unpitched hey/uh formant cut, dark (LPF 8 k), dry centre, dub throw. |
@@ -372,7 +372,7 @@ Common to all three v0 BASS presets (PLUCK, CLICK, ROUND):
 - Velocity curve (v/112)^2.06: vel 112 = 0 dB, 80 = −6 dB [L, PT `vel_gain`].
 - No delay or reverb send (FX = 0) [R; SB §1: "none on the dry bass"].
 - **Mix gates:**
-  - ≥ 91% of energy < 200 Hz [M REF_R5 91.8%, SR 95.3%];
+  - ≥ 91% of energy < 200 Hz [M refs pooled, SR 95.3%];
   - corr ≥ 0.997 [M];
   - > 1 kHz ≤ 0.5% [M 0.1%].
 
@@ -405,19 +405,19 @@ Common to all three v0 BASS presets (PLUCK, CLICK, ROUND):
 |---|---|
 | **Sample** (v1.3) | **LAYER**, `BASS/DCB_Bass_01_C.wav`, root **C#1**, start 0.0005 s, no loop, layerMix 0.5; pool of 6 (§2.1) [M-bank] |
 | Osc 1 | PolyBLEP **saw**, oct 0, 0 ct, 0 dB [R DS] |
-| Sub | sine oct 0, **−9 dB**, LP24 120 Hz [R from M: REF_B1 has only 14% of energy < 60 Hz and 70% at 60–100 Hz, so h2 carries the note] |
+| Sub | sine oct 0, **−9 dB**, LP24 120 Hz [R from M: the POP refs carry little energy < 60 Hz and most at 60–100 Hz, so h2 carries the note] |
 | Unison | 1 |
 | Filter | Ladder LP24 **rest 350 Hz** [M DS mockup value], res 10% [R] |
-| Filter env | **+24 st**, exponential **τ 17 ms** [R DS]. Fits REF_B1's above-150 Hz centroid 1374 Hz (0–10 ms) → 352 Hz (25–50 ms), −2 oct in about 25 ms [M] |
-| Amp env | A 1 / **D 120** / S 0 / R 20 ms. Note ≈ **1.1/16 = 127 ms** [M REF_B1 1.12/16, sounding 34%] |
+| Filter env | **+24 st**, exponential **τ 17 ms** [R DS]. Fits the POP refs' above-150 Hz centroid drop of about −2 oct in about 25 ms [M] |
+| Amp env | A 1 / **D 120** / S 0 / R 20 ms. Note ≈ **1.1/16 = 127 ms** [M POP refs] |
 | Voice / glide | mono, **glide 0** [R]. Octave pops about 20% from the generator [M CTR] |
 | Drive | soft clip 1 dB [R] |
 | EQ | HPF 30 Hz, LPF 1.5 kHz [R from M 0.6% > 400 Hz] |
-| Width | mono, corr ≥ 0.997 [M REF_B1 0.997] |
-| DUCK | **gate shape** (0.1 ms to depth, hold 40 ms, recover 60 ms), depth **20 dB** [R from DS "gated at kick"]. Only 2% of REF_B1 bass attacks land on the kick [M], so the gate mostly trims tails |
+| Width | mono, corr ≥ 0.997 [M POP refs] |
+| DUCK | **gate shape** (0.1 ms to depth, hold 40 ms, recover 60 ms), depth **20 dB** [R from DS "gated at kick"]. Very few POP-ref bass attacks land on the kick [M], so the gate mostly trims tails |
 | Level | **−24.7 LUFS-S ±0.5**, TP ≤ −8.9 dBTP [MIX §2.2]; MIX_SPEC CLICK override: comp release 100 ms |
 | Key / vel | vel → amp, → env amount 30% [R] |
-| Must measure | < 200 Hz **≥ 95%** [M REF_B1 97.5%], 60–100 Hz is the largest band [M 70%], > 400 Hz ≤ 1% [M 0.6%], centroid falls ≥ 1.8 oct within 50 ms [D] |
+| Must measure | < 200 Hz **≥ 95%** [M POP refs], 60–100 Hz is the largest band [M], > 400 Hz ≤ 1% [M], centroid falls ≥ 1.8 oct within 50 ms [D] |
 
 ### B3 · BASS · LONG · ROUND (hero; also the JACKIN 90s default, with dialect overrides DUCK 7 dB / 110 ms and glide 0)
 | Block | Target |
@@ -435,7 +435,7 @@ Common to all three v0 BASS presets (PLUCK, CLICK, ROUND):
 | Width | mono, corr 1.000 [M] |
 | DUCK | **18 dB / 180 ms** [R from M 28 dB / 200 ms, demucs-deepened; DS hero] |
 | Level | **−24.7 LUFS-S ±0.5** in LONG and as the JACKIN 90s borrow, TP ≤ −8.9 dBTP [MIX §2.2] |
-| Must measure | <60 Hz **≈ 68%**, >400 Hz ≤ 2.2% [M REF_D2] |
+| Must measure | <60 Hz **≈ 68%**, >400 Hz ≤ 2.2% [M LONG refs] |
 
 ---
 
@@ -474,7 +474,7 @@ Common to all three STAB presets:
 | EQ | **HPF 250 Hz** 12 dB [L] |
 | Delay | **3/16 = 346.2 ms** ping-pong, fb **40%**, HPF 300 / LPF 2.5 k in the loop, send **−8 dB** [L]. Off on the bar-8 slot-16 hit [L] |
 | Reverb | **plate 1.2 s**, pre-delay 1/64 = 28.8 ms [R], return **−14 dB**, HPF 250 [L] |
-| Width | target **corr 0.55** (0.48–0.63) [M REF_R5]. If the harness reads > 0.65, go to 4 voices ±15 ct, spread 80% (SB swell stab) [R] |
+| Width | target **corr 0.55** (0.48–0.63) [M UK MIN refs]. If the harness reads > 0.65, go to 4 voices ±15 ct, spread 80% (SB swell stab) [R] |
 | DUCK | **3 dB / 115 ms** [L] |
 | Level | **−26.8 LUFS-S ±1** (UK MIN STAB), TP ≤ −7.1 dBTP [MIX §2.2]; −29.8 when PLUCK also plays |
 | Key / vel | vel → amp (curve 2.06), vel 127 → +0.5 oct cutoff [R] |
@@ -484,25 +484,25 @@ Common to all three STAB presets:
 | Block | Target |
 |---|---|
 | **Sample** (v1.3) | **LAYER**, `STAB/JF_Synth_12_C.wav`, root **C3**, start 0.0 s, loop 62994–151805 fr, xfade 4800, layerMix 0.6; pool of 6 (§2.1) [M-bank] |
-| Voicing / chord memory | **5+2: A4 + E5** (440 / 659.26 Hz), lift G4 + D5 [M CTR C: REF_D2 5+2 on slots 14–15; mockup `fivetwo`]. `chordMemory` main A4 [0,7], lift G4 [0,7], PARALLEL (§4) |
+| Voicing / chord memory | **5+2: A4 + E5** (440 / 659.26 Hz), lift G4 + D5 [M CTR C: 5+2 on slots 14–15 in the LONG refs; mockup `fivetwo`]. `chordMemory` main A4 [0,7], lift G4 [0,7], PARALLEL (§4) |
 | Osc | 2 saws **±10 ct** (or saw + square −6 dB), oct 0 [R SB §4] |
 | Unison | **4 voices, 15 ct**, spread 80% [R from M corr target] |
 | Filter | SVF LP12 **1.4 kHz**, res 15% [R from M centroid] |
 | Filter env | +12 st, A 0 / D 500 / S 0 [R SB] |
-| Amp env | **A 90** / D 400 / S 0 / R 150 ms. The generator plays it **1/32 (57.7 ms) early** [R from M onset 25–45 ms before the barline, onset→peak 75–160 ms]. Dry decay to −15 dB is about 2.5–3/16 [D, matches REF_D2 2.3/16 [M sum]] |
+| Amp env | **A 90** / D 400 / S 0 / R 150 ms. The generator plays it **1/32 (57.7 ms) early** [R from M onset 25–45 ms before the barline, onset→peak 75–160 ms]. Dry decay to −15 dB is about 2.5–3/16 [D, close to the LONG refs [M sum]] |
 | EQ | HPF 200 Hz [R from M 160 Hz band edge] |
 | Delay | 3/16 = 346.2 ms ping-pong, fb 40%, HPF 300 / LPF 2.5 k, send −10 dB [R SB] |
 | Reverb | plate **1.8 s**, pre-delay **28.8 ms**, HPF 250, return −10 dB [R SB] |
 | Width | corr **0.50** (0.48–0.63) [M] |
 | DUCK | 3 dB / **157 ms** (LONG recovery) [R from DS] |
-| Level | **−32.6 LUFS-S ±1** (LONG STAB = kick −8.9), TP ≤ −7.1 dBTP [MIX §2.3: REF_D2 "other" −8.6 re kick + LONG TOP trim −0.3] |
+| Level | **−32.6 LUFS-S ±1** (LONG STAB = kick −8.9), TP ≤ −7.1 dBTP [MIX §2.3: LONG "other" −8.6 re kick + LONG TOP trim −0.3] |
 | Must measure | centroid 1.0–1.6 kHz, corr ≤ 0.63 [M / R] |
 
 ### S3 · STAB · POP · CLICK STAB
 | Block | Target |
 |---|---|
 | **Sample** (v1.3) | **SAMPLE**, `STAB/VER_Stab_04_C.wav`, root **E5**, start 0.0019 s, no loop, layerMix 0.5; pool of 6 (§2.1) [M-bank] |
-| Voicing / chord memory | **♭3+♭7 dyad: F4 + C5** (349.23 / 523.25 Hz), lift G4 + C5 [mockup `dyad`; CTR C REF_R3 dyad on the "a"]. `chordMemory` main F4 [0,7], lift G4 [0,5], PARALLEL (§4) |
+| Voicing / chord memory | **♭3+♭7 dyad: F4 + C5** (349.23 / 523.25 Hz), lift G4 + C5 [mockup `dyad`; CTR C dyad on the "a"]. `chordMemory` main F4 [0,7], lift G4 [0,5], PARALLEL (§4) |
 | Osc | saw 0 dB + square −6 dB, **plus a noise click**: white, HPF 2 kHz, A 0 / D 15 ms, −12 dB [R] |
 | Unison | 2 voices ±4 ct, spread 30% [R] |
 | Filter | SVF LP12 **6 kHz**, res 20% [R from M centroid 3.2–5.5 kHz] |
@@ -514,7 +514,7 @@ Common to all three STAB presets:
 | Width | corr 0.65 [R], mono below 300 Hz |
 | DUCK | **gate shape**, 6 dB [R from DS POP "gated at kick"] |
 | Level | **−26.0 LUFS-S ±1** (POP STAB = kick −2.3), TP ≤ −7.1 dBTP [MIX §2.3] |
-| Must measure | centroid **3.2–5.5 kHz**, −20 dB in **93–150 ms** dry [M REF_R5 short hit] |
+| Must measure | centroid **3.2–5.5 kHz**, −20 dB in **93–150 ms** dry [M UK MIN refs, short hit] |
 
 ---
 
@@ -525,7 +525,7 @@ Common to all three STAB presets:
 **Measured targets every HIT must meet:**
 - centroid 1–5 kHz;
 - mono below 150 Hz;
-- correlation 0.45–0.75 [M REF_R5 other 0.48–0.63 / swells 0.38–0.80].
+- correlation 0.45–0.75 [M UK MIN refs: other 0.48–0.63 / swells 0.38–0.80].
 
 **Hit behaviour (v1.3b, Maestro).** HITS are **one-shot 90s hits with no chord memory**: each key plays one hit at that note. Chord memory lives on STAB (§4, E10). The voicings below are the **notes the generator's HITS pattern sends** (or the player plays); they are not stored in the preset.
 
@@ -535,8 +535,8 @@ Common to all three STAB presets:
 | Block | Target |
 |---|---|
 | **Sample** (v1.3) | **LAYER**, `HITS/VER_DX7Organ_Bass_C.wav`, root **C2**, start 0.0007 s, no loop, layerMix 0.6; pool of 6 (§2.1) [M-bank] |
-| Voicing (generator notes) | **♭VI/♭VII: B♭3–D4–F4**, lift **C4–E4–G4** [mockup `pad` voice; CTR D6 REF_J1/J2 ♭6+♭7 sets]. Direction-B style: E4–G4–B♭4 / E4–A4–C5 [L, PT] |
-| Osc (3, re-voiced for E2) | **Osc 1 sine ×1 (8') 0 dB · Osc 2 sine +12 st (4') −3 dB · Osc 3 sine +19 st (2⅔', ×2.997) −9 dB** [R]. The even-harmonic lean follows the REF_J1/J2 organ bass (h2 −3 dB) [M SB §3]. The v1 2' sine and pulse are replaced by drive |
+| Voicing (generator notes) | **♭VI/♭VII: B♭3–D4–F4**, lift **C4–E4–G4** [mockup `pad` voice; CTR D6 ♭6+♭7 sets]. Direction-B style: E4–G4–B♭4 / E4–A4–C5 [L, PT] |
+| Osc (3, re-voiced for E2) | **Osc 1 sine ×1 (8') 0 dB · Osc 2 sine +12 st (4') −3 dB · Osc 3 sine +19 st (2⅔', ×2.997) −9 dB** [R]. The even-harmonic lean follows the JACKIN refs' organ bass (h2 −3 dB) [M SB §3]. The v1 2' sine and pulse are replaced by drive |
 | Key click | noise (E4), BP 2.5 kHz Q 1, A 0 / D 6 ms, −18 dB [R] |
 | Unison | 1 (organ: no detune) |
 | Filter | SVF LP12 **5 kHz**, res 0, no env [R] |
@@ -545,7 +545,7 @@ Common to all three STAB presets:
 | EQ | **HPF 250 Hz** [L PT organ lock], −2 dB bell at 500 Hz Q 1 [R] |
 | Delay / reverb | 1/8 = 230.8 ms, fb 20%, send −16 dB · plate 1.2 s, pre-delay 28.8 ms, return −14 dB [R] |
 | Width | ensemble 0.5 Hz, 25% → corr **0.70**; mono < 150 Hz [R] |
-| DUCK | 3 dB / 110 ms [R from M REF_J1/J2 3.6–8 dB] |
+| DUCK | 3 dB / 110 ms [R from M JACKIN refs, light duck] |
 | Level | **−27.7 LUFS-S ±1** (HITS = bass −3 LU, every dialect), TP ≤ −8.0 dBTP [MIX §2.2, A&R] |
 | Key / vel | vel → amp only [R] |
 | Must measure | centroid 1.0–2.0 kHz, < 1% of energy below 200 Hz [R] |
@@ -622,8 +622,8 @@ Common to all three PLUCK presets:
 | Osc | saw 0 dB + pulse 25% −6 dB [R] |
 | Unison | 2 voices ±6 ct, spread 30% [R] |
 | Filter | Ladder LP24 rest **900 Hz**, res 10% [R: above a D4–D5 fundamental] |
-| Filter env | **+36 st**, exponential **τ 12 ms** [D from M REF_B1 above-150 Hz centroid 1374 → 1149 → 352 Hz at 0–10 / 10–25 / 25–50 ms, about 2 octaves in about 20 ms] |
-| Amp env | A 0.5 / **D 140** / S 0 / R 40 ms. Note ≈ **1.1/16 = 127 ms** [M REF_B1 1.12/16] |
+| Filter env | **+36 st**, exponential **τ 12 ms** [D from M POP refs: above-150 Hz centroid falls about 2 octaves in about 20 ms] |
+| Amp env | A 0.5 / **D 140** / S 0 / R 40 ms. Note ≈ **1.1/16 = 127 ms** [M POP refs] |
 | Octave pops | about 20% (generator) [M CTR] |
 | EQ | HPF 300 Hz [R] |
 | Delay | 1/8 = 230.8 ms, fb 20%, send −16 dB [R] |
@@ -641,7 +641,7 @@ Common to all three PLUCK presets:
 | Osc | triangle 0 dB + saw −12 dB + sine +12 st −15 dB [R, round like B2] |
 | Unison | 3 voices, 8 ct, spread 50% [R] |
 | Filter | Ladder LP24 **1.2 kHz**, res 10% [R] |
-| Filter env | +18 st, **A 15** / D 250 / S 0 ms: the "delayed bloom" [D from M REF_D2 above-150 Hz centroid 220 → 312 → 283 → 236 Hz at 0–10 / 10–25 / 25–50 / 50–100 ms, peaking 10–50 ms after onset] |
+| Filter env | +18 st, **A 15** / D 250 / S 0 ms: the "delayed bloom" [D from M LONG refs: above-150 Hz centroid peaks 10–50 ms after onset] |
 | Amp env | A 5 / D 600 / S −18 dB / R 250 ms. Notes are 2–8/16 [M DS LONG] |
 | EQ | HPF 200 Hz [R] |
 | Delay | 1/4 = 461.5 ms, fb 30%, send −12 dB [R] |
@@ -704,7 +704,7 @@ Count = voices × Σ (oscillators × unison), with noise counted as one source:
 | Width make-up | **ensemble 50% mix** + **M/S width 160%** above 150 Hz (v1: unison 7) [R] |
 | EQ | HPF 400 Hz [R] |
 | Delay / reverb | dotted 1/4 = 692.3 ms, fb 35%, send −14 dB · **hall 4.0 s**, pre-delay 28.8 ms, wet 45% [R from M decay > 3 s] |
-| Width target | corr **0.38** (0.3–0.5) [M REF_R5 breakdown 2] |
+| Width target | corr **0.38** (0.3–0.5) [M UK MIN refs, breakdown] |
 | DUCK | 2 dB / 157 ms [R] |
 | Level | **−33.0 LUFS-S ±1.5** (LONG PAD), TP ≤ −20.7 dBTP [MIX §2.3] |
 | Must measure | **decay > 3 s** incl. returns [M], **corr ≤ 0.5** [M], **centroid ≈ 2.4 kHz** (2.0–2.8) [M] |
@@ -721,7 +721,7 @@ Count = voices × Σ (oscillators × unison), with noise counted as one source:
 | EQ | HPF 250 Hz [R] |
 | Reverb | **3.0 s**, pre-delay 28.8 ms, wet 30% [R DS]. No delay |
 | Width target | corr 0.60 [R] |
-| DUCK | 2 dB / 110 ms [R from M REF_J1/J2 light duck] |
+| DUCK | 2 dB / 110 ms [R from M JACKIN refs, light duck] |
 | Level | **−31.7 LUFS-S ±1.5** (JACKIN 90s PAD), TP ≤ −20.7 dBTP [MIX §2.3] |
 | Must measure | sustained, −15 dB at about 14/16 after onset [M]; centroid 1.2–2.0 kHz [R] |
 
@@ -746,7 +746,7 @@ Count = voices × Σ (oscillators × unison), with noise counted as one source:
 - Mod wheel = vowel morph to the next vowel.
 - Velocity → amp + F3 level (+6 dB at 127 = brighter).
 
-**Measured mix targets for every VOX preset (REF_R5 vocal) [M]:**
+**Measured mix targets for every VOX preset (UK MIN refs, vocal) [M]:**
 - energy 5–95% within **242–3935 Hz**, HPF edge about 124 Hz;
 - **≤ 1.2% above 6 kHz**;
 - centroid about **2.35 kHz**;
@@ -778,9 +778,9 @@ Count = voices × Σ (oscillators × unison), with noise counted as one source:
 |---|---|
 | **Sample** (v1.3) | **SAMPLE**, `VOX/THMN_Female_Vox_Lover_Amin_145_Lead_DRY.wav`, root **A3**, start 5.5857 s, no loop, layerMix 0.5; pool of 6 (§2.1) [M-bank] |
 | Default vowels | **oh**, morphing to **ah** over 600 ms (env → morph) [R] |
-| Source | pitch follow **100%**. **SIZE = female/alto** [R from M REF_D2 vocal median pitch A4, 91% pitched] |
+| Source | pitch follow **100%**. **SIZE = female/alto** [R from M LONG refs' vocal pitch] |
 | Vibrato | 5.5 Hz, ±15 ct, delay 300 ms [R] |
-| Amp env | A **25** / S 100% / R **300** ms. Typical note **4.2/16 ≈ 485 ms** [M REF_D2] |
+| Amp env | A **25** / S 100% / R **300** ms. Typical note **4.2/16 ≈ 485 ms** [M LONG refs] |
 | Voice / glide | poly 2, legato glide 60 ms [R] |
 | Delay | dotted 1/4 = 692.3 ms, fb 30%, send −14 dB [R] |
 | Reverb | **3.5 s**, pre-delay 28.8 ms, HPF 300 / LPF 6 k, return **−8 dB** [R from SB "2–5 s"] |
@@ -795,7 +795,7 @@ Count = voices × Σ (oscillators × unison), with noise counted as one source:
 | **Sample** (v1.3) | **SAMPLE**, `VOX/UHV_125_Chiki_Ah_2.wav`, root **B0**, start 0.1976 s, no loop, layerMix 0.5; + layer `VOX/UHV_125_Ta_Ta_Uh.wav` (slice source: glitch "ta-ta-uh" chopped for SHUFFLE); pool of 6 (§2.1) [M-bank] |
 | Default vowels | **ah** / **uh** round-robin [R] |
 | Source | pitch follow 100%, SIZE = male. Pitch env **+1 st → 0 in 30 ms** (the "bark") [R] |
-| Amp env | A 1 / **D 120** / S 0 / R 30 ms. Notes **about 1–2/16** [M POP staccato 1.1/16; REF_R6 chops 2.2/16] |
+| Amp env | A 1 / **D 120** / S 0 / R 30 ms. Notes **about 1–2/16** [M POP refs staccato to UK chops] |
 | EQ | HPF 180 Hz (over the chain HPF 140) [R] |
 | Delay | 1/8 = 230.8 ms, fb 15%, send −18 dB [R] |
 | Reverb | plate 0.9 s, return −18 dB [R] |
@@ -873,31 +873,31 @@ Rims sit inside "perc". Bare "hat" files were split into open or closed by decay
 - Many pack kicks are cut at 461.5 ms, so their −40 dB point is capped.
 
 ### 9.1 Measured distributions: median (IQR), n
-| Measure | min/tech [M-melak] | 90s/Chicago [M-melak] | 909free [M-909free] | REF_R5 [M-ref] |
-|---|---|---|---|---|
-| **Kick f0** | **52.8 Hz (50.1–55.9), 173** | 53.2 (47.3–68.8), 15 | 55.7 (55.5–62.1), 7 | 50.7 |
-| Kick f @ 5 / 20 / 80 ms | 281 / 166 / 70 Hz | 210 / 95 / 59 Hz | 407 / 184 / 69 Hz | 146 / 95 / 51 Hz |
-| Kick sweep | 31.3 st (25.8–37.6) | 25.2 st (23.1–29.3) | 37.3 st | about 18 st |
-| **Kick pitch τ** | **28.9 ms (24.0–33.5)** | 24.5 ms (19.3–33.9) | 21.0 ms (20.6–24.6) | 19 ms |
-| **Kick −6 / −20 / −40 dB** | **79 / 137 / 174 ms** | 57 / 112 / 178 ms | 41 / 79 / 295 ms | 24 / 203 / 385 ms |
-| Kick click (> 2 kHz, first 10 ms) | −14.4 dB (−19.4 to −9.8) | **−8.3 dB** (−11.1 to −2.0) | −28.4 dB | — |
-| **Clap bursts** | **3 (3–4), 185** | 2.5 (1–3), 10 | 3.5 (3–4), 4 | — |
-| **Clap burst spacing** | **11.4 ms (10.0–14.1)** | 10.4 ms (9.7–18.1) | 12.8 ms (12.5–13.7) | — |
-| Clap spectral peak | 1195 Hz (1055–1430) | 1594 Hz (1432–2336) | 879 Hz | ghost hit 1850 Hz |
-| Clap −6 / −12 / −20 dB | 31 / 49 / 72 ms | 36 / 59 / 107 ms | 105 / 172 / 320 ms (JD-Xi, long tail) | 14 / 55 / 82 ms |
-| Closed hat centroid | 7476 Hz (6328–9441), 72 | 4871 Hz (4780–5263), 5 | 7457 Hz, 3 | — |
-| Closed hat −6 / −20 / −40 dB | 14 / 44 / 82 ms | 38 / 102 / 126 ms | 10 / 33 / — ms | — |
-| Open hat centroid | 6830 Hz (6189–7755), 141 | 5193 Hz (4880–5804), 5 | 7276 Hz, 2 | — |
-| Open hat −6 / −20 / −40 dB | 30 / 94 / 175 ms | 89 / 296 / 468 ms | 42 / 242 / — ms | "&" hat 15 / 138 / — ms; REF_J1/J2 −15 dB @ 166 ms |
-| Ride centroid / −20 / −40 dB | 7749 Hz / 174 / 343 ms, 14 | — | crash 8053 Hz / 370 ms, 5 | — |
-| Shaker band 5–95% | 4673–13442 Hz, centroid 8633, 14 | — | — | — |
-| Shaker −20 dB | 72 ms (47–120) | — | — | 69 ms |
-| Perc pitch / −20 dB | 740 Hz (327–2396) / 73 ms, 205 | 734 Hz / 60 ms, 10 | rim 217 Hz / 22 ms, 4 | ghost 1850 Hz / 148 ms |
+| Measure | min/tech [M-melak] | 90s/Chicago [M-melak] | 909free [M-909free] |
+|---|---|---|---|
+| **Kick f0** | **52.8 Hz (50.1–55.9), 173** | 53.2 (47.3–68.8), 15 | 55.7 (55.5–62.1), 7 |
+| Kick f @ 5 / 20 / 80 ms | 281 / 166 / 70 Hz | 210 / 95 / 59 Hz | 407 / 184 / 69 Hz |
+| Kick sweep | 31.3 st (25.8–37.6) | 25.2 st (23.1–29.3) | 37.3 st |
+| **Kick pitch τ** | **28.9 ms (24.0–33.5)** | 24.5 ms (19.3–33.9) | 21.0 ms (20.6–24.6) |
+| **Kick −6 / −20 / −40 dB** | **79 / 137 / 174 ms** | 57 / 112 / 178 ms | 41 / 79 / 295 ms |
+| Kick click (> 2 kHz, first 10 ms) | −14.4 dB (−19.4 to −9.8) | **−8.3 dB** (−11.1 to −2.0) | −28.4 dB |
+| **Clap bursts** | **3 (3–4), 185** | 2.5 (1–3), 10 | 3.5 (3–4), 4 |
+| **Clap burst spacing** | **11.4 ms (10.0–14.1)** | 10.4 ms (9.7–18.1) | 12.8 ms (12.5–13.7) |
+| Clap spectral peak | 1195 Hz (1055–1430) | 1594 Hz (1432–2336) | 879 Hz |
+| Clap −6 / −12 / −20 dB | 31 / 49 / 72 ms | 36 / 59 / 107 ms | 105 / 172 / 320 ms (JD-Xi, long tail) |
+| Closed hat centroid | 7476 Hz (6328–9441), 72 | 4871 Hz (4780–5263), 5 | 7457 Hz, 3 |
+| Closed hat −6 / −20 / −40 dB | 14 / 44 / 82 ms | 38 / 102 / 126 ms | 10 / 33 / — ms |
+| Open hat centroid | 6830 Hz (6189–7755), 141 | 5193 Hz (4880–5804), 5 | 7276 Hz, 2 |
+| Open hat −6 / −20 / −40 dB | 30 / 94 / 175 ms | 89 / 296 / 468 ms | 42 / 242 / — ms |
+| Ride centroid / −20 / −40 dB | 7749 Hz / 174 / 343 ms, 14 | — | crash 8053 Hz / 370 ms, 5 |
+| Shaker band 5–95% | 4673–13442 Hz, centroid 8633, 14 | — | — |
+| Shaker −20 dB | 72 ms (47–120) | — | — |
+| Perc pitch / −20 dB | 740 Hz (327–2396) / 73 ms, 205 | 734 Hz / 60 ms, 10 | rim 217 Hz / 22 ms, 4 |
 
 **Reading the table:**
 - **Kick:** the packs confirm the reference window. Kick f0 medians are 52.8–55.7 Hz, against 50–55 Hz in the refs, and A1 = 55.0 Hz sits inside the min/tech IQR.
-- **The one-shots sweep further and faster than REF_R5's in-mix kick.** At 5 ms they read 281 Hz against 146 Hz. REF_R5 was measured on a demucs stem from a mastered mix, which smears the attack.
-- **Kick bodies:** the one-shots' bodies are shorter (−20 dB at 137 against 203 ms).
+- **The one-shots sweep further and faster than the in-mix reference kick.** The reference was measured on a demucs stem from a mastered mix, which smears the attack.
+- **Kick bodies:** the one-shots' bodies are shorter than the in-mix reference kick (−20 dB at 137 ms median).
 - **Claps:** they run 3–4 bursts about 11 ms apart in the packs and in the CC0 909 set alike.
 - **Hats:** 90s/Chicago hats are darker (centroid about 5 kHz) and longer than min/tech hats (about 7.5 kHz). This supports the two-kit split.
 
@@ -909,25 +909,25 @@ Rims sit inside "perc". Bare "hat" files were split into open or closed by decay
 
 ### 9.3 K1 · DRUMS · UK MIN KIT (tight; default for UK MIN, LONG and POP)
 
-**Primary samples (picked by `drum_pick.py`; Samples-relative names are in §9.8).** Score = mean |log(value / target)| against the REF_R5 targets.
+**Primary samples (picked by `drum_pick.py`; Samples-relative names are in §9.8).** Score = mean |log(value / target)| against the K1 voice targets below.
 
 | Voice | Reference file (under `references/melak_oneshots/Sample Market/`) | Why | Key numbers [M-melak] |
 |---|---|---|---|
-| Kick | `Sine_Artist_Series_16_Candidate/One Shots/Kicks/SN_CD_Kick_06.wav` | closest body to REF_R5 (−20 / −40 dB 192 / 349 vs 203 / 385 ms) | f0 57.5 Hz, start 189 Hz, sweep 20.6 st, τ 28.8 ms, −6 / −20 / −40 = 61 / 192 / 349 ms, click −15.1 dB |
-| Clap | `Hyper - Tripy Acid Tech/SINGLE HITS/DRUMS/CLAPS/HY_TAT_Clap_19.wav` | decay almost identical to REF_R5 (−6 / −12 / −20 = 17 / 50 / 82 vs 14 / 55 / 82 ms) | 4 bursts at 1.9 / 9.4 / 18.0 / 35.2 ms (spacing 8.6), peak 1464 Hz |
-| Open hat | `UNDRGRND Sounds - Minimal Tech Nation - Wav/…/US_MTN_Hats_Open Samples/US_MTN_Hat_Open_Rave.wav` | REF_R5 "&" hat shape (−6 / −20 / −30 = 17 / 127 / 161 vs 15 / 138 / 187 ms) | centroid 8202 Hz, band 4436–13491 Hz |
+| Kick | `Sine_Artist_Series_16_Candidate/One Shots/Kicks/SN_CD_Kick_06.wav` | closest body to the K1 kick target | f0 57.5 Hz, start 189 Hz, sweep 20.6 st, τ 28.8 ms, −6 / −20 / −40 = 61 / 192 / 349 ms, click −15.1 dB |
+| Clap | `Hyper - Tripy Acid Tech/SINGLE HITS/DRUMS/CLAPS/HY_TAT_Clap_19.wav` | decay almost identical to the K1 clap target | 4 bursts at 1.9 / 9.4 / 18.0 / 35.2 ms (spacing 8.6), peak 1464 Hz |
+| Open hat | `UNDRGRND Sounds - Minimal Tech Nation - Wav/…/US_MTN_Hats_Open Samples/US_MTN_Hat_Open_Rave.wav` | the K1 "&" hat shape | centroid 8202 Hz, band 4436–13491 Hz |
 | Closed hat | `Sine_Artist_Series_Dan Fresco/One Shots/Hats/Closed Hats/SN_DF_Closed_Hat_03.wav` | −20 dB at 48 ms (target 50) | centroid 8471 Hz, −40 dB at 95 ms |
-| Shaker | `Sine - Artist Series - Veritas /One Shots/Shakers & Tambourines/SN_VER_Shaker_06.wav` | matches REF_R5 (−6 / −12 / −20 = 19 / 39 / 73 vs 20 / 39 / 69 ms) | band 3962–13889 Hz, centroid 7470 Hz |
-| Ghost (rim) | `Sine_Artist_Series_12_Abdul Raeva/One Shots/Percussion/SN_AR_Perc_22.wav` | −20 dB at 153 ms (REF_R5 ghost 148) | peak 2340 Hz (REF_R5 1850) |
+| Shaker | `Sine - Artist Series - Veritas /One Shots/Shakers & Tambourines/SN_VER_Shaker_06.wav` | matches the K1 shaker target | band 3962–13889 Hz, centroid 7470 Hz |
+| Ghost (rim) | `Sine_Artist_Series_12_Abdul Raeva/One Shots/Percussion/SN_AR_Perc_22.wav` | −20 dB at 153 ms (target 150) | peak 2340 Hz |
 | Tom | `Hyper - Tripy Acid Tech/SINGLE HITS/DRUMS/PERC/HY_TAT_Perc_20.wav` | low tom with a long body | 122.5 Hz, −20 dB at 212 ms |
 
 **Voice targets (the circuit models must hit these):**
 
 | Voice | Slots | Tune | Pitch env | Decay (−6 / −20 / −40 dB) | Level | Pan |
 |---|---|---|---|---|---|---|
-| **Kick** | 1, 5, 9, 13 | **55.0 Hz** (§9.2) | **+21 st (≈ 185 Hz) → f0, τ 25 ms** [D: ref sample 20.6 st / 28.8 ms; REF_R5 18 st / 19 ms [M-ref]] | **60 / 195 / 360 ms** [D: ref sample 61 / 192 / 349 [M-melak], REF_R5 203 / 385 [M-ref]] | 0 dB (solo −23.7 LUFS-S, TP ≤ −11.0 dBTP [MIX]) | C |
+| **Kick** | 1, 5, 9, 13 | **55.0 Hz** (§9.2) | **+21 st (≈ 185 Hz) → f0, τ 25 ms** [D: ref sample 20.6 st / 28.8 ms [M-melak]] | **60 / 195 / 360 ms** [D: ref sample 61 / 192 / 349 [M-melak]] | 0 dB (solo −23.7 LUFS-S, TP ≤ −11.0 dBTP [MIX]) | C |
 | Kick click | with kick | > 2 kHz transient | — | 5 ms | **−15 dB re kick peak** [M-melak min/tech median −14.4, ref sample −15.1] | C |
-| **Clap** | 5, 13 | BP **1.3 kHz** [M-melak median 1195, ref 1464] | none | 4 bursts, **spacing 10 ms** [D: median 11.4, ref 8.6 [M-melak]]; tail **15 / 52 / 82 ms** to −6 / −12 / −20 [M-ref REF_R5, matched by the ref sample] | −6 dB [R] | C |
+| **Clap** | 5, 13 | BP **1.3 kHz** [M-melak median 1195, ref 1464] | none | 4 bursts, **spacing 10 ms** [D: median 11.4, ref 8.6 [M-melak]]; tail **15 / 52 / 82 ms** to −6 / −12 / −20 [M-ref, matched by the ref sample] | −6 dB [R] | C |
 | **Ghost (rim)** | 8, 16 | **A6 1760 Hz** [R from M-ref 1850] | none | −20 dB @ **150 ms** [M-ref 148, M-melak ref 153] | clap −5 dB [M-ref] | R 10% |
 | **Open hat** ("&") | 3, 7, 11, 15 | bank §9.5 (UK) | none | **15 / 135 ms**, −30 dB @ 180 ms [M-ref, matched by the ref sample] | −10 dB [R]; "&" = 0 dB hat reference [M-ref] | C ±10% |
 | **Closed hat** ("a" / "e") | 4, 8, 12, 16 / 2, 6, 10, 14 | bank §9.5 (UK) | none | **13 / 45 / 85 ms** [M-melak median 14 / 44 / 82, ref 13 / 48 / 95] | "a" −12, "e" −22 dB re "&" [M-ref] | C |
@@ -940,9 +940,9 @@ Rims sit inside "perc". Bare "hat" files were split into open or closed by decay
 
 | Voice | Reference file (under `references/melak_oneshots/Sample Market/`) | Why | Key numbers [M-melak] |
 |---|---|---|---|
-| Kick | `Sample Market Studio - Classic Chicago House/One Shots/Kicks/SMS_CCH_Kick_06.wav` | short body near REF_J1/J2 (−40 dB 177 vs 129 ms [M-ref]), slower sweep | f0 56.9 Hz, τ 33.9 ms, −6 / −20 / −40 = 89 / 126 / 177 ms, **click −1.0 dB** |
+| Kick | `Sample Market Studio - Classic Chicago House/One Shots/Kicks/SMS_CCH_Kick_06.wav` | short body near the K2 kick target, slower sweep | f0 56.9 Hz, τ 33.9 ms, −6 / −20 / −40 = 89 / 126 / 177 ms, **click −1.0 dB** |
 | Clap | `Sample Market Studio - Classic Chicago House/One Shots/Claps/SMS_CCH_Clap_04.wav` | looser tail (−20 dB at 118 ms) | 3 bursts at 8.5 / 21.3 / 29.3 ms (spacing 10.4), peak 1400 Hz, −40 dB at 220 ms |
-| Open hat | `Sample Market Studio - Acid Experiments/One Shots/Hats/Open Hats/AE_Open_Hat_02.wav` | −20 dB at 214 ms, the REF_J1/J2 "&" length | centroid 10.4 kHz (brighter than the 90s median, so it is a reference for decay only) |
+| Open hat | `Sample Market Studio - Acid Experiments/One Shots/Hats/Open Hats/AE_Open_Hat_02.wav` | −20 dB at 214 ms, the K2 "&" length | centroid 10.4 kHz (brighter than the 90s median, so it is a reference for decay only) |
 | Closed hat | `Sample Market Studio - Classic Chicago House/One Shots/Hats/SMS_CCH_Hat_08.wav` | −20 dB at 61 ms, dark | centroid 5263 Hz, band 1680–8538 Hz |
 | Ride | `Phantom - Rapture - Minimal:Deep Tech Pack/Drum One Shots/Cymbals/Rides/Phantom - Rapture Ride 3.wav` | longest ride body (no 90s ride in the packs) | −20 dB at 442 ms, centroid 7509 Hz |
 | Tom | `Sample Market Studio - Classic Chicago House/One Shots/Perc/SMS_CCH_Perc_01.wav` | 90s tom | 199 Hz, −20 dB at 157 ms |
@@ -951,11 +951,11 @@ Rims sit inside "perc". Bare "hat" files were split into open or closed by decay
 
 | Voice | Slots | Tune | Pitch env | Decay (−6 / −20 / −40 dB) | Level | Pan |
 |---|---|---|---|---|---|---|
-| **Kick** | 1, 5, 9, 13 | **55.0 Hz** | **+25 st (≈ 235 Hz) → f0, τ 30 ms** [D: 90s median 25.2 st / 24.5 ms [M-melak]; REF_J1/J2 preview τ 32–51 [M-ref]] | **60 / 110 / 150 ms** [D: 90s median 57 / 112 / 178 [M-melak], REF_J1/J2 −40 @ 129 [M-ref]] | 0 dB | C |
+| **Kick** | 1, 5, 9, 13 | **55.0 Hz** | **+25 st (≈ 235 Hz) → f0, τ 30 ms** [D: 90s median 25.2 st / 24.5 ms [M-melak]] | **60 / 110 / 150 ms** [D: 90s median 57 / 112 / 178 [M-melak]] | 0 dB | C |
 | Kick click | with kick | > 2 kHz | — | 5 ms | **−8 dB** [M-melak 90s median −8.3]. The 90s attack is about 7 dB hotter than UK's | C |
 | **Clap** | 5, 13 | BP **1.5 kHz** [M-melak 90s median 1594, ref 1400] | none | **3 bursts, spacing 10.5 ms** [M-melak]; tail **45 / 115 / 215 ms** [D: ref 50 / 118 / 220, median 36 / 107 / 211] | −4 dB [R from M-ref: clap band about +4 dB stronger on 2/4] | C |
 | Ghost (rim) | 16 only | A6 1760 Hz | none | −20 dB @ 150 ms | clap −8 dB [R] | R 10% |
-| **Open hat** ("&") | 3, 7, 11, 15 | bank §9.5 (JACKIN, [LOW-CONF]) | none | **50 / 230 / 420 ms** [D: ref 5 / 214 / 418 [M-melak]; REF_J1/J2 −15 dB @ 166 [M-ref]; 90s median 89 / 296 / 468] | −8 dB [R] | C |
+| **Open hat** ("&") | 3, 7, 11, 15 | bank §9.5 (JACKIN, [LOW-CONF]) | none | **50 / 230 / 420 ms** [D: ref 5 / 214 / 418 [M-melak]; 90s median 89 / 296 / 468] | −8 dB [R] | C |
 | **Closed hat** (on the beat) | 1, 5, 9, 13 | bank §9.5 (JACKIN, [LOW-CONF]) | none | **25 / 60 / 110 ms** [M-melak ref 22 / 61 / 65, 90s median 38 / 102 / 126] | −12 dB re open [R]; no "e" / "a" hats [M-ref] | C |
 | Shaker | off | — | — | — | [M-ref: no off-16th hits] | — |
 | **Ride** | 3, 7, 11, 15, under the open hat | bank §9.5 (RIDE) | none | −20 dB @ **440 ms** [M-melak ref 442] | −18 dB [R] | R 20% |
@@ -1004,11 +1004,11 @@ Formula [D]: **delay of each off-16th = (S − 50)/100 × 230.8 ms** at 130 BPM.
 
 | Context | SWING | 16th delay @ 130 BPM | Label |
 |---|---|---|---|
-| **K1 UK MIN KIT** (default) | **52%** | **4.6 ms** | [M-ref] REF_R4/R5 hats 52.8% |
+| **K1 UK MIN KIT** (default) | **52%** | **4.6 ms** | [M-ref] UK MIN refs' hats |
 | **K2 JACKIN KIT** (default) | **50%** | **0 ms** | [M-ref] CTR D5: straight; the ~67% figure is not confirmed |
 | Dialect UK MIN | 52% | 4.6 ms | [M-ref] |
 | Dialect LONG | 51% | 2.3 ms | [R] mockup LONG value |
-| Dialect POP | 50% | 0 ms | [M-ref] REF_B1 50.4% |
+| Dialect POP | 50% | 0 ms | [M-ref] POP refs |
 | Dialect JACKIN 90s | 50% | 0 ms | [M-ref] |
 | User range | 50–57% | 0–16.2 ms | [M-ref] UK hats 50.4–57.1% |
 | Direction A drums (for reference) | 56% | 13.8 ms | [L] PTD 6 |
@@ -1116,7 +1116,7 @@ These are unchanged from DS §14.2:
 ## 11. Mix-fit checklist (harness gates)
 | Check | Gate | Basis |
 |---|---|---|
-| Bass energy < 200 Hz | ≥ 91% (PLUCK 91–95, CLICK ≥ 95) | [M] REF_R5 91.8%, render 95.3%, REF_B1 97.5% |
+| Bass energy < 200 Hz | ≥ 91% (PLUCK 91–95, CLICK ≥ 95) | [M] refs pooled, render 95.3% |
 | Bass corr | ≥ 0.997 | [M] 0.997–1.000 |
 | Bass > 1 kHz | ≤ 0.5% | [M] 0.1% |
 | Bass filter env settle | PLUCK 50–70 ms, CLICK τ 12–22 ms, ROUND τ 40–55 ms | [M / L] |
@@ -1152,7 +1152,7 @@ These are unchanged from DS §14.2:
 2. **Pad width after re-voicing.** With unison down to 3, read corr and adjust WIDTH until the A1 / A2 targets are met.
 3. **Hoover width.** Unison 5 plus ensemble 40% has to reach corr 0.45.
 4. **Hat / ride banks.** Render both BANK MODEs and check centroid and decay against §9.5 and §11. The JACKIN LP 7 kHz value is [R]: at 9 kHz the bank rendered a 6003 Hz centroid against a 4.9–5.2 kHz target.
-5. **Kick sweep.** Both kits start from one-shot values ([M-melak]), which are faster and wider than REF_R5's in-mix kick ([M-ref], a demucs stem). Compare a mix render with REF_R5's 146 Hz @ 5 ms before locking.
+5. **Kick sweep.** Both kits start from one-shot values ([M-melak]), which are faster and wider than the in-mix reference kick ([M-ref], a demucs stem). Compare a mix render with the reference kick sweep before locking.
 6. **CPU.** Measure the E19 budget table (§12.2, now including samplers) on the first full build.
 7. **Sample presets vs v1.2 targets.** Render every SAMPLE / LAYER preset and compare with its "Must measure" row. Where a pick misses, change layerMix, the filter or the pool pick, never the target. Watch these three:
    - A1 SUS SWELL source centroid is 1158 Hz against the 1.4–2.3 kHz target, so the filter must open;
@@ -1160,7 +1160,7 @@ These are unchanged from DS §14.2:
    - S1 needs the quartal stack rendered (now by chord memory, §4).
 8. **JACKIN hat ratios, A&R re-check [LOW-CONF].** After the first build, render K2's CH / OH / ride in the bank modes MEASURED (JACKIN) and 808, both solo and layered under the K2 samples, at the JACKIN 90s default pattern.
    - Measure: centroid vs the 4.9–5.2 kHz target (§11); −20 dB at CH 60 ±10 ms and OH 230 ±30 ms.
-   - A&R listen beside the REF_J1/J2 reference and the UK bank.
+   - A&R listen beside the JACKIN references and the UK bank.
    - **Pass:** the centroid is in range and A&R signs off → the ratios lose the [LOW-CONF] tag. **Fail:** K2 defaults to BANK MODE 808, and the ratios get re-measured on more 90s hats.
 9. **Chord memory (STAB).** Render S1 / S2 / S3 from single keys at refKey and with the bar-8 lift flag. The rendered notes must be the §4 table's (pitch ±10 ct per note), with no extra voices and no voice-steal clicks at the 1/32-early overlap.
 10. **User sample slots.** Drop a test file into each of the 14 slots (a tonal file in the lanes, a matching one-shot per drum voice). Check:
@@ -1232,7 +1232,7 @@ A preset loads first. Then the active dialect's override block (if any) is appli
       "BASS": {
         "preset": "bass.long.round",
         "params": { "duck.depth_dB": 7, "duck.recovery_ms": 110, "voice.glide_ms": 0 },
-        "reason": "[M] REF_J1/J2 duck 7.3 dB / 110 ms; octave jumps snap"
+        "reason": "[M] JACKIN-style refs duck; octave jumps snap"
       },
       "DRUMS": { "preset": "drums.jackin.kit", "params": { "swing.pct": 50 } }
     },
@@ -1412,7 +1412,7 @@ Resolved in v1.3b (Maestro):
   - **Loudness re-targeted to MIX_SPEC v1 §2.2 / §2.3** (Mix Engineer, via Maestro): kick −23.7, bass −24.7 LUFS-S in every dialect, top lanes per dialect, HITS bass −3; the old bass −18 / buses −15 anchor retired (≈ 6.7 dB too hot). Per-preset v1.2 offsets dropped (level keys locked). The per-preset −6 dBFS peak rule is replaced by the MIX lane TP caps; −6 dBTP remains for the summed output and for sample prep. Bus targets are report-only; the sum −19.0 ±0.5 LUFS-S / −6 ±1 dBTP governs (§0.5, §9, §10, §11, §13).
   - **Samples prepped per MIX_SPEC §4** on the staged copies (originals untouched): float32, DC, lead / tail trim and fades, −24 LUFS, −6 dBTP cap. 252 / 252 pass the sample checks. Per-file gain in `SAMPLE_MANIFEST.json`; block positions shifted to the prepped files; one bad STAB loop (`STAB/JF_Synth_12_C.wav`, old loop sat below −60 dBFS) re-found. Staged set now 240.4 MB float32 (S12, S14, S16). Open questions 13–16.
 - **v1.2 — 2026-10-17**: DRUMS grounded in measured one-shots, and Maestro's answers applied.
-  - §9 rewritten with distributions from 1104 of Melak's one-shots [M-melak] and 27 CC0 909 one-shots [M-909free], compared with REF_R5 [M-ref]. It adds reference-sample picks per kit, new K1 / K2 targets, and hat / ride oscillator-bank ratios with an 808 comparison.
+  - §9 rewritten with distributions from 1104 of Melak's one-shots [M-melak] and 27 CC0 909 one-shots [M-909free], compared with the reference kit [M-ref]. It adds reference-sample picks per kit, new K1 / K2 targets, and hat / ride oscillator-bank ratios with an 808 comparison.
   - The drum-sample policy at the time was recorded; it was superseded in v1.3.
   - Generator SHUFFLE / KEEP; duck follows ROLLA's kick or the host grid; synthesized hats and ride (E16; v1.3 makes them an optional layer under the samples).
   - Nearest-preset borrow confirmed. Chord memory kept (E10); vowel keyswitches moved to post-v0 (§10.4).
