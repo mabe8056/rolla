@@ -13,10 +13,15 @@
 #include <string>
 #include <vector>
 
+// Linux drains the queue directly (the internal hook). macOS and Windows use
+// MessageManager::runDispatchLoopUntil, which needs JUCE_MODAL_LOOPS_PERMITTED=1
+// (set for this target in CMakeLists.txt).
+#if JUCE_LINUX
 namespace juce::detail
 {
 bool dispatchNextMessageOnSystemQueue (bool returnIfNoPendingMessages);
 }
+#endif
 
 namespace
 {
@@ -36,8 +41,12 @@ bool pumpUntil (const std::function<bool()>& done, int ms = 4000)
     const auto start = juce::Time::getMillisecondCounter();
     while (! done() && juce::Time::getMillisecondCounter() - start < (juce::uint32) ms)
     {
+#if JUCE_LINUX
         if (! juce::detail::dispatchNextMessageOnSystemQueue (true))
             juce::Thread::sleep (1);
+#else
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (2);
+#endif
     }
     return done();
 }
@@ -307,6 +316,10 @@ void testSoundControls()
     expect (proc.copyGroove().lane[rolla::Pluck].count == 0, "roller leaves pluck out");
     expect (reshapeTo (proc, "dialect", (float) rolla::Long), "deep for pluck");
     expect (pumpUntil ([&] { return proc.copyGroove().lane[rolla::Pluck].count > 0; }), "deep brings pluck in");
+    // DEEP's INTENSITY ladder (Intensity.h, since 8821a4f) brings HITS in last,
+    // at 90: at the default 75 the lane is meant to be empty.
+    expect ((int) rawOf (proc, "intensity") == 75, "default intensity is 75");
+    expect (proc.copyGroove().lane[rolla::Hits].count == 0, "deep at intensity 75 leaves hits out");
 
     // Factory presets play the sample pack and do not fall back to the synth.
     // A runner without ~/Music/ROLLA/Samples stays silent, same as the loudness gate.
@@ -317,10 +330,20 @@ void testSoundControls()
         return;
     }
 
+    // INTENSITY gates lanes by style (Intensity.h). DEEP brings HITS in last,
+    // at 90, so the default 75 leaves the HITS lane empty and its knobs have
+    // nothing to shape. Full intensity puts every lane of the roll in.
+    setDenorm (proc, "intensity", 100.f);
+    expect (pumpUntil ([&] { return proc.copyGroove().lane[rolla::Hits].count > 0; }),
+            "full intensity brings the DEEP hits in");
+
     const int lanes[] = { rolla::Bass, rolla::Stab, rolla::Hits, rolla::Pluck, rolla::Pad, rolla::Vox };
     const char* names[] = { "BASS", "STAB", "HITS", "PLUCK", "PAD", "VOX" };
     for (int i = 0; i < 6; ++i)
     {
+        // A lane with no notes cannot pass its sound checks: say so first.
+        expect (proc.copyGroove().lane[lanes[i]].count > 0,
+                std::string (names[i]) + " has notes in the roll under test");
         solo (proc, lanes[i]);
         const auto id = std::string (rolla::partId (lanes[i]));
         setDenorm (proc, (id + "Punch").c_str(), 0.5f);

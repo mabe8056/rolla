@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Score a batch of rolls against GENERATOR_RULES.md §6 and §7.2.
 
-    python3 tools/score_rolls/__main__.py batch.jsonl --refs /tmp/rolla_refs/transcriptions
+    python3 tools/score_rolls/__main__.py batch.jsonl --refs "$ROLLA_REFS"
 
 Input is JSON lines from tools/dump_grooves.cpp. One object per roll:
 style, key, bars, tag (plan|contour|cells), lanes, drums.
