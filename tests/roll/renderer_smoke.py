@@ -25,7 +25,7 @@ from mix_check import measure  # noqa: E402
 
 
 SR = 48000
-STYLES = ("ukmin", "long", "pop", "gaskin")
+STYLES = ("ukmin", "long", "pop", "jackin")
 
 
 def write_tone(path, seconds, fund=58.0, side_hz=42.0, side=0.22, decay=0.0):
@@ -84,7 +84,7 @@ def build_pack(root):
     write_tone(os.path.join(root, "HITS", "303saw_D4.wav"), 0.4, 293.7, 210.0, 0.16, decay=4.0)
     write_tone(os.path.join(root, "HITS", "noise_riser_D4.wav"), 0.6, 440.0, 330.0, 0.16, decay=2.0)
     for i in range(4):
-        # Kicks stay above the 120 Hz correlation band. GASKIN's drum plate
+        # Kicks stay above the 120 Hz correlation band. JACKIN's drum plate
         # (room 0.28, width 0.68) would otherwise turn a sub kick into a long
         # stereo tail and pull corr<120 under 0.99. The bass lane carries the
         # low side the mix program has to collapse.
@@ -179,7 +179,7 @@ def main():
                     problems.append(f"{style} roll_{roll:02d} kick midi at {meta.get('kickMidiSample')}")
                 if meta.get("style") != style:
                     problems.append(f"sidecar style {meta.get('style')} != {style}")
-                expect_mute = style != "gaskin"
+                expect_mute = style != "jackin"
                 if bool(meta.get("hitsMute")) != expect_mute:
                     problems.append(f"{style} hitsMute {meta.get('hitsMute')}")
                 presets = meta.get("presets", {})

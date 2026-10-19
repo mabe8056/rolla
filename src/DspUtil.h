@@ -140,6 +140,27 @@ struct Svf
     }
 };
 
+// Mono below fc on a stereo bus. The side (L-R)/2 goes through a Linkwitz-Riley
+// 24 dB/oct high-pass (two Butterworth Q 0.7071 stages); the mid (L+R)/2 is not
+// filtered. Below fc both channels carry (L+R)/2, above fc the image is kept,
+// and L+R is the input sum exactly at every frequency (flat, linear). No allocation.
+struct MonoBelow
+{
+    Svf hp1, hp2;
+
+    void reset() noexcept { hp1.reset(); hp2.reset(); }
+
+    void process (float& l, float& r, float fc, float sr) noexcept
+    {
+        const float mid = 0.5f * (l + r);
+        float side = 0.5f * (l - r);
+        side = hp1.highpass (side, fc, 0.70710678f, sr);
+        side = hp2.highpass (side, fc, 0.70710678f, sr);
+        l = flush (mid + side);
+        r = flush (mid - side);
+    }
+};
+
 // One-pole highpass / DC blocker (R is the pole, ~0.995 at 48 kHz for ~30 Hz).
 struct DcBlock
 {
