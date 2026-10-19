@@ -421,7 +421,17 @@ bool Sampler::Voice::Env::tick() noexcept
         }
     }
     else if (stage == 3)
+    {
         amp = sustain;
+        // A drum hit (sustain 0) that has decayed is silent: free the voice. Silent
+        // voices held to the end of a long file filled the pool and forced steals.
+        if (sustain <= 0.f)
+        {
+            amp = 0.f;
+            stage = 0;
+            return false;
+        }
+    }
     else if (stage == 4)
     {
         amp += (0.f - amp) * relC;
@@ -451,16 +461,41 @@ void Sampler::reset() noexcept
         v = {};
     for (int& c : sliceCursor)
         c = 0;
+    stepEst = 0.f;
+}
+
+bool Sampler::opensOnStep (const SampleAudio& a) noexcept
+{
+    const int n = std::min (a.frames, (int) a.left.size());
+    if (n < 2)
+        return false;
+    const bool stereo = (int) a.right.size() >= n;
+    const int span = std::clamp ((int) (0.001 * a.rate), 8, n - 1);
+    double first = 0.0, moves = 0.0;
+    for (int c = 0; c < (stereo ? 2 : 1); ++c)
+    {
+        const auto& x = c == 0 ? a.left : a.right;
+        first = std::max (first, (double) std::fabs (x[0]));
+        double sum = 0.0;
+        for (int k = 1; k <= span; ++k)
+            sum += std::fabs ((double) x[(size_t) k] - (double) x[(size_t) k - 1]);
+        moves = std::max (moves, sum / (double) span);
+    }
+    return first > 1.0e-3 && first > 4.0 * moves;
 }
 
 void Sampler::armAttack (Voice& v) noexcept
 {
     // A note that starts mid-file (slice, start offset, vox lead-in, reverse)
     // fades in over 3 ms so the cut does not click. One that starts on the
-    // file's first sample keeps the file's own attack, so a kick or hat
-    // transient is not softened.
+    // file's first sample fades in over 0.5 ms when the file opens on a step
+    // (opensOnStep: trimmed onto a non-zero sample, like most pack kicks, rims
+    // and bass stabs), so it no longer opens on a full-level step. A file that
+    // opens into noise or rises from zero plays as recorded: fading it moved
+    // a noisy kick's attack bands by up to 4 dB.
     const bool fileStart = ! v.reverse && ! v.tempoSync && v.pos < 0.5;
-    v.attackN = fileStart ? 0 : std::max (8, (int) (0.003 * sr));
+    const bool fade = ! fileStart || (v.audio != nullptr && opensOnStep (*v.audio));
+    v.attackN = fade ? std::max (8, (int) ((fileStart ? 0.0005 : 0.003) * sr)) : 0;
     v.attackLeft = v.attackN;
     v.fade = 1.f;
     v.fadeInc = 0.f;
@@ -468,6 +503,24 @@ void Sampler::armAttack (Voice& v) noexcept
     v.releaseN = 0;
     v.noteEdge = 1.f;
     v.stopping = false;
+}
+
+float Sampler::audibleLevel (const Voice& v) noexcept
+{
+    if (! v.on)
+        return 0.f;
+    // Born this sample, or still in its attack: about to be loud, whatever env.amp says.
+    if (v.born)
+        return 1.0e9f;
+    float g = v.env.stage == 1 ? 1.f : v.env.amp;
+    if (v.attackN > 0 && v.attackLeft > 0)
+        g = std::max (g, 1.f);
+    if (v.stopping && v.releaseN > 0)
+    {
+        const float t = std::clamp ((float) v.releaseLeft / (float) v.releaseN, 0.f, 1.f);
+        g *= 0.5f * (1.f - std::cos (kSincPi * t));
+    }
+    return g * std::fabs (v.gain) * v.fade * v.noteEdge;
 }
 
 void Sampler::park (const Voice& dying) noexcept
@@ -482,7 +535,7 @@ void Sampler::park (const Voice& dying) noexcept
             dest = &t;
             break;
         }
-        const float g = t.env.amp * (t.releaseN > 0 ? (float) t.releaseLeft / (float) std::max (1, t.releaseN) : t.fade);
+        const float g = audibleLevel (t);
         if (g < quietG)
         {
             quietG = g;
@@ -494,11 +547,30 @@ void Sampler::park (const Voice& dying) noexcept
     if (dest == nullptr)
         return;
     *dest = dying;
-    dest->attackLeft = 0;
-    dest->releaseN = std::max (8, (int) (0.004 * sr));
-    dest->releaseLeft = dest->releaseN;
+    // Keep the attack edge running: zeroing it mid-attack stepped the voice up
+    // to full level. The release multiplies on top, so both edges stay smooth.
+    // A voice already releasing keeps its own release: restarting at 1 is a step.
+    if (! (dying.stopping && dying.releaseN > 0))
+    {
+        dest->releaseN = std::max (8, (int) (0.004 * sr));
+        dest->releaseLeft = dest->releaseN;
+    }
     dest->stopping = true;
     dest->fadeInc = 0.f;
+}
+
+void Sampler::chokeDrum (int drumVoice) noexcept
+{
+    const int n = std::max (8, (int) (0.005 * sr));
+    for (auto& v : voices)
+    {
+        if (! v.on || v.part != Drums || v.drumVoice != drumVoice || v.born || v.stopping)
+            continue;
+        v.releaseN = n;
+        v.releaseLeft = n;
+        v.stopping = true;
+        v.fadeInc = 0.f;
+    }
 }
 
 void Sampler::releaseNote (int part, int midiNote) noexcept
@@ -515,19 +587,29 @@ void Sampler::releaseAll() noexcept
             v.env.release();
 }
 
-Sampler::Voice* Sampler::allocate (int) noexcept
+Sampler::Voice* Sampler::allocate (int part) noexcept
 {
     Voice* free = nullptr;
     Voice* quiet = nullptr;
-    for (auto& v : voices)
+    float quietG = 1.0e8f;
+    Voice* const first = part == Drums ? voices : voices + kDrumVoices;
+    Voice* const last = part == Drums ? voices + kDrumVoices : voices + kDrumVoices + kMelodicVoices;
+    for (Voice* p = first; p != last; ++p)
     {
+        Voice& v = *p;
         if (! v.on)
         {
             free = &v;
             break;
         }
-        if (quiet == nullptr || v.env.amp < quiet->env.amp)
+        // env.amp alone picked a voice born this same sample (amp still 0): the
+        // kick was parked 4 ms after it started and the hat took its slot.
+        const float g = audibleLevel (v);
+        if (g < quietG)
+        {
+            quietG = g;
             quiet = &v;
+        }
     }
     Voice* slot = free != nullptr ? free : quiet;
     if (slot == nullptr)
@@ -567,6 +649,14 @@ void Sampler::readVoice (Voice& v, float& l, float& r) noexcept
 {
     l = r = 0.f;
     if (! v.on || v.audio == nullptr || v.audio->frames <= 0)
+    {
+        v.on = false;
+        return;
+    }
+    // The release has reached zero. This used to be noticed only after the edge
+    // was computed, so the last sample of every steal, choke or relocate fade
+    // played at full level: a one-sample spike 4 ms after the hit.
+    if (v.stopping && v.releaseN > 0 && v.releaseLeft <= 0)
     {
         v.on = false;
         return;
@@ -651,9 +741,6 @@ void Sampler::readVoice (Voice& v, float& l, float& r) noexcept
         v.on = false;
     if (! v.loop && v.pos >= n - 1.0)
         v.on = false;
-    if (v.releaseN > 0 && v.releaseLeft <= 0 && v.stopping)
-        v.on = false;
-
     // The file as recorded unless TONE moved: no ladder, no HPF, and L and R
     // always through the same path (the old path filtered L only and folded
     // 15% of it into R, which made stereo samples lopsided and partly mono).
@@ -752,8 +839,13 @@ Amp ampFor (const PresetBank& bank, int part, int preset)
     }
     else if (part == Vox)
     {
-        const auto& p = bank.vox[i];
-        a = { 3.f, p.decayMs, 0.f, 30.f, 4000.f * p.brightness, 0.05f, 0.2f, 40.f, 200.f, ampDb (p.trimDb) * 0.25f };
+        // A vox sample plays as recorded. The preset's decayMs / brightness / trimDb
+        // shape the formant synth (Engine.cpp), not a file the loader already set to
+        // -24 LUFS: sustain 0 with a 140 ms decay faded a 278 ms shot out (~-11 dB,
+        // shape lost), the 4-pole at 4.6 kHz is -3 dB near 2 kHz, the 200 Hz HPF ate
+        // the fundamental and ampDb (-8) * 0.25 was another -20 dB (issue #68).
+        // TONE still darkens it (cut / 4 at 0); PUNCH still moves the attack.
+        a = { 3.f, 200.f, 1.f, 30.f, 20000.f, 0.f, 0.f, 40.f, 40.f, 1.f };
     }
     else
     {
@@ -1212,6 +1304,9 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
 {
     if (voice < 0 || voice >= NumDrumVoices || velocity <= 0)
         return 1.f;
+    // Choke group: the closed hat releases a ringing open hat over 5 ms.
+    if (voice == HatC)
+        chokeDrum (HatO);
     if (! params.sampleShaping || ! (gainScale > 0.f))
         gainScale = 1.f;
     Take taken;
@@ -1385,6 +1480,19 @@ void Sampler::render (float* laneL, float* laneR, float prev16, float pos16, boo
     for (int v = 0; v < NumDrumVoices; ++v)
         drumOutL[v] = drumOutR[v] = 0.f;
 
+    // The loop-end edge's length comes from the playhead step. pos16 is a float,
+    // so near 16th 128 its sample-to-sample step jitters by a few percent; a
+    // window built from the raw step moved every voice's edge by that much each
+    // sample, a click just before the wrap. A tempo change resets the estimate.
+    const float rawStep = pos16 - prev16;
+    if (playing && rawStep > 0.f)
+    {
+        if (stepEst <= 0.f || std::fabs (rawStep - stepEst) > 0.25f * stepEst)
+            stepEst = rawStep;
+        else
+            stepEst += (1.f / 64.f) * (rawStep - stepEst);
+    }
+
     auto renderOne = [&] (Voice& v)
     {
         if (! v.on)
@@ -1401,7 +1509,8 @@ void Sampler::render (float* laneL, float* laneR, float prev16, float pos16, boo
             const float step = pos16 - prev16;
             if (step > 0.f)
             {
-                const float window = std::max (step, step * (float) (0.010 * sr));
+                const float est = stepEst > 0.f ? stepEst : step;
+                const float window = std::max (est, est * (float) (0.010 * sr));
                 const float remain = stop - pos16;
                 if (remain <= 0.f)
                 {
@@ -1411,15 +1520,20 @@ void Sampler::render (float* laneL, float* laneR, float prev16, float pos16, boo
                 if (remain < window)
                     v.noteEdge = 0.5f * (1.f - std::cos (kSincPi * remain / window));
             }
-            else if (! born && prev16 < stop && pos16 + 1.0e-3f < prev16 && ! v.stopping)
+            else if (! born && prev16 < stop && pos16 + 1.0e-3f < prev16)
             {
                 // Loop wrap or a host relocate cut the note: fade it over 4 ms, never a hard cut.
-                v.attackLeft = 0;
-                v.releaseN = std::max (8, (int) (0.004 * sr));
-                v.releaseLeft = v.releaseN;
-                v.stopping = true;
+                // A voice still in its attack keeps that edge (zeroing it stepped up to full).
+                // One already fading (stolen, choked) keeps its own release.
+                if (! v.stopping)
+                {
+                    v.releaseN = std::max (8, (int) (0.004 * sr));
+                    v.releaseLeft = v.releaseN;
+                    v.stopping = true;
+                }
                 // The loop-end edge already faded this voice. Release from that
-                // level: snapping back to 1 stepped every tail still ringing on beat 1.
+                // level: snapping back to 1 stepped every tail still ringing on beat 1,
+                // stolen voices parked inside the loop-end fade included.
                 v.gain *= std::clamp (prevEdge, 0.f, 1.f);
             }
         }

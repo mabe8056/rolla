@@ -18,12 +18,14 @@ namespace rolla
 // A generator rebuild in this directory should keep this signature. Change
 // the body, not the call the processor makes.
 
-inline void reshapeLanes (Groove& groove,
+// False when the originality floor refused every composition: groove is then
+// untouched and the caller keeps the roll it had.
+inline bool reshapeLanes (Groove& groove,
                           const Settings& settings,
                           const std::uint32_t seeds[NumParts],
                           std::uint32_t partMask)
 {
-    generate (groove, settings, seeds, partMask);
+    return generate (groove, settings, seeds, partMask);
 }
 
 } // namespace rolla

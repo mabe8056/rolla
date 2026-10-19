@@ -236,7 +236,7 @@ def run(rolls, args, cache):
 
 def render_set(rolls, pack, out, cache, seed, count, stem_lanes, jobs):
     """One rolla-rolls per style; up to `jobs` at a time."""
-    styles = ["ukmin", "long", "pop", "gaskin"]
+    styles = ["ukmin", "long", "pop", "jackin"]
     env = dict(os.environ, ROLLA_CACHE_DIR=str(cache))
     pending, running, logs = list(styles), [], {}
     while pending or running:
@@ -314,7 +314,7 @@ def main():
         fails.append(f"files written into the sample folder: {extra[:5]}")
 
     if a.stab_sweep and a.part in ("all", "stab"):
-        for style in ("ukmin", "long", "pop", "gaskin"):
+        for style in ("ukmin", "long", "pop", "jackin"):
             lo = stab_notes(a.rolls, style, 7, 0.0, out, cache)
             mid = stab_notes(a.rolls, style, 7, 0.55, out, cache)
             hi = stab_notes(a.rolls, style, 7, 1.0, out, cache)

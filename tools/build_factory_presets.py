@@ -18,25 +18,25 @@ PRESETS = os.path.join(ROOT, "resources", "presets.json")
 
 HERO_STYLES = {
     ("bass", "pluck"): ["ukmin"],
-    ("bass", "round"): ["long", "gaskin"],
+    ("bass", "round"): ["long", "jackin"],
     ("bass", "click"): ["pop"],
     ("stab", "dub"): ["ukmin"],
-    ("stab", "swell"): ["long", "gaskin"],
+    ("stab", "swell"): ["long", "jackin"],
     ("stab", "click"): ["pop"],
-    ("hits", "warehouse"): ["ukmin", "gaskin"],
+    ("hits", "warehouse"): ["ukmin", "jackin"],
     ("hits", "rave"): ["pop"],
     ("hits", "dusty"): ["long"],
-    ("pluck", "hook"): ["ukmin", "gaskin"],
+    ("pluck", "hook"): ["ukmin", "jackin"],
     ("pluck", "soft"): ["pop"],
     ("pluck", "bright"): ["long"],
     ("pad", "air"): ["ukmin", "pop"],
     ("pad", "wide"): ["long"],
-    ("pad", "dark"): ["gaskin"],
+    ("pad", "dark"): ["jackin"],
     ("vox", "close"): ["ukmin"],
     ("vox", "booth"): ["long"],
-    ("vox", "chop"): ["pop", "gaskin"],
+    ("vox", "chop"): ["pop", "jackin"],
     ("drums", "tight"): ["ukmin", "long", "pop"],
-    ("drums", "room"): ["gaskin"],
+    ("drums", "room"): ["jackin"],
 }
 
 LANE_ID = {

@@ -137,7 +137,7 @@ inline bool samplePhrase (const char* text, const char* a, const char* b, const 
 
 inline bool sampleTextEqual (const char* a, const char* b) noexcept;
 
-// styles 0 fits every dialect. Otherwise bit 0 is UK MIN, then LONG, POP, GASKIN.
+// styles 0 fits every dialect. Otherwise bit 0 is UK MIN, then LONG, POP, JACKIN.
 inline bool sampleStyleAllows (std::uint8_t styles, int dialect) noexcept
 {
     if (styles == 0 || dialect < 0 || dialect >= NumDialects)

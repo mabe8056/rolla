@@ -30,8 +30,8 @@ def main():
     write(root, "LONG/FULL.wav.gr.json", {"tp_guard_gr_db_max": 0.25})
     write(root, "POP/FULL.wav.gr.json", {"tp_guard_gr_db_max": 0.7})
     write(root, "POP/MUTE_BASS.wav.gr.json", {"tp_guard_gr_db_max": 0.1})
-    write(root, "GASKIN/FULL.wav.gr.json", {"gr_db_max": 0.0})   # older sidecar, no field
-    write(root, "rolls/gaskin/roll_03.wav.gr.json", "not json")  # unreadable
+    write(root, "JACKIN/FULL.wav.gr.json", {"gr_db_max": 0.0})   # older sidecar, no field
+    write(root, "rolls/jackin/roll_03.wav.gr.json", "not json")  # unreadable
 
     code, out = run(root, "--json", "--bar", "1.0")
     t = {r["style"]: r for r in json.loads(out)["styles"]}
