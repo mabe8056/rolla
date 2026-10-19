@@ -2595,34 +2595,87 @@ void testOriginalityRefusalNeverShips()
     expect (proc.rollNotice().text.isEmpty(), "refusal: an accepted roll clears the status line");
 }
 
-// The built-in guard (no reference data): the banned figures fire on synthetic
-// lanes, and 4 styles x 20 gate-seed rolls all clear it without exhausting.
+// The built-in guard: the shipped banned-skeleton index (the repo holds no
+// banned skeleton; the bundle carries a private index in the external format)
+// and the built-in rules. The index path is exercised with a synthetic figure:
+// supplied in memory, through the file format, and from orig_builtin.json in
+// $ROLLA_GENRE_DATA_DIR; its hits count as built-in, and without it the lane
+// passes. Then the 2&4 root rule, and 4 styles x 20 gate-seed rolls all clear.
 void testOriginalityBuiltin()
 {
     rolla::orig::setIndex (nullptr);
-    rolla::Groove dotted {};
-    dotted.dialect = rolla::Long;
-    dotted.bars = 8;
-    auto& lane = dotted.lane[rolla::Bass];
-    const int slots[] = { 0, 3, 6, 9, 12 };
+    rolla::orig::setBuiltinIndex (nullptr);
+    rolla::Groove synth {};
+    synth.dialect = rolla::Long;
+    synth.bars = 8;
+    auto& lane = synth.lane[rolla::Bass];
+    const int slots[] = { 1, 5, 7, 10, 14 };      // synthetic: no reference figure
+    const int pitch[] = { 0, 10, 3, 7, 5 };
     for (int bar = 0; bar < 8; ++bar)
         for (int k = 0; k < 5; ++k)
         {
             auto& n = lane.notes[lane.count++];
             n.start = (float) (bar * 16 + slots[k]);
-            n.length = 2.f;
-            n.chord[0] = (std::int8_t) (slots[k] < 6 ? 7 : 5); // upper on 1 and 4, a whole step lower after
+            n.length = 1.5f;
+            n.chord[0] = (std::int8_t) pitch[(k + bar % 2) % 5];
             n.nChord = 1;
             n.vel = 100;
         }
-    const auto rep = rolla::orig::check (dotted, 1u << rolla::Bass, nullptr);
-    expect (! rep.pass && rep.worst.builtin && rep.worst.metric == rolla::orig::MetricSkelWin,
-            "originality: the dotted-pulse banned skeleton is caught without any index");
+    expect (rolla::orig::check (synth, 1u << rolla::Bass, nullptr).pass,
+            "originality: with no shipped index the synthetic figure is not banned");
 
-    rolla::Groove reaction {};
-    reaction.dialect = rolla::UkMin;
-    reaction.bars = 8;
-    auto& r = reaction.lane[rolla::Bass];
+    auto figure = std::make_shared<rolla::orig::Index>();
+    figure->addRef ("banned:synthetic_test_figure", laneStream (synth, rolla::Bass));
+    figure->finalize();
+    rolla::orig::setBuiltinIndex (figure);
+    auto rep = rolla::orig::check (synth, 1u << rolla::Bass, nullptr);
+    expect (! rep.pass && rep.worst.builtin && rep.worst.refId == "banned:synthetic_test_figure",
+            "originality: a figure in the shipped index is caught as built-in, with no external index");
+
+    juce::String error;
+    auto parsed = rolla::orig::parseIndex (juce::JSON::parse (rolla::orig::toJson (*figure)), &error);
+    expect (parsed != nullptr, "originality: the shipped index format round-trips: " + error.toStdString());
+    rolla::orig::setBuiltinIndex (parsed);
+    expect (! rolla::orig::check (synth, 1u << rolla::Bass, nullptr).pass, "originality: the parsed shipped index still catches it");
+
+    const auto dataDir = juce::File::createTempFile ("rolla-genre-data");
+    dataDir.createDirectory();
+    const char* oldDir = std::getenv ("ROLLA_GENRE_DATA_DIR");
+    const std::string keep = oldDir != nullptr ? oldDir : "";
+    rolla::test::putEnv ("ROLLA_GENRE_DATA_DIR", dataDir.getFullPathName().toStdString());
+    expect (rolla::orig::builtinIndexFile() == dataDir.getChildFile ("orig_builtin.json"),
+            "originality: the shipped index is read from $ROLLA_GENRE_DATA_DIR/orig_builtin.json");
+    expect (rolla::orig::loadIndex (rolla::orig::builtinIndexFile()) == nullptr, "originality: no shipped file, no shipped index");
+    expect (rolla::orig::writeIndex (*figure, rolla::orig::builtinIndexFile()), "originality: the test shipped index is written");
+    rolla::orig::setBuiltinIndex (rolla::orig::loadIndex (rolla::orig::builtinIndexFile(), &error));
+    rep = rolla::orig::check (synth, 1u << rolla::Bass, nullptr);
+    expect (! rep.pass && rep.worst.builtin, "originality: the shipped index loaded from its file catches the figure");
+    rolla::test::putEnv ("ROLLA_GENRE_DATA_DIR", keep);
+    dataDir.deleteRecursively();
+
+    // Determinism and the redraw: generate() never ships a roll the shipped index bans.
+    rolla::Settings ls;
+    ls.dialect = rolla::Long;
+    ls.bars = 8;
+    std::uint32_t lseeds[rolla::NumParts];
+    seedsForRoll (rolla::Long, 2, lseeds);
+    rolla::orig::setBuiltinIndex (nullptr);
+    rolla::Groove plain {};
+    expect (rolla::generate (plain, ls, lseeds, 0x7fu), "originality: the plain roll clears");
+    auto own = std::make_shared<rolla::orig::Index>();
+    own->addRef ("banned:synthetic_own_bass", laneStream (plain, rolla::Bass));
+    own->finalize();
+    rolla::orig::setBuiltinIndex (own);
+    rolla::Groove redrawn {};
+    expect (rolla::generate (redrawn, ls, lseeds, 0x7fu), "originality: a roll the shipped index bans is redrawn");
+    expect (rolla::orig::check (redrawn, 0x3fu, nullptr).pass && ! sameLane (redrawn.lane[rolla::Bass], plain.lane[rolla::Bass]),
+            "originality: what ships clears the shipped index");
+    rolla::orig::setBuiltinIndex (nullptr);
+
+    rolla::Groove rootTwoFour {};
+    rootTwoFour.dialect = rolla::UkMin;
+    rootTwoFour.bars = 8;
+    auto& r = rootTwoFour.lane[rolla::Bass];
     for (int bar = 0; bar < 8; ++bar)
         for (int slot : { 1, 3, 8 })
         {
@@ -2633,8 +2686,8 @@ void testOriginalityBuiltin()
             n.nChord = 1;
             n.vel = 100;
         }
-    expect (rolla::orig::bannedBassFigure (r, 8), "originality: root on 16ths 2 and 4 is the banned Reaction figure");
-    expect (! rolla::orig::check (reaction, 1u << rolla::Bass, nullptr).pass, "originality: the Reaction figure fails the check");
+    expect (rolla::orig::bannedBassFigure (r, 8), "originality: root on 16ths 2 and 4 is the banned 2&4 root figure");
+    expect (! rolla::orig::check (rootTwoFour, 1u << rolla::Bass, nullptr).pass, "originality: the 2&4 root figure fails the check");
 
     const char* names[] = { "ROLLER", "DEEP", "BOUNCY", "JACKIN" };
     for (int style = 0; style < rolla::NumDialects; ++style)
@@ -2713,19 +2766,10 @@ int countWord (const std::string& text, const std::string& word)
     return n;
 }
 
-// Reference names are kept shifted by one character so the plain names never
-// sit in the repo (tools/check_repo_clean.py decodes the same list).
-std::string unshift (const char* s)
-{
-    std::string out;
-    for (; *s != '\0'; ++s)
-        out.push_back ((char) (*s - 1));
-    return out;
-}
-
 // The owner's rule: no reference-derived sequence, cell, skeleton, codebook or
-// stab line in the generator. The removed tables, their files and any
-// reference-named cell must not come back into src/ or resources/.
+// stab line in the generator. The removed tables and their files must not come
+// back into src/ or resources/. Reference-named cells are checked by
+// tools/check_repo_clean.py (CI), which keeps only salted digests of the names.
 void testRemovedTables()
 {
     namespace fs = std::filesystem;
@@ -2750,7 +2794,6 @@ void testRemovedTables()
         "baseSlots", "deepBook", "bouncyBook", "jackinBook", "kPrefer0", "kPrefer1", "kPrefer2",
         "pushJackinVariationBack", "lockFromBook", "lockPhrase", "makeBassPhrase", "phrase_bank", "rolesFor", "assignSemi",
     };
-    const char* shiftedNames[] = { "N.Ijhi", "NIJHI", "NIjhi", "W!Mjof", "WMJOF", "WMjof", "W`Mjof", "Dmptfs", "Mpdbm!Evc", "MpdbmEvc" };
     int scanned = 0;
     for (const char* dir : { "src", "resources" })
     {
@@ -2767,11 +2810,6 @@ void testRemovedTables()
             ++scanned;
             for (const char* t : tokens)
                 expect (countWord (text, t) == 0, "removed table symbol '" + std::string (t) + "' is back in " + rel);
-            // The sample-library manifest lists pack file names, not references.
-            if (it->path().filename() == "SAMPLE_MANIFEST.json")
-                continue;
-            for (const char* sh : shiftedNames)
-                expect (countWord (text, unshift (sh)) == 0, "a reference-named cell is in " + rel);
         }
     }
     std::cout << "removed-table scan: " << scanned << " source/resource files checked\n";

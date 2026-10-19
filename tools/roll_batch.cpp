@@ -726,8 +726,16 @@ namespace
 {
 
 // The external index for this run: an explicit file, "none", or the default path if it exists.
+// The shipped banned-skeleton index loads as in the plugin ($ROLLA_GENRE_DATA_DIR/orig_builtin.json).
 bool loadOrigIndex (const std::string& choice)
 {
+    {
+        juce::String why;
+        auto shipped = rolla::orig::loadIndex (rolla::orig::builtinIndexFile(), &why);
+        std::cout << "originality: shipped banned-skeleton index "
+                  << (shipped != nullptr ? juce::String ((int) shipped->refs.size()) + " streams" : "absent (" + why + ")") << "\n";
+        rolla::orig::setBuiltinIndex (std::move (shipped));
+    }
     if (choice == "none")
     {
         rolla::orig::setIndex (nullptr);

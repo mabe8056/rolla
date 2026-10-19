@@ -11,6 +11,11 @@
 // ROLLA_SETTINGS_DIR moves it with the settings, so tests never see a real one.
 // Never in the repo and never in the bundle: it is reference-derived.
 //
+// The shipped banned-skeleton index (Originality.h source 2) uses the same
+// format: orig_builtin.json in $ROLLA_GENRE_DATA_DIR, else in the plugin
+// bundle's Contents/Resources/Genre/ (injected at packaging, like the sample
+// pack and genre_targets.json). Never in the repo.
+//
 // Build:  rolla-rolls --build-orig-index <reference MIDI folder> [--orig-out FILE]
 // The folder is scanned recursively for .mid/.midi and read the way
 // tools/originality_check.py reads it (one stream per track and channel, drums
@@ -50,6 +55,16 @@ inline juce::File defaultIndexFile()
     if (env.isNotEmpty() && juce::File::isAbsolutePath (env))
         return juce::File (env);
     return settings::file().getParentDirectory().getChildFile ("Originality").getChildFile ("orig_index.json");
+}
+
+inline juce::File builtinIndexFile()
+{
+    const auto env = juce::SystemStats::getEnvironmentVariable ("ROLLA_GENRE_DATA_DIR", {});
+    if (env.isNotEmpty())
+        return juce::File (env).getChildFile ("orig_builtin.json");
+    // <bundle>/Contents/MacOS/<binary> -> <bundle>/Contents/Resources/Genre
+    const auto exe = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
+    return exe.getParentDirectory().getParentDirectory().getChildFile ("Resources/Genre/orig_builtin.json");
 }
 
 inline juce::var toVar (const Index& idx)
@@ -175,7 +190,7 @@ inline std::shared_ptr<Index> parseIndex (const juce::var& v, juce::String* erro
     return idx;
 }
 
-// Null when the file is missing or unusable (then only the built-in guard runs).
+// Null when the file is missing or unusable (then that index is simply not checked).
 inline std::shared_ptr<const Index> loadIndex (const juce::File& file, juce::String* error = nullptr)
 {
     if (! file.existsAsFile())

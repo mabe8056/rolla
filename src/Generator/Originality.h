@@ -3,18 +3,24 @@
 // Originality floor (GENERATOR_RULES v2 H4, the owner's "never copy" rule).
 //
 // generate() runs check() on every roll it makes and redraws the lanes that hit,
-// with derived seeds (caller seed + k), so a copy never ships. Two sources:
+// with derived seeds (caller seed + k), so a copy never ships. Three sources:
 //
-//   1. Built in, always on, no reference data: the banned figures that
-//      GENERATOR_RULES H4 already names (the root on 16ths 2 and 4 that
-//      avoidRootTwoFour guards, the b3 tied over the barline from 16th 15, and the dotted-pulse
-//      skeleton the A&R synthesised from its key-free description). These are
-//      rules from the repo, not transcriptions.
-//   2. Optional: a hashed fingerprint index built on the owner's box from the
+//   1. Built-in rules, always on, no figure data: GENERATOR_RULES H4's root on
+//      16ths 2 and 4 (which avoidRootTwoFour also guards) and the b3 tied over
+//      the barline from 16th 15 (bannedBassFigure below).
+//   2. The shipped banned-skeleton index (builtin slot): the banned skeletons the
+//      A&R named are reference-derived figures, so the repo holds none of them,
+//      not even synthesised. They ship as a hashed index in the external file
+//      format (OriginalityJson.h, orig_builtin.json), kept private on the owner's
+//      box and injected into the packaged bundle's Contents/Resources/Genre/ at
+//      packaging time, like the sample pack and the genre data. The plugin loads
+//      it at start-up (setBuiltinIndex); its hits count as built-in. A build
+//      without it (a CI or test build) runs rule 1 and any external index only.
+//   3. Optional: a hashed fingerprint index built on the owner's box from the
 //      private reference MIDI (rolla-rolls --build-orig-index). It holds only
 //      64-bit hashes and MinHash signatures keyed by opaque ids: no notes, no
 //      names, no paths. It lives outside the repo and the bundle (see
-//      OriginalityJson.h for where), so nothing reference-derived ships.
+//      OriginalityJson.h for where).
 //
 // The features follow tools/originality_check.py (OC), the A&R gate:
 //   skel_ngram  (interval, inter-onset gap) 3-grams, gaps +-1 16th. Exact set
@@ -786,7 +792,7 @@ inline void scoreStream (const Stream& c, const Index& idx, int stream, bool bui
 inline bool bannedBassFigure (const Lane& bass, int bars) noexcept
 {
     bars = std::clamp (bars, 1, kMaxBars);
-    int reaction = 0;
+    int rootTwoFour = 0;
     int tie = 0;
     for (int b = 0; b < bars; ++b)
     {
@@ -808,44 +814,35 @@ inline bool bannedBassFigure (const Lane& bass, int bars) noexcept
             if (pc == 3 && slot == 14 && n.start + n.length > (float) ((b + 1) * 16) + 0.01f)
                 held = true;
         }
-        reaction += (r1 && r3) ? 1 : 0;
+        rootTwoFour += (r1 && r3) ? 1 : 0;
         tie += held ? 1 : 0;
     }
-    return reaction * 2 > bars || tie * 2 > bars;
+    return rootTwoFour * 2 > bars || tie * 2 > bars;
 }
 
-// The dotted-pulse banned skeletons (SCORER_CHANGELOG item 5): the upper note on
-// 16ths 1 and 4, a whole step lower on 7, 10 and 13, key-free; plus the tail and
-// neighbour onset sets the generator already avoids (lower note on the extras).
-// Synthesised from that description, four bars each, so no transcription is used.
-inline const Index& builtinIndex()
+// ------------------------------------------------------------------ shipped (built-in) index slot
+// The banned-skeleton index the bundle carries (source 2 above). Null or empty
+// means only the built-in rules and the external index run. Tests supply a
+// synthetic one here to exercise the path.
+inline std::shared_ptr<const Index>& builtinSlot()
 {
-    static const Index idx = []
-    {
-        Index out;
-        const int core[] = { 0, 3, 6, 9, 12 };
-        const int tail[] = { 0, 3, 6, 9, 12, 14 };
-        const int neighbour[] = { 0, 3, 6, 8, 9, 12, 14 };
-        auto add = [&out] (const char* id, const int* slots, int n)
-        {
-            std::vector<RawNote> notes;
-            for (int bar = 0; bar < 4; ++bar)
-                for (int k = 0; k < n; ++k)
-                    notes.push_back ({ (double) (bar * 16 + slots[k]), slots[k] < 6 ? 2 : 0 });
-            out.addRef (id, streamFromNotes (notes));
-        };
-        add ("banned:dotted_pulse_core", core, 5);
-        add ("banned:dotted_pulse_tail", tail, 6);
-        add ("banned:dotted_pulse_neighbour", neighbour, 7);
-        out.finalize();
-        return out;
-    }();
-    return idx;
+    static std::shared_ptr<const Index> slot;
+    return slot;
+}
+
+inline void setBuiltinIndex (std::shared_ptr<const Index> index)
+{
+    std::atomic_store (&builtinSlot(), std::move (index));
+}
+
+inline std::shared_ptr<const Index> currentBuiltinIndex()
+{
+    return std::atomic_load (&builtinSlot());
 }
 
 // ------------------------------------------------------------------ external index slot
-// The process-wide index the generator checks besides the built-in one. Null or
-// empty means only the built-in guard runs. Same seed + same index = same roll.
+// The process-wide index the generator checks besides the built-in ones. Null or
+// empty means only the built-in guard runs. Same seed + same indexes = same roll.
 inline std::shared_ptr<const Index>& indexSlot()
 {
     static std::shared_ptr<const Index> slot;
@@ -864,7 +861,8 @@ inline std::shared_ptr<const Index> currentIndex()
 
 // ------------------------------------------------------------------ check
 // Scores the regenerated pitched lanes in partMask (and the merged lowest voice
-// of every pitched lane, as OC does) against the built-in guard and `external`.
+// of every pitched lane, as OC does) against the built-in rules, the shipped
+// index (currentBuiltinIndex) and `external`.
 // bumpMask names the lanes to redraw: the lane that hit, or for a merged hit
 // the bass when it was regenerated (else every regenerated pitched lane).
 inline Report check (const Groove& g, std::uint32_t partMask, const Index* external)
@@ -904,7 +902,7 @@ inline Report check (const Groove& g, std::uint32_t partMask, const Index* exter
         h.score = 1.f;
         h.severity = 1.f;
         h.builtin = true;
-        h.refId = "banned:reaction_or_b3_tie";
+        h.refId = "banned:root24_or_b3_tie";
         detail::note (rep, h, 1u << Bass);
     }
     if (external != nullptr && external->refuseAll)
@@ -916,12 +914,14 @@ inline Report check (const Groove& g, std::uint32_t partMask, const Index* exter
         detail::note (rep, h, pitched);
         return rep;
     }
-    const Index& builtin = builtinIndex();
+    const auto builtin = currentBuiltinIndex();
+    const bool useBuiltin = builtin != nullptr && ! builtin->empty();
     const bool useExternal = external != nullptr && ! external->empty();
     for (const auto& st : streams)
     {
         const std::uint32_t bump = st.part == kMerged ? mergedBump : (1u << st.part);
-        scoreStream (st.s, builtin, st.part, true, rep, bump);
+        if (useBuiltin)
+            scoreStream (st.s, *builtin, st.part, true, rep, bump);
         if (useExternal)
             scoreStream (st.s, *external, st.part, false, rep, bump);
     }

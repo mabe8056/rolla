@@ -374,7 +374,7 @@ struct Bar
 };
 
 // Pitches the onsets of one bar from `from` on. Slots below `from` keep their
-// pitches. The reaction figure (root on 16ths 2 and 4) is never drawn.
+// pitches. The 2&4 root figure (root on 16ths 2 and 4) is never drawn.
 // lastOpen: the bar's last onset avoids the root.
 void pitchBar (int st, int mode, float dark, const BassTables& t, Bar& b, int from, int prevSemi, bool callStart,
                bool lastOpen, Rng& r)
@@ -818,7 +818,7 @@ void repairTonic (Lane& lane, int st)
                 continue;
             const int slot = ((int) std::lround (lane.notes[i].start)) % kBar;
             if (slot == 3 || slot == 1)
-                continue; // never the reaction figure
+                continue; // never the 2&4 root figure
             if (best < 0 || lane.notes[i].length > lane.notes[best].length)
                 best = i;
         }

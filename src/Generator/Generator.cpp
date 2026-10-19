@@ -3063,7 +3063,7 @@ bool b2Passing (const Lane& lane, int i) noexcept
 // passing b2's neighbour (a 2 under a b3 stab), which leaves a b2 that is no
 // longer passing: out of the roll's mode. Outside phrygian such a b2 takes
 // the root, else the b3, else the nearest in-mode pitch with no semitone
-// clash and no reaction figure. Phrygian rolls keep their b2 (in mode).
+// clash and no 2&4 root figure. Phrygian rolls keep their b2 (in mode).
 void settleStrandedB2 (Groove& g, int mode)
 {
     if (mode == phrase::Phrygian)
@@ -3547,7 +3547,7 @@ int bassFillRoom (const bool* used, int bar, int nslots, float tailCut, int dial
 // note, an octave away about one time in seven so its octave share holds.
 // The other styles take a pitch class the bar already plays (then 5th, b3,
 // b7, root), never the neighbours' own pitch class, so the held line keeps
-// moving and no breath is forced. Never a b2, never the reaction figure.
+// moving and no breath is forced. Never a b2, never the 2&4 root figure.
 // harmonizeRoll still conforms the mode and the stab clashes afterwards.
 int bassFillPitch (const Lane& lane, int abs, int dialect, std::uint32_t seed)
 {

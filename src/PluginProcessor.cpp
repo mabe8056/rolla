@@ -424,10 +424,14 @@ void RollaProcessor::deferredStartup()
         }
         presetGen.fetch_add (1, std::memory_order_release);
 
-        // The owner's private hashed reference index, if there is one (Generator/OriginalityJson.h).
-        // Without it every roll still passes the built-in originality guard.
+        // The shipped banned-skeleton index (injected into the bundle at packaging) and the
+        // owner's private hashed reference index, if there are (Generator/OriginalityJson.h).
+        // Without them every roll still passes the built-in originality rules.
         if (! startupStop.load())
+        {
+            orig::setBuiltinIndex (orig::loadIndex (orig::builtinIndexFile()));
             orig::setIndex (orig::loadIndex (orig::defaultIndexFile()));
+        }
 
         if (! startupStop.load() && grooveEpoch.load (std::memory_order_relaxed) == 0)
         {
