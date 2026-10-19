@@ -630,7 +630,7 @@
     }
    }
   },
-  "GASKIN": {
+  "JACKIN": {
    "top_trim_db": 1.0,
    "default_lanes": [
     "KICK",
@@ -810,7 +810,7 @@
    "cal_default": 1.03,
    "src": "M: data/cal_combos.json (ref drop windows; class D=drums, B=bass, O=other, V=vocals; median over the style refs)"
   },
-  "GASKIN": {
+  "JACKIN": {
    "cal": {
     "D": 0.59,
     "DB": 0.4,

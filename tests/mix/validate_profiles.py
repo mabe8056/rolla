@@ -12,7 +12,7 @@ P=json.load(open(os.path.join(ROOT,'resources','mix_profiles.json'))); T=json.lo
 ok('schema_version' in P,'schema_version missing')
 m=re.search(r'## 8\..*?```json\n(.*?)\n```',md,re.S); ok(m is not None,'no json block in §8')
 if m: ok(json.loads(m.group(1))==P,'embedded §8 JSON != mix_profiles.json')
-ST=['UKMIN','LONG','POP','GASKIN']
+ST=['UKMIN','LONG','POP','JACKIN']
 def lane(s,k):
     L=P['dialects'][s]['lanes']; return L['DRUMS']['voices'][k.split(':')[1]] if k.startswith('DRUMS:') else L[k]
 # vs targets.json

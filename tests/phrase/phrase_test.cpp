@@ -1,22 +1,24 @@
-// rolla-phrase-test: DEEP / JACKIN phrase grammar checks. No JUCE.
+// rolla-phrase-test: rule composer checks (RuleComposer.h). No JUCE.
 //
-//   rolla-phrase-test [--fresh N] [--seeds a,b,c]
+//   rolla-phrase-test [--seeds a,b,c]
 //
-// Runs on the CI gate seed set (the rolla-rolls formula) plus N fresh random
-// seed sets (default 3, printed so a failure can be replayed with --seeds).
-// Nothing here tunes constants against particular seeds.
+// Deterministic: a fixed set of seed bases (the CI gate bases the roll tests
+// use) plus a fixed seed sweep. No random_device, so a failure always replays.
+// Extra bases can be added with --seeds. Nothing here tunes constants against
+// particular seeds.
 
-#include "Generator/PhraseBank.h"
+#include "Generator/RuleComposer.h"
+#include "Generator/RuleTables.h"
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <random>
+#include <set>
 #include <string>
 #include <vector>
 
 using namespace rolla;
-using namespace rolla::phrase;
 
 namespace
 {
@@ -29,43 +31,77 @@ void check (bool ok, const char* what, const std::string& detail = {})
         ++failures;
 }
 
-const char* styleName (Style s)
-{
-    return s == Style::Deep ? "DEEP" : "JACKIN";
-}
+const char* kNames[] = { "ROLLER", "DEEP", "BOUNCY", "JACKIN" };
 
 constexpr int kRolls = 200;
 constexpr int kBlock = 20;
 constexpr int kMaxPairsPerBlock = 2;
+constexpr float kNearIdentical = 0.85f;
 
-struct SeedSet
-{
-    std::string label;
-    std::vector<std::uint32_t> base; // one base seed; rolls derive from it
-};
-
-// Same derivation as rolla-rolls: 1 + roll * 0x9E3779B9 + dialect * 101, from base.
+// Same derivation as rolla-rolls: base + roll * 0x9E3779B9 + dialect * 101.
 std::uint32_t rollSeed (std::uint32_t base, int roll, int dialect)
 {
     return base + (std::uint32_t) roll * 0x9E3779B9u + (std::uint32_t) dialect * 101u;
 }
 
-PhraseSettings randomSettings (std::mt19937& g, int bars)
+int pcOf (int semi)
 {
-    std::uniform_real_distribution<float> u (0.f, 1.f);
-    PhraseSettings s;
-    s.busy = u (g);
-    s.bounce = u (g);
-    s.dark = u (g);
-    s.bars = bars;
-    return s;
+    const int pc = semi % 12;
+    return pc < 0 ? pc + 12 : pc;
 }
 
-// Near-identical pairs inside each block of 20 rolls. Returns the worst block.
-int worstBlockPairs (const std::vector<Skeleton>& sk, float* worstSim = nullptr)
+// Rhythm + pitch outline of bars 1-2.
+struct Skeleton
+{
+    std::uint32_t onsets = 0;
+    std::int8_t pitch[32] {};
+};
+
+Skeleton skeletonOf (const Lane& lane)
+{
+    Skeleton k;
+    for (int i = 0; i < lane.count; ++i)
+    {
+        const int s = (int) std::lround (lane.notes[i].start);
+        if (s < 0 || s >= 32)
+            continue;
+        k.onsets |= 1u << s;
+        k.pitch[s] = (std::int8_t) pcOf (lane.notes[i].chord[0]);
+    }
+    return k;
+}
+
+int pop32 (std::uint32_t x)
+{
+    int c = 0;
+    while (x)
+    {
+        x &= x - 1;
+        ++c;
+    }
+    return c;
+}
+
+// Onset Jaccard scaled by how many shared onsets carry the same pitch class.
+float similarity (const Skeleton& a, const Skeleton& b)
+{
+    const std::uint32_t inter = a.onsets & b.onsets;
+    const int nu = pop32 (a.onsets | b.onsets);
+    if (nu == 0)
+        return 1.f;
+    const int ni = pop32 (inter);
+    int same = 0;
+    for (int s = 0; s < 32; ++s)
+        if (((inter >> s) & 1u) && a.pitch[s] == b.pitch[s])
+            ++same;
+    const float j = (float) ni / (float) nu;
+    return j * (0.5f + 0.5f * (ni > 0 ? (float) same / (float) ni : 0.f));
+}
+
+int worstBlockPairs (const std::vector<Skeleton>& sk, float& worstSim)
 {
     int worst = 0;
-    float ws = 0.f;
+    worstSim = 0.f;
     for (int b = 0; b + kBlock <= (int) sk.size(); b += kBlock)
     {
         int pairs = 0;
@@ -73,18 +109,15 @@ int worstBlockPairs (const std::vector<Skeleton>& sk, float* worstSim = nullptr)
             for (int j = i + 1; j < b + kBlock; ++j)
             {
                 const float s = similarity (sk[(size_t) i], sk[(size_t) j]);
-                ws = std::max (ws, s);
+                worstSim = std::max (worstSim, s);
                 if (s >= kNearIdentical)
                     ++pairs;
             }
         worst = std::max (worst, pairs);
     }
-    if (worstSim != nullptr)
-        *worstSim = ws;
     return worst;
 }
 
-// Greedy clusters at the near-identical threshold = distinct shapes.
 int distinctShapes (const std::vector<Skeleton>& sk)
 {
     std::vector<Skeleton> reps;
@@ -103,166 +136,436 @@ int distinctShapes (const std::vector<Skeleton>& sk)
     return (int) reps.size();
 }
 
-void runSet (Style style, int dialect, const SeedSet& set)
+// Hard rules for a composed bass lane. `why` names the first failure.
+bool hardRules (const Lane& lane, int bars, int mode, std::string& why)
 {
-    const std::uint32_t base = set.base[0];
-    for (int bars : { 2, 1 })
+    const float loopEnd = (float) (bars * 16);
+    int onKick = 0;
+    bool barHas[8] {};
+    for (int i = 0; i < lane.count; ++i)
     {
-        for (int mode = 0; mode < 2; ++mode) // 0 default knobs, 1 random knobs
+        const Note& n = lane.notes[i];
+        if (! phrase::inMode (n.chord[0], mode))
         {
-            std::mt19937 g (base ^ 0xA5A5u ^ (std::uint32_t) bars);
-            std::vector<Skeleton> raw, guarded;
-            SkeletonHistory hist;
-            int hardFails = 0;
-            char why[96] = "";
-            char firstWhy[160] = "";
-            for (int roll = 0; roll < kRolls; ++roll)
-            {
-                PhraseSettings ps;
-                ps.bars = bars;
-                if (mode == 1)
-                    ps = randomSettings (g, bars);
-                const std::uint32_t seed = rollSeed (base, roll, dialect);
-                const Phrase p = makeBassPhrase (style, seed, ps);
-                if (! passesHardRules (p, why))
-                {
-                    if (hardFails++ == 0)
-                        std::snprintf (firstWhy, sizeof (firstWhy), "seed %u: %s", seed, why);
-                }
-                raw.push_back (skeletonOf (p));
-                if (roll % kBlock == 0)
-                    hist.clear();
-                guarded.push_back (skeletonOf (drawDistinctBass (style, seed, ps, hist)));
-            }
+            why = "out of mode: " + std::to_string (n.chord[0]);
+            return false;
+        }
+        if (n.start < 0.f || n.start + n.length > loopEnd + 1.0e-3f || n.length < 0.25f)
+        {
+            why = "note outside the loop at " + std::to_string (n.start);
+            return false;
+        }
+        if (i + 1 < lane.count && n.start + n.length > lane.notes[i + 1].start + 1.0e-3f)
+        {
+            why = "overlap at " + std::to_string (n.start);
+            return false;
+        }
+        const int st = (int) std::lround (n.start);
+        if (st % 4 == 0)
+            ++onKick;
+        if (st / 16 < 8)
+            barHas[st / 16] = true;
+        if (st / 16 == bars - 1 && st % 16 >= 12)
+        {
+            why = "attack in the bar-8 turn rest at " + std::to_string (st);
+            return false;
+        }
+    }
+    for (int b = 0; b < bars; ++b)
+        if (! barHas[b])
+        {
+            why = "empty bar " + std::to_string (b + 1);
+            return false;
+        }
+    if (lane.count > 0 && (float) onKick > 0.35f * (float) lane.count + 1.0e-4f)
+    {
+        why = std::to_string (onKick) + " of " + std::to_string (lane.count) + " attacks on kick steps";
+        return false;
+    }
+    if (rules::thinRepeatedBackHalf (lane, bars))
+    {
+        why = "thin repeated back half";
+        return false;
+    }
+    return true;
+}
+
+void runSet (int dialect, std::uint32_t base, const std::string& label, int rolls)
+{
+    for (int bars : { 8, 4, 2 })
+    {
+        std::vector<Skeleton> sk;
+        int hardFails = 0;
+        std::string firstWhy;
+        for (int roll = 0; roll < rolls; ++roll)
+        {
+            const std::uint32_t seed = rollSeed (base, roll, dialect);
+            rules::BassParams p;
+            p.dialect = dialect;
+            p.bars = bars;
+            p.dark = (float) ((roll * 37) % 101) / 100.f; // a fixed spread over DARK
+            p.mode = rules::drawMode (dialect, p.dark, seed);
+            Lane lane;
+            rules::composeBass (lane, p, seed);
+            std::string why;
+            if (! hardRules (lane, bars, p.mode, why) && hardFails++ == 0)
+                firstWhy = "seed " + std::to_string (seed) + ": " + why;
+            sk.push_back (skeletonOf (lane));
+        }
+        char d[256];
+        std::snprintf (d, sizeof d, "%s %s %d-bar: hard fails %d/%d %s", kNames[dialect], label.c_str(), bars, hardFails,
+                       rolls, firstWhy.c_str());
+        check (hardFails == 0, "hard rules (mode, loop, overlap, empty bar, turn rest, kick <= 35%, back-half guard)", d);
+        if (rolls >= kBlock)
+        {
             float ws = 0.f;
-            const int worstRaw = worstBlockPairs (raw, &ws);
-            const int worstGuard = worstBlockPairs (guarded);
-            const int shapes = distinctShapes (raw);
-            // Rhythm alone (pitch ignored), reported, not gated.
-            std::vector<Skeleton> rhythm = raw;
-            for (auto& k : rhythm)
-                std::memset (k.pitch, 0, sizeof (k.pitch));
-            const int worstRhythm = worstBlockPairs (rhythm);
-            char label[200];
-            std::snprintf (label, sizeof (label), "%s %s %d-bar %s knobs", styleName (style), set.label.c_str(), bars,
-                           mode == 0 ? "default" : "random");
-            char d[200];
-            std::snprintf (d, sizeof (d), "%s: hard fails %d/%d %s", label, hardFails, kRolls, firstWhy);
-            check (hardFails == 0, "hard rules", d);
-            std::snprintf (d, sizeof (d), "%s: worst block %d pairs (max sim %.2f), with redraw %d", label, worstRaw, ws, worstGuard);
-            check (worstRaw <= kMaxPairsPerBlock && worstGuard <= kMaxPairsPerBlock, "<=2 near-identical skeletons per 20 rolls", d);
-            std::printf ("INFO %s: rhythm-only worst block %d pairs\n", label, worstRhythm);
-            std::snprintf (d, sizeof (d), "%s: %d distinct shapes in %d rolls", label, shapes, kRolls);
-            check (shapes >= 40, ">=40 distinct phrase shapes", d);
+            const int worst = worstBlockPairs (sk, ws);
+            std::snprintf (d, sizeof d, "%s %s %d-bar: worst block %d pairs (max sim %.2f)", kNames[dialect], label.c_str(),
+                           bars, worst, ws);
+            check (worst <= kMaxPairsPerBlock, "<=2 near-identical skeletons per 20 rolls", d);
+        }
+        if (rolls >= kRolls)
+        {
+            const int shapes = distinctShapes (sk);
+            std::snprintf (d, sizeof d, "%s %s %d-bar: %d distinct shapes in %d rolls", kNames[dialect], label.c_str(), bars,
+                           shapes, rolls);
+            check (shapes >= 120, ">=120 distinct bar 1-2 shapes in 200 rolls", d);
         }
     }
 }
 
-void runAnswers (const SeedSet& set)
+// Stabs: in mode, at most perBar hits a bar. A stab may land on a bass attack
+// (the model's share, as in the references) only when it agrees with that bass
+// note: no m2 / m9, and no M7 outside DEEP. Most hits stay off the attacks.
+void runStabs (int dialect, std::uint32_t base)
 {
-    const std::uint32_t base = set.base[0];
-    std::mt19937 g (base ^ 0x5151u);
-    float gapSum = 0.f, gapMin = 1.f, callSum = 0.f;
-    int barsWithout = 0, outOfKey = 0, n = 0, hits = 0;
-    for (int roll = 0; roll < kRolls; ++roll)
+    int onBass = 0;
+    int clashes = 0;
+    int outOfMode = 0;
+    int overCap = 0;
+    int hits = 0;
+    for (int roll = 0; roll < 100; ++roll)
     {
-        const PhraseSettings ps = roll % 2 ? randomSettings (g, 2) : PhraseSettings {};
-        const std::uint32_t seed = rollSeed (base, roll, Gaskin);
-        const Phrase bass = makeBassPhrase (Style::Jackin, seed, ps);
-        const Phrase stab = makeStabAnswer (Style::Jackin, bass, seed, ps);
-        const AnswerStats st = answerStats (bass, stab);
-        gapSum += st.inGapShare;
-        gapMin = std::min (gapMin, st.inGapShare);
-        callSum += st.callsAnswered;
-        hits += st.stabHits;
-        ++n;
-        for (int b = 0; b < stab.bars; ++b)
-        {
-            bool any = false;
-            for (int i = 0; i < stab.count; ++i)
-                if ((int) stab.notes[i].start / 16 == b)
-                    any = true;
-            if (! any)
-                ++barsWithout;
-        }
+        const std::uint32_t seed = rollSeed (base, roll, dialect);
+        rules::BassParams p;
+        p.dialect = dialect;
+        p.mode = rules::drawMode (dialect, 0.55f, seed);
+        Lane bass;
+        rules::composeBass (bass, p, seed);
+        rules::StabParams sp;
+        sp.dialect = dialect;
+        sp.mode = p.mode;
+        sp.perBar = 3;
+        Lane stab;
+        rules::composeStab (stab, bass, sp, seed ^ 0x5717u);
+        int perBar[8] {};
         for (int i = 0; i < stab.count; ++i)
-            for (int c = 0; c < stab.notes[i].nChord; ++c)
-                if (! inMode (stab.notes[i].chord[c], stab.mode))
-                    ++outOfKey;
+        {
+            const Note& n = stab.notes[i];
+            ++hits;
+            const int st = (int) std::lround (n.start);
+            if (st / 16 < 8)
+                ++perBar[st / 16];
+            for (int k = 0; k < bass.count; ++k)
+                if ((int) std::lround (bass.notes[k].start) == st)
+                {
+                    ++onBass;
+                    const int bpc = ((bass.notes[k].chord[0] % 12) + 12) % 12;
+                    for (int c = 0; c < n.nChord && c < 4; ++c)
+                    {
+                        const int ic = ((n.chord[c] - bpc) % 12 + 12) % 12;
+                        if (ic == 1 || (ic == 11 && dialect != Long))
+                            ++clashes;
+                    }
+                }
+            for (int c = 0; c < n.nChord && c < 4; ++c)
+                if (! phrase::inMode (n.chord[c], p.mode))
+                    ++outOfMode;
+        }
+        for (int b = 0; b < 8; ++b)
+            if (perBar[b] > sp.perBar)
+                ++overCap;
     }
     char d[200];
-    std::snprintf (d, sizeof (d), "JACKIN %s: stab onsets in bass gaps mean %.2f min %.2f", set.label.c_str(), gapSum / n, gapMin);
-    check (gapSum / n >= 0.95f && gapMin >= 0.75f, "call/answer: stabs answer in the gaps", d);
-    std::snprintf (d, sizeof (d), "JACKIN %s: calls answered %.2f, %.1f stab hits per phrase", set.label.c_str(), callSum / n, (float) hits / n);
-    check (callSum / n >= 0.70f, "call/answer: bass calls get an answer", d);
-    std::snprintf (d, sizeof (d), "JACKIN %s: %d bars without a stab, %d out-of-key stab notes", set.label.c_str(), barsWithout, outOfKey);
-    check (barsWithout == 0 && outOfKey == 0, "call/answer: every bar answered, all in key", d);
+    std::snprintf (d, sizeof d, "%s: %d hits, %d on a bass attack (%d clashing), %d out-of-mode tones, %d bars over the cap",
+                   kNames[dialect], hits, onBass, clashes, outOfMode, overCap);
+    check (hits > 0 && outOfMode == 0 && overCap == 0 && clashes == 0 && onBass * 100 <= hits * 60,
+           "stabs in mode, under the cap; on a bass attack only when consonant, and mostly off them", d);
 }
 
 void runBasics()
 {
-    PhraseSettings ps;
-    const Phrase a = makeBassPhrase (Style::Deep, 1234, ps);
-    const Phrase b = makeBassPhrase (Style::Deep, 1234, ps);
+    rules::BassParams p;
+    p.dialect = Long;
+    Lane a;
+    Lane b;
+    rules::composeBass (a, p, 1234u);
+    rules::composeBass (b, p, 1234u);
     bool same = a.count == b.count;
     for (int i = 0; same && i < a.count; ++i)
         same = a.notes[i].start == b.notes[i].start && a.notes[i].chord[0] == b.notes[i].chord[0]
                && a.notes[i].length == b.notes[i].length;
     check (same, "deterministic for a seed");
 
-    Lane lane;
-    const int written = writePhrase (a, lane, 8);
-    bool tiled = written == a.count * 4;
-    for (int i = 0; tiled && i < a.count; ++i)
-        tiled = lane.notes[i + a.count * 3].start == a.notes[i].start + 96.f;
-    check (tiled, "writePhrase tiles a 2-bar phrase over 8 bars");
-
-    check (degreeToSemis (-1, Aeolian) == -2 && degreeToSemis (-3, Aeolian) == -5 && degreeToSemis (7, Dorian) == 12
-               && degreeToSemis (-7, Phrygian) == -12 && degreeToSemis (2, Phrygian) == 3 && degreeToSemis (5, Dorian) == 9,
+    check (phrase::degreeToSemis (-1, phrase::Aeolian) == -2 && phrase::degreeToSemis (-3, phrase::Aeolian) == -5
+               && phrase::degreeToSemis (7, phrase::Dorian) == 12 && phrase::degreeToSemis (-7, phrase::Phrygian) == -12
+               && phrase::degreeToSemis (2, phrase::Phrygian) == 3 && phrase::degreeToSemis (5, phrase::Dorian) == 9,
            "degree -> semitone mapping");
-
-    Style s;
-    check (styleForDialect (Long, s) && s == Style::Deep && styleForDialect (Gaskin, s) && s == Style::Jackin
-               && ! styleForDialect (UkMin, s),
-           "dialect mapping (DEEP = long, JACKIN = gaskin)");
-
-    // DEEP and JACKIN should not sound alike: compare onset density and note length.
-    float deepLen = 0.f, jackLen = 0.f;
-    int deepN = 0, jackN = 0;
-    for (std::uint32_t sd = 1; sd <= 200; ++sd)
+    // Genre model v1.2 (A&R fix 561): auto rolls stay inside the scorer's scale,
+    // so no dorian (or mixolydian) in any style. BOUNCY is aeolian only; the
+    // other styles draw aeolian and phrygian.
+    for (int dialect = 0; dialect < NumDialects; ++dialect)
     {
-        const Phrase d = makeBassPhrase (Style::Deep, sd, ps);
-        const Phrase j = makeBassPhrase (Style::Jackin, sd, ps);
-        for (int i = 0; i < d.count; ++i)
-            deepLen += d.notes[i].length;
-        for (int i = 0; i < j.count; ++i)
-            jackLen += j.notes[i].length;
-        deepN += d.count;
-        jackN += j.count;
+        int seen[3] {};
+        for (std::uint32_t k = 0; k < 400; ++k)
+            ++seen[std::clamp (rules::drawMode (dialect, (float) (k % 11) / 10.f, 1u + k * 0x9E3779B9u), 0, 2)];
+        char d[160];
+        std::snprintf (d, sizeof d, "%s: dorian %d aeolian %d phrygian %d of 400", kNames[dialect], seen[0], seen[1], seen[2]);
+        bool ok = seen[phrase::Aeolian] > 0 && seen[phrase::Dorian] == 0;
+        if (dialect == Pop)
+            ok = ok && seen[phrase::Phrygian] == 0;
+        else
+            ok = ok && seen[phrase::Phrygian] > 0;
+        check (ok, "mode weights follow the v1.2 model (no dorian in auto rolls, BOUNCY aeolian only)", d);
     }
-    char d[160];
-    std::snprintf (d, sizeof (d), "mean length DEEP %.2f vs JACKIN %.2f sixteenths; notes/phrase %.1f vs %.1f",
-                   deepLen / deepN, jackLen / jackN, deepN / 200.f, jackN / 200.f);
-    check (deepLen / deepN > 1.4f * (jackLen / jackN), "DEEP holds longer than JACKIN", d);
+
+    // The guard itself: a back half of single-pitch-class bars with 2-3 attacks.
+    Lane thin;
+    for (int bar = 0; bar < 8; ++bar)
+        for (int slot : { 2, 5, 9, 13 })
+        {
+            if (bar >= 4 && slot > 5 && ! (slot == 9 && (bar & 1)))
+                continue;
+            Note& n = thin.notes[thin.count++];
+            n.start = (float) (bar * 16 + slot);
+            n.length = 1.f;
+            n.chord[0] = (std::int8_t) (bar >= 4 ? 0 : (slot == 9 ? 7 : 0));
+            n.vel = 100;
+        }
+    check (rules::thinRepeatedBackHalf (thin, 8), "back-half guard fires on a thin repeated-root back half");
+    Lane full;
+    rules::composeBass (full, p, 77u);
+    check (! rules::thinRepeatedBackHalf (full, 8), "back-half guard stays quiet on a composed line");
 }
+
+float entropyOf (const float* v, int n)
+{
+    float s = 0.f;
+    for (int i = 0; i < n; ++i)
+        s += v[i];
+    double h = 0.0;
+    for (int i = 0; i < n; ++i)
+        if (v[i] > 0.f)
+            h -= (v[i] / s) * std::log (v[i] / s);
+    return (float) (h / std::log ((double) n));
+}
+
+// The compiled model (RuleTables.h, generated from genre_writing_model.json
+// v1.2): distributions sum to 1, no transition cell over 0.60, every table at
+// or over its entropy floor, single-source voicings gone, stab cap 3.
+void runModelTables()
+{
+    using namespace rules::tables;
+    int bad = 0;
+    std::string why;
+    for (int st = 0; st < kStyles; ++st)
+    {
+        for (int r = 0; r < 12; ++r)
+        {
+            float sb = 0.f, ss = 0.f, mb = 0.f, ms = 0.f;
+            for (int c = 0; c < 12; ++c)
+            {
+                sb += kBassTrans[st][r][c];
+                ss += kStabTrans[st][r][c];
+                mb = std::max (mb, kBassTrans[st][r][c]);
+                ms = std::max (ms, kStabTrans[st][r][c]);
+            }
+            if (std::fabs (sb - 1.f) > 0.002f || std::fabs (ss - 1.f) > 0.002f || mb > kCellCeiling + 1.0e-4f || ms > kCellCeiling + 1.0e-4f
+                || entropyOf (kBassTrans[st][r], 12) < kFloorRowBass - 0.005f || entropyOf (kStabTrans[st][r], 12) < kFloorRowStab - 0.005f)
+            {
+                ++bad;
+                why = std::string (kNames[st]) + " transition row " + std::to_string (r);
+            }
+        }
+        for (int g = 0; g < 3; ++g)
+            if (entropyOf (kBassOnset[st][g], 16) < kFloorOnsetBass - 0.005f)
+            {
+                ++bad;
+                why = std::string (kNames[st]) + " bass onset grid " + std::to_string (g);
+            }
+        for (int g = 0; g < 3; ++g)
+            if (entropyOf (kStabGiven[st][g], 16) < kFloorOnsetStab - 0.005f)
+            {
+                ++bad;
+                why = std::string (kNames[st]) + " stab grid " + std::to_string (g);
+            }
+        float vw = 0.f;
+        for (int v = 0; v < kVoicingCount[st]; ++v)
+        {
+            const auto& V = kStabVoicings[st][v];
+            vw += V.w;
+            // A&R single-source voicings, removed in v1.2.
+            const int shapes[7][4] = { { 0, 2, 3, 7 }, { 0, 4, 7, 11 }, { 0, 1, 3, 11 }, { 0, 1, 3, -1 }, { 0, 5, 9, -1 }, { 0, 10, -1, -1 }, { 0, 11, -1, -1 } };
+            for (const auto& sh : shapes)
+            {
+                int n = 0;
+                while (n < 4 && sh[n] >= 0)
+                    ++n;
+                bool same = n == V.n;
+                for (int i = 0; same && i < n; ++i)
+                    same = V.iv[i] == sh[i];
+                if (same)
+                {
+                    ++bad;
+                    why = std::string (kNames[st]) + " carries a removed single-source voicing";
+                }
+            }
+        }
+        if (std::fabs (vw - 1.f) > 0.003f)
+        {
+            ++bad;
+            why = std::string (kNames[st]) + " voicing weights do not sum to 1";
+        }
+        const float m = kModeWeights[st][0] + kModeWeights[st][1] + kModeWeights[st][2];
+        if (std::fabs (m - 1.f) > 0.002f)
+        {
+            ++bad;
+            why = std::string (kNames[st]) + " mode weights do not sum to 1";
+        }
+    }
+    check (bad == 0 && kStabHitsCap <= 3 && kHatSwingLo >= 0.53f && kHatSwingHi <= 0.57f,
+           "model tables: sums, 0.60 cell ceiling, entropy floors, removed voicings, stab cap 3, swing band", why);
+}
+
+// Composer-level v1.2 checks per style: density near the style median,
+// on-kick share near its target, median length inside the guard band,
+// mutations in the back half, >= 2 pitch classes in bars 5-8, one note per
+// onset, the tonic guard, and stabs with no m2 / m9 against the bass under them.
+void runV12 (int dialect, std::uint32_t base)
+{
+    using namespace rules::tables;
+    double notes = 0.0;
+    double kick = 0.0;
+    int lenOk = 0;
+    int diffBack = 0;
+    int diffAll = 0;
+    int thinBars = 0;
+    int backBars = 0;
+    int dups = 0;
+    int tonicBad = 0;
+    int stabHits = 0;
+    int stabClash = 0;
+    const int rolls = 200;
+    for (int roll = 0; roll < rolls; ++roll)
+    {
+        const std::uint32_t seed = rollSeed (base, roll, dialect);
+        rules::BassParams p;
+        p.dialect = dialect;
+        p.mode = rules::drawMode (dialect, 0.55f, seed);
+        Lane bass;
+        rules::composeBass (bass, p, seed);
+        notes += (double) bass.count / 8.0;
+        kick += rules::kickShare (bass);
+        const float med = rules::medianLength (bass);
+        if (dialect == Pop || (med >= kLenMedLo[dialect] - 0.26f && med <= kLenMedHi[dialect] + 0.01f))
+            ++lenOk;
+        dups += rules::duplicateOnsets (bass);
+        if (! rules::tonicGuardOk (bass, dialect))
+            ++tonicBad;
+        int grid[8][16];
+        for (auto& row : grid)
+            for (int& x : row)
+                x = -1;
+        for (int i = 0; i < bass.count; ++i)
+        {
+            const int st = (int) std::lround (bass.notes[i].start);
+            if (st >= 0 && st < 128)
+                grid[st / 16][st % 16] = pcOf (bass.notes[i].chord[0]);
+        }
+        // Mutations: bars 4-7 against the cell bar of the same parity.
+        for (int b = 3; b < 7; ++b)
+            for (int s = 0; s < 16; ++s)
+                if (grid[b][s] != grid[b & 1][s])
+                {
+                    ++diffAll;
+                    if (s >= 8)
+                        ++diffBack;
+                }
+        for (int b = 4; b < 8; ++b)
+        {
+            int n = 0;
+            int pcs = 0;
+            for (int s = 0; s < 16; ++s)
+                if (grid[b][s] >= 0)
+                {
+                    ++n;
+                    pcs |= 1 << grid[b][s];
+                }
+            ++backBars;
+            if (n >= 1 && (pcs & (pcs - 1)) == 0)
+                ++thinBars;
+        }
+        rules::StabParams sp;
+        sp.dialect = dialect;
+        sp.mode = p.mode;
+        sp.perBar = 3;
+        Lane stab;
+        rules::composeStab (stab, bass, sp, seed ^ 0x5717u);
+        for (int i = 0; i < stab.count; ++i)
+        {
+            ++stabHits;
+            const float t = stab.notes[i].start;
+            for (int k = 0; k < bass.count; ++k)
+            {
+                if (bass.notes[k].start > t + 1.0e-3f || bass.notes[k].start + bass.notes[k].length <= t + 1.0e-3f)
+                    continue;
+                const int bpc = pcOf (bass.notes[k].chord[0]);
+                for (int c = 0; c < stab.notes[i].nChord && c < 4; ++c)
+                {
+                    const int ic = pcOf (stab.notes[i].chord[c] - bpc);
+                    if (ic == 1 || ic == 11)
+                    {
+                        ++stabClash;
+                        c = 4;
+                    }
+                }
+            }
+        }
+    }
+    const double npb = notes / rolls;
+    const double ks = kick / rolls;
+    const double back = diffAll > 0 ? (double) diffBack / diffAll : 1.0;
+    char d[320];
+    std::snprintf (d, sizeof d,
+                   "%s: notes/bar %.2f (median %.1f), on-kick %.3f (target %.2f), length guard %d/%d, back-half share %.2f, "
+                   "one-pitch bars 5-8 %d/%d, dup onsets %d, tonic guard misses %d, stab m2/m9 %d of %d",
+                   kNames[dialect], npb, kBassDensityMedian[dialect], ks, kKickTarget[dialect], lenOk, rolls, back, thinBars, backBars,
+                   dups, tonicBad, stabClash, stabHits);
+    check (npb >= kBassDensityMedian[dialect] - 1.5 && npb <= kBassDensityMedian[dialect] + 1.0, "v1.2 composer density near the style median", d);
+    check (ks <= kKickTarget[dialect] + 0.08 && ks <= 0.35, "v1.2 composer on-kick share near its target, under 35%", d);
+    check (lenOk * 10 >= rolls * 9, "v1.2 median note length inside the guard band in >= 90% of rolls", d);
+    check (back >= kBackHalfShareMin, ">= 60% of bar-to-bar mutations in the back half (slots 9-16)", d);
+    check (thinBars * 20 <= backBars, "bars 5-8 carry >= 2 pitch classes (>= 95% of bars)", d);
+    check (dups == 0, "one note per onset (DUP_NOTES)", d);
+    check (tonicBad == 0, "tonic guard: root most-sounding and the top-2 share held", d);
+    check (stabClash * 50 <= stabHits, "stabs make no m2 / m9 against the sounding bass (<= 2% before the harmony pass)", d);
+}
+
 } // namespace
 
 int main (int argc, char** argv)
 {
-    int fresh = 3;
-    std::vector<std::uint32_t> fixed;
+    std::vector<std::uint32_t> extra;
     for (int i = 1; i < argc; ++i)
     {
-        if (std::strcmp (argv[i], "--fresh") == 0 && i + 1 < argc)
-            fresh = std::atoi (argv[++i]);
-        else if (std::strcmp (argv[i], "--seeds") == 0 && i + 1 < argc)
+        if (std::strcmp (argv[i], "--seeds") == 0 && i + 1 < argc)
         {
             std::string v = argv[++i];
             size_t p = 0;
             while (p < v.size())
             {
                 const size_t q = v.find (',', p);
-                fixed.push_back ((std::uint32_t) std::strtoul (v.substr (p, q - p).c_str(), nullptr, 10));
+                extra.push_back ((std::uint32_t) std::strtoul (v.substr (p, q - p).c_str(), nullptr, 10));
                 if (q == std::string::npos)
                     break;
                 p = q + 1;
@@ -270,27 +573,25 @@ int main (int argc, char** argv)
         }
     }
 
-    std::vector<SeedSet> sets;
-    sets.push_back ({ "gate(base 1)", { 1u } });
-    for (auto s : fixed)
-        sets.push_back ({ "seed " + std::to_string (s), { s } });
-    std::random_device rd;
-    for (int i = 0; i < fresh; ++i)
-    {
-        const std::uint32_t s = rd();
-        sets.push_back ({ "fresh " + std::to_string (s), { s } });
-    }
-    std::printf ("seed sets:");
-    for (const auto& s : sets)
-        std::printf (" %u", s.base[0]);
-    std::printf ("  (replay: --fresh 0 --seeds a,b,c)\n");
-
+    // Fixed bases: the gate bases of the roll tests.
+    const std::uint32_t fixed[] = { 1u, 77u, 913u, 423423u, 20261018u, 2026101852u, 2517220185u };
     runBasics();
-    for (const auto& set : sets)
+    runModelTables();
+    for (int dialect = 0; dialect < NumDialects; ++dialect)
+        runV12 (dialect, 2026101852u);
+    for (int dialect = 0; dialect < NumDialects; ++dialect)
     {
-        runSet (Style::Deep, Long, set);
-        runSet (Style::Jackin, Gaskin, set);
-        runAnswers (set);
+        for (std::uint32_t base : fixed)
+            runSet (dialect, base, "base " + std::to_string (base), kRolls);
+        for (std::uint32_t base : extra)
+            runSet (dialect, base, "seed " + std::to_string (base), kRolls);
+        // Deterministic sweep: 32 more bases, 40 rolls each.
+        for (int k = 0; k < 32; ++k)
+        {
+            const std::uint32_t base = 0x2545F491u * (std::uint32_t) (k + 1) + 0x9E37u;
+            runSet (dialect, base, "sweep " + std::to_string (k), 40);
+        }
+        runStabs (dialect, 2026101852u);
     }
     std::printf ("%s: %d failure(s)\n", failures == 0 ? "OK" : "FAILED", failures);
     return failures == 0 ? 0 : 1;
