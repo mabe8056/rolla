@@ -2344,8 +2344,13 @@
      "m2_min": 0.513
     },
     "kick": {
-     "target_pct": 30.0,
-     "hard_cap_pct": 35
+     "target_pct": 25.0,
+     "hard_cap_pct": 35,
+     "band_pct": [
+      20,
+      28
+     ],
+     "note": "Maestro 655: median 25%, band 20-28%, inside the A&R scorer soft limit (ONKICK_HIGH over 28%)"
     },
     "sounding": {
      "gap_fraction": 0.93,

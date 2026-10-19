@@ -126,6 +126,7 @@ struct Knobs
     float levelDb[rolla::NumParts] {};
     int intensity = 75;
     bool stems = false;
+    bool midiOnly = false;     // --midi-only: write the MIDI and roll.json, no WAV render
     bool styleFolders = false; // --folder-names styles
     unsigned stemMask = 0x7fu; // --stem-lanes picks which stems --stems writes
 
@@ -645,6 +646,11 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
                 std::cerr << "FAIL " << error << "\n";
                 return 1;
             }
+            if (knobs.midiOnly)
+            {
+                std::cout << rolla::dialectId (style) << " " << name.str() << " redraws=" << redraws.total() << " midi-only\n";
+                continue;
+            }
             const auto wav = juce::File (dir.string())
                                  .getChildFile ("ROLLA_" + juce::String (rolla::keyName (settings.key)) + "min_"
                                                 + rolla::dialectId (style) + ".wav");
@@ -694,7 +700,7 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
 const char* usageText()
 {
     return "rolla-rolls --samples DIR --style roller|deep|bouncy|jackin|ukmin|long|pop|all --count N --seed S\n"
-           "            [--out DIR] [--stems] [--stem-lanes DRUMS,BASS] [--folder-names ids|styles]\n"
+           "            [--out DIR] [--stems] [--stem-lanes DRUMS,BASS] [--folder-names ids|styles] [--midi-only]\n"
            "            (style is case-insensitive; folders default to the ids ukmin/long/pop/jackin,\n"
            "            'styles' names them roller/deep/bouncy/jackin)\n"
            "            [--knob DARK=0.55] [--knob BUSY=0.40] [--knob BOUNCE=0.45] [--knob STAB=0.55]\n"
@@ -806,6 +812,7 @@ int main (int argc, char** argv)
             return 0;
         }
         if (arg == "--stems") { knobs.stems = true; batch = true; }
+        else if (arg == "--midi-only") { knobs.midiOnly = true; batch = true; }
         else if (take ("--stem-lanes"))
         {
             // Comma list of BASS,STAB,HITS,PLUCK,PAD,VOX,DRUMS. Implies --stems.

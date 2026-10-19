@@ -254,7 +254,7 @@ inline constexpr float kBassEndBar8[kStyles][12] = {
 };
 inline constexpr float kRepeatM1Max[kStyles] = { 0.735f, 0.667f, 0.751f, 0.1f };
 inline constexpr float kRepeatM2Min[kStyles] = { 0.599f, 0.596f, 0.513f, 0.7f };
-inline constexpr float kKickTarget[kStyles] = { 0.17f, 0.07f, 0.3f, 0.19f }; // share of bass attacks on kick steps
+inline constexpr float kKickTarget[kStyles] = { 0.17f, 0.07f, 0.25f, 0.19f }; // share of bass attacks on kick steps
 inline constexpr float kGapFraction[kStyles] = { 0.81f, 0.79f, 0.93f, 0.83f }; // note length = this x the gap to the next onset
 inline constexpr float kSoundingLo[kStyles] = { 0.79f, 0.74f, 0.85f, 0.79f };
 inline constexpr float kSoundingHi[kStyles] = { 0.9f, 0.84f, 0.975f, 0.9f };
@@ -485,11 +485,15 @@ inline constexpr int kBarCountHi = 8;
 // Bar 2 against bar 1 (the call): keep the call's front half with this P and
 // redraw the back half; JACKIN instead draws bar 2 into the call's silence so
 // the 1-bar repeat stays under its cap.
-inline constexpr float kAnswerKeepFront[kStyles] = { 0.50f, 0.60f, 0.55f, 0.0f };
+inline constexpr float kAnswerKeepFront[kStyles] = { 0.85f, 0.60f, 0.85f, 0.0f };
 inline constexpr float kAnswerCallSlotWeight[kStyles] = { 0.45f, 0.50f, 0.50f, 0.12f };
 inline constexpr float kAnswerSilentBoost[kStyles] = { 1.0f, 1.0f, 1.0f, 1.8f };
+// JACKIN onset weight in the front / back half of the bar (its hook leans into beats 3-4).
+inline constexpr float kJackinBackLean[2] = { 0.50f, 1.50f };
 // P(bar 5 or 6 restates with a back-half mutation).
-inline constexpr float kBackHalfVariation[kStyles] = { 0.55f, 0.65f, 0.60f, 0.40f };
+inline constexpr float kBackHalfVariation[kStyles] = { 0.35f, 0.65f, 0.60f, 0.40f };
+// Smallest density change (notes) that redraws a restated bar's back half (bars 5-7).
+inline constexpr int kRestateDeltaMin[kStyles] = { 2, 1, 1, 1 };
 // P(the call's first onset is the root): an anchor for the tonic guard.
 inline constexpr float kFirstRoot[kStyles] = { 0.65f, 0.70f, 0.80f, 0.55f };
 // DARK tilt: bright boosts the 5th, dark the b3 and the 2nd / b2.

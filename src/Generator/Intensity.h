@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Generator.h"
 #include "Pattern.h"
 
 #include <cstdio>
@@ -267,6 +268,10 @@ inline void applyIntensity (const Groove& src, Groove& dst, const IntensityPlan&
             intensity_detail::oddLoop (arranged, loop, bars);
         dst.lane[part] = arranged;
     }
+    // The arrangement moves lanes against each other (bars copied per lane, odd
+    // loops): the upper lanes give way to the bass that now sounds under them.
+    // Kept lanes stay as they are.
+    giveWayToBass (dst, keepMask);
 }
 
 } // namespace rolla

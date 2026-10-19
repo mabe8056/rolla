@@ -346,6 +346,9 @@ void testEarReview()
     int pulseN = 0;
     double popOct = 0;
     int popN = 0;
+    double bounceOct = 0;
+    int bounceN = 0;
+    double pulseOctMax = 0;
     std::set<std::string> jackinRhythms;
     double jackinLen = 0;
     int jackinStabs = 0;
@@ -445,6 +448,14 @@ void testEarReview()
                 }
                 if (moves > 0)
                     popOct += 100.0 * oct / moves;
+                // A&R lane F7 per roll: bounce 15-26% octave moves, pulse 0-8.5%.
+                if (moves > 0 && g.bassMode == rolla::BassModePulse)
+                    pulseOctMax = std::max (pulseOctMax, 100.0 * oct / moves);
+                else if (moves > 0)
+                {
+                    bounceOct += 100.0 * oct / moves;
+                    ++bounceN;
+                }
                 if (g.bassMode == rolla::BassModePulse)
                 {
                     ++pulseN;
@@ -485,8 +496,13 @@ void testEarReview()
     if (brightN > 0)
         std::cout << "DEEP bright " << brightN << "/20 npb " << (brightNpb / brightN) << "\n";
     if (popN > 0)
-        std::cout << "BOUNCY octave moves " << (popOct / popN) << "%  pulse-length rolls " << pulseN << "/20\n";
-    expect (popN > 0 && popOct / popN >= 15.0 && popOct / popN <= 30.0, "BOUNCY octaves land in 15-30%");
+        std::cout << "BOUNCY octave moves " << (popOct / popN) << "% (bounce mean "
+                  << (bounceN > 0 ? bounceOct / bounceN : 0.0) << "%, pulse max " << pulseOctMax
+                  << "%)  pulse-length rolls " << pulseN << "/20\n";
+    // Per mode, as the A&R lane F7 reads a roll: bounce 15-26%, pulse 0-8.5%.
+    expect (bounceN > 0 && bounceOct / bounceN >= 15.0 && bounceOct / bounceN <= 26.0,
+            "BOUNCY bounce octaves land in 15-26%");
+    expect (pulseOctMax <= 8.5, "BOUNCY pulse octaves stay at or under 8.5%");
     expect (pulseN >= 3, "BOUNCY has a pulse mode");
     expect (jackinRhythms.size() >= 18, "JACKIN 8-bar rhythms are almost all distinct");
     expect (flavour[0] > 0 && flavour[1] > 0 && flavour[2] > 0 && flavour[3] > 0, "JACKIN uses all four flavours");
@@ -935,11 +951,15 @@ void testAr423Bass()
 {
     const std::uint32_t base = 423423u;
     const char* names[] = { "ROLLER", "DEEP", "BOUNCY", "JACKIN" };
-    const double target[] = { 0.17, 0.07, 0.32, 0.19 };
+    // BOUNCY: Maestro 655, median 25% inside a 20-28% band (A&R soft limit 28%).
+    const double target[] = { 0.17, 0.07, 0.25, 0.19 };
     for (int style = 0; style < 4; ++style)
     {
         int onsets = 0;
         int onKick = 0;
+        int pulseOnsets = 0;
+        int pulseKick = 0;
+        double bounceMaxKick = 0.0;
         double sndSum = 0.0;
         double sndMin = 1.0;
         for (int roll = 0; roll < 20; ++roll)
@@ -970,6 +990,13 @@ void testAr423Bass()
             }
             onsets += rollOn;
             onKick += rollKick;
+            if (style == rolla::Pop && g.bassMode == rolla::BassModePulse)
+            {
+                pulseOnsets += rollOn;
+                pulseKick += rollKick;
+            }
+            else if (style == rolla::Pop && rollOn > 0)
+                bounceMaxKick = std::max (bounceMaxKick, (double) rollKick / rollOn);
             const double snd = loop > 0.0 ? held / loop : 0.0;
             sndSum += snd;
             sndMin = std::min (sndMin, snd);
@@ -998,6 +1025,16 @@ void testAr423Bass()
                   << (100.0 * target[style]) << "%) sounding mean " << (sndSum / 20.0) << " min " << sndMin << "\n";
         expect (std::abs (share - target[style]) <= 0.10,
                 std::string (names[style]) + " bass on-kick share within 10 points of the reference");
+        if (style == rolla::Pop)
+        {
+            // Maestro 655: BOUNCY on the kick inside the A&R lanes, per mode. The
+            // pulse rolls carry the kick (20-28%, the soft limit 28%); the bounce
+            // lane wants 85% off the kick, so bounce rolls stay at 15% or under.
+            expect (pulseOnsets == 0 || (pulseKick >= 0.20 * pulseOnsets - 1.0e-6 && pulseKick <= 0.28 * pulseOnsets + 1.0e-6),
+                    "BOUNCY pulse bass on-kick share in 20-28% (" + std::to_string (pulseOnsets > 0 ? 100.0 * pulseKick / pulseOnsets : 0.0) + "%)");
+            expect (bounceMaxKick <= 0.15 + 1.0e-6,
+                    "BOUNCY bounce rolls keep the bass on the kick at 15% or under (max " + std::to_string (100.0 * bounceMaxKick) + "%)");
+        }
         expect (share <= 0.35, std::string (names[style]) + " bass on-kick share <= 35%");
     }
 }
