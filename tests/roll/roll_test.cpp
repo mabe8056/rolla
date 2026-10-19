@@ -25,12 +25,16 @@
 #include <intrin.h>
 #endif
 
-// JUCE builds with modal loops off, so MessageManager::runDispatchLoopUntil is not in the
-// library. The roll and shuffle handlers post to the message queue; this drains it.
+// The roll and shuffle handlers post to the message queue; pumpUntil drains it.
+// Linux uses the internal hook. macOS and Windows use
+// MessageManager::runDispatchLoopUntil, which needs JUCE_MODAL_LOOPS_PERMITTED=1
+// (set for this target in CMakeLists.txt).
+#if JUCE_LINUX
 namespace juce::detail
 {
 bool dispatchNextMessageOnSystemQueue (bool returnIfNoPendingMessages);
 }
+#endif
 
 namespace
 {
@@ -71,8 +75,12 @@ bool pumpUntil (const std::function<bool()>& done)
     const auto start = juce::Time::getMillisecondCounter();
     while (! done() && juce::Time::getMillisecondCounter() - start < 5000)
     {
+#if JUCE_LINUX
         if (! juce::detail::dispatchNextMessageOnSystemQueue (true))
             juce::Thread::sleep (1);
+#else
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (2);
+#endif
     }
     return done();
 }
