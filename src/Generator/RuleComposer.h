@@ -18,7 +18,8 @@
 //     0.60) at run time, before the mode mask;
 //   - stabs placed by P(stab onset | bass state) with the gap weight, at most
 //     3 hits a bar, voicings from the chord-quality palette that are in the
-//     mode and make no m2 / m9 with the bass under them.
+//     mode and make no m2 / m9 with the bass under them (so a stab on a bass
+//     attack agrees with that note).
 // No JUCE. Same seed + same parameters -> same lane.
 //
 // Pitches follow the Lane convention: chord[0] is semitones from the key root.
@@ -87,6 +88,13 @@ int composeBass (Lane& lane, const BassParams& p, std::uint32_t seed);
 // returns a pitch class (0..11) in the mode. Deterministic in `hash`.
 int sampleDegreeSemis (int dialect, int mode, int prevSemi, std::uint32_t hash) noexcept;
 
+// One onset slot (0..15) for the style's bass, drawn from the model's per-16th
+// onset weights for bar group `group` (0 body, 1 bar 4, 2 bar 8) after the
+// per-roll kick weighting and entropy floor. Only slots with allowed[s] can be
+// drawn; -1 if none is allowed. The rewrite passes use this instead of fixed
+// slot lists. Deterministic in `hash`.
+int sampleBassSlot (int dialect, int group, const bool* allowed, std::uint32_t hash) noexcept;
+
 struct StabParams
 {
     int dialect = UkMin;
@@ -102,7 +110,8 @@ struct StabParams
 };
 
 // Stabs placed against `bass`: per bar the style's gap / sustain / onset
-// shares (never on a bass attack outside BOUNCY, never on a kick step), slots
+// shares (the model's, so a stab can land on a bass attack; beats up to the style's
+// on-beat ceiling), slots
 // weighted by the model's P(stab onset | bass state) with the gap weight and
 // the answer after a bass phrase end. Two voicings per roll (one per bar
 // parity), in the mode, with no m2 / m9 against the bass under their hits.

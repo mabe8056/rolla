@@ -19,6 +19,31 @@ namespace rolla
 namespace
 {
 
+// The roll being written (set at the top of generateOnce). The rewrite passes
+// draw every pitch they change from the style's model under this mode, so no
+// pass carries a fixed degree list of its own.
+struct RollCtx
+{
+    int dialect = UkMin;
+    int mode = 1; // phrase::Aeolian
+};
+thread_local RollCtx tRoll;
+
+// A pitch class from the style's first-order degree table, one step from
+// prevPc, in the roll's mode, never one in `avoid` (bit pc). -1 if 12 draws
+// find none.
+int drawPc (int prevPc, unsigned avoid, std::uint32_t hash)
+{
+    for (int t = 0; t < 12; ++t)
+    {
+        const int pc = rules::sampleDegreeSemis (tRoll.dialect, tRoll.mode, ((prevPc % 12) + 12) % 12,
+                                                 (hash ? hash : 1u) * 0x9E3779B1u + 0x632BE5ABu * (std::uint32_t) (t + 1));
+        if ((avoid & (1u << pc)) == 0u)
+            return pc;
+    }
+    return -1;
+}
+
 constexpr int kLoop = 8 * 16;
 
 int clampi (int v, int lo, int hi) noexcept
@@ -261,9 +286,20 @@ float rootShareOf (const Lane& lane) noexcept
     return tot > 0.f ? root / tot : 0.f;
 }
 
-void fitRootShare (Lane& lane, float lo, float hi, std::uint32_t seed)
+// A non-root pitch class drawn from the style's degree table under the mode.
+int sampleColour (int dialect, int mode, std::uint32_t hash)
 {
-    static const int colours[] = { 3, 7, 10, 8, 5, 2 };
+    for (int t = 0; t < 6; ++t)
+    {
+        const int pc = rules::sampleDegreeSemis (dialect, mode, 0, hash * 0x9E3779B1u + (std::uint32_t) t);
+        if (pc != 0)
+            return pc;
+    }
+    return 7;
+}
+
+void fitRootShare (Lane& lane, float lo, float hi, std::uint32_t seed, int dialect, int mode)
+{
     int guard = 0;
     while (rootShareOf (lane) > hi && guard++ < lane.count)
     {
@@ -283,7 +319,7 @@ void fitRootShare (Lane& lane, float lo, float hi, std::uint32_t seed)
         }
         if (best < 0 || roots <= 1)
             break;
-        lane.notes[best].chord[0] = (std::int8_t) colours[(seed + (std::uint32_t) guard) % 6u];
+        lane.notes[best].chord[0] = (std::int8_t) sampleColour (dialect, mode, (seed ^ 0xC010Fu) + (std::uint32_t) guard);
     }
     guard = 0;
     while (rootShareOf (lane) < lo && guard++ < lane.count)
@@ -319,7 +355,6 @@ void densifyDeepDark (Lane& lane, int bars, std::uint32_t seed, int mode)
         if (st >= 0 && st < bars * 16 && st / 16 < 8)
             used[st / 16][st % 16] = true;
     }
-    static const int slots[] = { 1, 2, 3, 5, 6, 7, 9, 10, 11, 13, 14, 15 };
     const int last = std::min (bars, 8) - 1;
     for (int bar = 0; bar < bars && bar < 8; ++bar)
     {
@@ -331,22 +366,17 @@ void densifyDeepDark (Lane& lane, int bars, std::uint32_t seed, int mode)
         int target = 6 + (int) (((seed >> (bar & 3)) + (std::uint32_t) bar) % 2u);
         if (bar == last)
             target = std::min (target, 6);
-        const int spin = (int) ((seed + (std::uint32_t) bar * 3u) % 12u);
         int guard = 0;
         while (have < target && lane.count < kMaxNotes && guard++ < 16)
         {
-            int slot = -1;
-            for (int t = 0; t < 12; ++t)
-            {
-                const int s = slots[(spin + t) % 12];
-                if (bar == last && s >= 12)
-                    continue;
-                if (! used[bar][s])
-                {
-                    slot = s;
-                    break;
-                }
-            }
+            // Fill slots come from the model's DEEP onset weights (off the kick
+            // steps; the turn bar keeps its last beat free).
+            bool allowed[16];
+            for (int s = 0; s < 16; ++s)
+                allowed[s] = ! used[bar][s] && ! kickSlot (s) && ! (bar == last && s >= 12);
+            const int group = bar == last ? 2 : (bar == 3 ? 1 : 0);
+            const int slot = rules::sampleBassSlot (Long, group, allowed,
+                                                    (seed ^ 0xD3F1u) * 0x9E3779B1u + (std::uint32_t) (bar * 32 + guard));
             if (slot < 0)
                 break;
             used[bar][slot] = true;
@@ -401,9 +431,8 @@ void densifyDeepDark (Lane& lane, int bars, std::uint32_t seed, int mode)
                [] (const Note& a, const Note& b) { return a.start < b.start; });
 }
 
-void moveJackinNote (Lane& lane, int bars, int parity, int want, std::uint32_t salt)
+void moveJackinNote (Lane& lane, int bars, int parity, std::uint32_t salt)
 {
-    static const int pool[] = { 1, 2, 3, 5, 6, 7, 9, 10, 11, 13 };
     const int turn = std::min (bars, 8) - 1;
     for (int b = parity; b < bars && b < 8; b += 2)
     {
@@ -423,19 +452,11 @@ void moveJackinNote (Lane& lane, int bars, int parity, int want, std::uint32_t s
             if (slot >= 1 && slot <= 13 && ! kickSlot (slot))
                 movable[n++] = i;
         }
-        int dest = (want >= 0 && want < 16 && ! kickSlot (want) && ! used[want]) ? want : -1;
-        if (dest < 0)
-        {
-            for (int t = 0; t < 10; ++t)
-            {
-                const int s = pool[((want < 0 ? -want : want) + t + (int) (salt % 7u)) % 10];
-                if (! used[s])
-                {
-                    dest = s;
-                    break;
-                }
-            }
-        }
+        // The destination is drawn from the model's JACKIN onset weights.
+        bool allowed[16];
+        for (int s = 0; s < 16; ++s)
+            allowed[s] = s >= 1 && s <= 13 && ! kickSlot (s) && ! used[s];
+        const int dest = rules::sampleBassSlot (Gaskin, b == 3 ? 1 : 0, allowed, salt * 0x9E3779B1u + (std::uint32_t) b);
         int src = -1;
         for (int k = n - 1; k >= 0; --k)
         {
@@ -455,20 +476,19 @@ void moveJackinNote (Lane& lane, int bars, int parity, int want, std::uint32_t s
 
 void diversifyJackin (Lane& lane, int bars, std::uint32_t seed)
 {
-    static const int pool[] = { 1, 2, 3, 5, 6, 7, 9, 10, 11, 13 };
-    auto pick = [&] (int shift) { return pool[((seed >> shift) ^ seed) % 10u]; };
-    moveJackinNote (lane, bars, 0, pick (0), seed);
-    moveJackinNote (lane, bars, 0, pick (4), seed + 1u);
-    moveJackinNote (lane, bars, 1, pick (8), seed + 2u);
-    moveJackinNote (lane, bars, 1, pick (12), seed + 3u);
+    moveJackinNote (lane, bars, 0, seed);
+    moveJackinNote (lane, bars, 0, seed + 1u);
+    moveJackinNote (lane, bars, 1, seed + 2u);
+    moveJackinNote (lane, bars, 1, seed + 3u);
     std::sort (lane.notes, lane.notes + lane.count,
                [] (const Note& a, const Note& b) { return a.start < b.start; });
 }
 
+// JACKIN's dotted flavour (A&R: >= 55% of attacks on the dotted grid 0/3/6/9/12/15)
+// is a statistical lean: off-grid attacks move to dotted-grid positions drawn by
+// the model's JACKIN onset weights. No fixed cell or order.
 void leanJackinDotted (Lane& lane, int bars, std::uint32_t seed)
 {
-    static const int dotted[] = { 3, 6, 9, 15 };
-    const int rot = (int) (seed % 4u);
     const int turn = std::min (bars, 8) - 1;
     for (int b = 0; b < bars && b < 8; ++b)
     {
@@ -494,16 +514,11 @@ void leanJackinDotted (Lane& lane, int bars, std::uint32_t seed)
         int guard = 0;
         while (n > 0 && dots * 5 < n * 3 && guard++ < 4)
         {
-            int dest = -1;
-            for (int t = 0; t < 4; ++t)
-            {
-                const int s = dotted[(rot + (b & 1) + t) % 4];
-                if (! used[s])
-                {
-                    dest = s;
-                    break;
-                }
-            }
+            bool allowed[16] {};
+            for (int s : { 3, 6, 9, 15 })
+                allowed[s] = ! used[s];
+            const int dest = rules::sampleBassSlot (Gaskin, b == 3 ? 1 : 0, allowed,
+                                                    (seed ^ 0xD077u) * 0x9E3779B1u + (std::uint32_t) (b * 8 + guard));
             if (dest < 0)
                 break;
             int src = -1;
@@ -527,24 +542,33 @@ void leanJackinDotted (Lane& lane, int bars, std::uint32_t seed)
     }
 }
 
-void ensureColour (Lane& lane)
+// The line carries at least two colours besides the root (A&R F2: 2-5 pitch
+// classes). Missing colours are drawn from the model and replace the latest roots.
+void ensureColour (Lane& lane, std::uint32_t seed)
 {
-    const int need[] = { 3, 7, 10 };
-    for (int want : need)
+    for (int k = 0; k < 3; ++k)
     {
-        bool has = false;
+        unsigned present = 0u;
         for (int i = 0; i < lane.count; ++i)
-            if (pcOf (lane.notes[i].chord[0]) == want)
-                has = true;
-        if (has)
-            continue;
-        for (int i = lane.count - 1; i >= 1; --i)
-        {
-            if (pcOf (lane.notes[i].chord[0]) != 0)
-                continue;
-            lane.notes[i].chord[0] = (std::int8_t) want;
-            break;
-        }
+            present |= 1u << pcOf (lane.notes[i].chord[0]);
+        int colours = 0;
+        for (int pc = 1; pc < 12; ++pc)
+            if (present & (1u << pc))
+                ++colours;
+        if (colours >= 2)
+            return;
+        const int want = drawPc (0, present | 1u, (seed ^ 0xC0105u) + (std::uint32_t) k);
+        if (want < 0)
+            return;
+        bool done = false;
+        for (int i = lane.count - 1; i >= 1 && ! done; --i)
+            if (pcOf (lane.notes[i].chord[0]) == 0)
+            {
+                lane.notes[i].chord[0] = (std::int8_t) want;
+                done = true;
+            }
+        if (! done)
+            return;
     }
 }
 
@@ -601,10 +625,10 @@ void styleJackinBass (Lane& lane, int bars, std::uint32_t seed, int mode)
     diversifyJackin (lane, bars, seed);
     if (flavour == 0)
         leanJackinDotted (lane, bars, seed);
-    ensureColour (lane);
+    ensureColour (lane, seed);
     if (flavour == 1)
         paintFlat2 (lane);
-    fitRootShare (lane, 0.40f, 0.72f, seed);
+    fitRootShare (lane, 0.40f, 0.72f, seed, Gaskin, mode);
 }
 
 void enforceMonophonic (Lane& lane)
@@ -643,7 +667,8 @@ void enforceMonophonic (Lane& lane)
     lane.count = w;
 }
 
-// Banned REF_R5 figure: a root on the 2nd and 4th 16th of the bar.
+// No root on both the 2nd and the 4th 16th of a bar: the later one takes a
+// colour drawn from the model.
 void avoidRootTwoFour (Lane& lane)
 {
     for (int b = 0; b < 8; ++b)
@@ -663,7 +688,10 @@ void avoidRootTwoFour (Lane& lane)
                 at3 = i;
         }
         if (at1 >= 0 && at3 >= 0)
-            lane.notes[at3].chord[0] = (std::int8_t) ((b & 1) ? 3 : 10);
+        {
+            const int pc = drawPc (0, 1u, 0xA2F4u + (std::uint32_t) b * 0x9E37u);
+            lane.notes[at3].chord[0] = (std::int8_t) (pc > 0 ? pc : 3);
+        }
     }
 }
 
@@ -746,63 +774,37 @@ void paintOctaveShare (Lane& lane, std::uint32_t seed, float share = 0.20f)
     }
 }
 
-// `want` (4-6) off-kick slots, two 16ths apart where the bag allows, drawn from
-// the seed. The last bar stops by slot 9 so its turn rest stays silent.
+// `want` (4-6) off-kick slots, two 16ths apart where possible, drawn one by one
+// from the model's BOUNCY onset weights (bar group: body, or the turn bar, which
+// stops by slot 9 so its turn rest stays silent). False if `want` can't be met.
 bool pickPulseSlots (int* out, std::uint32_t h, bool turn, int want)
 {
     want = clampi (want, 1, 6);
-    const int poolFull[] = { 1, 2, 3, 5, 6, 7, 9, 10, 11, 13, 14, 15 };
-    const int poolTurn[] = { 1, 2, 3, 5, 6, 7, 9 };
-    const int* pool = turn ? poolTurn : poolFull;
-    const int nPool = turn ? 7 : 12;
-    int bag[12];
-    for (int i = 0; i < nPool; ++i)
-        bag[i] = pool[i];
-    for (int i = nPool - 1; i > 0; --i)
-    {
-        h = h * 0x9E3779B1u + 0x85EBCA6Bu;
-        const int j = (int) (h % (std::uint32_t) (i + 1));
-        std::swap (bag[i], bag[j]);
-    }
     int picked[6];
     int n = 0;
     for (int gap = 2; gap >= 1 && n < want; --gap)
-    {
-        for (int i = 0; i < nPool && n < want; ++i)
+        for (int guard = 0; guard < 24 && n < want; ++guard)
         {
-            bool ok = true;
-            for (int k = 0; k < n; ++k)
-                if (std::abs (bag[i] - picked[k]) < gap)
-                    ok = false;
-            if (! ok)
-                continue;
-            bool already = false;
-            for (int k = 0; k < n; ++k)
-                if (picked[k] == bag[i])
-                    already = true;
-            if (! already)
-                picked[n++] = bag[i];
+            bool allowed[16];
+            for (int sl = 0; sl < 16; ++sl)
+            {
+                bool ok = ! kickSlot (sl) && ! (turn && sl > 9);
+                for (int k = 0; k < n && ok; ++k)
+                    if (std::abs (sl - picked[k]) < gap)
+                        ok = false;
+                allowed[sl] = ok;
+            }
+            h = h * 0x9E3779B1u + 0x85EBCA6Bu;
+            const int pick = rules::sampleBassSlot (Pop, turn ? 2 : 0, allowed, h);
+            if (pick < 0)
+                break;
+            picked[n++] = pick;
         }
-    }
     if (n < want)
         return false;
     std::sort (picked, picked + want);
     for (int k = 0; k < want; ++k)
         out[k] = picked[k];
-    // The dotted-pulse sets are a soft ban when most bars land on them.
-    auto nearBanned = [&] (std::initializer_list<int> banned)
-    {
-        int inter = 0;
-        for (int s : banned)
-            for (int k = 0; k < want; ++k)
-                if (out[k] == s)
-                    ++inter;
-        const int uni = want + (int) banned.size() - inter;
-        return uni > 0 && inter * 4 >= uni * 3;
-    };
-    if (nearBanned ({ 0, 3, 6, 9, 12 }) || nearBanned ({ 0, 3, 6, 9, 12, 14 })
-        || nearBanned ({ 0, 3, 6, 8, 9, 12, 14 }))
-        return false;
     return true;
 }
 
@@ -817,9 +819,11 @@ void makePulse (Lane& lane, int bars, std::uint32_t seed)
     constexpr int kBody = 6;
     constexpr int kTurn = 5;
     const std::uint32_t h = (seed ? seed : 1u) * 0x9E3779B1u;
-    int even[kBody] = { 1, 3, 6, 9, 11, 14 };
-    int odd[kBody] = { 2, 5, 7, 10, 13, 15 };
-    int turn[kBody] = { 1, 3, 5, 7, 9, 0 };
+    // Every grid is drawn from the model; with 12 off-kick slots and a one-16th
+    // fallback spacing a draw always completes, so there is no fixed default.
+    int even[kBody] {};
+    int odd[kBody] {};
+    int turn[kBody] {};
     for (int t = 0; t < 8; ++t)
         if (pickPulseSlots (even, h + (std::uint32_t) t * 17u, false, kBody))
             break;
@@ -874,18 +878,10 @@ void makePulse (Lane& lane, int bars, std::uint32_t seed)
             // octave: pulse keeps octave moves at or under 8% (Composer).
             if (havePrev && pcOf (nte.chord[0]) == pcOf (prevPitch))
             {
-                static const int kAnswer[] = { 7, 3, 10, 5 };
                 const int prevPc = pcOf (prevPitch);
-                const int pick = (int) ((h + (std::uint32_t) (bar * 8 + k)) % 4u);
-                for (int a = 0; a < 4; ++a)
-                {
-                    const int c = kAnswer[(pick + a) % 4];
-                    if (c != prevPc)
-                    {
-                        nte.chord[0] = (std::int8_t) c;
-                        break;
-                    }
-                }
+                const int c = drawPc (prevPc, 1u << prevPc, h + (std::uint32_t) (bar * 8 + k));
+                if (c >= 0)
+                    nte.chord[0] = (std::int8_t) c;
             }
             prevPitch = nte.chord[0];
             havePrev = true;
@@ -963,12 +959,9 @@ void ensureBar8Turn (Lane& lane, int bars, std::uint32_t seed)
         const int st = (int) std::lround (lane.notes[i].start);
         if (st / 16 != 7 || st % 16 >= 12)
             continue;
-        static const int alt[] = { 3, 10, 7, 5 };
-        const int d = alt[(seed + (std::uint32_t) st) % 4u];
-        if (pcOf (lane.notes[i].chord[0]) == d)
-            lane.notes[i].chord[0] = 0;
-        else
-            lane.notes[i].chord[0] = (std::int8_t) d;
+        const int cur = pcOf (lane.notes[i].chord[0]);
+        const int d = drawPc (cur, 1u << cur, (seed ^ 0xB8u) + (std::uint32_t) st);
+        lane.notes[i].chord[0] = (std::int8_t) (d >= 0 ? d : 0);
         break;
     }
 }
@@ -983,20 +976,23 @@ bool noteInOctave (const Lane& lane, int i) noexcept
     return false;
 }
 
-// D has to be the most-sounding bass pitch. Eb and E are passing tones:
-// short, and never the note the key reader could mistake for the tonic.
+// The tonic has to be the most-sounding bass pitch. The b2 and the 2 are passing
+// tones: short, and never the note a key reader could mistake for the tonic.
 void anchorPopRoot (Lane& lane, std::uint32_t seed)
 {
     if (lane.count <= 0)
         return;
     std::sort (lane.notes, lane.notes + lane.count,
                [] (const Note& a, const Note& b) { return a.start < b.start; });
-    static const int colour[] = { 3, 7, 10, 5, 8 };
     for (int i = 0; i < lane.count; ++i)
     {
         const int pc = pcOf (lane.notes[i].chord[0]);
         if ((pc == 1 || pc == 2) && lane.notes[i].length > 1.15f && ! noteInOctave (lane, i))
-            lane.notes[i].chord[0] = (std::int8_t) colour[(seed + (std::uint32_t) i) % 5u];
+        {
+            const int c = drawPc (pc, 0x7u, (seed ^ 0xA9C0u) + (std::uint32_t) i);
+            if (c >= 0)
+                lane.notes[i].chord[0] = (std::int8_t) c;
+        }
     }
     auto timeOf = [&] (int want) -> float
     {
@@ -1064,7 +1060,8 @@ void anchorPopRoot (Lane& lane, std::uint32_t seed)
         }
         if (best < 0 || roots <= 1)
             break;
-        lane.notes[best].chord[0] = (std::int8_t) colour[(seed + (std::uint32_t) guard) % 5u];
+        const int c = drawPc (0, 1u, (seed ^ 0xA9C1u) + (std::uint32_t) guard);
+        lane.notes[best].chord[0] = (std::int8_t) (c > 0 ? c : 7);
     }
 }
 
@@ -1088,7 +1085,6 @@ void contrastCallAnswer (Lane& lane, int bars)
 {
     if (bars < 2 || lane.count <= 0)
         return;
-    static const int deg[] = { 0, 3, 7, 10, 2, 5, 8, 1 };
     const int last = std::min (bars, 8) - 1;
     for (int pass = 0; pass < 3; ++pass)
     {
@@ -1118,16 +1114,9 @@ void contrastCallAnswer (Lane& lane, int bars)
                 if (cover >= 0)
                 {
                     const int cur = pcOf (lane.notes[cover].chord[0]);
-                    int want = cur;
-                    for (int t = 0; t < 8; ++t)
-                    {
-                        const int d = deg[(cur + 1 + t + pass) % 8];
-                        if (d != p0)
-                        {
-                            want = d;
-                            break;
-                        }
-                    }
+                    const int d = drawPc (cur, (1u << cur) | (p0 >= 0 ? 1u << p0 : 0u),
+                                          0xCA11u + (std::uint32_t) (pass * 4096 + b * 16 + s));
+                    const int want = d >= 0 ? d : cur;
                     if (want != cur)
                     {
                         const int reg = (int) lane.notes[cover].chord[0] - cur;
@@ -1159,15 +1148,9 @@ void contrastCallAnswer (Lane& lane, int bars)
                         if (pcOf (lane.notes[best].chord[0]) == p0)
                         {
                             const int cur = pcOf (lane.notes[best].chord[0]);
-                            for (int t = 0; t < 8; ++t)
-                            {
-                                const int d = deg[(cur + 3 + t) % 8];
-                                if (d != p0)
-                                {
-                                    lane.notes[best].chord[0] = (std::int8_t) d;
-                                    break;
-                                }
-                            }
+                            const int d = drawPc (cur, (1u << cur) | (1u << p0), 0xCA12u + (std::uint32_t) (pass * 4096 + abs1));
+                            if (d >= 0)
+                                lane.notes[best].chord[0] = (std::int8_t) d;
                         }
                         changed = true;
                     }
@@ -1258,9 +1241,9 @@ int pickJackinHook (const Lane& lane, int bars) noexcept
     return best;
 }
 
-// B4: the last onset of bar 4 takes another pitch the hook plays (JACKIN is
-// phrygian, never the b2 here, never a pitch bar 2 has within one 16th of
-// that slot), so bar 4 answers bar 2 and the rest of the bar repeats.
+// B4: the last onset of bar 4 takes another pitch, drawn from the model in the
+// roll's mode (one the hook plays where possible, never a pitch bar 2 has within
+// one 16th of that slot), so bar 4 answers bar 2 and the rest of the bar repeats.
 void answerJackinBar4 (Lane& lane, std::uint32_t seed)
 {
     const int dst = 3;
@@ -1284,22 +1267,20 @@ void answerJackinBar4 (Lane& lane, std::uint32_t seed)
         if (bar == 0 || bar == 1)
             inHook[pc] = true;
     }
-    static const int alt[] = { 3, 10, 7, 8, 5, 0 };
-    const int spin = (int) (((seed ? seed : 1u) >> 4) % 6u);
-    int want = -1;
-    for (int pass = 0; pass < 2 && want < 0; ++pass)
-        for (int t = 0; t < 6 && want < 0; ++t)
-        {
-            const int d = alt[(spin + t) % 6];
-            if (d == oldPc || near[d] || ! phrase::inMode (d, phrase::Phrygian))
-                continue;
-            if (pass == 0 && ! inHook[d])
-                continue;
-            // Root on slot 1 or 3 is half of the banned reaction figure.
-            if (d == 0 && (slot == 1 || slot == 3))
-                continue;
-            want = d;
-        }
+    unsigned avoid = 1u << oldPc;
+    for (int pc = 0; pc < 12; ++pc)
+        if (near[pc])
+            avoid |= 1u << pc;
+    // A root on 16th 2 or 4 would pair with avoidRootTwoFour's rule.
+    if (slot == 1 || slot == 3)
+        avoid |= 1u;
+    unsigned notHook = 0u;
+    for (int pc = 0; pc < 12; ++pc)
+        if (! inHook[pc])
+            notHook |= 1u << pc;
+    int want = drawPc (oldPc, avoid | notHook, (seed ? seed : 1u) ^ 0xB4A1u);
+    if (want < 0)
+        want = drawPc (oldPc, avoid, (seed ? seed : 1u) ^ 0xB4A2u);
     if (want < 0)
         return;
     int delta = want - oldPc;
@@ -1380,13 +1361,12 @@ void loopJackinBass (Lane& lane, int bars, std::uint32_t seed)
             lane.notes[i].length = std::max (0.25f, room);
     }
     // Same share and hash as differBar4, so the bar-4 answer rate is unchanged.
-    if (nb >= 8 && (((seed ? seed : 1u) * 0xC2B2AE35u) % 100u) < 58u)
+    if (nb >= 8 && (float) (((seed ? seed : 1u) * 0xC2B2AE35u) % 1000u) < 1000.f * rules::tables::kBar4AnswerProb[std::clamp ((int) Gaskin, 0, rules::tables::kStyles - 1)])
         answerJackinBar4 (lane, seed);
 }
 
 void softenFifths (Lane& lane, std::uint32_t seed)
 {
-    static const int alt[] = { 3, 10, 2, 5 };
     int guard = 0;
     while (guard++ < lane.count)
     {
@@ -1401,7 +1381,8 @@ void softenFifths (Lane& lane, std::uint32_t seed)
         {
             if (pcOf (lane.notes[i].chord[0]) != 7)
                 continue;
-            lane.notes[i].chord[0] = (std::int8_t) alt[(seed + (std::uint32_t) guard + (std::uint32_t) i) % 4u];
+            const int d = drawPc (7, (1u << 7) | 1u, seed + (std::uint32_t) guard * 977u + (std::uint32_t) i);
+            lane.notes[i].chord[0] = (std::int8_t) (d >= 0 ? d : 3);
             changed = true;
             break;
         }
@@ -1450,7 +1431,7 @@ void differBar4 (Lane& lane, int bars, std::uint32_t seed)
         return;
     // Just over half the rolls. A pitch-class change is what the token test counts;
     // a one-slot slide with the same pitch still matches.
-    const bool answer = (((seed ? seed : 1u) * 0xC2B2AE35u) % 100u) < 58u;
+    const bool answer = (float) (((seed ? seed : 1u) * 0xC2B2AE35u) % 1000u) < 1000.f * rules::tables::kBar4AnswerProb[std::clamp (tRoll.dialect, 0, rules::tables::kStyles - 1)];
     const int srcBar = 1;
     const int dstBar = 3;
     if (dstBar >= bars)
@@ -1548,13 +1529,14 @@ void differBar4 (Lane& lane, int bars, std::uint32_t seed)
             if (std::abs (st % 16 - slot) <= 1)
                 near[pcOf (lane.notes[i].chord[0])] = true;
         }
-        static const int alt[] = { 3, 10, 7, 8, 5, 0 };
         const int oldPc = pcOf (lane.notes[ni].chord[0]);
-        for (int t = 0; t < 6; ++t)
+        unsigned avoid = 1u << oldPc;
+        for (int pc = 0; pc < 12; ++pc)
+            if (near[pc])
+                avoid |= 1u << pc;
+        const int d = drawPc (oldPc, avoid, (seed >> 4) ^ 0xD4B4u);
+        if (d >= 0)
         {
-            const int d = alt[(int) (((seed >> 4) + (std::uint32_t) t) % 6u)];
-            if (d == oldPc || near[d])
-                continue;
             const int reg = (int) lane.notes[ni].chord[0] - oldPc;
             lane.notes[ni].chord[0] = (std::int8_t) (d + (reg >= 12 ? 12 : 0));
             return;
@@ -1669,7 +1651,7 @@ void finishPhrase (Lane& lane, const Settings& s, std::uint32_t seed, bool pulse
         densifyDeepDark (lane, bars, seed, mode);
     applyBusyDensity (lane, dialect, bars, s.busy, seed);
     if (dialect == Long)
-        fitRootShare (lane, 0.42f, 0.68f, seed);
+        fitRootShare (lane, 0.42f, 0.68f, seed, dialect, mode);
     if (dialect == Pop)
     {
         // Bounce root share stays inside 30-64% of bass time. Notes are about
@@ -4348,6 +4330,8 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
     const std::uint32_t bassSeed = seeds[Bass] ? seeds[Bass] : 1u;
     // One mode per roll for every pitched lane (harmonizeRoll snaps to it again).
     const int mode = rollMode (s, bassSeed);
+    tRoll.dialect = s.dialect;
+    tRoll.mode = mode;
     // BOUNCY plays one of two modes per roll: bounce, or pulse on a 35% batch quota.
     const int popMode = bouncyModeOf (s, modeSeed);
     // The composer's submode: density and length targets of the roll.

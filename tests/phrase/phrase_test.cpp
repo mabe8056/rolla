@@ -234,10 +234,13 @@ void runSet (int dialect, std::uint32_t base, const std::string& label, int roll
     }
 }
 
-// Stabs: in mode, never on a bass attack outside BOUNCY, at most perBar hits a bar.
+// Stabs: in mode, at most perBar hits a bar. A stab may land on a bass attack
+// (the model's share, as in the references) only when it agrees with that bass
+// note: no m2 / m9, and no M7 outside DEEP. Most hits stay off the attacks.
 void runStabs (int dialect, std::uint32_t base)
 {
     int onBass = 0;
+    int clashes = 0;
     int outOfMode = 0;
     int overCap = 0;
     int hits = 0;
@@ -265,7 +268,16 @@ void runStabs (int dialect, std::uint32_t base)
                 ++perBar[st / 16];
             for (int k = 0; k < bass.count; ++k)
                 if ((int) std::lround (bass.notes[k].start) == st)
+                {
                     ++onBass;
+                    const int bpc = ((bass.notes[k].chord[0] % 12) + 12) % 12;
+                    for (int c = 0; c < n.nChord && c < 4; ++c)
+                    {
+                        const int ic = ((n.chord[c] - bpc) % 12 + 12) % 12;
+                        if (ic == 1 || (ic == 11 && dialect != Long))
+                            ++clashes;
+                    }
+                }
             for (int c = 0; c < n.nChord && c < 4; ++c)
                 if (! phrase::inMode (n.chord[c], p.mode))
                     ++outOfMode;
@@ -275,10 +287,10 @@ void runStabs (int dialect, std::uint32_t base)
                 ++overCap;
     }
     char d[200];
-    std::snprintf (d, sizeof d, "%s: %d hits, %d on a bass attack, %d out-of-mode tones, %d bars over the cap", kNames[dialect],
-                   hits, onBass, outOfMode, overCap);
-    check (hits > 0 && outOfMode == 0 && overCap == 0 && (dialect == Pop || onBass == 0),
-           "stabs in mode, under the cap, off the bass attacks (BOUNCY excepted)", d);
+    std::snprintf (d, sizeof d, "%s: %d hits, %d on a bass attack (%d clashing), %d out-of-mode tones, %d bars over the cap",
+                   kNames[dialect], hits, onBass, clashes, outOfMode, overCap);
+    check (hits > 0 && outOfMode == 0 && overCap == 0 && clashes == 0 && onBass * 100 <= hits * 60,
+           "stabs in mode, under the cap; on a bass attack only when consonant, and mostly off them", d);
 }
 
 void runBasics()
@@ -299,9 +311,9 @@ void runBasics()
                && phrase::degreeToSemis (7, phrase::Dorian) == 12 && phrase::degreeToSemis (-7, phrase::Phrygian) == -12
                && phrase::degreeToSemis (2, phrase::Phrygian) == 3 && phrase::degreeToSemis (5, phrase::Dorian) == 9,
            "degree -> semitone mapping");
-    // Genre model v1.2: modes inside the scorer's scale. JACKIN aeolian or
-    // phrygian (never dorian), BOUNCY never phrygian (weight 0), all styles use
-    // only the three minor modes and draw more than one of them.
+    // Genre model v1.2 (A&R fix 561): auto rolls stay inside the scorer's scale,
+    // so no dorian (or mixolydian) in any style. BOUNCY is aeolian only; the
+    // other styles draw aeolian and phrygian.
     for (int dialect = 0; dialect < NumDialects; ++dialect)
     {
         int seen[3] {};
@@ -309,14 +321,12 @@ void runBasics()
             ++seen[std::clamp (rules::drawMode (dialect, (float) (k % 11) / 10.f, 1u + k * 0x9E3779B9u), 0, 2)];
         char d[160];
         std::snprintf (d, sizeof d, "%s: dorian %d aeolian %d phrygian %d of 400", kNames[dialect], seen[0], seen[1], seen[2]);
-        bool ok = seen[phrase::Aeolian] > 0;
-        if (dialect == Gaskin)
-            ok = ok && seen[phrase::Dorian] == 0 && seen[phrase::Phrygian] > 0;
-        else if (dialect == Pop)
-            ok = ok && seen[phrase::Phrygian] == 0 && seen[phrase::Dorian] > 0;
+        bool ok = seen[phrase::Aeolian] > 0 && seen[phrase::Dorian] == 0;
+        if (dialect == Pop)
+            ok = ok && seen[phrase::Phrygian] == 0;
         else
-            ok = ok && seen[phrase::Dorian] > 0 && seen[phrase::Phrygian] > 0;
-        check (ok, "mode weights follow the v1.2 model (JACKIN never dorian, BOUNCY never phrygian)", d);
+            ok = ok && seen[phrase::Phrygian] > 0;
+        check (ok, "mode weights follow the v1.2 model (no dorian in auto rolls, BOUNCY aeolian only)", d);
     }
 
     // The guard itself: a back half of single-pitch-class bars with 2-3 attacks.

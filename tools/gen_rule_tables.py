@@ -108,11 +108,12 @@ inline constexpr int kDeepBackHalf[kDeepBackHalfShapes][3] = {
 };
 
 // Stab placement shares per bar against the bass: in a gap, over a sustain, on
-// an attack (only BOUNCY, whose stab sits on the bass). The batch median of the
-// gap share is the model's soft target (gap_soft_target_pct); slot choice
-// inside a class follows the model's p_onset_given_bass tables.
+// an attack. The batch median of the gap share is the model's soft target
+// (gap_soft_target_pct); slot choice inside a class follows the model's
+// p_onset_given_bass tables. The on-attack share (kStabOnsetShare, generated
+// below) is the model's own: stabs land on a bass note when the references do,
+// and the composer keeps them consonant with it.
 inline constexpr float kStabGapShare[kStyles] = { 0.18f, 0.32f, 0.20f, 0.29f };
-inline constexpr float kStabOnsetShare[kStyles] = { 0.0f, 0.0f, 0.55f, 0.0f };
 // Stab in-beat class weights for the HITS lane (e, and, a); beats are kick steps.
 inline constexpr float kStabSlotClass[3] = { 0.30f, 0.45f, 0.25f };
 inline constexpr float kAnswerTailFactor = 1.2f;
@@ -246,6 +247,15 @@ def build(M):
     o.append("\n// ==================================================================== stab\n")
     o.append("// P(stab onset) per slot by the bass state there: 0 rest (gap), 1 held, 2 attack.\n")
     o.append(nested("kStabGiven", [3, 16], [[s["stab"]["p_onset_given_bass"][k] for k in ("rest", "sus", "onset")] for s in S]))
+    # Share of stab hits on a bass attack: the p_onset_given_bass mass per class,
+    # weighted by a typical bar's bass occupancy (3 rest / 8 sustain / 5 attack 16ths).
+    occ = {"rest": 3 / 16, "sus": 8 / 16, "onset": 5 / 16}
+    shares = []
+    for st in S:
+        pg = st["stab"]["p_onset_given_bass"]
+        w = {k: sum(pg[k]) / 16 * occ[k] for k in occ}
+        shares.append(round(w["onset"] / sum(w.values()), 3))
+    o.append("inline constexpr float kStabOnsetShare[kStyles] = { " + ", ".join(f"{x}f" for x in shares) + " };\n")
     o.append(f"inline constexpr float kStabGapWeight = {f(S[0]['stab']['gap_weight'])};\n")
     o.append(f"inline constexpr float kStabGapTarget = {f(S[0]['stab']['gap_soft_target_pct'] / 100.0)};\n")
     o.append(per_style("kStabOnBeatCeil", [s["stab"]["on_beat_ceiling_pct"] / 100.0 for s in S]))

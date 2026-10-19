@@ -1121,6 +1121,18 @@ int sampleDegreeSemis (int dialect, int mode, int prevSemi, std::uint32_t hash) 
     return pc < 0 ? 0 : pc;
 }
 
+int sampleBassSlot (int dialect, int group, const bool* allowed, std::uint32_t hash) noexcept
+{
+    const int st = styleOf (dialect);
+    BassTables t;
+    prepareBass (st, t);
+    Rng r (hash ? hash : 1u);
+    bool legal[kBar];
+    for (int s = 0; s < kBar; ++s)
+        legal[s] = allowed == nullptr || allowed[s];
+    return pickWeighted (t.grid[std::clamp (group, 0, 2)], legal, kBar, r);
+}
+
 void stabVoicing (int dialect, int mode, std::uint32_t hash, int* out, int& n) noexcept
 {
     Rng r (hash ? hash : 1u);
@@ -1202,6 +1214,8 @@ void composeStab (Lane& lane, const Lane& bass, const StabParams& p, std::uint32
     unsigned bassMask[2] {};
     int strengthVote[2][3] {};
 
+    int placedAll = 0;
+    int onBeat = 0;
     for (int bar = 0; bar < nb; ++bar)
     {
         if (p.skipOdd && (bar & 1) != 0)
@@ -1212,9 +1226,7 @@ void composeStab (Lane& lane, const Lane& bass, const StabParams& p, std::uint32
         for (int s = 0; s < kBar; ++s)
         {
             const int abs = bar * kBar + s;
-            if (kickStep (s))
-                cls[s] = -1;
-            else if (onset (abs))
+            if (onset (abs))
                 cls[s] = 2;
             else if (covers (abs))
                 cls[s] = 1;
@@ -1253,9 +1265,12 @@ void composeStab (Lane& lane, const Lane& bass, const StabParams& p, std::uint32
                         continue;
                     float w[kBar];
                     bool legal[kBar];
+                    // Beats (kick steps) take stabs too, up to the style's on-beat
+                    // ceiling of the roll's hits so far (A&R: DEEP 20%, JACKIN 30%).
+                    const bool beatOk = (float) (onBeat + 1) <= kStabOnBeatCeil[st] * (float) (placedAll + 1);
                     for (int s = 0; s < kBar; ++s)
                     {
-                        legal[s] = cls[s] == want && ! taken[s];
+                        legal[s] = cls[s] == want && ! taken[s] && (beatOk || ! kickStep (s));
                         w[s] = cls[s] < 0 ? 0.f : kStabGiven[st][cls[s]][s];
                         if (cls[s] == 0)
                             w[s] *= kStabGapWeight;
@@ -1274,6 +1289,9 @@ void composeStab (Lane& lane, const Lane& bass, const StabParams& p, std::uint32
                     continue;
                 taken[pick] = true;
                 ++placed;
+                ++placedAll;
+                if (kickStep (pick))
+                    ++onBeat;
                 hits[nh++] = { bar, pick, len };
                 const int bpc = bassPcAt (bar * kBar + pick);
                 if (bpc >= 0)

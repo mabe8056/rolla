@@ -45,9 +45,9 @@ inline constexpr float kHatSwingHi = 0.57f;
 // Mode weights in phrase::Mode order (dorian, aeolian, phrygian); every mode is
 // inside the scorer's scale for the style.
 inline constexpr float kModeWeights[kStyles][3] = {
-    { 0.3846f, 0.5128f, 0.1026f }, // ROLLER
-    { 0.3529f, 0.5294f, 0.1176f }, // DEEP
-    { 0.625f, 0.375f, 0.0f }, // BOUNCY
+    { 0.0f, 0.8333f, 0.1667f }, // ROLLER
+    { 0.0f, 0.8182f, 0.1818f }, // DEEP
+    { 0.0f, 1.0f, 0.0f }, // BOUNCY
     { 0.0f, 0.5833f, 0.4167f }, // JACKIN
 };
 inline constexpr float kB2Cap[kStyles] = { 0.06f, 0.06f, 0.03f, 0.06f }; // b2 share of bass time outside phrygian
@@ -307,6 +307,7 @@ inline constexpr float kStabGiven[kStyles][3][16] = {
         { 0.1202f, 0.063f, 0.0448f, 0.0728f, 0.0385f, 0.1175f, 0.0975f, 0.0798f, 0.0385f, 0.083f, 0.097f, 0.0254f, 0.1707f, 0.1558f, 0.2194f, 0.0513f },
     },
 };
+inline constexpr float kStabOnsetShare[kStyles] = { 0.427f, 0.451f, 0.449f, 0.452f };
 inline constexpr float kStabGapWeight = 1.6f;
 inline constexpr float kStabGapTarget = 0.22f;
 inline constexpr float kStabOnBeatCeil[kStyles] = { 0.3f, 0.2f, 0.3f, 0.3f };
@@ -501,11 +502,12 @@ inline constexpr int kDeepBackHalf[kDeepBackHalfShapes][3] = {
 };
 
 // Stab placement shares per bar against the bass: in a gap, over a sustain, on
-// an attack (only BOUNCY, whose stab sits on the bass). The batch median of the
-// gap share is the model's soft target (gap_soft_target_pct); slot choice
-// inside a class follows the model's p_onset_given_bass tables.
+// an attack. The batch median of the gap share is the model's soft target
+// (gap_soft_target_pct); slot choice inside a class follows the model's
+// p_onset_given_bass tables. The on-attack share (kStabOnsetShare, generated
+// below) is the model's own: stabs land on a bass note when the references do,
+// and the composer keeps them consonant with it.
 inline constexpr float kStabGapShare[kStyles] = { 0.18f, 0.32f, 0.20f, 0.29f };
-inline constexpr float kStabOnsetShare[kStyles] = { 0.0f, 0.0f, 0.55f, 0.0f };
 // Stab in-beat class weights for the HITS lane (e, and, a); beats are kick steps.
 inline constexpr float kStabSlotClass[3] = { 0.30f, 0.45f, 0.25f };
 inline constexpr float kAnswerTailFactor = 1.2f;
