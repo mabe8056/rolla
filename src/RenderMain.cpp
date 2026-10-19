@@ -171,6 +171,9 @@ RenderStats renderDialect (const rolla::PresetBank& bank, int dialect, const juc
     params.library = library;
     params.sampleIndex = index;
     params.bpm = (float) bpm;
+    // Every lane's chosen file in memory before the first block (bounded, logged).
+    if (library != nullptr && index != nullptr)
+        rolla::prefetchPlayFiles (*library, bank, *index, params.preset, params.samplePick, dialect, 20000, "render");
 
     juce::AudioBuffer<float> audio (2, total);
     audio.clear();

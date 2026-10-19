@@ -1795,6 +1795,7 @@ void Engine::process (const Groove& groove,
         };
 
         float playL[NumParts] {}, playR[NumParts] {};
+        sampler.retryHeld (bank, play, (float) prev, (float) pos, transport.playing);
         sampler.render (playL, playR, (float) prev, (float) pos, transport.playing, (float) loop16);
 
         const float bFader = E.level[Bass].next();

@@ -110,6 +110,9 @@ rolla::EngineParams makeParams (const rolla::PresetBank& bank, const rolla::MixP
     // FULL unmutes every MAIN lane, so the frozen mask is all six bits.
     params.sumMask = 63;
     params.bypassSumTrim = bypassSum;
+    // Every lane's chosen file in memory before the first block (bounded, logged).
+    if (library != nullptr && index != nullptr)
+        rolla::prefetchPlayFiles (*library, bank, *index, params.preset, params.samplePick, dialect, 20000, "mix-render");
     return params;
 }
 
