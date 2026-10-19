@@ -141,10 +141,13 @@ void clampLane (Lane& lane, int bars)
     lane.count = w;
 }
 
-// 0.75 at BUSY 0, 0.99 at the shipped 0.40, 1.35 at BUSY 1.
+// 0.90 at BUSY 0, 1.0 at the shipped 0.40, 1.36 at BUSY 1. The low end is
+// compressed so BUSY 0 still lands inside every style's density band (Maestro
+// 655: the gate runs BUSY 0.40 and BUSY 0, and both must pass).
 float busyFactor (float busy) noexcept
 {
-    return 0.75f + 0.60f * std::clamp (busy, 0.f, 1.f);
+    const float b = std::clamp (busy, 0.f, 1.f);
+    return b < 0.40f ? 0.90f + 0.25f * b : 1.0f + 0.60f * (b - 0.40f);
 }
 
 // Scale one bar's attacks around the phrase the style already ships. Low BUSY
@@ -3475,11 +3478,11 @@ void harmonizeRoll (Groove& g, const Settings& s, std::uint32_t bassSeed, std::u
 }
 
 // A&R msg 423 #1: target share of bass note-ons on kick steps, per style.
-// Reference medians: ROLLER ~17%, DEEP ~7%, BOUNCY ~32%, JACKIN ~19%.
+// Reference medians: ROLLER ~17%, DEEP ~7%, BOUNCY 25% (Maestro 655), JACKIN ~19%.
 // The 35% hard cap (hardFail, and the composer's own kick cap) always wins.
 float bassKickTarget (int dialect) noexcept
 {
-    // Genre model v1.2 per-style medians (ROLLER 17, DEEP 7, BOUNCY 30, JACKIN 19).
+    // Genre model per-style medians (ROLLER 17, DEEP 7, BOUNCY 25, JACKIN 19).
     return rules::tables::kKickTarget[clampi (dialect, 0, rules::tables::kStyles - 1)];
 }
 
@@ -3807,12 +3810,138 @@ void fillBassDensity (Lane& lane, int dialect, int bars, float busy, std::uint32
     sortByStart (lane);
 }
 
+// A&R lane F3 / BASS_REESE_LONG (Maestro 655: the scorer's length bands win over
+// the gap ratio): notes of 6 sixteenths or more stay at or under maxShare of the
+// notes. The longest are shortened to 5.9 (just under 6) first.
+void capLongBassNotes (Lane& lane, float maxShare)
+{
+    const int n = std::min (lane.count, kMaxNotes);
+    if (n <= 0)
+        return;
+    int order[kMaxNotes];
+    int nLong = 0;
+    for (int i = 0; i < n; ++i)
+        if (lane.notes[i].length >= 6.f - 1.0e-4f)
+            order[nLong++] = i;
+    const int allowed = (int) std::floor (maxShare * (float) n + 1.0e-4f);
+    if (nLong <= allowed)
+        return;
+    std::sort (order, order + nLong, [&] (int a, int b)
+    {
+        if (lane.notes[a].length != lane.notes[b].length)
+            return lane.notes[a].length > lane.notes[b].length;
+        return a < b;
+    });
+    for (int k = 0; k < nLong - allowed; ++k)
+        lane.notes[order[k]].length = 5.9f;
+}
+
+// A&R bounce lane: median note 0.9-1.4 sixteenths (BASS_NOTES_TOO_SHORT under
+// 0.8). Every bounce note is at least 0.9 long where the next onset allows.
+void floorBounceLengths (Lane& lane, int bars, float minLen)
+{
+    sortByStart (lane);
+    const float loop = (float) (std::min (bars, kMaxBars) * 16);
+    const float tick = 1.f / 120.f;
+    for (int i = 0; i < lane.count; ++i)
+    {
+        Note& note = lane.notes[i];
+        const float next = i + 1 < lane.count ? lane.notes[i + 1].start : loop;
+        const float room = std::max (0.25f, next - note.start - tick);
+        if (note.length < minLen)
+            note.length = std::min (minLen, room);
+    }
+}
+
+// The A&R soft limit (ONKICK_HIGH over 28% of bass attacks on the kick): attacks
+// on kick steps move one 16th to a free off-kick slot in the same bar until the
+// share is at or under maxShare. Keyed on the position in the 2-bar cycle, so
+// repeats move together. Never into the last bar's turn rest.
+void capBassOnKicks (Lane& lane, int bars, float maxShare, std::uint32_t seed)
+{
+    const int n = std::min (lane.count, kMaxNotes);
+    const int nslots = std::min (bars, kMaxBars) * 16;
+    if (n <= 1 || nslots <= 0)
+        return;
+    sortByStart (lane);
+    const int allowed = (int) std::floor (maxShare * (float) n + 1.0e-4f);
+    bool used[kMaxSteps] {};
+    int onKick = 0;
+    for (int i = 0; i < n; ++i)
+    {
+        const int st = (int) std::lround (lane.notes[i].start);
+        if (st >= 0 && st < nslots)
+            used[st] = true;
+        if (st >= 0 && kickSlot (st % 16))
+            ++onKick;
+    }
+    if (onKick <= allowed)
+        return;
+    const float tailCut = bassTailCut (bars);
+    struct Move { int i; int q; std::uint32_t prio; };
+    Move moves[kMaxNotes];
+    int nm = 0;
+    for (int i = 0; i < n && nm < kMaxNotes; ++i)
+    {
+        const int st = (int) std::lround (lane.notes[i].start);
+        if (st < 0 || st >= nslots || ! kickSlot (st % 16))
+            continue;
+        // Later first: the 16th after a kick keeps the push; then the one before,
+        // then two 16ths either way.
+        for (int dir : { 1, -1, 2, -2 })
+        {
+            const int q = st + dir;
+            if (q < 0 || q >= nslots || q / 16 != st / 16 || used[q] || (float) q >= tailCut)
+                continue;
+            const float nextStart = i + 1 < n ? lane.notes[i + 1].start : 1.0e9f;
+            const float prevEnd = i > 0 ? lane.notes[i - 1].start : -1.0e9f;
+            if ((float) q >= nextStart || (float) q <= prevEnd)
+                continue;
+            moves[nm++] = { i, q, postHash (seed ^ 0x0FF1Cu, (std::uint32_t) ((st % 32) * 4 + (dir > 0 ? 1 : 0))) };
+            break;
+        }
+    }
+    std::sort (moves, moves + nm, [] (const Move& a, const Move& b)
+    {
+        if (a.prio != b.prio)
+            return a.prio < b.prio;
+        return a.i < b.i;
+    });
+    for (int m = 0; m < nm && onKick > allowed; ++m)
+    {
+        Note& note = lane.notes[moves[m].i];
+        const int st = (int) std::lround (note.start);
+        if (used[moves[m].q])
+            continue;
+        used[st] = false;
+        used[moves[m].q] = true;
+        const float shift = (float) (moves[m].q - st);
+        note.start += shift;
+        note.length = std::max (0.5f, note.length - std::max (0.f, shift));
+        --onKick;
+    }
+    // No free slot left: drop kick-step notes, latest first, keeping the loop's
+    // first note. A bounce line with the bass on every downbeat is already 20% on
+    // the kick; the bass leaves some downbeats to the kick.
+    for (int i = lane.count - 1; i > 0 && (float) onKick > maxShare * (float) lane.count + 1.0e-4f; --i)
+    {
+        const int st = (int) std::lround (lane.notes[i].start);
+        if (st <= 0 || ! kickSlot (st % 16))
+            continue;
+        for (int j = i; j + 1 < lane.count; ++j)
+            lane.notes[j] = lane.notes[j + 1];
+        --lane.count;
+        --onKick;
+    }
+    sortByStart (lane);
+}
+
 // Moves bass attacks one 16th (then two) onto a free kick step in the same
 // bar until the on-kick share reaches the style target, never above 35%.
 // Only empty slots are used and a two-16th move needs the slot between free,
 // so note order (and every interval / octave figure) is unchanged. The pick
 // is keyed on the position in the 2-bar cycle, so repeats move together.
-void placeBassOnKicks (Lane& lane, int dialect, int bars, std::uint32_t seed)
+void placeBassOnKicks (Lane& lane, int dialect, int bars, std::uint32_t seed, float target = -1.f)
 {
     const int n = std::min (lane.count, kMaxNotes);
     const int nslots = std::min (bars, kMaxBars) * 16;
@@ -3820,7 +3949,7 @@ void placeBassOnKicks (Lane& lane, int dialect, int bars, std::uint32_t seed)
         return;
     sortByStart (lane);
     const int cap = (int) std::floor (0.35f * (float) n + 1.0e-4f);
-    const int want = std::min (cap, (int) std::lround (bassKickTarget (dialect) * (float) n));
+    const int want = std::min (cap, (int) std::lround ((target >= 0.f ? target : bassKickTarget (dialect)) * (float) n));
     bool used[kMaxSteps] {};
     int onKick = 0;
     for (int i = 0; i < n; ++i)
@@ -4030,6 +4159,109 @@ void fitBounceSounding (Lane& lane, int bars, float lo, float hi, std::uint32_t 
 // bar (turn / pickup), never a bar's first onset, never under 0.30 sounding.
 // Removing a note adds no clash, overlap or duplicate, so this is safe after
 // harmonizeRoll.
+// BOUNCY bounce register: the export plays the BOUNCY bass from octave 2 (MIDI
+// 36 + key), which suits pulse (A&R pulse lane 25-42) but puts every bounce line
+// over the bounce lane's 25-36 median. A bounce line moves down an octave when
+// that brings its exported median nearer 34; intervals and octave moves unchanged.
+void lowerBounceRegister (Lane& lane, int key)
+{
+    const int n = std::min (lane.count, kMaxNotes);
+    if (n <= 0)
+        return;
+    int semis[kMaxNotes];
+    for (int i = 0; i < n; ++i)
+        semis[i] = lane.notes[i].chord[0];
+    std::sort (semis, semis + n);
+    const int median = semis[n / 2];
+    const int k = (key % 12 + 12) % 12;
+    // The octave whose exported median lands nearest 34: inside both the A&R
+    // bounce lane (25-36) and the Composer's bounce band (32-40) where possible.
+    const int here = 36 + k + median;
+    if (std::abs (here - 12 - 34) < std::abs (here - 34))
+        for (int i = 0; i < n; ++i)
+            lane.notes[i].chord[0] = (std::int8_t) (lane.notes[i].chord[0] - 12);
+}
+
+// BOUNCY bounce as a 2-bar cell: the A&R loop gate wants the line to come back
+// every 2 bars (rep2 0.50 and up) and the Composer wants the bar densities to
+// differ (onsets-per-bar spread 0.7 and up). Bars 1-2 are the cell, written so
+// their note counts differ by two or more (spread 1.0 on their own); every later
+// bar restates it, and only the back halves of bars 4 and 8 keep their own notes
+// (the answer and the turn).
+void loopBounceCell (Lane& lane, int bars, std::uint32_t seed)
+{
+    const int nb = std::min (bars, kMaxBars);
+    if (nb < 4 || lane.count <= 0)
+        return;
+    sortByStart (lane);
+    auto barOf = [] (const Note& n) { return (int) std::lround (n.start) / 16; };
+    int count[2] {};
+    for (int i = 0; i < lane.count; ++i)
+        if (barOf (lane.notes[i]) < 2)
+            ++count[barOf (lane.notes[i])];
+    // Thin the sparser cell bar (never its first note) until the counts differ by 2.
+    const int sparse = count[0] <= count[1] ? 0 : 1;
+    for (int t = 0; t < 8 && std::abs (count[0] - count[1]) < 2 && count[sparse] > 2; ++t)
+    {
+        int cand[16];
+        int nc = 0;
+        bool first = true;
+        for (int i = 0; i < lane.count && nc < 16; ++i)
+        {
+            if (barOf (lane.notes[i]) != sparse)
+                continue;
+            if (first)
+            {
+                first = false;
+                continue;
+            }
+            cand[nc++] = i;
+        }
+        if (nc <= 0)
+            break;
+        const int drop = cand[postHash (seed ^ 0xCE11u, (std::uint32_t) t) % (std::uint32_t) nc];
+        for (int i = drop; i + 1 < lane.count; ++i)
+            lane.notes[i] = lane.notes[i + 1];
+        --lane.count;
+        --count[sparse];
+    }
+    Note out[kMaxNotes];
+    int w = 0;
+    for (int b = 0; b < nb; ++b)
+    {
+        const bool ownBack = b == 3 || b == nb - 1;
+        for (int i = 0; i < lane.count && w < kMaxNotes; ++i)
+        {
+            const Note& n = lane.notes[i];
+            const int nbar = barOf (n);
+            const int slot = (int) std::lround (n.start) % 16;
+            if (b < 2)
+            {
+                if (nbar == b)
+                    out[w++] = n;
+                continue;
+            }
+            if (ownBack && slot >= 8)
+            {
+                if (nbar == b)
+                    out[w++] = n;
+                continue;
+            }
+            if (nbar == (b & 1))
+            {
+                Note c = n;
+                c.start += (float) ((b - (b & 1)) * 16);
+                out[w++] = c;
+            }
+        }
+    }
+    lane.count = w;
+    for (int i = 0; i < w; ++i)
+        lane.notes[i] = out[i];
+    sortByStart (lane);
+    enforceMonophonic (lane);
+}
+
 void spreadBounceDensity (Lane& lane, int bars, float minSd, std::uint32_t seed)
 {
     const int nb = std::min (bars, kMaxBars);
@@ -4687,7 +4919,13 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
     {
         if (popMode != BassModePulse)
             fillBassDensity (g.lane[Bass], s.dialect, s.bars, s.busy, bassSeed);
-        placeBassOnKicks (g.lane[Bass], s.dialect, s.bars, bassSeed);
+        // Maestro 655: at most 28% of bass attacks on the kick in every style
+        // (the A&R soft limit). BOUNCY sits at 20-28% over the batch: the A&R
+        // bounce lane wants 85% off the kick, so bounce keeps the kick for the
+        // pulse rolls (28%) and bounce stays at 15% or under.
+        const float kickTarget = popMode == BassModePulse ? 0.28f : (popMode == BassModeBounce ? 0.14f : -1.f);
+        placeBassOnKicks (g.lane[Bass], s.dialect, s.bars, bassSeed, kickTarget);
+        capBassOnKicks (g.lane[Bass], s.bars, popMode == BassModeBounce ? 0.15f : 0.28f, bassSeed);
         if (popMode == BassModeBounce)
             fitBounceSounding (g.lane[Bass], s.bars, 0.33f, 0.46f, bassSeed);
         else
@@ -4720,13 +4958,20 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
     {
         if (popMode == BassModeBounce)
         {
+            loopBounceCell (g.lane[Bass], s.bars, bassSeed);
             spreadBounceDensity (g.lane[Bass], s.bars, 0.7f, bassSeed);
+            // The restated cell carries bars 1-2's kick share and sounding to every
+            // bar: both are checked again on the line that ships.
+            capBassOnKicks (g.lane[Bass], s.bars, 0.15f, bassSeed);
+            fitBounceSounding (g.lane[Bass], s.bars, 0.33f, 0.46f, bassSeed);
             capBassSounding (g.lane[Bass], s.bars, 0.49f, 0.9f);
             // A&R / model v1.2: bounce mean note length 0.9-1.4 sixteenths (its own
             // band; the gap ratio is for the other modes).
             fitBounceMeanLength (g, s.bars, 0.9f, 1.4f, bassSeed);
+            floorBounceLengths (g.lane[Bass], s.bars, 0.9f);
             // A&R lane F7: octave moves 15-26% of the moves (OCTAVE_PUMP over 26).
             capPulseOctaves (g.lane[Bass], 0.25f);
+            lowerBounceRegister (g.lane[Bass], s.key);
         }
         else if (popMode == BassModePulse)
         {
@@ -4734,6 +4979,7 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
             capPulseOctaves (g.lane[Bass], 0.08f);
             // Pulse sounds about 0.93 of each gap.
             guardGapRatio (g.lane[Bass], s.bars, 0.90f, 0.95f);
+            capLongBassNotes (g.lane[Bass], 0.07f);
         }
         else
         {
@@ -4741,6 +4987,9 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
             capPulseOctaves (g.lane[Bass], 0.24f);
             // Model v1.2: 0.79-0.83 of the gap to the next note.
             guardGapRatio (g.lane[Bass], s.bars, 0.79f, 0.83f);
+            // Maestro 655: the scorer's length bands win; DEEP keeps its held notes.
+            if (s.dialect != Long)
+                capLongBassNotes (g.lane[Bass], 0.07f);
         }
         // The length guard changes how long each pitch sounds: the b2 cap (and
         // the mode snap) are checked again on the final lengths.
@@ -4766,6 +5015,14 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
             trimSamePitchOverlaps (g.lane[part]);
         }
         enforceMonophonic (g.lane[Bass]);
+    }
+    // BOUNCY bounce: the A&R bounce lane wants 85% of the bass off the kick. The
+    // last bass passes (pickup, turn, density) can land on kick steps, so the cap
+    // is the final bass step; the upper lanes then give way to that bass.
+    if (regen (Bass) && popMode == BassModeBounce)
+    {
+        capBassOnKicks (g.lane[Bass], s.bars, 0.15f, bassSeed);
+        giveWayToBass (g, ~partMask);
     }
     g.mode = mode;
     g.guardScore = shippedHard ? 0.f : 1.f;

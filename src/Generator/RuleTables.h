@@ -254,7 +254,7 @@ inline constexpr float kBassEndBar8[kStyles][12] = {
 };
 inline constexpr float kRepeatM1Max[kStyles] = { 0.735f, 0.667f, 0.751f, 0.1f };
 inline constexpr float kRepeatM2Min[kStyles] = { 0.599f, 0.596f, 0.513f, 0.7f };
-inline constexpr float kKickTarget[kStyles] = { 0.17f, 0.07f, 0.3f, 0.19f }; // share of bass attacks on kick steps
+inline constexpr float kKickTarget[kStyles] = { 0.17f, 0.07f, 0.25f, 0.19f }; // share of bass attacks on kick steps
 inline constexpr float kGapFraction[kStyles] = { 0.81f, 0.79f, 0.93f, 0.83f }; // note length = this x the gap to the next onset
 inline constexpr float kSoundingLo[kStyles] = { 0.79f, 0.74f, 0.85f, 0.79f };
 inline constexpr float kSoundingHi[kStyles] = { 0.9f, 0.84f, 0.975f, 0.9f };
