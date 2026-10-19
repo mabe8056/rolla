@@ -789,7 +789,7 @@ float sincRead (const std::vector<float>& src, double index)
 // the 0.5 ms raised-cosine fade-in and the 4 ms fade at the file end. Without
 // them the tile is the raw file: what "plays as recorded" is measured against.
 void addTile (std::vector<float>& out, const std::vector<float>& src, double fileRate, int at, double ratio,
-              int until, bool edges, double sr = 48000.0)
+              int until, bool edges, double sr = 48000.0, bool startFade = true)
 {
     constexpr double pi = 3.14159265358979;
     const int frames = (int) src.size();
@@ -806,7 +806,7 @@ void addTile (std::vector<float>& out, const std::vector<float>& src, double fil
         double s = unity ? (double) src[(size_t) k] : (double) sincRead (src, idx);
         if (edges)
         {
-            if (k < attackN)
+            if (startFade && k < attackN)
                 s *= 0.5 * (1.0 - std::cos (pi * (double) k / (double) attackN));
             const double remain = (double) frames - (double) (k + 1) * ratio;
             if (remain < fadeLen)
@@ -855,7 +855,7 @@ SourceLR sourceOf (const rolla::SampleAudio& a)
 // (t = 0 and both loop wraps included for the kick). Two rules:
 //  - away from the loop wraps (where the engine fades the loop end on purpose) the
 //    render nulls against the file, tiled at the hits at one fitted gain, to under
-//    -80 dBFS; only the engine's 0.5 ms frame-0 fade and 4 ms end fade are modelled;
+//    -80 dBFS; only the engine's 0.5 ms frame-0 fade (files that open on a step) and 4 ms end fade are modelled;
 //  - the render's d2_clicks events are all events of the raw file tiled at the same
 //    offsets and gain: the engine adds no step. A hard cut injected into the render
 //    must be caught (the rule can see an engine step).
@@ -913,7 +913,9 @@ void checkDrumAsRecorded (rolla::PresetBank& bank, const rolla::SampleLibrary& l
     }
     expect (! hits.empty() && (every != 4 || hits.front() == 0), tag + ": the hits play from t = 0");
 
-    // Expected render: each hit cut at the next loop wrap, with the engine's edges.
+    // Expected render: each hit cut at the next loop wrap, with the engine's edges
+    // (the 0.5 ms file-start fade only for a file that opens on a step).
+    const bool startFade = rolla::Sampler::opensOnStep (*audio);
     const double ratio = std::clamp (audio->rate / sr, 0.25, 4.0);
     std::vector<float> eL ((size_t) total, 0.f), eR ((size_t) total, 0.f);
     std::vector<float> rawL ((size_t) total, 0.f), rawR ((size_t) total, 0.f);
@@ -923,8 +925,8 @@ void checkDrumAsRecorded (rolla::PresetBank& bank, const rolla::SampleLibrary& l
         for (int w : wraps)
             if (w > at)
                 until = std::min (until, w);
-        addTile (eL, src.l, src.rate, at, ratio, until, true);
-        addTile (eR, src.r, src.rate, at, ratio, until, true);
+        addTile (eL, src.l, src.rate, at, ratio, until, true, sr, startFade);
+        addTile (eR, src.r, src.rate, at, ratio, until, true, sr, startFade);
         addTile (rawL, src.l, src.rate, at, ratio, total, false);
         addTile (rawR, src.r, src.rate, at, ratio, total, false);
     }
@@ -1492,19 +1494,19 @@ void testFingerprintTool()
     expect (fp::nonIdString (juce::var (leaky)) == "path", "privacy: a path string is caught");
 
     const auto oneJson = base.getChildFile ("one.json");
-    expect (runTool ({ "scan-stems", base.getChildFile ("stems/trackA").getFullPathName(), "--track-id", "t01", "--style", "pop",
+    expect (runTool ({ "scan-stems", base.getChildFile ("stems/trackA").getFullPathName(), "--track-id", "x01", "--style", "pop",
                        "--min-conf", "0.55", "--out", oneJson.getFullPathName() }) == 0,
             "fingerprint tool: scan-stems runs on one track");
     const auto one = fp::entriesFromJson (juce::JSON::parse (oneJson));
     bool idsOk = ! one.empty();
     for (const auto& e : one)
-        idsOk = idsOk && e.track == "t01" && e.style == "pop";
+        idsOk = idsOk && e.track == "x01" && e.style == "pop";
     expect (idsOk, "fingerprint tool: scan-stems keys slices by the given track id and style");
     expect (one.size() <= sliced.size(), "fingerprint tool: --min-conf only drops slices");
 
-    base.getChildFile ("ids.csv").replaceWithText ("folder,track_id,style\ntrackA,t07,long\n");
+    base.getChildFile ("ids.csv").replaceWithText ("folder,track_id,style\ntrackA,x07,long\n");
     const auto idMap = fp::readStyles (base.getChildFile ("ids.csv"));
-    expect (idMap.count ("trackA") == 1 && idMap.at ("trackA").id == "t07" && idMap.at ("trackA").style == "long",
+    expect (idMap.count ("trackA") == 1 && idMap.at ("trackA").id == "x07" && idMap.at ("trackA").style == "long",
             "fingerprint tool: a folder,track_id,style CSV writes the id, not the folder");
 
     const auto targetsJson = base.getChildFile ("targets.json");
@@ -1527,7 +1529,7 @@ void testGenreTargets()
     expect (! mock.fromData && mock.lane (Style::Deep, Lane::Stab).centroidHz.hi < mock.lane (Style::Bouncy, Lane::Stab).centroidHz.hi
                 && mock.lane (Style::Deep, Lane::Pad).decayMs.hi > mock.lane (Style::Bouncy, Lane::Pad).decayMs.hi,
             "genre mock: DEEP is darker and longer than BOUNCY");
-    expect (std::string (laneName (Lane::HatC)) == "HAT_C" && laneFromName ("VOX") == Lane::Vox && styleFromId ("gaskin") == Style::Jackin,
+    expect (std::string (laneName (Lane::HatC)) == "HAT_C" && laneFromName ("VOX") == Lane::Vox && styleFromId ("jackin") == Style::Jackin,
             "genre names round-trip");
 
     SampleFeatures kick;
@@ -2078,8 +2080,8 @@ int main()
             if (rolla::pickPresetForRoll (factory, rolla::Bass, rolla::UkMin, seed) != first)
                 sameRecipe = false;
         expect (sameRecipe, "the dialect picks the recipe; the folder scan picks the file");
-        expect (rolla::pickPresetForRoll (factory, rolla::Drums, rolla::Gaskin, 3) == 1,
-                "gaskin roll stays on the sample kit");
+        expect (rolla::pickPresetForRoll (factory, rolla::Drums, rolla::Jackin, 3) == 1,
+                "jackin roll stays on the sample kit");
         for (int dialect = 0; dialect < rolla::NumDialects; ++dialect)
             for (std::uint32_t seed = 1; seed < 32; ++seed)
             {
@@ -2286,6 +2288,138 @@ int main()
         expect (pad.isChord && rolla::pitchprobe::pcDistance (pad.rootPitch, 64.0) < 0.3 && pad.quality == rolla::ChordQuality::Minor,
                 "a C minor file on a C major chord plays from the third (E minor)" + got (pad));
         pitchRoot.deleteRecursively();
+    }
+
+    {
+        // Issue #68: a solo VOX lane played a 278 ms vocal shot ~41 dB under its
+        // source with corr 0.29 (synth trim, 140 ms decay to silence, 4-pole at
+        // 4.6 kHz and a 200 Hz HPF on the sample). At unity knobs the lane must sit
+        // within 6 dB of the loaded buffer and keep its shape.
+        const auto voxRoot = rootDir.getChildFile ("voxlevel");
+        voxRoot.deleteRecursively();
+        constexpr double rate = 48000.0;
+        const int shotN = (int) (0.278 * rate);
+        std::vector<float> shot ((size_t) shotN, 0.f);
+        {
+            // "Yeah": a 170 -> 210 Hz voice through three formants, swelling to a
+            // peak near 90 ms and still at a third of it at the end.
+            double phase = 0.0;
+            for (int i = 0; i < shotN; ++i)
+            {
+                const double t = i / rate;
+                const double f0 = 170.0 + 40.0 * t / 0.278;
+                phase += 2.0 * 3.14159265358979 * f0 / rate;
+                const double rise = std::min (1.0, t / 0.015);
+                const double swell = t < 0.09 ? 0.4 + 0.6 * t / 0.09 : 1.0 - 0.65 * (t - 0.09) / 0.188;
+                double y = 0.0;
+                for (int h = 1; h <= 24; ++h)
+                {
+                    const double fh = f0 * h;
+                    auto bump = [fh] (double fc, double bw, double g) { return g / (1.0 + std::pow ((fh - fc) / bw, 2.0)); };
+                    const double w = 0.25 / h + bump (650.0, 150.0, 1.0) + bump (1150.0, 200.0, 0.6) + bump (2600.0, 300.0, 0.35);
+                    y += w * std::sin ((double) h * phase);
+                }
+                shot[(size_t) i] = (float) std::clamp (0.12 * rise * swell * y, -0.95, 0.95);
+            }
+        }
+        writeWave (voxRoot.getChildFile ("VOX/yeah_shot.wav"), shot);
+
+        rolla::PresetBank bank;
+        rolla::loadDefaultPresets (bank);
+        bank.count[rolla::Vox] = 1;
+        auto& spec = bank.vox[0].sample;
+        spec.mode = rolla::SampleMode::Sample;
+        spec.filter.on = false;
+        spec.start = 0.f;
+        spec.slice = false;
+        spec.reverse = false;
+        spec.loop.on = false;
+        spec.poolCount = 0;
+        spec.zoneCount = 0;
+        std::snprintf (spec.file, sizeof spec.file, "%s", "VOX/yeah_shot.wav");
+
+        rolla::SampleLibrary lib;
+        lib.setRoot (voxRoot);
+        lib.watch (bank);
+        expect (waitUntil ([&] { return lib.ready ("VOX/yeah_shot.wav"); }), "vox level: test shot loads");
+        const rolla::SampleAudio* src = lib.tryGet ("VOX/yeah_shot.wav");
+
+        rolla::EngineParams params;
+        params.presets = &bank;
+        params.library = &lib;
+        params.sampleShaping = true;
+        for (int i = 0; i < rolla::NumParts; ++i)
+        {
+            params.tone[i] = 0.5f;
+            params.punch[i] = 0.5f;
+        }
+
+        rolla::Sampler s;
+        s.prepare (rate);
+        const auto taken = s.take (rolla::Vox, 64, 127, 1.0e9f, bank, params);
+        const int outN = (int) (0.4 * rate);
+        std::vector<float> out ((size_t) outN, 0.f);
+        for (int i = 0; i < outN; ++i)
+        {
+            float laneL[rolla::NumParts] {};
+            float laneR[rolla::NumParts] {};
+            s.render (laneL, laneR, 0.f, 0.f, false);
+            out[(size_t) i] = laneL[rolla::Vox];
+        }
+
+        if (src != nullptr && src->frames > 64)
+        {
+            const int frames = src->frames;
+            const auto& x = src->left;
+            // The voice may open a little into the buffer (lead / voiced start):
+            // align on the best lag, then compare the first note sample for sample.
+            int bestLag = 0;
+            double bestCorr = -2.0;
+            const int win = std::min (outN, (int) (0.25 * rate));
+            for (int lag = 0; lag <= std::min (frames / 4, (int) (0.03 * rate)); ++lag)
+            {
+                double xy = 0.0, xx = 0.0, yy = 0.0;
+                for (int i = 0; i < win && lag + i < frames; ++i)
+                {
+                    const double a = x[(size_t) (lag + i)];
+                    const double b = out[(size_t) i];
+                    xy += a * b;
+                    xx += a * a;
+                    yy += b * b;
+                }
+                const double c = (xx > 0.0 && yy > 0.0) ? xy / std::sqrt (xx * yy) : 0.0;
+                if (c > bestCorr)
+                {
+                    bestCorr = c;
+                    bestLag = lag;
+                }
+            }
+            double srcSum = 0.0, outSum = 0.0;
+            float srcPeak = 0.f, outPeak = 0.f;
+            int n = 0;
+            for (int i = 0; bestLag + i < frames && i < outN; ++i, ++n)
+            {
+                const float a = x[(size_t) (bestLag + i)];
+                const float b = out[(size_t) i];
+                srcSum += (double) a * a;
+                outSum += (double) b * b;
+                srcPeak = std::max (srcPeak, std::fabs (a));
+                outPeak = std::max (outPeak, std::fabs (b));
+            }
+            const double srcRms = std::sqrt (srcSum / std::max (1, n));
+            const double outRms = std::sqrt (outSum / std::max (1, n));
+            const double rmsDb = 20.0 * std::log10 ((outRms + 1.0e-12) / (srcRms + 1.0e-12));
+            const double peakDb = 20.0 * std::log10 ((outPeak + 1.0e-12) / (srcPeak + 1.0e-12));
+            const std::string got = " (rms " + std::to_string (rmsDb) + " dB, peak " + std::to_string (peakDb)
+                                  + " dB, corr " + std::to_string (bestCorr) + " at lag " + std::to_string (bestLag) + ")";
+            expect (taken.kind == 1, "vox level: the shot plays as a sample" + got);
+            expect (std::fabs (rmsDb) <= 6.0 && std::fabs (peakDb) <= 6.0,
+                    "VOX_LEVEL: a solo vox shot at unity knobs sits within 6 dB of its source" + got);
+            expect (bestCorr > 0.8, "VOX_SHAPE: a solo vox shot keeps its waveform over the first note" + got);
+        }
+        else
+            expect (false, "vox level: test shot has no audio");
+        voxRoot.deleteRecursively();
     }
 
     {
@@ -2708,7 +2842,7 @@ int main()
         expect (rolla::sampleIndexCount (pools, rolla::Hits, hits) == 0, "LONG hits drop acid");
         hits.dialect = rolla::Pop;
         expect (rolla::sampleIndexCount (pools, rolla::Hits, hits) == 0, "BOUNCY hits drop acid");
-        hits.dialect = rolla::Gaskin;
+        hits.dialect = rolla::Jackin;
         expect (rolla::sampleIndexCount (pools, rolla::Hits, hits) == 0, "JACKIN hits drop acid");
 
         rolla::PoolFilter bass;
@@ -2811,10 +2945,10 @@ int main()
 
         const auto plucks = paths (fake, rolla::Pluck, rolla::Pop);
         expect (plucks.size() == 1 && plucks[0] == "PLUCK/Pluck_Chord_D5.wav", "pluck drops telephone and whoosh");
-        const auto stabs = paths (fake, rolla::Stab, rolla::Gaskin);
+        const auto stabs = paths (fake, rolla::Stab, rolla::Jackin);
         expect (stabs.size() == 1 && stabs[0] == "STAB/Stab_Chord_Fm.wav", "stab drops the uplifter sweep");
 
-        for (int dialect : { rolla::UkMin, rolla::Long, rolla::Pop, rolla::Gaskin })
+        for (int dialect : { rolla::UkMin, rolla::Long, rolla::Pop, rolla::Jackin })
         {
             const auto hitPaths = paths (fake, rolla::Hits, dialect);
             expect (has (hitPaths, "HITS/Chord_Stab_Cmin.wav"), "tonal chord stab stays");
@@ -2842,7 +2976,7 @@ int main()
         rolla::PoolFilter loose;
         loose.on = true;
         loose.lane = rolla::Hits;
-        loose.dialect = rolla::Gaskin;
+        loose.dialect = rolla::Jackin;
         expect (rolla::sampleIndexCount (pitchedOnly, rolla::Hits, loose) == 1, "a pitched same-lane file is the fallback");
         expect (std::string (rolla::sampleIndexAt (pitchedOnly, rolla::Hits, loose, 0)->path) == "HITS/Synth_One_Shot_C.wav",
                 "the fallback stays in the hits lane");
@@ -2873,7 +3007,7 @@ int main()
         muteParams.presets = &muteBank;
         muteParams.library = &muteLib;
         muteParams.sampleIndex = &emptyLane;
-        muteParams.dialect = rolla::Gaskin;
+        muteParams.dialect = rolla::Jackin;
         const auto muted = muteSampler.take (rolla::Hits, 64, 110, 4.f, muteBank, muteParams);
         expect (muted.kind == 1 && std::fabs (muted.synthGain) < 1.0e-6f,
                 "an empty pool mutes instead of synthesising");
@@ -3314,7 +3448,7 @@ int main()
         chopParams.presets = &chopBank;
         chopParams.library = &chopLib;
         chopParams.sampleIndex = chopSnap.get();
-        chopParams.dialect = rolla::Gaskin;
+        chopParams.dialect = rolla::Jackin;
         chopParams.bpm = 130.f;
         chopParams.samplePick[rolla::Hits] = 0;
         chopSampler.take (rolla::Hits, 60, 110, 1.0e9f, chopBank, chopParams);
@@ -3430,7 +3564,7 @@ int main()
             gp.presets = &gateBank;
             gp.library = &gateLib;
             gp.sampleIndex = gateSnap.get();
-            gp.dialect = rolla::Gaskin;
+            gp.dialect = rolla::Jackin;
             gp.bpm = 130.f;
             for (int i = 0; i < rolla::NumDrumVoices; ++i)
                 gp.drumDecay[i] = 0.5f;

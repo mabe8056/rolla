@@ -32,7 +32,7 @@ constexpr double kBpm = 126.0;
 constexpr int kBars = 8;
 constexpr int kBlock = 256;
 
-const char* kStyle[rolla::NumDialects] = { "UKMIN", "LONG", "POP", "GASKIN" };
+const char* kStyle[rolla::NumDialects] = { "UKMIN", "LONG", "POP", "JACKIN" };
 
 struct LaneId
 {
@@ -633,7 +633,7 @@ int renderSet (const rolla::PresetBank& bank, const rolla::MixProgram& mix, cons
 
 int dialectIndex (const std::string& name)
 {
-    const char* names[] = { "UKMIN", "LONG", "POP", "GASKIN" };
+    const char* names[] = { "UKMIN", "LONG", "POP", "JACKIN" };
     const juce::String n (name);
     for (int d = 0; d < 4; ++d)
         if (n.equalsIgnoreCase (names[d]))

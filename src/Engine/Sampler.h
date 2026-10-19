@@ -28,6 +28,12 @@ public:
     void prepare (double sampleRate) noexcept;
     void reset() noexcept;
 
+    // True when the file opens on a step: its first sample sits well above how
+    // far the signal moves per sample over the next millisecond (a kick trimmed
+    // onto its peak). Only those get the 0.5 ms file-start fade; a file that
+    // opens into noise or rises from zero plays its first samples as recorded.
+    static bool opensOnStep (const SampleAudio& audio) noexcept;
+
     // ask: the chord this note opens (empty for a single note). A chord file plays
     // from that chord's root, and moves to a root where its quality fits.
     Take take (int part, int midiNote, int velocity, float end16,

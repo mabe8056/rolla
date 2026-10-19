@@ -498,7 +498,7 @@ int main()
     for (int t = 0; t < 128; ++t)
         if (g.drums.vel[rolla::Kick][t] && (t % 2) == 0)
             ++straightKick;
-    int percs = 0, percOdd = 0, gaskinPerc = 0;
+    int percs = 0, percOdd = 0, jackinPerc = 0;
     for (int t = 0; t < 16; ++t)
     {
         if (g.drums.vel[rolla::Perc][t])
@@ -510,20 +510,20 @@ int main()
     }
     {
         rolla::Settings gas = settings;
-        gas.dialect = rolla::Gaskin;
+        gas.dialect = rolla::Jackin;
         rolla::Groove gg {};
         rolla::Rng gr (0x0909u);
         rolla::writeDrumPattern (gg, gas, gr);
         for (int t = 0; t < 16; ++t)
             if (gg.drums.vel[rolla::Perc][t])
-                ++gaskinPerc;
+                ++jackinPerc;
     }
     std::cout << "bar1 kick " << kicks << " clap " << claps << " oh " << opens
               << " rimOnStab " << ghostOnStab << " evenKicks " << straightKick
-              << " perc " << percs << " percOdd " << percOdd << " gaskinPerc " << gaskinPerc << "\n";
+              << " perc " << percs << " percOdd " << percOdd << " jackinPerc " << jackinPerc << "\n";
     expect (kicks == 4 && claps == 2 && opens == 4, "uk grid");
     expect (percs == 16 && percOdd == 8, "perc grid");
-    expect (gaskinPerc == 0, "gaskin perc off");
+    expect (jackinPerc == 0, "jackin perc off");
     expect (ghostOnStab == 0, "ghost dropped under stab");
     expect (std::fabs (rolla::DrumMachine::kickHzForKey (2) - 55.f) < 0.1f, "key follow D");
 

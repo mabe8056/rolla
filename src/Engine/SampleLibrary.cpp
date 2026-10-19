@@ -872,7 +872,7 @@ std::uint8_t stylesFromTags (const juce::var& presets)
                 styles = (std::uint8_t) (styles | 2u);
             else if (second == "pop")
                 styles = (std::uint8_t) (styles | 4u);
-            else if (second == "gaskin")
+            else if (second == "jackin")
                 styles = (std::uint8_t) (styles | 8u);
         }
     }
