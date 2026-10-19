@@ -161,7 +161,7 @@ void readStyles (SampleSpec& spec, const juce::var& preset)
                 spec.styles = (std::uint8_t) (spec.styles | 2u);
             else if (s == "pop")
                 spec.styles = (std::uint8_t) (spec.styles | 4u);
-            else if (s == "gaskin")
+            else if (s == "jackin")
                 spec.styles = (std::uint8_t) (spec.styles | 8u);
         }
     }
@@ -374,11 +374,13 @@ void loadDefaultPresets (PresetBank& bank)
     // pluginval's 512 KB macOS test thread can open the plugin.
     auto blank = std::make_unique<PresetBank>();
     bank = std::move (*blank);
-    fillDialect (bank.dialect[UkMin], "pluck", "dub", "warehouse", "hook", "air", "close", "tight", true, 0.52f);
-    fillDialect (bank.dialect[Long], "round", "swell", "dusty", "bright", "wide", "booth", "tight", true, 0.51f);
-    fillDialect (bank.dialect[Pop], "click", "click", "rave", "soft", "air", "chop", "tight", true, 0.50f);
-    fillDialect (bank.dialect[Gaskin], "round", "swell", "warehouse", "hook", "dark", "chop", "room", false, 0.50f);
-    auto& g = bank.dialect[Gaskin];
+    fillDialect (bank.dialect[UkMin], "pluck", "dub", "warehouse", "hook", "air", "close", "tight", true, 0.537f);
+    // 16th swing per style, inside the genre model v1.2 hat band 53-57%:
+    // ROLLER 53.7 (was 52), DEEP 54, BOUNCY 56.7, JACKIN 56.5.
+    fillDialect (bank.dialect[Long], "round", "swell", "dusty", "bright", "wide", "booth", "tight", true, 0.54f);
+    fillDialect (bank.dialect[Pop], "click", "click", "rave", "soft", "air", "chop", "tight", true, 0.567f);
+    fillDialect (bank.dialect[Jackin], "round", "swell", "warehouse", "hook", "dark", "chop", "room", false, 0.565f);
+    auto& g = bank.dialect[Jackin];
     g.bassDuck = true;
     g.bassGlide = true;
     g.bassDuckDb = 7.f;
@@ -554,7 +556,9 @@ bool loadPresetsFromJson (PresetBank& bank, const char* json, int size)
                         id.copyToUTF8 (slot.presetId[part], 24);
                     }
                     slot.hitsMute = flag (row, "hitsMute", slot.hitsMute);
-                    slot.swing = std::clamp (num (row, "swing", slot.swing), 0.50f, 0.57f);
+                    // A style's default 16th swing stays in the model's hat band (53-57%);
+                    // the SWING knob itself still runs 50-57.
+                    slot.swing = std::clamp (num (row, "swing", slot.swing), 0.53f, 0.57f);
                     if (auto* rowObj = row.getDynamicObject())
                     {
                         if (rowObj->hasProperty ("overrides"))

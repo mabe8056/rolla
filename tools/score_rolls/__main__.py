@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Score a batch of rolls against GENERATOR_RULES.md §6 and §7.2.
 
-    python3 tools/score_rolls/__main__.py batch.jsonl --refs /tmp/rolla_refs/transcriptions
+    python3 tools/score_rolls/__main__.py batch.jsonl --refs "$ROLLA_REFS"
 
 Input is JSON lines from tools/dump_grooves.cpp. One object per roll:
 style, key, bars, tag (plan|contour|cells), lanes, drums.
@@ -51,7 +51,7 @@ PRESET = {
                 plans={"P3": 0.60, "P2": 0.40},
                 cells=("off_8th_pump", "fifth_pop", "rest"),
                 contours=("fifth_pop", "pedal", "step_up")),
-    "gaskin": dict(npb=(6.0, 8.0), len16=(1.9, 2.3), on_kick=0.35, root=(0.28, 0.40),
+    "jackin": dict(npb=(6.0, 8.0), len16=(1.9, 2.3), on_kick=0.35, root=(0.28, 0.40),
                    top2=(0.55, 0.70), oct_max=0.05, sounding=(0.75, 0.85),
                    match1_max=0.20, match2=0.85, stab_pb=(5.5, 6.5), stab_beat=0.20,
                    plans={"P4": 0.80, "P2": 0.20},
@@ -72,7 +72,7 @@ HAT_VOICES = {6, 7}  # HatC, HatO
 
 
 def in_scale(style, pc):
-    if style == "gaskin":
+    if style == "jackin":
         return pc in {0, 1, 2, 3, 5, 7, 8, 10}
     return pc in {0, 1, 2, 3, 5, 7, 8, 9, 10}
 
@@ -686,7 +686,7 @@ def main():
         except Exception as exc:
             print(f"originality unavailable: {exc}", file=sys.stderr)
     reports = []
-    for style in ("ukmin", "long", "pop", "gaskin"):
+    for style in ("ukmin", "long", "pop", "jackin"):
         if style not in by:
             continue
         print(f"scoring {args.label} {style} ({len(by[style])})", file=sys.stderr)

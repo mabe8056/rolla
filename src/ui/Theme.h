@@ -45,6 +45,8 @@ struct Theme
     static constexpr juce::uint32 mark = 0xffe9b32a;
     static constexpr juce::uint32 warn = 0xffff4d5e;
     static constexpr juce::uint32 mute = 0xffadaaa3;
+    // Lane solo fill. The amber mark, so a solo reads apart from the grey mute.
+    static constexpr juce::uint32 solo = mark;
     static constexpr juce::uint32 acc = 0xffff6a3d;
     static constexpr juce::uint32 acc2 = 0xffff7d55;
     static constexpr juce::uint32 faceInk = 0xff111214;

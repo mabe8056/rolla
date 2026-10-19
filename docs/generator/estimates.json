@@ -5,7 +5,7 @@
       "ukmin": {"P1": 0.35, "P2": 0.25, "P3": 0.15, "P5": 0.25},
       "long": {"P1": 0.40, "P2": 0.30, "P3": 0.30},
       "pop": {"P3": 0.60, "P2": 0.40},
-      "gaskin": {"P4": 0.80, "P2": 0.20}
+      "jackin": {"P4": 0.80, "P2": 0.20}
     },
     "max_changed_slots_per_bar_vs_parent": 8,
     "bar4_fill_probability": 0.5,
@@ -36,7 +36,7 @@
     "pitch_classes_per_motif": [2, 4],
     "len16": [0.5, 1.5]
   },
-  "gaskin": {
+  "jackin": {
     "hat_swing": [62, 68],
     "octave_share_max": 0.05
   },

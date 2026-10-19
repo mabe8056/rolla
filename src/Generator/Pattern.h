@@ -38,7 +38,7 @@ enum Dialect : int
     UkMin = 0,
     Long,
     Pop,
-    Gaskin,
+    Jackin,
     NumDialects
 };
 
@@ -93,6 +93,30 @@ struct Groove
     // Candidates drawn this call, and how many a hard rule threw out.
     int draws = 0;
     int hardDraws = 0;
+    // BOUNCY bass mode of the last bass roll: 0 not BOUNCY, 1 bounce, 2 pulse.
+    // MidiExport writes it into the bass track ("mode:bounce" / "mode:pulse").
+    int bassMode = 0;
+    // The roll's mode (phrase::Mode: 0 dorian, 1 aeolian, 2 phrygian) for every
+    // pitched lane, as shipped (a redraw can change it with the bass seed).
+    int mode = 1;
+    // Redraws behind the last generate(): orig = the originality check (#76
+    // guard: built-in banned figures and the reference index) refused the
+    // roll, guard = the thin-cell guard (bars 5-8) refused it. One log entry
+    // per redraw (up to kMaxRedrawLog): the lane that hit (-1 merged, -2 none),
+    // the opaque reference stream id (or "banned:..." / "guard:..."), metric
+    // and score as orig::check reported them.
+    int origRedraws = 0;
+    int guardRedraws = 0;
+    struct RedrawEntry
+    {
+        std::int8_t lane = -2;
+        std::int8_t metric = 0;
+        float score = 0.f;
+        char ref[32] = "";
+    };
+    static constexpr int kMaxRedrawLog = 16;
+    RedrawEntry redrawLog[kMaxRedrawLog] {};
+    int redrawLogCount = 0;
     Lane lane[NumParts] {};
     DrumLane drums {};
 };
@@ -110,7 +134,10 @@ struct Settings
     int dialect = UkMin;
     int key = 2;
     int bars = 8;
+    // A drum fill on the last beat of the phrase (snare / tom run into the downbeat).
     bool fill = false;
+    // HITS land on the stab's onsets (its answer slots) instead of avoiding them.
+    bool hitsInStab = false;
     // 0 hugs the soft bands, 0.35 is the normal lane, 0.6 is wild.
     // BUSY and BOUNCE extremes raise the effective value. Soft rules never reject.
     float freedom = 0.35f;
@@ -120,6 +147,25 @@ struct Settings
     // A locked scale quantizes every regenerated melodic lane after the draw.
     int scale = 0;
 };
+
+enum BassMode : int
+{
+    BassModeNone = 0,
+    BassModeBounce,
+    BassModePulse
+};
+
+// Text written into the exported bass track for BOUNCY, nullptr otherwise.
+inline const char* bassModeText (const Groove& g) noexcept
+{
+    if (g.dialect != Pop)
+        return nullptr;
+    if (g.bassMode == BassModeBounce)
+        return "mode:bounce";
+    if (g.bassMode == BassModePulse)
+        return "mode:pulse";
+    return nullptr;
+}
 
 inline const char* partId (int p) noexcept
 {
@@ -135,7 +181,7 @@ inline const char* partName (int p) noexcept
 
 inline const char* dialectId (int d) noexcept
 {
-    static const char* ids[] = { "ukmin", "long", "pop", "gaskin" };
+    static const char* ids[] = { "ukmin", "long", "pop", "jackin" };
     return ids[d];
 }
 
@@ -155,28 +201,28 @@ inline const StyleCopy& styleCopy (int d) noexcept
 {
     static const StyleCopy rows[] = {
         { kStyleLabels[UkMin],
-          "Groove\tswing 52%\n"
+          "Groove\tswing 53.7%\n"
           "Notes\t1-4.5 sixteenths\n"
           "Bass\tpluck\n"
           "Stab\tdub\n"
           "Pad\tair\n"
           "Plays\tbass, stab, pluck, pad, vox, drums" },
         { kStyleLabels[Long],
-          "Groove\tswing 51%\n"
+          "Groove\tswing 54%\n"
           "Notes\t2-8 sixteenths\n"
           "Bass\tround\n"
           "Stab\tswell\n"
           "Pad\twide\n"
           "Plays\tbass, stab, pluck, pad, vox, drums" },
         { kStyleLabels[Pop],
-          "Groove\tswing 50%\n"
+          "Groove\tswing 56.7%\n"
           "Notes\t1-1.25 sixteenths\n"
           "Bass\tclick\n"
           "Stab\tclick\n"
           "Pad\tair\n"
           "Plays\tbass, stab, pluck, pad, vox, drums" },
-        { kStyleLabels[Gaskin],
-          "Groove\tstraight, swing 50%\n"
+        { kStyleLabels[Jackin],
+          "Groove\tswing 56.5%\n"
           "Notes\t2 sixteenths\n"
           "Bass\tround\n"
           "Stab\tswell\n"

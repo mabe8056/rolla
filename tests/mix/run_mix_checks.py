@@ -6,7 +6,7 @@
 """
 import argparse, json, os, subprocess, sys
 
-STYLES = ["UKMIN", "LONG", "POP", "GASKIN"]
+STYLES = ["UKMIN", "LONG", "POP", "JACKIN"]
 LANES = [
     ("KICK", "KICK", None),
     ("CLAP", "DRUMS", "CLAP"),
@@ -202,7 +202,7 @@ def main():
             rows.append((style, name, status, "; ".join(x for x in why[:6] if x)))
             print(f"{style} {name} render={'PASS' if ok_r else 'FAIL'} mute={'PASS' if ok_m else 'FAIL'} {why[:3]}")
     if args.switch_dir:
-        pairs = [("UKMIN", "LONG"), ("LONG", "POP"), ("POP", "GASKIN")]
+        pairs = [("UKMIN", "LONG"), ("LONG", "POP"), ("POP", "JACKIN")]
         for src, dst in pairs:
             wav = os.path.join(args.switch_dir, f"{src}_{dst}.wav")
             ok_s, data_s = run(["switch", wav, "--switch-at", str(args.switch_at), "--ramp-ms", str(args.ramp_ms), "--dialect", f"{src}>{dst}"])

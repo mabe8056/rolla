@@ -27,7 +27,7 @@ struct EngineParams
     int preset[NumParts] {};
     bool duck = true;
     bool drumsToMain = true;
-    float swing = 0.52f;
+    float swing = 0.537f; // model v1.2 hat swing target (53-57%)
     float outputDb = 0.f;
     float drumsAccent = 0.6f;
     // Per-voice drum panel. Defaults are an identity: tune 0 st, decay 0.5, level 0 dB, accent off.
@@ -63,6 +63,11 @@ struct EngineParams
     // Master true-peak safety stage, ceiling -6 dBTP (src/Mix/TruePeakGuard.h).
     // Off keeps the same latency and passes the sum through unchanged.
     bool tpGuard = true;
+    // Lane TONE / PUNCH, DRUMS ACCENT and the per-voice drum ACCENT also shape
+    // sample playback (not only the synth). The plugin turns this on; tools and
+    // tests that build EngineParams by hand keep the old sample path. At the
+    // knob defaults (tone / punch 0.5, accent 0.6, voice accent off) it is an identity.
+    bool sampleShaping = false;
 };
 
 struct Transport
