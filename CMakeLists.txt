@@ -354,6 +354,8 @@ target_include_directories(rolla-roll-test PRIVATE src)
 
 target_compile_definitions(rolla-roll-test
     PRIVATE
+        # Lets the test pump the message loop on macOS (runDispatchLoopUntil).
+        JUCE_MODAL_LOOPS_PERMITTED=1
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
         JUCE_DISPLAY_SPLASH_SCREEN=0
@@ -534,6 +536,8 @@ target_include_directories(rolla-knob-test PRIVATE src)
 
 target_compile_definitions(rolla-knob-test
     PRIVATE
+        # Lets the test pump the message loop on macOS (runDispatchLoopUntil).
+        JUCE_MODAL_LOOPS_PERMITTED=1
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
         JUCE_DISPLAY_SPLASH_SCREEN=0
