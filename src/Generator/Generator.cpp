@@ -2057,7 +2057,7 @@ void writePluck (Lane& lane, const Settings& s, Rng& rng, int mode)
     if (s.dialect != Long && s.dialect != Pop)
         return;
     namespace rt = rules::tables;
-    int per = s.dialect == Pop ? 6 : 3;
+    int per = s.dialect == Pop ? 6 : 4;
     if (s.styleIntensity <= 0.25f)
         per = 1;
     else if (s.styleIntensity >= 0.75f)
@@ -2076,7 +2076,9 @@ void writePluck (Lane& lane, const Settings& s, Rng& rng, int mode)
     const int loopBars = std::min (s.bars, 8);
     if (loopBars <= 0)
         return;
-    const int cyc = drawCycleBars (rng, loopBars, true);
+    // No 1-bar cycle: a bar-long figure repeated eight times is the generic shape
+    // that kept matching reference skeletons (Maestro 655 item 5).
+    const int cyc = drawCycleBars (rng, loopBars, false);
     struct PNote { int slot; int deg; float len; };
     struct Notes
     {
@@ -2098,7 +2100,7 @@ void writePluck (Lane& lane, const Settings& s, Rng& rng, int mode)
             const int zone = 16 / phrases;
             const int start = clampi (p * zone + 1 + (int) (rng.next() * (double) std::max (1, zone - span)), 1, 15);
             // The phrase's own few pitches, from the chain.
-            const int distinct = clampi (drawAround (rng, rt::kPhraseDistinct, n), 1, std::min (n, 6));
+            const int distinct = clampi (std::max (3, drawAround (rng, rt::kPhraseDistinct, n)), 1, std::min (n, 6));
             int pcs[6] {};
             for (int k = 0; k < distinct; ++k)
                 pcs[k] = nextDeg();
