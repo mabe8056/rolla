@@ -1905,6 +1905,8 @@ void testTreatment()
     expect (std::fabs (ratio - std::pow (10.0, 0.6)) < 0.05, "treatment seam: gainDb scales the voice");
 
     root.deleteRecursively();
+}
+
 // Made-up samples with numbers typical of the mock bands; never real files or a profile.
 rolla::genre::SampleFeatures mockSample (rolla::genre::Lane lane, const std::string& id, const std::string& pack, bool onTarget)
 {
