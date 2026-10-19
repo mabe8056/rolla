@@ -46,6 +46,15 @@ public:
                     float gainScale = 1.f) noexcept;
     void releaseNote (int part, int midiNote) noexcept;
 
+    // Audio thread, once per sample before render(). A note whose file was still
+    // loading when it was triggered is held here (fixed slots, no allocation) and
+    // starts, with a short fade-in, as soon as its file is ready inside the note's
+    // length. It is dropped at the note end, a loop wrap, a release or a stop.
+    void retryHeld (const PresetBank& bank, const EngineParams& params,
+                    float prev16, float pos16, bool playing) noexcept;
+    // Notes waiting on a loading file. Tests and status.
+    int heldNotes() const noexcept { return heldCount; }
+
     void releaseAll() noexcept;
     // loopEnd16 > 0 fades every voice out at the phrase end so nothing runs into the next bar.
     void render (float* laneL, float* laneR, float prev16, float pos16, bool playing, float loopEnd16 = 0.f) noexcept;
@@ -138,6 +147,34 @@ private:
         } env;
     };
 
+    struct Held
+    {
+        bool on = false;
+        // Set for the sample it was held on: that sample may also be the
+        // downbeat rewind, which is not a loop wrap for this note.
+        bool born = false;
+        int part = 0;
+        int midiNote = 60;
+        int velocity = 0;
+        float end16 = 0.f;
+        ChordAsk ask {};
+        int wait = 0;
+        int sweep = 0;
+        char file[256] {};
+    };
+    static constexpr int kHeld = 16;
+    Held held[kHeld];
+    int heldCount = 0;
+    // Set by start() when the note was dropped only because a file is still loading.
+    bool pendingNote = false;
+    const char* pendingFile = nullptr;
+    // Set while retryHeld() starts a held note: the voice fades in.
+    bool lateStart = false;
+    Take startNote (int part, int midiNote, int velocity, float end16,
+                const PresetBank& bank, const EngineParams& params, ChordAsk ask) noexcept;
+    void holdNote (int part, int midiNote, int velocity, float end16, ChordAsk ask, const char* file) noexcept;
+    void dropHeld (Held& h) noexcept;
+
     // Drum hits steal only drum voices, melodic notes only melodic voices.
     Voice* allocate (int part) noexcept;
     void park (const Voice& dying) noexcept;
@@ -172,5 +209,15 @@ private:
 };
 
 const SampleSpec& sampleSpecFor (const PresetBank& bank, int part, int preset) noexcept;
+
+// Kick key follow (PRESET_SPEC 9.2). Pitch confidence a kick needs before it is retuned:
+// lower than kPitchConfMin, since a kick's tail is a decaying sine with a chirp on top.
+inline constexpr float kKickFollowConfMin = 0.3f;
+inline constexpr double kKickFollowMaxSt = 3.0;
+
+// Playback ratio that moves a sampled kick's measured fundamental (tail f0, folded
+// into 40-80 Hz) toward DrumMachine::kickHzForKey (key), within +-3 st so the body
+// keeps its character. 1 for an unpitched or low-confidence file.
+double kickKeyFollowRatio (const PitchInfo& pitch, int key) noexcept;
 
 } // namespace rolla

@@ -261,7 +261,8 @@ void SampleLibrary::preload (const std::vector<std::string>& relativePaths)
 }
 
 void collectPlayFiles (const PresetBank& bank, const SampleIndex& index, const int preset[NumParts],
-                       const int samplePick[NumParts], int dialect, int window, std::vector<std::string>& out)
+                       const int samplePick[NumParts], int dialect, int window, std::vector<std::string>& out,
+                       const int* drumPick)
 {
     auto addIndexed = [&] (const SampleSpec& spec, int part, int voice, int pick)
     {
@@ -299,9 +300,55 @@ void collectPlayFiles (const PresetBank& bank, const SampleIndex& index, const i
         const auto& own = bank.drums[kit].voicePool[voice];
         if (! own.empty())
             out.push_back (own[(size_t) (pick % (int) own.size())]);
+        else if (drumPick != nullptr && drumPick[voice] >= 0)
+            addIndexed (drums, Drums, voice, drumPick[voice]); // as takeDrum: the voice's own pick
         else
             addIndexed (drums, Drums, voice, pick);
     }
+}
+
+bool waitForSampleFiles (SampleLibrary& library, const std::vector<std::string>& paths, int timeoutMs, const char* who)
+{
+    library.preload (paths);
+    const double deadline = juce::Time::getMillisecondCounterHiRes() + (double) std::max (0, timeoutMs);
+    auto loading = [&]
+    {
+        for (const auto& path : paths)
+            if (! path.empty() && ! library.ready (path.c_str()) && ! library.missing (path.c_str()))
+                return true;
+        return false;
+    };
+    while (loading() && juce::Time::getMillisecondCounterHiRes() < deadline)
+        juce::Thread::sleep (5);
+    int late = 0;
+    int absent = 0;
+    for (const auto& path : paths)
+    {
+        if (path.empty() || library.ready (path.c_str()))
+            continue;
+        if (library.missing (path.c_str()))
+            ++absent;
+        else
+        {
+            ++late;
+            // sample_pack_check.py greps this prefix.
+            std::cerr << "SAMPLE NOT READY (timeout " << timeoutMs << " ms, "
+                      << (who != nullptr ? who : "render") << ") " << path << "\n";
+        }
+    }
+    if (absent > 0)
+        std::cerr << "ROLLA samples [" << (who != nullptr ? who : "render") << "]: " << absent
+                  << " file(s) not on disk; the sampler swaps them from the same pool\n";
+    return late == 0;
+}
+
+bool prefetchPlayFiles (SampleLibrary& library, const PresetBank& bank, const SampleIndex& index,
+                        const int preset[NumParts], const int samplePick[NumParts], int dialect,
+                        int timeoutMs, const char* who)
+{
+    std::vector<std::string> paths;
+    collectPlayFiles (bank, index, preset, samplePick, dialect, 8, paths);
+    return waitForSampleFiles (library, paths, timeoutMs, who);
 }
 
 void SampleLibrary::enqueue (const std::string& relative)

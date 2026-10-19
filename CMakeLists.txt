@@ -460,6 +460,38 @@ target_link_libraries(rolla-export-test
         juce::juce_recommended_warning_flags
 )
 
+# rolla-export-test in slices (--only), so CTest runs them in parallel and each
+# stays well under the timeout. Each run uses its own scratch profile.
+# Tone pack: -DROLLA_TEST_TONE_PACK=/tmp/rolla-tone-pack (built by
+# tests/roll/renderer_smoke.py build_pack). Empty: no stem-content checks.
+#   ctest --test-dir build -L export -j 4 --output-on-failure
+set(ROLLA_TEST_TONE_PACK "" CACHE PATH "Tone pack folder passed to rolla-export-test --samples")
+enable_testing()
+set(ROLLA_EXPORT_SLICES
+    midi
+    audio:ROLLER audio:DEEP audio:BOUNCY audio:JACKIN
+    vox:0-9 vox:10-19 vox:20-29 vox:30-end
+    length2)
+foreach(slice IN LISTS ROLLA_EXPORT_SLICES)
+    string(REPLACE ":" "-" slice_name "${slice}")
+    string(TOLOWER "${slice_name}" slice_name)
+    set(slice_args --only ${slice})
+    if(ROLLA_TEST_TONE_PACK)
+        list(APPEND slice_args --samples "${ROLLA_TEST_TONE_PACK}")
+    endif()
+    add_test(NAME rolla-export-${slice_name} COMMAND rolla-export-test ${slice_args})
+    # Slices that bounce 7-8 stems at once take two processors' worth of CPU.
+    if(slice MATCHES "^(audio:|length2)")
+        set(slice_procs 2)
+    else()
+        set(slice_procs 1)
+    endif()
+    set_tests_properties(rolla-export-${slice_name} PROPERTIES
+        TIMEOUT 1200
+        LABELS export
+        PROCESSORS ${slice_procs})
+endforeach()
+
 # Bundled sample pack: resolve order, one bar per lane from the bundle, silence
 # with no samples, settings never take a temp root. Scratch profile only.
 add_executable(rolla-bundle-test

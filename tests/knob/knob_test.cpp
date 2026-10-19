@@ -635,6 +635,26 @@ void testState()
     const auto back = restored.copyGroove();
     expect (hashPart (back, rolla::Bass) == hashPart (groove, rolla::Bass), "restore bass pattern");
     expect (back.generation == groove.generation, "restore does not reshuffle");
+
+    // Per-voice drum picks: unset by default, saved and restored, and a session saved
+    // without them (every session before this field) restores every voice unset.
+    expect (proc.drumVoicePick (rolla::Kick) == -1 && proc.drumVoicePick (rolla::Perc) == -1,
+            "drum picks start unset");
+    proc.setDrumVoicePick (rolla::Kick, 3);
+    proc.setDrumVoicePick (rolla::TomLow, 7);
+    juce::MemoryBlock picked;
+    proc.getStateInformation (picked);
+    rolla::RollaProcessor withPicks;
+    withPicks.waitUntilReady();
+    withPicks.setStateInformation (picked.getData(), (int) picked.getSize());
+    expect (withPicks.drumVoicePick (rolla::Kick) == 3, "restore kick drum pick");
+    expect (withPicks.drumVoicePick (rolla::TomLow) == 7, "restore tom drum pick");
+    expect (withPicks.drumVoicePick (rolla::Snare) == -1, "an unset drum pick stays unset");
+    withPicks.setStateInformation (block.getData(), (int) block.getSize());
+    bool allUnset = true;
+    for (int v = 0; v < rolla::NumDrumVoices; ++v)
+        allUnset = allUnset && withPicks.drumVoicePick (v) == -1;
+    expect (allUnset, "an old session restores every drum voice to the shared pick");
 }
 
 void testBindings()

@@ -1,5 +1,6 @@
 #include "Sampler.h"
 #include "Engine.h"
+#include "../Drums/DrumMachine.h"
 #include "../Sampler/PlayDecision.h"
 #include "../Sampler/UserSlots.h"
 
@@ -106,6 +107,8 @@ struct LaneHit
     SampleChoice choice {};
     const SampleAudio* audio = nullptr;
     bool pending = false;
+    // The first still-loading file the note waits on (nullptr when none).
+    const char* waitFile = nullptr;
 };
 
 // Preferred file is requested. Already-loaded neighbours can play immediately.
@@ -149,6 +152,7 @@ bool readyFromIndex (const SampleLibrary* library, const SampleIndex* index, int
         {
             library->request (preferred->path);
             hit.pending = true;
+            hit.waitFile = preferred->path;
         }
     }
     const int window = n < 32 ? n : 32;
@@ -186,6 +190,7 @@ bool readyFromIndex (const SampleLibrary* library, const SampleIndex* index, int
         {
             library->request (entry->path);
             hit.pending = true;
+            hit.waitFile = entry->path;
             hit.spec = &spec;
             requested = true;
         }
@@ -209,7 +214,10 @@ bool readyChoice (const SampleLibrary* library, const SampleSpec& spec, int midi
         return true;
     }
     if (state == FileState::Pending)
+    {
         hit.pending = true;
+        hit.waitFile = choice.file;
+    }
 
     const char* extras[SampleSpec::kPool + SampleSpec::kZones + 1] {};
     int n = 0;
@@ -235,7 +243,11 @@ bool readyChoice (const SampleLibrary* library, const SampleSpec& spec, int midi
             return true;
         }
         if (extra == FileState::Pending)
+        {
             hit.pending = true;
+            if (hit.waitFile == nullptr)
+                hit.waitFile = extras[i];
+        }
     }
     return false;
 }
@@ -377,6 +389,24 @@ const SampleSpec& sampleSpecFor (const PresetBank& bank, int part, int preset) n
     return specAt (bank, part, preset);
 }
 
+double kickKeyFollowRatio (const PitchInfo& pitch, int key) noexcept
+{
+    // A chord reading on a kick is noise, not a fundamental.
+    if (! pitch.pitched() || pitch.isChord || ! (pitch.conf >= kKickFollowConfMin))
+        return 1.0;
+    double f0 = 440.0 * std::pow (2.0, ((double) pitch.rootPitch - 69.0) / 12.0);
+    if (! std::isfinite (f0) || f0 <= 1.0)
+        return 1.0;
+    // The probe may read the body's octave or a harmonic: fold into the kick register.
+    while (f0 >= 80.0)
+        f0 *= 0.5;
+    while (f0 < 40.0)
+        f0 *= 2.0;
+    const double target = (double) DrumMachine::kickHzForKey (key);
+    const double semis = std::clamp (12.0 * std::log2 (target / f0), -kKickFollowMaxSt, kKickFollowMaxSt);
+    return std::pow (2.0, semis / 12.0);
+}
+
 void Sampler::Voice::Env::start (float aMs, float dMs, float sGain, float rMs, float sr) noexcept
 {
     stage = 1;
@@ -461,6 +491,12 @@ void Sampler::reset() noexcept
         v = {};
     for (int& c : sliceCursor)
         c = 0;
+    for (auto& h : held)
+        h = {};
+    heldCount = 0;
+    pendingNote = false;
+    pendingFile = nullptr;
+    lateStart = false;
     stepEst = 0.f;
 }
 
@@ -578,6 +614,9 @@ void Sampler::releaseNote (int part, int midiNote) noexcept
     for (auto& v : voices)
         if (v.on && v.part == part && v.midiNote == midiNote)
             v.env.release();
+    for (auto& h : held)
+        if (h.on && h.part == part && h.midiNote == midiNote)
+            dropHeld (h);
 }
 
 void Sampler::releaseAll() noexcept
@@ -585,6 +624,8 @@ void Sampler::releaseAll() noexcept
     for (auto& v : voices)
         if (v.on)
             v.env.release();
+    for (auto& h : held)
+        dropHeld (h);
 }
 
 Sampler::Voice* Sampler::allocate (int part) noexcept
@@ -977,6 +1018,12 @@ bool Sampler::playUserSlot (int part, int drumVoice, int midiNote, int velocity,
         take.kind = 1;
         take.synthGain = 0.f;
         drumKeep = 0.f;
+        // A melodic note waits for the slot file instead of being lost.
+        if (slot.loading && drumVoice < 0)
+        {
+            pendingNote = true;
+            pendingFile = nullptr;
+        }
         return true;
     }
 
@@ -1061,6 +1108,125 @@ bool Sampler::playUserSlot (int part, int drumVoice, int midiNote, int velocity,
 Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
                              const PresetBank& bank, const EngineParams& params, ChordAsk ask) noexcept
 {
+    // A new note on a lane replaces an older held copy of the same pitch; mono
+    // lanes (BASS, VOX) replace every held note, so a late start never stacks.
+    for (auto& h : held)
+        if (h.on && h.part == part && (h.midiNote == midiNote || part == Bass || part == Vox))
+            dropHeld (h);
+    pendingNote = false;
+    pendingFile = nullptr;
+    const Take result = startNote (part, midiNote, velocity, end16, bank, params, ask);
+    // Only notes with a known length are held; a live key without one could start after its release.
+    if (pendingNote && velocity > 0 && end16 < 1.0e8f)
+        holdNote (part, midiNote, velocity, end16, ask, pendingFile);
+    pendingNote = false;
+    pendingFile = nullptr;
+    return result;
+}
+
+void Sampler::holdNote (int part, int midiNote, int velocity, float end16, ChordAsk ask, const char* file) noexcept
+{
+    Held* slot = nullptr;
+    for (auto& h : held)
+        if (! h.on)
+        {
+            slot = &h;
+            break;
+        }
+    if (slot == nullptr)
+        return;
+    slot->on = true;
+    slot->born = true;
+    slot->part = part;
+    slot->midiNote = midiNote;
+    slot->velocity = velocity;
+    slot->end16 = end16;
+    slot->ask = ask;
+    slot->wait = 0;
+    slot->sweep = 0;
+    slot->file[0] = 0;
+    if (file != nullptr)
+    {
+        std::strncpy (slot->file, file, sizeof (slot->file) - 1);
+        slot->file[sizeof (slot->file) - 1] = 0;
+    }
+    ++heldCount;
+}
+
+void Sampler::dropHeld (Held& h) noexcept
+{
+    if (! h.on)
+        return;
+    h.on = false;
+    heldCount = std::max (0, heldCount - 1);
+}
+
+void Sampler::retryHeld (const PresetBank& bank, const EngineParams& params,
+                         float prev16, float pos16, bool playing) noexcept
+{
+    if (heldCount <= 0)
+        return;
+    // Cheap poll of the awaited file every 32 samples; a full re-resolve every
+    // 2048 samples covers a pick that moved on (an absent file swaps to the next).
+    constexpr int kPoll = 32;
+    constexpr int kSweep = 2048 / kPoll;
+    for (auto& h : held)
+    {
+        if (! h.on)
+            continue;
+        if (h.born)
+        {
+            h.born = false;
+            continue;
+        }
+        if (! playing || pos16 < prev16 || pos16 >= h.end16)
+        {
+            dropHeld (h);
+            continue;
+        }
+        if (--h.wait > 0)
+            continue;
+        h.wait = kPoll;
+        bool due = ++h.sweep >= kSweep;
+        if (h.file[0] != 0 && params.library != nullptr
+            && (params.library->ready (h.file) || params.library->missing (h.file)))
+            due = true;
+        if (! due)
+            continue;
+        h.sweep = 0;
+        pendingNote = false;
+        pendingFile = nullptr;
+        lateStart = true;
+        const Take started = startNote (h.part, h.midiNote, h.velocity, h.end16, bank, params, h.ask);
+        lateStart = false;
+        if (pendingNote)
+        {
+            // Still loading (perhaps a pool neighbour now): keep waiting on it.
+            if (pendingFile != nullptr && std::strcmp (pendingFile, h.file) != 0)
+            {
+                std::strncpy (h.file, pendingFile, sizeof (h.file) - 1);
+                h.file[sizeof (h.file) - 1] = 0;
+            }
+        }
+        else
+        {
+            const int donePart = h.part;
+            const float doneEnd = h.end16;
+            dropHeld (h);
+            // A recorded chord sounds every tone: the other held tones of that chord stay quiet.
+            if (started.chordFile)
+                for (auto& other : held)
+                    if (other.on && other.part == donePart && other.end16 == doneEnd)
+                        dropHeld (other);
+        }
+        pendingNote = false;
+        pendingFile = nullptr;
+    }
+}
+
+Sampler::Take Sampler::startNote (int part, int midiNote, int velocity, float end16,
+                                  const PresetBank& bank, const EngineParams& params, ChordAsk ask) noexcept
+{
     Take result;
     if (part < 0 || part >= Drums)
         return result;
@@ -1088,7 +1254,8 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
         return result;
     }
 
-    const int sliceIndex = sliceCursor[part]++;
+    // A held note retried late keeps the slice the lane would draw next.
+    const int sliceIndex = lateStart ? sliceCursor[part] : sliceCursor[part]++;
     LaneHit hit;
     const bool recipe = spec.filter.on && params.sampleIndex != nullptr;
     if (recipe)
@@ -1154,9 +1321,15 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
         }
     }
     // Still loading, or confirmed missing after the same-pool swap: the sample
-    // owns this note. The lane synth does not fill the gap.
+    // owns this note. The lane synth does not fill the gap. A still-loading file
+    // is not the end of the note: take() holds it and retryHeld() starts it late.
     if (audio == nullptr || audio->frames < 8)
     {
+        if (hit.pending)
+        {
+            pendingNote = true;
+            pendingFile = hit.waitFile;
+        }
         result.kind = 1;
         result.synthGain = 0.f;
         return result;
@@ -1292,6 +1465,13 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     }
 
     armAttack (fresh);
+    if (lateStart)
+    {
+        // Started after its file finished loading: a 12 ms raised-cosine fade-in,
+        // so the late entry is not a click.
+        fresh.attackN = std::max (8, (int) (0.012 * sr));
+        fresh.attackLeft = fresh.attackN;
+    }
     fresh.born = true;
     *slot = fresh;
     if (layered)
@@ -1377,13 +1557,16 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
     int pick = params.samplePick[Drums];
     if (pick < 0)
         pick = 0;
+    // A genre-drawn voice pick is an ordinal in this voice's scanned pool, so it only
+    // applies there. An explicit voice pool and the pack fallback keep the shared pick.
+    const int indexPick = params.drumPick[voice] >= 0 ? params.drumPick[voice] : pick + shift;
     const auto& own = drum.voicePool[voice];
     if (! own.empty())
         scanPool (own, pick + shift, true);
     else if (params.sampleIndex != nullptr)
     {
         LaneHit indexed;
-        if (readyFromIndex (params.library, params.sampleIndex, Drums, spec, pick + shift, voice, params.dialect, indexed))
+        if (readyFromIndex (params.library, params.sampleIndex, Drums, spec, indexPick, voice, params.dialect, indexed))
             audio = indexed.audio;
         else if (indexed.pending)
             pending = true;
@@ -1401,6 +1584,8 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
             pending = true;
         }
     }
+    // Key follow only trusts the kick's own file, not a hit borrowed from the pack.
+    const bool ownFile = audio != nullptr;
     if (audio == nullptr && ! pending)
     {
         // Crash, tom, shaker, noise, or a missing folder: PERC, then OH, then RIDE.
@@ -1439,6 +1624,10 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
 
     const auto amp = ampFor (bank, Drums, presetOf (params, Drums));
     const float tune = std::pow (2.f, params.drumTuneSt[voice] / 12.f);
+    // Multiplies the TUNE knob; exactly 1 when off, so the ratio is bit-identical.
+    const double keyFollow = voice == Kick && params.kickKeyFollow && ownFile
+                                 ? kickKeyFollowRatio (audio->pitch, params.key)
+                                 : 1.0;
     Voice fresh;
     fresh.on = true;
     fresh.part = Drums;
@@ -1447,7 +1636,7 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
     fresh.audio = audio;
     notePicked (Drums, voice, audio);
     fresh.reverse = spec.reverse;
-    fresh.ratio = std::clamp (tune * (audio->rate / sr), 0.25, 4.0);
+    fresh.ratio = std::clamp (tune * (audio->rate / sr) * keyFollow, 0.25, 4.0);
     fresh.end16 = 1.0e9f;
     fresh.fade = 0.f;
     fresh.fadeInc = 1.f / std::max (8.f, 0.002f * (float) sr);
