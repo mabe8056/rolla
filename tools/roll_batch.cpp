@@ -103,6 +103,14 @@ void writeRollJson (const std::filesystem::path& dir, int style, const std::stri
     for (int p = 0; p < rolla::NumParts; ++p)
         out << (p ? ", " : "") << seeds[p];
     out << "],\n  " << redrawJson (r) << "\n}\n";
+    // Every redraw behind the roll, one stderr line each (count, reference
+    // stream id and score), so a gate log shows what the guard caught.
+    for (std::size_t i = 0; i < r.log.size(); ++i)
+        std::cerr << "REDRAW " << rolla::dialectId (style) << " " << name << " #" << (i + 1) << "/" << r.total()
+                  << " lane=" << laneName (r.log[i].lane) << " metric=" << metricText (r.log[i].metric)
+                  << " ref=" << (r.log[i].ref[0] ? r.log[i].ref : "-") << " score=" << r.log[i].score << "\n";
+    if (r.skeleton > 0)
+        std::cerr << "REDRAW " << rolla::dialectId (style) << " " << name << " skeleton=" << r.skeleton << " (batch twin)\n";
 }
 
 struct Knobs

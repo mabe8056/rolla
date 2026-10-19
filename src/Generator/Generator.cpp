@@ -2704,7 +2704,8 @@ float jaccard8 (const RhythmSnap& a, const RhythmSnap& b) noexcept
 
 bool rhythmTwin (const RhythmSnap& a, const RhythmSnap& b) noexcept
 {
-    return jaccard32 (a.b2, b.b2) >= 0.80f || jaccard8 (a, b) >= 0.80f;
+    // Model v1.2 batch twin line (twin_jaccard_max).
+    return jaccard32 (a.b2, b.b2) >= rules::tables::kTwinJaccardMax || jaccard8 (a, b) >= rules::tables::kTwinJaccardMax;
 }
 
 bool rhythmClose (const RhythmRing& ring, const RhythmSnap& snap) noexcept
@@ -3658,15 +3659,21 @@ void fillBassDensity (Lane& lane, int dialect, int bars, float busy, std::uint32
         add[b] = even;
     if (dialect == Long && nb == 8)
     {
+        // Back-half density movement (bars 5-7) drawn per bar from the model's
+        // DEEP density curve (mean, sd per bar), against the line's own mean.
         namespace rt = rules::tables;
-        const int* c = rt::kDeepBackHalf[postHash (seed ^ 0xDEE5u, 5u) % (std::uint32_t) rt::kDeepBackHalfShapes];
+        const int st = std::clamp ((int) Long, 0, rt::kStyles - 1);
+        Rng rd (postHash (seed ^ 0xDEE5u, 5u) | 1u);
         const bool busyLine = mean >= target + 1.f;
         for (int j = 0; j < 3; ++j)
         {
+            const float g = (float) ((rd.next() + rd.next() + rd.next() - 1.5) * 2.0);
+            const float want = rt::kBassDensity[st][4 + j][0] + rt::kBassDensity[st][4 + j][1] * 0.5f * g;
+            const int c = std::clamp ((int) std::lround (want - mean), 0, 2);
             if (busyLine)
-                thin[4 + j] = c[j];
+                thin[4 + j] = c;
             else
-                add[4 + j] += c[j];
+                add[4 + j] += c;
         }
     }
 
@@ -3853,6 +3860,30 @@ void capBassSounding (Lane& lane, int bars, float capFrac, float minLen)
 }
 
 // Onsets per bar, population sd over the loop's bars (the scorer's npb_sd).
+// A&R / model v1.2: every bass note sounds lo..hi of the gap to the next onset
+// (the last note's gap wraps to the loop's first onset), never under half a 16th
+// and never over eight. The final word on bass lengths after every other pass.
+void guardGapRatio (Lane& lane, int bars, float lo, float hi)
+{
+    if (lane.count <= 0)
+        return;
+    std::sort (lane.notes, lane.notes + lane.count,
+               [] (const Note& a, const Note& b) { return a.start < b.start; });
+    const float loop = (float) (std::min (bars, kMaxBars) * 16);
+    for (int i = 0; i < lane.count; ++i)
+    {
+        const float next = i + 1 < lane.count ? lane.notes[i + 1].start : loop + lane.notes[0].start;
+        const float gap = std::max (0.5f, next - lane.notes[i].start);
+        float len = std::clamp (lane.notes[i].length, lo * gap, hi * gap);
+        len = std::clamp (len, 0.5f, 8.f);
+        // Never past the next onset (one note per onset, no overlap).
+        len = std::min (len, std::max (0.25f, gap - 1.f / 120.f));
+        // Never past the loop end.
+        len = std::min (len, std::max (0.25f, loop - lane.notes[i].start));
+        lane.notes[i].length = len;
+    }
+}
+
 float barDensitySpread (const Lane& lane, int bars) noexcept
 {
     const int nb = clampi (bars, 1, kMaxBars);
@@ -4610,17 +4641,20 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
         {
             spreadBounceDensity (g.lane[Bass], s.bars, 0.7f, bassSeed);
             capBassSounding (g.lane[Bass], s.bars, 0.49f, 0.9f);
-            // Composer: bounce mean note length 0.8-1.6 sixteenths.
-            fitBounceMeanLength (g, s.bars, 0.85f, 1.55f, bassSeed);
+            // A&R / model v1.2: bounce mean note length 0.9-1.4 sixteenths (its own
+            // band; the gap ratio is for the other modes).
+            fitBounceMeanLength (g, s.bars, 0.9f, 1.4f, bassSeed);
         }
         else if (popMode == BassModePulse)
         {
             // Composer: pulse octave moves at most 8%.
             capPulseOctaves (g.lane[Bass], 0.08f);
-            capBassSounding (g.lane[Bass], s.bars, 0.975f, 1.0f);
+            // Pulse sounds about 0.93 of each gap.
+            guardGapRatio (g.lane[Bass], s.bars, 0.90f, 0.95f);
         }
-        else if (s.dialect == Long)
-            capBassSounding (g.lane[Bass], s.bars, 0.88f, 1.0f);
+        else
+            // Model v1.2: 0.79-0.83 of the gap to the next note.
+            guardGapRatio (g.lane[Bass], s.bars, 0.79f, 0.83f);
     }
     g.guardScore = shippedHard ? 0.f : 1.f;
     g.guardLevel = shippedHard ? 2 : 0;
@@ -4663,6 +4697,49 @@ struct RedrawTally
     }
 };
 
+// Loop repeat of a bass line at `lag` 16ths: per 16th the attack's pitch class,
+// rests and sustains as one token, pairs where both are rests skipped (the A&R
+// scorer's F6 measure).
+float bassRepeat (const Lane& lane, int bars, int lag)
+{
+    const int L = std::min (bars, kMaxBars) * 16;
+    if (L <= lag)
+        return -1.f;
+    int tok[kMaxSteps];
+    for (int i = 0; i < L; ++i)
+        tok[i] = -1;
+    for (int i = 0; i < lane.count; ++i)
+    {
+        const int a = (int) std::lround (lane.notes[i].start);
+        if (a < 0 || a >= L)
+            continue;
+        tok[a] = ((lane.notes[i].chord[0] % 12) + 12) % 12;
+    }
+    int pairs = 0;
+    int same = 0;
+    for (int i = 0; i + lag < L; ++i)
+    {
+        if (tok[i] == -1 && tok[i + lag] == -1)
+            continue;
+        ++pairs;
+        if (tok[i] == tok[i + lag])
+            ++same;
+    }
+    return pairs > 0 ? (float) same / (float) pairs : -1.f;
+}
+
+// Model v1.2 loop identity: JACKIN repeats on the 2-bar grid (>= kRepeatM2Min)
+// and not on the 1-bar grid (<= kRepeatM1Max). A line outside it is recomposed.
+bool jackinRepeatOk (const Lane& lane, int bars)
+{
+    if (bars < 4)
+        return true;
+    const int st = std::clamp ((int) Gaskin, 0, rules::tables::kStyles - 1);
+    const float r1 = bassRepeat (lane, bars, 16);
+    const float r2 = bassRepeat (lane, bars, 32);
+    return r1 <= rules::tables::kRepeatM1Max[st] + 1.0e-4f && (r2 < 0.f || r2 >= rules::tables::kRepeatM2Min[st] - 1.0e-4f);
+}
+
 static bool composeOriginal (Groove& g, const Groove& input, const Settings& settings,
                              const std::uint32_t base[NumParts], std::uint32_t partMask,
                              const orig::Index* external, RedrawTally& tally, std::uint32_t modeSeed)
@@ -4682,6 +4759,14 @@ static bool composeOriginal (Groove& g, const Groove& input, const Settings& set
         // one pitch class on four or fewer attacks in two or more bars is
         // composed again (the composer avoids it; the post passes can still
         // produce it).
+        if ((pitched & (1u << Bass)) != 0 && g.dialect == Gaskin && ! jackinRepeatOk (g.lane[Bass], g.bars)
+            && k + 1 < kOrigAttempts)
+        {
+            ++bump[Bass];
+            ++tally.guard;
+            tally.add (Bass, 0, bassRepeat (g.lane[Bass], g.bars, 16), "guard:jackin_repeat");
+            continue;
+        }
         if ((pitched & (1u << Bass)) != 0 && rules::thinRepeatedBackHalf (g.lane[Bass], g.bars))
         {
             ++bump[Bass];

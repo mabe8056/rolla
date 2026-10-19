@@ -346,11 +346,23 @@ int placeOctave (int st, int pc, int prevSemi, Rng& r) noexcept
 {
     if (pc < 7)
         return pc;
+    // The interval distribution gets the model's entropy floor at run time.
+    float iv[27];
+    float flat[27];
+    float mean = 0.f;
+    for (int i = 0; i < 27; ++i)
+        mean += kBassInterval[st][i] / 27.f;
+    for (int i = 0; i < 27; ++i)
+    {
+        iv[i] = kBassInterval[st][i];
+        flat[i] = mean;
+    }
+    enforceFloor (iv, flat, 27, kFloorIntervalBass);
     float w[2];
     for (int k = 0; k < 2; ++k)
     {
         const int c = pc - 12 * k;
-        w[k] = kBassInterval[st][std::clamp (c - prevSemi + 13, 0, 26)] + 1.0e-3f;
+        w[k] = iv[std::clamp (c - prevSemi + 13, 0, 26)] + 1.0e-3f;
     }
     return pc - 12 * pickAll (w, 2, r);
 }
@@ -971,6 +983,8 @@ void chooseVoicing (int st, int mode, unsigned bassMask, int prevBottom, int str
     float row[12];
     for (int pc = 0; pc < 12; ++pc)
         row[pc] = prevBottom >= 0 ? kStabTrans[st][prevBottom][pc] : kStabUnigram[st][pc];
+    // Cell cap and entropy floor at run time, as for the bass rows.
+    prepareRow (row, kStabUnigram[st], kFloorRowStab);
     unsigned mask = bassMask;
     int bottom = -1;
     int vi = -1;
@@ -1216,6 +1230,21 @@ void composeStab (Lane& lane, const Lane& bass, const StabParams& p, std::uint32
 
     int placedAll = 0;
     int onBeat = 0;
+    // Per-roll copies of the stab onset weights with the model's onset entropy floor.
+    float given[3][kBar];
+    for (int c = 0; c < 3; ++c)
+    {
+        float mean = 0.f;
+        for (int s = 0; s < kBar; ++s)
+        {
+            given[c][s] = kStabGiven[st][c][s];
+            mean += given[c][s] / (float) kBar;
+        }
+        float flat[kBar];
+        for (float& x : flat)
+            x = mean;
+        enforceFloor (given[c], flat, kBar, kFloorOnsetStab);
+    }
     for (int bar = 0; bar < nb; ++bar)
     {
         if (p.skipOdd && (bar & 1) != 0)
@@ -1271,7 +1300,7 @@ void composeStab (Lane& lane, const Lane& bass, const StabParams& p, std::uint32
                     for (int s = 0; s < kBar; ++s)
                     {
                         legal[s] = cls[s] == want && ! taken[s] && (beatOk || ! kickStep (s));
-                        w[s] = cls[s] < 0 ? 0.f : kStabGiven[st][cls[s]][s];
+                        w[s] = cls[s] < 0 ? 0.f : given[cls[s]][s];
                         if (cls[s] == 0)
                             w[s] *= kStabGapWeight;
                         if (answer[bar * kBar + s])

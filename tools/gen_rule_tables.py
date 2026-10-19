@@ -100,13 +100,6 @@ inline constexpr float kStabAnswerBoost = 3.0f;
 inline constexpr int kArcShapes = 4;
 inline constexpr const char* kArcNames[kArcShapes] = { "arc_flat", "arc_build", "arc_dip", "arc_swell" };
 
-// DEEP density fill (Generator fillBassDensity): extra attacks in bars 5-7,
-// one abstract contour drawn per roll.
-inline constexpr int kDeepBackHalfShapes = 5;
-inline constexpr int kDeepBackHalf[kDeepBackHalfShapes][3] = {
-    { 0, 1, 2 }, { 1, 0, 2 }, { 1, 2, 1 }, { 2, 1, 1 }, { 0, 2, 1 },
-};
-
 // Stab placement shares per bar against the bass: in a gap, over a sustain, on
 // an attack. The batch median of the gap share is the model's soft target
 // (gap_soft_target_pct); slot choice inside a class follows the model's

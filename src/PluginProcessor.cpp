@@ -59,7 +59,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout (const PresetBa
 
     add (std::make_unique<AudioParameterFloat> (
         ParameterID { "swing", 1 }, "Swing",
-        NormalisableRange<float> (0.50f, 0.57f, 0.001f), 0.52f));
+        NormalisableRange<float> (0.50f, 0.57f, 0.001f), 0.537f)); // model v1.2 hat swing target (53-57%)
 
     add (std::make_unique<AudioParameterChoice> (
         ParameterID { "length", 1 }, "Length",

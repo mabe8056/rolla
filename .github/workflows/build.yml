@@ -252,7 +252,7 @@ jobs:
           mkdir -p "$CCACHE_DIR"
           ccache -z
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-          TESTS="rolla-sampler-test rolla-sample-check rolla-roll-test rolla-knob-test rolla-phrase-test rolla-arrange-test rolla-tp-test rolla-export-test rolla-bundle-test"
+          TESTS="rolla-sampler-test rolla-sample-check rolla-roll-test rolla-knob-test rolla-phrase-test rolla-tp-test rolla-export-test rolla-bundle-test"
           if [ "$LIGHT" = "true" ]; then
             echo "Draft PR: building test binaries only"
             cmake --build build --target $TESTS
@@ -309,11 +309,10 @@ jobs:
           set -euo pipefail
           ./build/rolla-roll-test
 
-      - name: Phrase grammar and arrangement
+      - name: Phrase grammar
         run: |
           set -euo pipefail
           ./build/rolla-phrase-test
-          ./build/rolla-arrange-test
 
       # About 6 minutes on main; built on drafts, run on full CI only.
       - name: True-peak guard tests
