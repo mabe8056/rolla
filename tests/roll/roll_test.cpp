@@ -1403,6 +1403,8 @@ void testStabDensity()
                     + " inside the style range");
         expect (at0 < atDefault && atDefault < at1,
                 std::string (names[style]) + " STAB 0 / 0.55 / 1 raises stab density strictly");
+        expect (at1 <= 3.0 + 1.0e-9,
+                std::string (names[style]) + " full STAB stays at 3 hits/bar or fewer (no 4-hit riff)");
     }
 }
 

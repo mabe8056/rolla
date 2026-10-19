@@ -2858,13 +2858,13 @@ constexpr int kStabHitsMax = 3;
 // (0.55), but a full 3 in every bar is 3.0 hits a bar, over the stab_hpb
 // ceilings in data/genre/style_rules.json (DEEP 2.76, BOUNCY / JACKIN 2.97).
 // So up to 0.8, bars 2, 4 and 6 (0-based 1, 3, 5) take one fewer: a style
-// that fills the cap lands at 2.625 hits a bar. Over 0.8 every bar takes
-// kStabHitsMax + 1, so the knob still adds density at the top (0 / 0.55 / 1
-// rises strictly in every style; roll_test testStabDensity checks it).
+// that fills the cap lands at 2.625 hits a bar. Over 0.8 every bar takes the
+// full kStabHitsMax (3.0 a bar), never more: no knob value makes a 4-hit riff
+// (0 / 0.55 / 1 still rises strictly; roll_test testStabDensity checks it).
 int stabHitCap (const Settings& s, int bar) noexcept
 {
     if (s.stab > 0.8f)
-        return kStabHitsMax + 1;
+        return kStabHitsMax;
     const int b = bar & 7;
     return (b == 1 || b == 3 || b == 5) ? kStabHitsMax - 1 : kStabHitsMax;
 }
