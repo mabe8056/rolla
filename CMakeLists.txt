@@ -102,6 +102,9 @@ target_link_libraries(ROLLA
 # where ROLLA looks first. Audio stays out of the repo: point this at a folder on disk.
 #   cmake -B build -DROLLA_SAMPLE_PACK_DIR=/path/to/pack
 set(ROLLA_SAMPLE_PACK_DIR "" CACHE PATH "Sample pack folder copied into the built plugin bundles")
+# Private genre data (orig_builtin.json, genre_targets.json) copied into
+# Contents/Resources/Genre with the pack. Never in the repo.
+set(ROLLA_GENRE_DATA_DIR "" CACHE PATH "Private genre data folder copied into the built plugin bundles")
 if(ROLLA_SAMPLE_PACK_DIR)
     if(NOT IS_DIRECTORY "${ROLLA_SAMPLE_PACK_DIR}")
         message(FATAL_ERROR "ROLLA_SAMPLE_PACK_DIR is not a folder: ${ROLLA_SAMPLE_PACK_DIR}")
@@ -123,7 +126,7 @@ if(ROLLA_SAMPLE_PACK_DIR)
         else()
             # Copies (APFS clones on macOS), writes .rolla-pack.json, re-signs ad hoc.
             add_custom_command(TARGET ROLLA_${rolla_format} POST_BUILD
-                COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tools/inject_pack.sh" "${rolla_bundle}" "${ROLLA_SAMPLE_PACK_DIR}"
+                COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tools/inject_pack.sh" "${rolla_bundle}" "${ROLLA_SAMPLE_PACK_DIR}" "${ROLLA_GENRE_DATA_DIR}"
                 VERBATIM)
         endif()
     endforeach()
