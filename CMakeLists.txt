@@ -593,7 +593,7 @@ add_executable(rolla-profile-test
     src/Sampler/SamplePrep.cpp
     src/Sampler/UserSlots.cpp
     src/Generator/Generator.cpp
-    src/Generator/PhraseBank.cpp
+    src/Generator/RuleComposer.cpp
     src/Generator/Presets.cpp
     src/Generator/MidiFile.cpp
     src/Drums/DrumMachine.cpp
