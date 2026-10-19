@@ -2,6 +2,7 @@
 
 #include "../DspUtil.h"
 #include "../Drums/DrumMachine.h"
+#include "../Generator/Scale.h"
 #include "../Mix/MixRuntime.h"
 #include "../Mix/TruePeakGuard.h"
 #include "../Sampler/UserSlots.h"
@@ -360,8 +361,13 @@ struct Engine::Impl
     juce::Reverb reverb;
     int reverbIdle = 1000000;
     DcBlock mainDc, mainDcR, drumDc, drumDcR;
-    // Master sub-mono crossover (mix path only).
-    Svf subL, subR;
+    // Master mono below 120 Hz (LR4 on the side, mix path only). It used to be
+    // L += LP(M) - LP(L) with a 2-pole LP: the side then only saw 1 - LP, a
+    // 6 dB/oct shelf (about -3 dB at 60 Hz), so the plate's side sailed through.
+    MonoBelow masterMono;
+    // Plate return mono below 120 Hz: the drum room send comes back stereo
+    // (width 0.68) after the DRUMS bus cut.
+    MonoBelow plateMono;
     // DRUMS bus mono below 120 Hz (LR4 on the side), before the main sum and the stem.
     MonoBelow drumMono;
     MixRuntime mixRt;
@@ -447,8 +453,8 @@ struct Engine::Impl
         mainDcR.reset();
         drumDc.reset();
         drumDcR.reset();
-        subL.reset();
-        subR.reset();
+        masterMono.reset();
+        plateMono.reset();
         drumMono.reset();
         mixRt.reset();
         tpGuard.reset();
@@ -1112,6 +1118,11 @@ void Engine::process (const Groove& groove,
                         count = std::min (4, sp.chordN);
                         for (int c = 0; c < count; ++c)
                             iv[c] = std::clamp (root + sp.chordIv[c], -48, 48);
+                        // Parallel chord memory is written for minor. A locked scale
+                        // folds it in, so the stab stays inside the picked scale.
+                        if (params.scale != ScaleAuto)
+                            for (int c = 0; c < count; ++c)
+                                iv[c] = quantizeToScale (params.scale, iv[c]);
                     }
                     const Extras& ex = part == Stab ? sp.ex : (part == Pluck ? pp.ex : padP.ex);
                     const ChordAsk ask = chordAskOf (iv, std::min (count, 4));
@@ -1795,6 +1806,7 @@ void Engine::process (const Groove& groove,
         };
 
         float playL[NumParts] {}, playR[NumParts] {};
+        sampler.retryHeld (bank, play, (float) prev, (float) pos, transport.playing);
         sampler.render (playL, playR, (float) prev, (float) pos, transport.playing, (float) loop16);
 
         const float bFader = E.level[Bass].next();
@@ -2298,6 +2310,9 @@ void Engine::process (const Groove& groove,
             E.reverb.processStereo (&revL, &revR, 1);
             revL = flush (revL * fxGate);
             revR = flush (revR * fxGate);
+            // The plate widens the drum room send after the DRUMS bus cut; mono its low end.
+            if (mixSum)
+                E.plateMono.process (revL, revR, kSubMonoHz, srF);
             if (! mixSum && std::fabs (revL) < 1.0e-7f && std::fabs (revR) < 1.0e-7f && std::fabs (send) < 1.0e-6f)
                 ++E.reverbIdle;
             else
@@ -2319,12 +2334,8 @@ void Engine::process (const Groove& groove,
             const float sg = E.mixRt.sumGain();
             // Mono below 120 Hz on the master: the plate, the delay and the unstripped
             // toms / slot kicks put side energy under the lanes' own mono-below.
-            // Linear, so MUTE − (FULL − SOLO) still nulls.
-            const float lowL = E.subL.lowpass (outL, kSubMonoHz, 0.70710678f, srF);
-            const float lowR = E.subR.lowpass (outR, kSubMonoHz, 0.70710678f, srF);
-            const float lowM = 0.5f * (lowL + lowR);
-            outL += lowM - lowL;
-            outR += lowM - lowR;
+            // LR4 on the side, mid untouched. Linear, so MUTE − (FULL − SOLO) still nulls.
+            E.masterMono.process (outL, outR, kSubMonoHz, srF);
             outL = flush (E.mainDc.process (outL) * sg * og);
             outR = flush (E.mainDcR.process (outR) * sg * og);
         }

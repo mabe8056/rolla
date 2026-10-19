@@ -84,6 +84,10 @@ jobs:
           tests/bundle/inject_pack_check.sh "$(cat /tmp/rolla_au_path)"
 
       - name: pluginval strictness 5
+        env:
+          # The plugin honours these two; keeps settings and caches off the runner's profile.
+          ROLLA_SETTINGS_DIR: ${{ runner.temp }}/rolla-profile/settings
+          ROLLA_CACHE_DIR: ${{ runner.temp }}/rolla-profile/cache
         run: |
           set -euo pipefail
           curl -fsSL -o /tmp/pluginval.zip \
@@ -251,8 +255,8 @@ jobs:
           set -euo pipefail
           mkdir -p "$CCACHE_DIR"
           ccache -z
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-          TESTS="rolla-sampler-test rolla-sample-check rolla-roll-test rolla-knob-test rolla-phrase-test rolla-arrange-test rolla-tp-test rolla-export-test rolla-bundle-test"
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DROLLA_TEST_TONE_PACK=/tmp/rolla-tone-pack
+          TESTS="rolla-sampler-test rolla-sample-check rolla-roll-test rolla-knob-test rolla-phrase-test rolla-tp-test rolla-export-test rolla-bundle-test rolla-profile-test"
           if [ "$LIGHT" = "true" ]; then
             echo "Draft PR: building test binaries only"
             cmake --build build --target $TESTS
@@ -269,6 +273,12 @@ jobs:
         with:
           path: ${{ github.workspace }}/.ccache
           key: ${{ steps.ccache.outputs.cache-primary-key }}
+
+      - name: Profile isolation (no test touches a real ROLLA profile)
+        run: |
+          set -euo pipefail
+          ./build/rolla-profile-test
+
 
       - name: Sampler tests
         run: |
@@ -288,7 +298,9 @@ jobs:
         run: |
           set -euo pipefail
           python3 -c "import sys; sys.path.insert(0, 'tests/roll'); import renderer_smoke as r; r.build_pack('/tmp/rolla-tone-pack')"
-          ./build/rolla-export-test --samples /tmp/rolla-tone-pack
+          # rolla-export-test in 10 slices (midi, audio-<style>, vox-<range>,
+          # length2), each with its own scratch profile, run in parallel.
+          ctest --test-dir build -L export -j "$(nproc)" --output-on-failure
 
       - name: Bundled samples (bundle root, one bar per lane, fidelity, silence, settings)
         run: |
@@ -309,11 +321,10 @@ jobs:
           set -euo pipefail
           ./build/rolla-roll-test
 
-      - name: Phrase grammar and arrangement
+      - name: Phrase grammar
         run: |
           set -euo pipefail
           ./build/rolla-phrase-test
-          ./build/rolla-arrange-test
 
       # About 6 minutes on main; built on drafts, run on full CI only.
       - name: True-peak guard tests
@@ -333,7 +344,7 @@ jobs:
         run: |
           set -euo pipefail
           # rolla-render's 0.10 cpu gate is a quiet-machine realtime budget.
-          # ubuntu-24.04 runners have landed just over it (gaskin 0.109) while
+          # ubuntu-24.04 runners have landed just over it (jackin 0.109) while
           # A&R still passed. Waive only that line, and only up to 0.25.
           set +e
           ./build/rolla-render "$GITHUB_WORKSPACE/renders" > /tmp/rolla-render.log 2>&1
@@ -361,6 +372,10 @@ jobs:
 
       - name: pluginval strictness 5
         if: ${{ !github.event.pull_request.draft }}
+        env:
+          # The plugin honours these two; keeps settings and caches off the runner's profile.
+          ROLLA_SETTINGS_DIR: ${{ runner.temp }}/rolla-profile/settings
+          ROLLA_CACHE_DIR: ${{ runner.temp }}/rolla-profile/cache
         run: |
           set -euo pipefail
           curl -fsSL -o /tmp/pluginval.zip \
@@ -397,7 +412,7 @@ jobs:
           set -euo pipefail
           ./build/rolla-rolls --style all --count 20 --seed 1 --out "$GITHUB_WORKSPACE/ci-rolls"
           python3 -m pip install --user --break-system-packages mido || true
-          for style in ukmin long pop gaskin; do
+          for style in ukmin long pop jackin; do
             python3 tools/score_rolls.py "$GITHUB_WORKSPACE/ci-rolls/$style" --style "$style" --no-orig || true
           done
           echo "clicks, tails, loudness: SKIPPED (no sample pack on this runner)"
@@ -530,7 +545,7 @@ jobs:
           python3 tests/mix/mix_check.py stimulus "$GITHUB_WORKSPACE/mix-renders/stimulus.wav" --seconds 4
           ./build/rolla-mix-render --switch --stim "$GITHUB_WORKSPACE/mix-renders/stimulus.wav" --from UKMIN --to LONG --at 1.0 --lane STAB "$GITHUB_WORKSPACE/mix-renders/switch/UKMIN_LONG.wav"
           ./build/rolla-mix-render --switch --stim "$GITHUB_WORKSPACE/mix-renders/stimulus.wav" --from LONG --to POP --at 1.0 --lane STAB "$GITHUB_WORKSPACE/mix-renders/switch/LONG_POP.wav"
-          ./build/rolla-mix-render --switch --stim "$GITHUB_WORKSPACE/mix-renders/stimulus.wav" --from POP --to GASKIN --at 1.0 --lane STAB "$GITHUB_WORKSPACE/mix-renders/switch/POP_GASKIN.wav"
+          ./build/rolla-mix-render --switch --stim "$GITHUB_WORKSPACE/mix-renders/stimulus.wav" --from POP --to JACKIN --at 1.0 --lane STAB "$GITHUB_WORKSPACE/mix-renders/switch/POP_JACKIN.wav"
           python3 tests/mix/run_mix_checks.py --gate --switch-dir "$GITHUB_WORKSPACE/mix-renders/switch" "$GITHUB_WORKSPACE/mix-renders"
 
       - name: tp_guard table

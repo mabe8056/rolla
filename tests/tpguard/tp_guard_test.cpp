@@ -12,7 +12,8 @@
 // own 24-tap detector. Factory presets are sample-only, so part B forces every
 // lane to SYNTH; no sample pack is needed.
 // Part C checks the DRUMS bus mono-below-120 Hz: a hard-panned stereo kick
-// through MonoBelow, and JACKIN rolls whose DRUMS stem must correlate >= 0.99 below 120 Hz.
+// through MonoBelow, and JACKIN rolls whose DRUMS stem must correlate >= 0.99 below 120 Hz,
+// plus the rolla-rolls --stems DRUMS stem (main out, others muted): side >= 30 dB under mid below 120 Hz.
 // Part D (chain_click_test.cpp) renders kicks and rim/perc hits through their strips and
 // asserts the A&R click score does not rise (ROLLA_CLICK_PACK=<folder> adds pack files).
 
@@ -23,6 +24,7 @@
 #include "Generator/Presets.h"
 #include "Mix/MixProgram.h"
 #include "Mix/TruePeakGuard.h"
+#include "../common/ScratchProfile.h"
 
 #include <BinaryData.h>
 #include <juce_core/juce_core.h>
@@ -536,6 +538,76 @@ void partC()
     }
     std::printf ("INFO JACKIN low-end correlation, worst of 6 rolls: DRUMS stem %.4f, main %.4f (synth voices)\n",
                  worstDrum, worstMain);
+
+    // The `rolla-rolls --stems` DRUMS stem: tools/roll_batch.cpp renderWav with every
+    // other lane muted, drums to main, no separate drum outs, guard on, 0.7 s tail.
+    // That stem is the main out, so it carries the plate return and the master.
+    // Side (L-R)/2 below 120 Hz must sit >= 30 dB under mid (L+R)/2 below 120 Hz.
+    double worstRatio = 0.0;
+    for (std::uint32_t roll = 0; roll < 6; ++roll)
+    {
+        rolla::Settings st;
+        st.dialect = kJackin;
+        st.bars = 8;
+        st.fill = true;
+        const std::uint32_t seeds[rolla::NumParts] = { 0x0B17u + roll * 101u, 0x51ABu + roll * 7u, 0x19C3u + roll, 0x77E1u, 0x0A11u, 0xBEEFu, 0x0909u + roll * 977u };
+        rolla::Groove g {};
+        rolla::generate (g, st, seeds, 0x7fu);
+        auto params = makeParams (bank, mix, kJackin);
+        for (int i = 0; i < rolla::NumParts; ++i)
+            params.mute[i] = i != rolla::Drums;
+        for (int v = 0; v < rolla::NumDrumVoices; ++v)
+            params.drumDecay[v] = 0.5f;
+        params.duck = true;
+        params.drumsToMain = true;
+        params.drumsAccent = 0.6f;
+        params.outputDb = 0.f;
+        params.tpGuard = true;
+        const int loopN = total;
+        const int stemN = loopN + (int) std::llround (0.70 * kSr);
+        Stereo stem { std::vector<float> ((size_t) stemN), std::vector<float> ((size_t) stemN) };
+        rolla::Engine engine;
+        engine.prepare (kSr, kBlock);
+        double ppq = 0.0;
+        int done = 0;
+        while (done < stemN)
+        {
+            int n = std::min (kBlock, stemN - done);
+            if (done < loopN)
+                n = std::min (n, loopN - done);
+            rolla::Transport t;
+            t.playing = done < loopN;
+            t.bpm = kBpm;
+            t.ppqStart = ppq;
+            t.sampleRate = kSr;
+            juce::MidiBuffer midi;
+            engine.process (g, params, t, stem.l.data() + done, stem.r.data() + done, nullptr, nullptr, n, midi, true);
+            if (t.playing)
+                ppq += (double) n * kBpm / (60.0 * kSr);
+            done += n;
+        }
+        // LR4 low-pass at 120 Hz on mid and side.
+        rolla::Svf mA, mB, sA, sB;
+        const float srF = (float) kSr;
+        double midE = 0.0, sideE = 0.0;
+        for (int i = 0; i < stemN; ++i)
+        {
+            const float m = 0.5f * (stem.l[(size_t) i] + stem.r[(size_t) i]);
+            const float s = 0.5f * (stem.l[(size_t) i] - stem.r[(size_t) i]);
+            const float ml = mB.lowpass (mA.lowpass (m, 120.f, 0.70710678f, srF), 120.f, 0.70710678f, srF);
+            const float sl = sB.lowpass (sA.lowpass (s, 120.f, 0.70710678f, srF), 120.f, 0.70710678f, srF);
+            midE += (double) ml * ml;
+            sideE += (double) sl * sl;
+        }
+        const double ratioDb = 10.0 * std::log10 ((midE + 1.0e-20) / (sideE + 1.0e-20));
+        worstRatio = roll == 0 ? ratioDb : std::min (worstRatio, ratioDb);
+        check (midE > 1.0e-6 && ratioDb >= 30.0,
+               "JACKIN roll " + std::to_string (roll) + ": rolla-rolls DRUMS stem side below 120 Hz >= 30 dB under mid",
+               fmt ("mid %.2f dB, side %.2f dB, side %.2f dB under mid",
+                    10.0 * std::log10 (midE / stemN + 1.0e-20), 10.0 * std::log10 (sideE / stemN + 1.0e-20), ratioDb));
+    }
+    std::printf ("INFO JACKIN rolla-rolls DRUMS stem, worst of 6 rolls: side %.2f dB under mid below 120 Hz (synth voices)\n",
+                 worstRatio);
 }
 } // namespace
 
@@ -544,6 +616,12 @@ int runChainClickTests();
 
 int main()
 {
+    // Links the sample library and user slots: run on a scratch profile like every test.
+    if (rolla::test::useScratchProfile ("tp").empty())
+    {
+        std::printf ("could not set up a scratch profile\n");
+        return 1;
+    }
     partA();
     partB();
     partC();

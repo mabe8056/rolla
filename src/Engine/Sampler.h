@@ -2,14 +2,111 @@
 
 #include "SampleLibrary.h"
 #include <atomic>
+#include <cstring>
 #include <string>
 #include "../DspUtil.h"
 #include "../Generator/Presets.h"
+#include "../GenreBrain/Treatment.h"
 
 namespace rolla
 {
 
 struct EngineParams;
+
+// Per-lane adaptive treatments (GenreBrain/Treatment.h), decided at roll time for
+// the drawn samples and published through EngineParams::treatments. Null there (the
+// default) leaves every voice exactly as before. User slots are never treated: the
+// user's own sample keeps the user's settings.
+//
+// A slot with a file only treats that file (library-relative path, as in
+// SampleAudio::path); a pool swap to another file plays it untreated. An empty
+// file treats whatever the lane plays.
+//
+// Publish like UserSlotView: build a set off the audio thread, then swap the
+// pointer. The audio thread only reads it.
+struct TreatmentSet
+{
+    struct Slot
+    {
+        bool on = false;
+        genre::Treatment treatment;
+        char file[96] {};
+    };
+
+    Slot part[NumParts] {};       // melodic lanes; part[Drums] is unused (see drum)
+    Slot drum[NumDrumVoices] {};  // drum voices (takeDrum)
+
+    void set (int lane, const genre::Treatment& t, const char* file = nullptr) noexcept
+    {
+        if (lane >= 0 && lane < NumParts && lane != Drums)
+            fill (part[lane], t, file);
+    }
+
+    void setDrum (int voice, const genre::Treatment& t, const char* file = nullptr) noexcept
+    {
+        if (voice >= 0 && voice < NumDrumVoices)
+            fill (drum[voice], t, file);
+    }
+
+    void clear() noexcept
+    {
+        for (auto& s : part)
+            s = {};
+        for (auto& s : drum)
+            s = {};
+    }
+
+    // The treatment for a voice about to start, or null. drumVoice >= 0 picks a drum slot.
+    const genre::Treatment* find (int lane, int drumVoice, const char* path) const noexcept
+    {
+        const Slot* s = nullptr;
+        if (drumVoice >= 0)
+            s = drumVoice < NumDrumVoices ? &drum[drumVoice] : nullptr;
+        else if (lane >= 0 && lane < NumParts && lane != Drums)
+            s = &part[lane];
+        if (s == nullptr || ! s->on)
+            return nullptr;
+        if (s->file[0] != 0 && (path == nullptr || std::strcmp (s->file, path) != 0))
+            return nullptr;
+        return &s->treatment;
+    }
+
+private:
+    static void fill (Slot& s, const genre::Treatment& t, const char* file) noexcept
+    {
+        s.on = true;
+        s.treatment = t;
+        copySamplePath (s.file, (int) sizeof s.file, file);
+    }
+};
+
+// Where a genre lane plays in the engine: a melodic part, or a drum voice of the
+// Drums part. False for lanes with no engine slot (FX).
+inline bool engineSlotFor (genre::Lane lane, int& part, int& drumVoice) noexcept
+{
+    part = -1;
+    drumVoice = -1;
+    switch (lane)
+    {
+        case genre::Lane::Kick:  drumVoice = Kick; break;
+        case genre::Lane::Clap:  drumVoice = Clap; break;
+        case genre::Lane::Snare: drumVoice = Snare; break;
+        case genre::Lane::HatC:  drumVoice = HatC; break;
+        case genre::Lane::HatO:  drumVoice = HatO; break;
+        case genre::Lane::Perc:  drumVoice = Perc; break;
+        case genre::Lane::Ride:  drumVoice = Ride; break;
+        case genre::Lane::Bass:  part = Bass; break;
+        case genre::Lane::Stab:  part = Stab; break;
+        case genre::Lane::Pluck: part = Pluck; break;
+        case genre::Lane::Pad:   part = Pad; break;
+        case genre::Lane::Hits:  part = Hits; break;
+        case genre::Lane::Vox:   part = Vox; break;
+        default: return false;
+    }
+    if (drumVoice >= 0)
+        part = Drums;
+    return true;
+}
 
 // Realtime sample voices. take() / takeDrum() run on the audio thread and only
 // read a published SampleAudio. Rendering uses a 16-tap windowed sinc.
@@ -28,6 +125,12 @@ public:
     void prepare (double sampleRate) noexcept;
     void reset() noexcept;
 
+    // True when the file opens on a step: its first sample sits well above how
+    // far the signal moves per sample over the next millisecond (a kick trimmed
+    // onto its peak). Only those get the 0.5 ms file-start fade; a file that
+    // opens into noise or rises from zero plays its first samples as recorded.
+    static bool opensOnStep (const SampleAudio& audio) noexcept;
+
     // ask: the chord this note opens (empty for a single note). A chord file plays
     // from that chord's root, and moves to a root where its quality fits.
     Take take (int part, int midiNote, int velocity, float end16,
@@ -39,6 +142,15 @@ public:
     float takeDrum (int voice, int velocity, const PresetBank& bank, const EngineParams& params,
                     float gainScale = 1.f) noexcept;
     void releaseNote (int part, int midiNote) noexcept;
+
+    // Audio thread, once per sample before render(). A note whose file was still
+    // loading when it was triggered is held here (fixed slots, no allocation) and
+    // starts, with a short fade-in, as soon as its file is ready inside the note's
+    // length. It is dropped at the note end, a loop wrap, a release or a stop.
+    void retryHeld (const PresetBank& bank, const EngineParams& params,
+                    float prev16, float pos16, bool playing) noexcept;
+    // Notes waiting on a loading file. Tests and status.
+    int heldNotes() const noexcept { return heldCount; }
 
     void releaseAll() noexcept;
     // loopEnd16 > 0 fades every voice out at the phrase end so nothing runs into the next bar.
@@ -104,6 +216,10 @@ private:
         int releaseLeft = 0;
         int releaseN = 0;
         float noteEdge = 1.f;
+        // Treatment decay trim: output samples until the trim fade starts (0 = no
+        // trim), then a raised-cosine release of trimFadeN samples.
+        int trimLeft = 0;
+        int trimFadeN = 0;
         float gain = 0.2f;
         float pan = 0.f;
         float end16 = 1.0e9f;
@@ -132,9 +248,45 @@ private:
         } env;
     };
 
+    struct Held
+    {
+        bool on = false;
+        // Set for the sample it was held on: that sample may also be the
+        // downbeat rewind, which is not a loop wrap for this note.
+        bool born = false;
+        int part = 0;
+        int midiNote = 60;
+        int velocity = 0;
+        float end16 = 0.f;
+        ChordAsk ask {};
+        int wait = 0;
+        int sweep = 0;
+        char file[256] {};
+    };
+    static constexpr int kHeld = 16;
+    Held held[kHeld];
+    int heldCount = 0;
+    // Set by start() when the note was dropped only because a file is still loading.
+    bool pendingNote = false;
+    const char* pendingFile = nullptr;
+    // Set while retryHeld() starts a held note: the voice fades in.
+    bool lateStart = false;
+    Take startNote (int part, int midiNote, int velocity, float end16,
+                const PresetBank& bank, const EngineParams& params, ChordAsk ask) noexcept;
+    void holdNote (int part, int midiNote, int velocity, float end16, ChordAsk ask, const char* file) noexcept;
+    void dropHeld (Held& h) noexcept;
+
+    // Drum hits steal only drum voices, melodic notes only melodic voices.
     Voice* allocate (int part) noexcept;
     void park (const Voice& dying) noexcept;
+    // What a voice still puts out: env, release edge and gain. A voice born this
+    // sample (env still 0) is never the quietest: stealing it chopped the new kick.
+    static float audibleLevel (const Voice& v) noexcept;
+    // Closed hat chokes the open hat: a 5 ms raised-cosine release, never a hard cut.
+    void chokeDrum (int drumVoice) noexcept;
     void armAttack (Voice& voice) noexcept;
+    // Loop region and decay trim from a Treatment; call after armAttack.
+    void applyTreatment (Voice& voice, const genre::Treatment& t) const noexcept;
     float readSinc (const std::vector<float>& src, double index) const noexcept;
     void readVoice (Voice& v, float& l, float& r) noexcept;
     // True when a user slot owns this note (playing, or still loading).
@@ -146,11 +298,29 @@ private:
     // takeDrum's gainScale, seen by playUserSlot for a drum voice. Audio thread only.
     float drumGain = 1.f;
     int serial = 1;
+    // The playhead's 16ths per sample, smoothed (render). Audio thread only.
+    float stepEst = 0.f;
     int sliceCursor[NumParts] {};
-    Voice voices[40];
-    Voice tails[16];
+    // Two pools. With one shared pool a full drum kit stole bass notes (a bass
+    // voice's gain ranks below a drum tail's), and in a stem bounce the muted
+    // drums still played into the pool and cut the soloed bass.
+    static constexpr int kDrumVoices = 40;
+    static constexpr int kMelodicVoices = 32;
+    Voice voices[kDrumVoices + kMelodicVoices];
+    // Stolen voices finish their release here. Evicting a tail is a cut, so keep plenty.
+    Voice tails[32];
 };
 
 const SampleSpec& sampleSpecFor (const PresetBank& bank, int part, int preset) noexcept;
+
+// Kick key follow (PRESET_SPEC 9.2). Pitch confidence a kick needs before it is retuned:
+// lower than kPitchConfMin, since a kick's tail is a decaying sine with a chirp on top.
+inline constexpr float kKickFollowConfMin = 0.3f;
+inline constexpr double kKickFollowMaxSt = 3.0;
+
+// Playback ratio that moves a sampled kick's measured fundamental (tail f0, folded
+// into 40-80 Hz) toward DrumMachine::kickHzForKey (key), within +-3 st so the body
+// keeps its character. 1 for an unpitched or low-confidence file.
+double kickKeyFollowRatio (const PitchInfo& pitch, int key) noexcept;
 
 } // namespace rolla

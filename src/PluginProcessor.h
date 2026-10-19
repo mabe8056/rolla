@@ -4,6 +4,7 @@
 #include "Engine/SampleLibrary.h"
 #include "Mix/MixProgram.h"
 #include "Sampler/UserSlots.h"
+#include "Sampler/RetuneGuard.h"
 #include "Generator/Generator.h"
 #include "Generator/Pattern.h"
 #include "Generator/Presets.h"
@@ -134,6 +135,16 @@ public:
 
     void triggerRoll();
     void triggerShuffle (int part);
+
+    // Status line after the originality floor refused a ROLL / shuffle / reshape
+    // and the previous roll was kept ("Roll refused: ..."). Empty again after
+    // the next accepted roll. serial changes on every set or clear.
+    struct RollNotice
+    {
+        juce::String text;
+        std::uint32_t serial = 0;
+    };
+    RollNotice rollNotice() const;
     // Alt-click on a solo button: solo `part` and clear every other lane's solo.
     void setExclusiveSolo (int part);
 
@@ -169,8 +180,47 @@ public:
     };
     SamplesStatus samplesStatus() const;
 
+    // One-line UI notice (e.g. the Key + Scale guard: "NO SAFE FILE: STAB muted in D# Phrygian").
+    // Any thread may set it; never call from the audio thread (takes a lock, copies a String).
+    // An empty string clears it. The editor polls getUiNotice() and shows it in the status strip.
+    void setUiNotice (const juce::String& text)
+    {
+        {
+            const std::lock_guard<std::mutex> lock (uiNoticeMu);
+            uiNotice = text;
+        }
+        uiNoticeSerial.fetch_add (1, std::memory_order_release);
+    }
+    void clearUiNotice() { setUiNotice ({}); }
+    juce::String getUiNotice() const
+    {
+        const std::lock_guard<std::mutex> lock (uiNoticeMu);
+        return uiNotice;
+    }
+    // Bumps on every set; lets the editor skip the lock when nothing changed.
+    std::uint32_t getUiNoticeSerial() const noexcept { return uiNoticeSerial.load (std::memory_order_acquire); }
+    // Retune guard notice for the header, e.g. "NO SAFE FILE: BASS in F# Dorian".
+    // Empty when every pitched lane has a file that survives the key. Any thread.
+    juce::String retuneNotice() const;
+    // Tests: whether the guard muted a lane's sampler for this pattern.
+    bool retuneMutedLane (int part) const noexcept
+    {
+        return part >= 0 && part < NumParts && retuneMuted[part].load (std::memory_order_relaxed);
+    }
+
     // Library-relative file the last note on a lane (or drum voice) played. Tests only.
     std::string lastPickedFile (int part, int drumVoice = -1) const { return engine.lastPickedFile (part, drumVoice); }
+
+    // Per-voice drum pick (genre brain); -1 plays the shared drum pick. Tests and status.
+    int drumVoicePick (int voice) const noexcept
+    {
+        return voice >= 0 && voice < NumDrumVoices ? drumPick[voice].load (std::memory_order_relaxed) : -1;
+    }
+    void setDrumVoicePick (int voice, int pick) noexcept
+    {
+        if (voice >= 0 && voice < NumDrumVoices)
+            drumPick[voice].store (pick < 0 ? -1 : pick, std::memory_order_relaxed);
+    }
 
     // 14 session slots (6 lanes + 8 drum voices). Paths persist; audio does not.
     bool loadUserSlot (int slot, const juce::File& file, juce::String& error);
@@ -191,9 +241,16 @@ public:
     std::uint32_t getProjectEditorSerial() const noexcept { return projectEditorSerial.load (std::memory_order_relaxed); }
 
 private:
+    mutable std::mutex uiNoticeMu;
+    juce::String uiNotice;
+    std::atomic<std::uint32_t> uiNoticeSerial { 0 };
+
     void parameterChanged (const juce::String& parameterID, float newValue) override;
     void applyDialect (int dialect);
     void regenerate (int onlyPart);
+    void setRollNotice (const juce::String& text);
+    mutable std::mutex noticeMu;
+    RollNotice notice;
     void requestReshape();
     void reshapeUnkept();
     EngineParams readParams (std::shared_ptr<const PresetBank>& hold) const;
@@ -223,6 +280,12 @@ private:
     // Message thread. Loads the files the current presets and picks will play, so a
     // freshly rolled lane is ready before the downbeat instead of starting silent.
     void prefetchPlayFiles();
+    // Message thread (prefetch timer). Checks each pitched lane's pick against the
+    // retune guard for the shifts this roll needs and moves samplePick to the next
+    // pool file that survives. Key locked and none survives: the lane is muted and
+    // retuneNotice() says so. Key Auto: the key moves to the nearest one where every
+    // lane survives (today's when it does). Never the audio thread.
+    void guardRetunes();
 
     struct AsyncState
     {
@@ -256,6 +319,14 @@ private:
     SampleLibrary library;
     UserSlots slots;
     std::atomic<int> samplePick[NumParts] {};
+    // One pick per drum voice, -1 (set in the constructor) until the genre brain
+    // draws it. A plain roll or an old session resets it, so drums use samplePick[Drums].
+    std::atomic<int> drumPick[NumDrumVoices] {};
+    // Genre brain (Job G2): the bundle's Genre/ data, loaded on the first roll. With
+    // no data a roll keeps today's seed draw. Message thread only.
+    struct GenreBrainState;
+    std::shared_ptr<GenreBrainState> genreBrain;
+    void applyGenreBrain (std::uint32_t mask, const Settings& s, const std::uint32_t* seeds, const int* presetFor);
     std::atomic<int> samplesFoundCount { -1 };
     std::atomic<int> samplesMissingCount { -1 };
 
@@ -295,6 +366,14 @@ private:
     std::atomic<DrumSampleSlot*> drumSlot { nullptr };
 
     std::uint64_t prefetchedKey = 0;
+    // Retune guard state. Message thread only, except the cache (locked).
+    RetuneTolerances retuneTol;
+    RetuneCache retuneCache;
+    std::uint64_t guardedStamp = 0;
+    bool guardPending = false;
+    // Key locked, no surviving file: the sampler is silent on the lane (readParams).
+    std::atomic<bool> retuneMuted[NumParts] {};
+    void setRetuneNotice (const juce::String& text); // writes the UI notice
     struct PrefetchTimer : juce::Timer
     {
         explicit PrefetchTimer (RollaProcessor& p) : owner (p) {}

@@ -1,6 +1,7 @@
 #include "Engine/Engine.h"
 #include "Engine/Sampler.h"
 #include "Generator/Presets.h"
+#include "../tests/common/ScratchProfile.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_events/juce_events.h>
@@ -49,6 +50,10 @@ void writeSine (const juce::File& file)
 
 int main()
 {
+    // The library writes its loudness cache: keep it in a scratch profile.
+    const auto home = rolla::test::useScratchProfile ("sample-check");
+    if (home.empty())
+        return fail ("could not set up a scratch profile");
     juce::ScopedJuceInitialiser_GUI juce;
 
     if (rolla::midiFromNoteName ("D1", -1) != 26)

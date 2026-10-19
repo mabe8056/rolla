@@ -1,9 +1,21 @@
 // rolla-export-test: what the plugin exports is what it plays.
 //
-//   rolla-export-test [--samples DIR]
+//   rolla-export-test [--samples DIR] [--only PART]
 //
 // With --samples (CI builds a tone pack with tests/roll/renderer_smoke.py's
 // build_pack, nothing committed) it also checks that stems are not silent.
+//
+// --only runs one slice, so CTest can run the slices in parallel (each one well
+// under the timeout). Without it everything runs in one process, as before.
+//   midi          every style: full MIDI == played notes, host-loop checks
+//                 (incl. "some style has bars 5-8 unlike 1-4"), lane MIDI
+//   audio:STYLE   one style (ROLLER, DEEP, BOUNCY, JACKIN): stems, every lane
+//                 WAV, folder export
+//   vox:A-B       vox presets A..B (inclusive; B = end: to the last preset),
+//                 each right after its pick
+//   length2       LENGTH 2 on an 8-bar groove, then a fresh 2-bar roll (all checks)
+// Each run works in its own scratch profile (pid + time stamp), never a shared
+// temp folder, so parallel runs never collide.
 // For every style it ROLLs, then, without playing first:
 //  - writes the full multitrack MIDI and compares every note-on with the
 //    pattern MIDI processBlock sends to the host over the same loop
@@ -29,6 +41,7 @@
 #include <iostream>
 #include <map>
 #include <string>
+#include <thread>
 #include <vector>
 
 
@@ -363,14 +376,17 @@ int lengthBars (rolla::RollaProcessor& proc)
 }
 
 // Full MIDI vs what processBlock plays over one loop of LENGTH bars.
-void compareMidi (rolla::RollaProcessor& proc, const std::string& tag, const rolla::Groove& g, int bars)
+// Returns the played notes (empty if there was no file to compare against), so
+// the host-loop checks reuse this straight-host render instead of making the
+// same one again.
+std::vector<NoteOn> compareMidi (rolla::RollaProcessor& proc, const std::string& tag, const rolla::Groove& g, int bars)
 {
     const int loopTicks = bars * 4 * 480;
     const int loopN = rolla::rollexport::loopSamples (bars, kBpm, kRate);
     const auto mids = proc.writeTempMidi();
     expect (mids.size() == 1, tag + ": one full MIDI file");
     if (mids.isEmpty())
-        return;
+        return {};
     const juce::File full (mids[0]);
     expect (nameOk (full, g, rolla::rollexport::kFull), tag + ": full MIDI name " + full.getFileName().toStdString());
     const auto fn = readMidi (full, loopTicks);
@@ -386,6 +402,7 @@ void compareMidi (rolla::RollaProcessor& proc, const std::string& tag, const rol
             tag + ": exported notes == played notes (" + std::to_string (fn.ons.size()) + " in file, "
                 + std::to_string (played.size()) + " played, " + std::to_string (onlyFile) + " only in file, "
                 + std::to_string (onlyPlayed) + " only played) " + example);
+    return played;
 }
 
 // Styles whose bars 5-8 differ from bars 1-4, so the host-loop checks below
@@ -396,7 +413,11 @@ int distinctHalves = 0;
 // bars. ROLLA plays its own phrase through the wrap, so an 8-bar roll sends the
 // same notes as under a straight host, bars 5-8 included. A stop and restart
 // goes back to bar 1.
-void testHostLoop (rolla::RollaProcessor& proc, const std::string& tag, int bars)
+// `straightPlayed` is compareMidi's straight-host render of the same loop: playedNotes
+// re-prepares the processor every call, and the checks below already rely on
+// two calls giving the same notes, so a second straight render is redundant.
+// Empty (compareMidi had no file): render it here.
+void testHostLoop (rolla::RollaProcessor& proc, const std::string& tag, int bars, const std::vector<NoteOn>& straightPlayed)
 {
     if (bars != 8)
         return;
@@ -409,7 +430,7 @@ void testHostLoop (rolla::RollaProcessor& proc, const std::string& tag, int bars
             c += x.tick >= half - 4.0;
         return c;
     };
-    const auto straight = playedNotes (proc, loopN);
+    const auto straight = straightPlayed.empty() ? playedNotes (proc, loopN) : straightPlayed;
     const int late = lateCount (straight);
     {
         std::vector<NoteOn> first, second;
@@ -453,23 +474,10 @@ bool nameOk (const juce::File& f, const rolla::Groove& g, int part)
            && name.fromLastOccurrenceOf ("_", false, false).length() == 8;
 }
 
-void testStyle (rolla::RollaProcessor& proc, int style, bool pack, const juce::File& scratch)
+// The 7 stems (drag-all), straight after the roll, before anything has played.
+void testStems (rolla::RollaProcessor& proc, const std::string& tag, const rolla::Groove& g, int bars, bool pack)
 {
-    const std::string tag = std::string (rolla::kStyleLabels[style]);
-    if ((int) proc.apvts.getRawParameterValue ("dialect")->load() != style)
-        expect (reshapeTo (proc, "dialect", (float) style), tag + ": style reshape");
-    // A fresh roll that has never played: its files may not be loaded yet.
-    {
-        const auto before = proc.copyGroove().generation;
-        proc.triggerRoll();
-        expect (pumpUntil ([&] { return proc.copyGroove().generation != before; }), tag + ": roll");
-    }
-    const auto g = proc.copyGroove();
-    const int bars = lengthBars (proc);
-    const int loopTicks = bars * 4 * 480;
     const int loopN = rolla::rollexport::loopSamples (bars, kBpm, kRate);
-
-    // Stems first, straight after the roll, before anything has played.
     const auto t0 = juce::Time::getMillisecondCounterHiRes();
     const auto stems = proc.writeStemAudio();
     std::cout << "INFO " << tag << ": 7 stems bounced in " << (int) (juce::Time::getMillisecondCounterHiRes() - t0) << " ms\n";
@@ -504,13 +512,18 @@ void testStyle (rolla::RollaProcessor& proc, int style, bool pack, const juce::F
     }
     if (pack)
         expect (silent == 0, tag + ": no silent stems right after a roll " + silentNames);
+}
 
-    // Full multitrack MIDI vs what processBlock plays.
-    compareMidi (proc, tag, g, bars);
-    testHostLoop (proc, tag, bars);
+// Full multitrack MIDI vs what processBlock plays, host loops, lane MIDI.
+// Returns false if the full MIDI file could not be written (the rest is skipped).
+bool testMidiExports (rolla::RollaProcessor& proc, const std::string& tag, const rolla::Groove& g, int bars)
+{
+    const int loopTicks = bars * 4 * 480;
+    const auto straight = compareMidi (proc, tag, g, bars);
+    testHostLoop (proc, tag, bars, straight);
     const auto mids = proc.writeTempMidi();
     if (mids.isEmpty())
-        return;
+        return false;
     const auto fn = readMidi (juce::File (mids[0]), loopTicks);
 
     // Lane MIDI = that lane's track of the full file.
@@ -559,11 +572,29 @@ void testStyle (rolla::RollaProcessor& proc, int style, bool pack, const juce::F
                                           + " bars (end of track at " + std::to_string (end) + " ticks)");
         }
     }
+    return true;
+}
 
-    // Every lane's WAV stem on its own (lane drag in audio mode).
+// Every lane's WAV stem on its own (lane drag in audio mode), then the folder export.
+void testLaneAudioAndFolder (rolla::RollaProcessor& proc, const std::string& tag, const rolla::Groove& g, int bars,
+                             const juce::File& scratch)
+{
+    const int loopN = rolla::rollexport::loopSamples (bars, kBpm, kRate);
+    // The 7 lane bounces are independent (each builds its own offline engine,
+    // like writeStemAudio's 7 workers), so they run at once instead of one
+    // after another. Same calls, same files; only the checks run on this thread.
+    std::vector<juce::StringArray> laneWavs ((size_t) rolla::NumParts);
+    {
+        std::vector<std::thread> workers;
+        workers.reserve ((size_t) rolla::NumParts);
+        for (int part = 0; part < rolla::NumParts; ++part)
+            workers.emplace_back ([&proc, &laneWavs, part] { laneWavs[(size_t) part] = proc.writeLaneAudio (part); });
+        for (auto& w : workers)
+            w.join();
+    }
     for (int part = 0; part < rolla::NumParts; ++part)
     {
-        const auto wav = proc.writeLaneAudio (part);
+        const auto& wav = laneWavs[(size_t) part];
         const std::string lane = rolla::partId (part);
         if (wav.isEmpty())
         {
@@ -593,10 +624,154 @@ void testStyle (rolla::RollaProcessor& proc, int style, bool pack, const juce::F
             tag + ": folder export has " + std::to_string (mid) + " MIDI (want 8: 7 lanes + full) and "
                 + std::to_string (wav) + " WAV (want 8: 7 stems + full mix)");
 }
+
+// One style: a fresh roll, then the MIDI checks, the audio checks or both
+// (both = the original order: stems, MIDI, lane WAVs, folder).
+void testStyle (rolla::RollaProcessor& proc, int style, bool pack, const juce::File& scratch, bool doMidi = true,
+                bool doAudio = true)
+{
+    const std::string tag = std::string (rolla::kStyleLabels[style]);
+    if ((int) proc.apvts.getRawParameterValue ("dialect")->load() != style)
+        expect (reshapeTo (proc, "dialect", (float) style), tag + ": style reshape");
+    // A fresh roll that has never played: its files may not be loaded yet.
+    {
+        const auto before = proc.copyGroove().generation;
+        proc.triggerRoll();
+        expect (pumpUntil ([&] { return proc.copyGroove().generation != before; }), tag + ": roll");
+    }
+    const auto g = proc.copyGroove();
+    const int bars = lengthBars (proc);
+    if (doAudio)
+        testStems (proc, tag, g, bars, pack);
+    if (doMidi && ! testMidiExports (proc, tag, g, bars))
+        return;
+    if (doAudio)
+        testLaneAudioAndFolder (proc, tag, g, bars, scratch);
+}
+
+// Vox presets first..last (inclusive), each right after its pick: each recipe
+// has to find a file in the library (the "loops" recipe has no tempo-locked
+// loop in the tone pack and used to leave the lane silent, a different style
+// each CI run).
+void testVoxPresets (rolla::RollaProcessor& proc, int first, int last)
+{
+    auto* voxPreset = proc.apvts.getParameter ("voxPreset");
+    const int n = voxPreset != nullptr ? (int) voxPreset->getNormalisableRange().end + 1 : 0;
+    expect (n > 0, "voxPreset parameter has presets (" + std::to_string (n) + ")");
+    for (int i = std::max (0, first); i < n && i <= last; ++i)
+    {
+        setDenorm (proc, "voxPreset", (float) i);
+        pumpUntil ([&] { return (int) proc.apvts.getRawParameterValue ("voxPreset")->load() == i; }, 2000);
+        if (proc.copyGroove().lane[rolla::Vox].count <= 0)
+        {
+            std::cout << "vox preset " << i << ": no vox notes in this groove, skipped\n";
+            continue;
+        }
+        const auto lane = proc.writeLaneAudio (rolla::Vox);
+        const auto w = lane.isEmpty() ? Wav {} : readWav (juce::File (lane[0]));
+        expect (w.peak > 1.0e-4f, "vox preset " + std::to_string (i) + " sounds right after it is picked (peak "
+                                      + std::to_string (w.peak) + ")");
+    }
+}
+
+// LENGTH 2 without a re-roll: the engine loops the first 2 bars of the 8-bar
+// groove, and the export has to follow it. Then a fresh 2-bar roll.
+void testLength2 (rolla::RollaProcessor& proc, bool pack, const juce::File& scratch)
+{
+    setDenorm (proc, "length", 0.f);
+    pumpUntil ([&] { return lengthBars (proc) == 2; });
+    expect (lengthBars (proc) == 2 && proc.copyGroove().bars == 8, "LENGTH 2 set on an 8-bar groove, no re-roll");
+    {
+        const auto g = proc.copyGroove();
+        compareMidi (proc, "LENGTH 2 (no re-roll)", g, 2);
+        const auto lane = proc.writeLaneAudio (rolla::Drums);
+        const auto w = lane.isEmpty() ? Wav {} : readWav (juce::File (lane[0]));
+        expect (w.length == rolla::rollexport::loopSamples (2, kBpm, kRate),
+                "LENGTH 2 (no re-roll): drum stem is 2 bars (" + std::to_string (w.length) + " samples)");
+    }
+    // And a fresh 2-bar roll.
+    testStyle (proc, rolla::Pop, pack, scratch);
+}
+
+// The slice that --only picks. Default: everything, in the original order.
+struct Slice
+{
+    bool midi = true;      // every style's MIDI + host-loop checks, distinct-halves check
+    int audioStyle = -2;   // -2: every style's audio checks, -1: none, else that style only
+    int voxFirst = 0, voxLast = 1 << 30; // vox presets; voxFirst > voxLast: none
+    bool length2 = true;
+    std::string name = "all";
+};
+
+bool parseSlice (const juce::String& s, Slice& out)
+{
+    Slice none;
+    none.midi = false;
+    none.audioStyle = -1;
+    none.voxFirst = 1;
+    none.voxLast = 0;
+    none.length2 = false;
+    none.name = s.toStdString();
+    if (s == "all")
+    {
+        out = Slice {};
+        return true;
+    }
+    if (s == "midi")
+    {
+        out = none;
+        out.midi = true;
+        return true;
+    }
+    if (s == "length2")
+    {
+        out = none;
+        out.length2 = true;
+        return true;
+    }
+    if (s.startsWith ("audio:"))
+    {
+        const auto style = s.fromFirstOccurrenceOf (":", false, false);
+        for (int i = 0; i < rolla::NumDialects; ++i)
+            if (style.equalsIgnoreCase (rolla::kStyleLabels[i]))
+            {
+                out = none;
+                out.audioStyle = i;
+                return true;
+            }
+        return false;
+    }
+    if (s.startsWith ("vox:"))
+    {
+        const auto range = s.fromFirstOccurrenceOf (":", false, false);
+        const auto a = range.upToFirstOccurrenceOf ("-", false, false);
+        const auto b = range.fromFirstOccurrenceOf ("-", false, false);
+        const bool toEnd = b == "end";
+        if (! a.containsOnly ("0123456789") || a.isEmpty() || (! toEnd && (! b.containsOnly ("0123456789") || b.isEmpty())))
+            return false;
+        out = none;
+        out.voxFirst = a.getIntValue();
+        out.voxLast = toEnd ? (1 << 30) : b.getIntValue();
+        return out.voxFirst <= out.voxLast;
+    }
+    return false;
+}
 } // namespace
 
 int main (int argc, char** argv)
 {
+    Slice slice;
+    for (int i = 1; i < argc; ++i)
+        if (juce::String (argv[i]) == "--only" && i + 1 < argc)
+        {
+            const juce::String what (argv[++i]);
+            if (! parseSlice (what, slice))
+            {
+                std::cerr << "unknown --only " << what.toStdString() << " (midi, audio:ROLLER|DEEP|BOUNCY|JACKIN, vox:A-B, vox:A-end, length2, all)\n";
+                return 2;
+            }
+        }
+
     // setSamplesRoot saves ROLLA.settings, and drags write to the export cache.
     // Everything goes to a scratch profile, never the real one.
     const auto home = rolla::test::useScratchProfile ("export");
@@ -613,8 +788,11 @@ int main (int argc, char** argv)
     for (int i = 1; i < argc; ++i)
         if (juce::String (argv[i]) == "--samples" && i + 1 < argc)
             pack = juce::File::getCurrentWorkingDirectory().getChildFile (argv[++i]);
+    std::cout << "slice: " << slice.name << "\n";
 
-    const auto scratch = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("rolla-export-test");
+    // Folder exports go inside this run's own scratch profile (unique per pid and
+    // time stamp), never a shared $TMPDIR/rolla-export-test that parallel runs share.
+    const auto scratch = juce::File (juce::String (home)).getChildFile ("folder-export");
     scratch.deleteRecursively();
     scratch.createDirectory();
     {
@@ -631,49 +809,32 @@ int main (int argc, char** argv)
         else
             std::cout << "no --samples: stem audio content not checked (factory sounds are samples only)\n";
 
+        // One processor, one indexed library for every case in this run.
+        bool rolled = false;
         for (int style = 0; style < rolla::NumDialects; ++style)
-            testStyle (proc, style, havePack, scratch);
-        expect (distinctHalves > 0, "host loop: " + std::to_string (distinctHalves)
-                                        + " style(s) with bars 5-8 unlike bars 1-4");
-
-        // Every vox preset, right after its pick: each recipe has to find a file
-        // in the library (the "loops" recipe has no tempo-locked loop in the tone
-        // pack and used to leave the lane silent, a different style each CI run).
-        if (havePack)
         {
-            auto* voxPreset = proc.apvts.getParameter ("voxPreset");
-            const int n = voxPreset != nullptr ? (int) voxPreset->getNormalisableRange().end + 1 : 0;
-            for (int i = 0; i < n; ++i)
-            {
-                setDenorm (proc, "voxPreset", (float) i);
-                pumpUntil ([&] { return (int) proc.apvts.getRawParameterValue ("voxPreset")->load() == i; }, 2000);
-                if (proc.copyGroove().lane[rolla::Vox].count <= 0)
-                {
-                    std::cout << "vox preset " << i << ": no vox notes in this groove, skipped\n";
-                    continue;
-                }
-                const auto lane = proc.writeLaneAudio (rolla::Vox);
-                const auto w = lane.isEmpty() ? Wav {} : readWav (juce::File (lane[0]));
-                expect (w.peak > 1.0e-4f, "vox preset " + std::to_string (i) + " sounds right after it is picked (peak "
-                                              + std::to_string (w.peak) + ")");
-            }
+            const bool audio = slice.audioStyle == -2 || slice.audioStyle == style;
+            if (! slice.midi && ! audio)
+                continue;
+            testStyle (proc, style, havePack, scratch, slice.midi, audio);
+            rolled = true;
         }
+        // Needs every style's host-loop checks, so only where all of them ran.
+        if (slice.midi)
+            expect (distinctHalves > 0, "host loop: " + std::to_string (distinctHalves)
+                                            + " style(s) with bars 5-8 unlike bars 1-4");
 
-        // LENGTH 2 bars without a re-roll: the engine loops the first 2 bars of
-        // the 8-bar groove, and the export has to follow it.
-        setDenorm (proc, "length", 0.f);
-        pumpUntil ([&] { return lengthBars (proc) == 2; });
-        expect (lengthBars (proc) == 2 && proc.copyGroove().bars == 8, "LENGTH 2 set on an 8-bar groove, no re-roll");
-        {
-            const auto g = proc.copyGroove();
-            compareMidi (proc, "LENGTH 2 (no re-roll)", g, 2);
-            const auto lane = proc.writeLaneAudio (rolla::Drums);
-            const auto w = lane.isEmpty() ? Wav {} : readWav (juce::File (lane[0]));
-            expect (w.length == rolla::rollexport::loopSamples (2, kBpm, kRate),
-                    "LENGTH 2 (no re-roll): drum stem is 2 bars (" + std::to_string (w.length) + " samples)");
-        }
-        // And a fresh 2-bar roll.
-        testStyle (proc, rolla::Pop, havePack, scratch);
+        const bool vox = slice.voxFirst <= slice.voxLast;
+        if (vox && ! havePack)
+            std::cout << "no --samples: vox presets not checked\n";
+        // A slice that starts here begins where the full run is at this point:
+        // a fresh 8-bar roll of the last style.
+        if (((vox && havePack) || slice.length2) && ! rolled)
+            testStyle (proc, rolla::NumDialects - 1, havePack, scratch, false, false);
+        if (vox && havePack)
+            testVoxPresets (proc, slice.voxFirst, slice.voxLast);
+        if (slice.length2)
+            testLength2 (proc, havePack, scratch);
     }
     scratch.deleteRecursively();
     juce::File (juce::String (home)).deleteRecursively();

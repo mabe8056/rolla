@@ -115,6 +115,11 @@ float Theme::lineHeight (Role role) noexcept
     return specFor (role).line;
 }
 
+float Theme::pointSize (Role role) noexcept
+{
+    return specFor (role).px;
+}
+
 void Theme::warmTypefaces()
 {
     (void) faces();

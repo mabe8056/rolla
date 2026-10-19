@@ -59,6 +59,8 @@ public:
 
     void setRoot (const juce::File& root);
     juce::File root() const;
+    // Where assign() copies an outside file for this slot: <root>/USER/<slot folder>.
+    juce::File copyFolder (int slot) const;
 
     // Message thread. Copies an outside file into Samples/USER/... (the source
     // is not modified). A file already under the root is referenced in place.

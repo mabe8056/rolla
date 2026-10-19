@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rolla/sample_features.schema.json",
+  "title": "ROLLA sample features v1",
+  "description": "The box's measurements of every library file, for the sound selector (src/GenreBrain/SampleFeaturesJson.h, SoundSelector.h). Private: shipped beside genre_targets.json in the bundle at Contents/Resources/Genre/ or via ROLLA_GENRE_DATA_DIR, never committed. Numbers and ids only. Keys of `files` are library-relative paths exactly as the sample index holds them (forward slashes). A lane pool uses the selector only when every file in it has an entry; otherwise it keeps the seeded pool draw.",
+  "type": "object",
+  "required": ["version", "files"],
+  "properties": {
+    "version": { "const": 1 },
+    "extractor": { "type": "string", "pattern": "^rolla-fingerprint/" },
+    "files": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/entry" }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "required": ["lane", "f"],
+      "properties": {
+        "lane": { "enum": ["KICK", "CLAP", "SNARE", "HAT_C", "HAT_O", "PERC", "RIDE", "BASS", "STAB", "PLUCK", "PAD", "FX", "HITS", "VOX"] },
+        "pack": { "type": "string", "description": "source pack code (same pack as the anchor: x3, drums x6)" },
+        "family": { "type": "string", "description": "pack family code (same family: x1.5)" },
+        "tier": { "type": "integer", "minimum": 0, "description": "manifest tier, higher is better; 0 unknown" },
+        "length_ms": { "type": "number", "minimum": 0 },
+        "pack_code": { "type": "string", "description": "same as pack (either is read)" },
+        "low_corr": { "type": "number", "description": "L/R correlation under 150 Hz; 1 = mono" },
+        "lt200": { "type": "number", "minimum": 0, "maximum": 1, "description": "power share under 200 Hz (mono, first 20 s)" },
+        "gt1k": { "type": "number", "minimum": 0, "maximum": 1, "description": "power share over 1 kHz" },
+        "chord_pcs": { "type": "integer", "minimum": 0, "maximum": 4095, "description": "absolute pitch-class mask, bit 0 = C" },
+        "f": { "$ref": "#/$defs/features" }
+      },
+      "additionalProperties": false
+    },
+    "features": {
+      "description": "Same block as fp.json \"f\" (src/Tools/FingerprintTool.h toJson).",
+      "type": "object",
+      "required": ["mfcc_mean", "mfcc_std"],
+      "properties": {
+        "mfcc_mean": { "type": "array", "items": { "type": "number" }, "minItems": 13, "maxItems": 13 },
+        "mfcc_std": { "type": "array", "items": { "type": "number" }, "minItems": 13, "maxItems": 13 },
+        "centroid_hz": { "type": "number" },
+        "rolloff85_hz": { "type": "number" },
+        "flatness": { "type": "number" },
+        "attack_ms": { "type": "number" },
+        "decay20_ms": { "type": "number" },
+        "decay40_ms": { "type": ["number", "null"], "description": "null when unknown (read as truncated)" },
+        "truncated": { "type": "boolean" },
+        "sub_ratio": { "type": "number" },
+        "rms_db": { "type": "number" },
+        "tilt_db_oct": { "type": "number" },
+        "tilt_db_per_oct": { "type": "number" },
+        "low_corr": { "type": "number" },
+        "root_pitch": { "type": "number", "description": "MIDI, -1 unpitched" },
+        "root_conf": { "type": "number", "minimum": 0, "maximum": 1 },
+        "is_chord": { "type": "boolean" },
+        "quality": { "enum": ["", "maj", "min", "neutral"] }
+      },
+      "additionalProperties": false
+    }
+  }
+}

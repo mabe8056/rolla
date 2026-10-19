@@ -4,8 +4,14 @@
 #include "Generator/Drive.h"
 #include "Generator/Intensity.h"
 #include "Generator/MidiFile.h"
+#include "Generator/OriginalityJson.h"
 #include "Export/RollExport.h"
 #include "Engine/RollaSettings.h"
+#include "Generator/Scale.h"
+#include "Sampler/RetuneGuard.h"
+#include "GenreBrain/GenreTargetsJson.h"
+#include "GenreBrain/KitMeshJson.h"
+#include "GenreBrain/LanePools.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
 
@@ -13,10 +19,12 @@
 
 #include "ui/Theme.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <random>
+#include <set>
 #include <thread>
 #include <string>
 #include <vector>
@@ -58,7 +66,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout (const PresetBa
 
     add (std::make_unique<AudioParameterFloat> (
         ParameterID { "swing", 1 }, "Swing",
-        NormalisableRange<float> (0.50f, 0.57f, 0.001f), 0.52f));
+        NormalisableRange<float> (0.50f, 0.57f, 0.001f), 0.537f)); // model v1.2 hat swing target (53-57%)
 
     add (std::make_unique<AudioParameterChoice> (
         ParameterID { "length", 1 }, "Length",
@@ -125,6 +133,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout (const PresetBa
         // A trigger, like ROLL: automating it re-rolls that lane on the host's beat.
         add (std::make_unique<AudioParameterBool> (ParameterID { id + "Shuffle", 1 }, label + " Shuffle", false));
     }
+
+    // KEY / SCALE picker (#13). Appended so older sessions and index-based hosts
+    // keep every existing slot. "key" stays the root (C..B, saved sessions load
+    // unchanged); keyLock off is the dropdown's Auto. Scale Auto is each style's
+    // own minor, exactly as before. Both ship in the same build as SOLO.
+    add (std::make_unique<AudioParameterBool> (ParameterID { "keyLock", 1 }, "Key Lock", false));
+    StringArray scaleNames;
+    for (int i = 0; i < NumScales; ++i)
+        scaleNames.add (scaleName (i));
+    add (std::make_unique<AudioParameterChoice> (ParameterID { "scale", 1 }, "Scale", scaleNames, ScaleAuto));
 
     // Appended last so saved sessions and host automation keep their parameter indices.
     for (int part = 0; part < NumParts; ++part)
@@ -223,6 +241,54 @@ bool decodeBlock (const juce::String& text, void* data, size_t bytes)
     return true;
 }
 
+// resources/retune_tolerances.json: tune the guard without a code change.
+// A missing or malformed key keeps the RetuneGuard.h default.
+RetuneTolerances loadRetuneTolerances (const char* data, int size)
+{
+    RetuneTolerances t;
+    if (data == nullptr || size <= 0)
+        return t;
+    const auto parsed = juce::JSON::parse (juce::String::fromUTF8 (data, size));
+    auto* obj = parsed.getDynamicObject();
+    if (obj == nullptr)
+        return t;
+    auto read = [obj] (const char* id, double& dest)
+    {
+        const juce::Identifier name (id);
+        if (! obj->hasProperty (name))
+            return;
+        const auto v = obj->getProperty (name);
+        if (v.isDouble() || v.isInt() || v.isInt64())
+            dest = (double) v;
+    };
+    read ("capTonal", t.capTonal);
+    read ("capShort", t.capShort);
+    read ("capBass", t.capBass);
+    read ("capSlack", t.capSlack);
+    read ("subFloorHz", t.subFloorHz);
+    read ("subCeilHz", t.subCeilHz);
+    read ("subLowMin", t.subLowMin);
+    read ("lowMidRise", t.lowMidRise);
+    read ("monoCorrMin", t.monoCorrMin);
+    read ("kickClashSt", t.kickClashSt);
+    read ("kickUnisonSt", t.kickUnisonSt);
+    read ("tonalLowMaxDb", t.tonalLowMaxDb);
+    read ("shortLowMaxDb", t.shortLowMaxDb);
+    read ("centroidExcessOct", t.centroidExcessOct);
+    read ("tiltExcessDbOct", t.tiltExcessDbOct);
+    read ("bandExcess", t.bandExcess);
+    read ("flatnessExcessDb", t.flatnessExcessDb);
+    read ("bandMove", t.bandMove);
+    read ("attackOct", t.attackOct);
+    read ("attackFloorMs", t.attackFloorMs);
+    read ("crestDb", t.crestDb);
+    read ("foldShare", t.foldShare);
+    read ("nyquistExcess", t.nyquistExcess);
+    read ("dcMax", t.dcMax);
+    read ("maxSeconds", t.maxSeconds);
+    return t;
+}
+
 } // namespace
 
 RollaProcessor::RollaProcessor()
@@ -232,9 +298,11 @@ RollaProcessor::RollaProcessor()
       presets (makeStartupBank()),
       apvts (*this, &undo, "ROLLA", createLayout (*presets))
 {
+    for (auto& pick : drumPick)
+        pick.store (-1, std::memory_order_relaxed);
     apvts.addParameterListener ("roll", this);
     apvts.addParameterListener ("dialect", this);
-    for (const char* id : { "dark", "busy", "bounce", "stab", "styleIntensity", "fill", "hitsInStab" })
+    for (const char* id : { "dark", "busy", "bounce", "stab", "styleIntensity", "fill", "hitsInStab", "scale" })
         apvts.addParameterListener (id, this);
     apvts.addParameterListener ("intensity", this);
     for (int i = 0; i < NumParts; ++i)
@@ -246,6 +314,7 @@ RollaProcessor::RollaProcessor()
     mixProgram.loadFromMemory (BinaryData::mix_profiles_json, BinaryData::mix_profiles_jsonSize,
                                BinaryData::main_sum_trim_json, BinaryData::main_sum_trim_jsonSize,
                                BinaryData::mix_makeup_json, BinaryData::mix_makeup_jsonSize);
+    retuneTol = loadRetuneTolerances (BinaryData::retune_tolerances_json, BinaryData::retune_tolerances_jsonSize);
     startupT0 = juce::Time::getMillisecondCounterHiRes();
     startupThread = std::thread ([this] { deferredStartup(); });
     prefetchTimer.startTimer (50);
@@ -260,7 +329,7 @@ RollaProcessor::~RollaProcessor()
 
     apvts.removeParameterListener ("roll", this);
     apvts.removeParameterListener ("dialect", this);
-    for (const char* id : { "dark", "busy", "bounce", "stab", "styleIntensity", "fill", "hitsInStab" })
+    for (const char* id : { "dark", "busy", "bounce", "stab", "styleIntensity", "fill", "hitsInStab", "scale" })
         apvts.removeParameterListener (id, this);
     apvts.removeParameterListener ("intensity", this);
     for (int i = 0; i < NumParts; ++i)
@@ -275,6 +344,8 @@ RollaProcessor::~RollaProcessor()
 
 void RollaProcessor::prefetchPlayFiles()
 {
+    // First, so a pick the guard moves is prefetched on this same tick.
+    guardRetunes();
     const auto index = library.index();
     const auto bank = sharePresets();
     if (index == nullptr || bank == nullptr)
@@ -294,12 +365,303 @@ void RollaProcessor::prefetchPlayFiles()
         mix ((std::uint64_t) (std::uint32_t) preset[i]);
         mix ((std::uint64_t) (std::uint32_t) pick[i]);
     }
+    int voicePick[NumDrumVoices] {};
+    for (int v = 0; v < NumDrumVoices; ++v)
+    {
+        voicePick[v] = drumPick[v].load (std::memory_order_relaxed);
+        mix ((std::uint64_t) (std::uint32_t) voicePick[v]);
+    }
     if (key == prefetchedKey)
         return;
     prefetchedKey = key;
     std::vector<std::string> paths;
-    collectPlayFiles (*bank, *index, preset, pick, dialect, 8, paths);
+    collectPlayFiles (*bank, *index, preset, pick, dialect, 8, paths, voicePick);
     library.preload (paths);
+}
+
+void RollaProcessor::guardRetunes()
+{
+    // A retune must never wreck a sound (#13 amendment, Maestro 354). Key locked: a
+    // lane with no surviving file is muted. Key Auto: the key moves to the nearest
+    // one where every pitched lane has a surviving file; today's key when it passes,
+    // so a roll with nothing failing is untouched.
+    const int scale = (int) raw (apvts, "scale");
+    const bool keyLocked = raw (apvts, "keyLock") >= 0.5f;
+    if (! startupDone.load (std::memory_order_acquire) || restoring.load (std::memory_order_acquire)
+        || ! sourceReady.load (std::memory_order_relaxed))
+        return;
+    const auto index = library.index();
+    const auto bank = sharePresets();
+    if (index == nullptr || bank == nullptr)
+        return;
+
+    const Groove src = copySource();
+    const int todayKey = ((int) raw (apvts, "key") % 12 + 12) % 12;
+    const int dialect = (int) raw (apvts, "dialect");
+    int preset[NumParts] {};
+    std::uint64_t stamp = 1469598103934665603ull;
+    auto mix = [&stamp] (std::uint64_t v) { stamp = (stamp ^ v) * 1099511628211ull; };
+    mix ((std::uint64_t) (std::uintptr_t) index.get());
+    mix ((std::uint64_t) (std::uintptr_t) bank.get());
+    mix ((std::uint64_t) src.generation);
+    mix ((std::uint64_t) todayKey);
+    mix ((std::uint64_t) (keyLocked ? 1 : 0));
+    mix ((std::uint64_t) dialect);
+    mix ((std::uint64_t) scale);
+    for (int i = 0; i < NumParts; ++i)
+    {
+        preset[i] = presetSlot (*bank, i, (int) raw (apvts, (juce::String (partId (i)) + "Preset").toRawUTF8()));
+        mix ((std::uint64_t) (std::uint32_t) preset[i]);
+        mix ((std::uint64_t) (std::uint32_t) samplePick[i].load (std::memory_order_relaxed));
+        if (i < Drums)
+            mix ((std::uint64_t) (std::uint32_t) slots.mode (i));
+    }
+    if (stamp == guardedStamp && ! guardPending)
+        return;
+    guardedStamp = stamp;
+    guardPending = false;
+
+    const double outRate = preparedRate > 1000.0 ? preparedRate : 48000.0;
+    const StabPatch& sp = bank->stab[preset[Stab]];
+
+    // One lane's guard result for a candidate key.
+    struct LaneGuard
+    {
+        bool active = false; // the lane draws from a pool and has notes to judge
+        int n = 0;
+        int pick = 0;
+        RetunePick res;
+    };
+
+    // Judges every pitched lane in `key`. loud logs each skip (only for the key
+    // that is applied, so Auto's search does not flood the log).
+    auto evalKey = [&] (int key, bool loud, LaneGuard (&out)[NumParts])
+    {
+        const int bassBase = 12 * (std::clamp (bank->bass[preset[Bass]].octave, 0, 3) + 1) + key;
+
+        // Vox is never retuned (PR #40) and drums never are; every other lane is.
+        for (int part : { Bass, Stab, Hits, Pluck, Pad })
+        {
+            out[part] = LaneGuard {};
+            // A lane playing the user's own sample is their call, not the pool's.
+            if (slots.mode (part) != 0)
+                continue;
+            const SampleSpec& spec = specAt (*bank, part, preset[part]);
+            if (! spec.filter.on)
+                continue;
+            const PoolFilter filter = poolFilterFor (spec, part, -1, dialect);
+            const int n = sampleIndexCount (*index, part, filter);
+            const Lane& lane = src.lane[part];
+            if (n <= 0 || lane.count <= 0)
+                continue;
+
+            // The notes Sampler::take is asked for, as Engine sends them: bass and hits
+            // one note, stab / pluck / pad every tone (chord memory expanded) with the
+            // chord's ask on the first.
+            struct Want
+            {
+                int midi = 60;
+                ChordAsk ask {};
+                bool first = true;
+            };
+            std::vector<Want> wants;
+            const int base = part == Bass ? bassBase : (part == Pluck ? 72 + key : 60 + key);
+            for (int i = 0; i < lane.count && i < kMaxNotes; ++i)
+            {
+                const Note& note = lane.notes[i];
+                if (note.vel <= 2)
+                    continue;
+                int count = std::clamp ((int) note.nChord, 1, 4);
+                int iv[4] {};
+                for (int c = 0; c < count; ++c)
+                    iv[c] = note.chord[c];
+                if (part == Stab && sp.chordOn && count <= 1 && sp.chordN > 1)
+                {
+                    const int rootIv = iv[0];
+                    count = std::min (4, sp.chordN);
+                    for (int c = 0; c < count; ++c)
+                    {
+                        iv[c] = std::clamp (rootIv + sp.chordIv[c], -48, 48);
+                        if (scale != ScaleAuto)
+                            iv[c] = quantizeToScale (scale, iv[c]);
+                    }
+                }
+                if (part == Bass || part == Hits)
+                    count = 1;
+                const ChordAsk ask = count > 1 ? chordAskOf (iv, count) : ChordAsk {};
+                for (int c = 0; c < count; ++c)
+                    wants.push_back ({ std::clamp (base + iv[c], 0, 127), c == 0 ? ask : ChordAsk {}, c == 0 });
+            }
+            if (wants.empty())
+                continue;
+
+            auto judge = [&] (int at, double& worst) -> RetuneVerdict
+            {
+                RetuneVerdict verdict;
+                const SampleEntry* entry = sampleIndexAt (*index, part, filter, at);
+                if (entry == nullptr)
+                {
+                    verdict.ok = false;
+                    verdict.reason = "no pool entry";
+                    return verdict;
+                }
+                const SampleAudio* audio = library.tryGet (entry->path);
+                if (audio == nullptr || audio->frames < 8)
+                {
+                    verdict.ok = false;
+                    if (library.missing (entry->path))
+                    {
+                        verdict.reason = "missing";
+                        return verdict;
+                    }
+                    library.preload ({ std::string (entry->path) });
+                    verdict.known = false;
+                    return verdict;
+                }
+                const PitchInfo& pitch = audio->pitch;
+                const double root = retuneRoot (pitch, audio->namedRoot);
+                if (root < 0.0)
+                {
+                    // Below the confidence threshold the file is not retuned; that
+                    // means a different file, not an off-key one.
+                    verdict.ok = false;
+                    verdict.reason = "unpitched or under the pitch confidence threshold";
+                    if (loud)
+                        juce::Logger::writeToLog (juce::String ("ROLLA retune guard: skip ") + entry->path + " ("
+                                                  + juce::String (verdict.reason) + ")");
+                    return verdict;
+                }
+                const bool chordFile = pitch.isChord && pitch.conf >= kPitchConfMin && part != Bass;
+                const double seconds = (double) audio->frames / std::max (1.0, audio->rate);
+                const RetuneKind kind = retuneKindFor (part, seconds, chordFile);
+                ShiftRule rule; // Sampler.cpp shiftRuleFor: bass keeps a full octave.
+                if (part == Bass)
+                    rule.cap = 12.0;
+                worst = 0.0;
+                std::set<long long> judged;
+                for (const auto& w : wants)
+                {
+                    // A recorded chord sounds every tone from its root.
+                    if (chordFile && ! w.first)
+                        continue;
+                    const int toward = w.midi + (chordFile ? w.ask.rootDelta + chordFileOffset (pitch.quality, w.ask.quality) : 0);
+                    const double semis = tonalShift (pitch, audio->namedRoot, (double) toward, rule);
+                    worst = std::max (worst, std::fabs (semis));
+                    if (! verdict.ok || ! judged.insert (RetuneCache::tenths (semis)).second)
+                        continue;
+                    RetuneRequest req;
+                    req.left = audio->left.data();
+                    req.right = audio->right.size() == audio->left.size() ? audio->right.data() : nullptr;
+                    req.frames = std::min (audio->frames, (int) audio->left.size());
+                    req.rate = audio->rate;
+                    req.outRate = outRate;
+                    req.semis = semis;
+                    req.rootMidi = root;
+                    req.kind = kind;
+                    const RetuneVerdict got = retuneCache.get (entry->path, kind, semis,
+                                                               [&] { return judgeRetune (req, retuneTol); });
+                    if (! got.ok)
+                        verdict = got;
+                }
+                // Every skip is logged with its reason, so a degraded retune is never
+                // silent and the scorer can count them.
+                if (! verdict.ok && loud)
+                    juce::Logger::writeToLog (juce::String ("ROLLA retune guard: skip ") + entry->path + " ("
+                                              + juce::String (verdict.reason) + ", up to "
+                                              + juce::String (worst, 1) + " st)");
+                return verdict;
+            };
+
+            // The whole pool is walked: a degraded retune is never played while another
+            // file in the lane survives this key.
+            out[part].active = true;
+            out[part].n = n;
+            out[part].pick = std::max (0, samplePick[part].load (std::memory_order_relaxed));
+            out[part].res = pickRetuneSafe (n, out[part].pick, n, judge);
+        }
+    };
+
+    LaneGuard lanes[NumParts];
+    int playKey = todayKey;
+    if (! keyLocked)
+    {
+        // Auto: the pass counts pick the key. Candidate keys are judged quietly;
+        // the cache keeps the search cheap after the first roll.
+        const AutoKeyPick choice = pickAutoKey (todayKey, [&] (int k)
+        {
+            LaneGuard trial[NumParts];
+            evalKey (k, false, trial);
+            for (const auto& g : trial)
+                if (g.active && g.res.pending)
+                    return -1;
+            for (const auto& g : trial)
+                if (g.active && ! g.res.safe)
+                    return 0;
+            return 1;
+        });
+        if (choice.pending)
+        {
+            guardPending = true;
+            return;
+        }
+        playKey = choice.key;
+        if (! choice.found)
+            juce::Logger::writeToLog (juce::String ("ROLLA retune guard: Auto found no key where every lane survives; keeping ")
+                                      + keyName (todayKey));
+    }
+    evalKey (playKey, true, lanes);
+
+    std::vector<std::string> mutedNames;
+    for (int part = 0; part < Drums; ++part)
+    {
+        bool mute = false;
+        const LaneGuard& g = lanes[part];
+        if (g.active)
+        {
+            if (g.res.pending)
+                guardPending = true;
+            else
+            {
+                const int at = g.pick % g.n;
+                mute = retuneMuteFor (keyLocked, g.res);
+                if (! mute && g.res.index >= 0 && g.res.index != at)
+                    samplePick[part].store (g.pick + (g.res.index - at + g.n) % g.n, std::memory_order_relaxed);
+                if (mute)
+                {
+                    mutedNames.push_back (partName (part));
+                    juce::Logger::writeToLog (juce::String ("ROLLA retune guard: NO SAFE FILE ") + partName (part) + " in "
+                                              + keyName (playKey) + " " + scaleName (scale));
+                }
+                else if (! g.res.safe)
+                    juce::Logger::writeToLog (juce::String ("ROLLA retune guard: no ") + partName (part)
+                                              + " file survives in Auto; playing the least-shifted one");
+            }
+        }
+        retuneMuted[part].store (mute, std::memory_order_relaxed);
+    }
+    setRetuneNotice (juce::String (retuneNoticeText (mutedNames, keyName (playKey), scaleName (scale))));
+
+    // Auto moves the key last, so the stamp changes and the next tick re-judges
+    // (from the cache) in the key that now plays.
+    if (playKey != todayKey)
+        if (auto* p = apvts.getParameter ("key"))
+        {
+            p->beginChangeGesture();
+            p->setValueNotifyingHost (p->convertTo0to1 ((float) playKey));
+            p->endChangeGesture();
+        }
+}
+
+// The retune guard's notice is the editor's UI notice (one slot, one display).
+juce::String RollaProcessor::retuneNotice() const
+{
+    return getUiNotice();
+}
+
+void RollaProcessor::setRetuneNotice (const juce::String& text)
+{
+    if (text != getUiNotice())
+        setUiNotice (text);
 }
 
 std::shared_ptr<const PresetBank> RollaProcessor::sharePresets() const
@@ -423,11 +785,23 @@ void RollaProcessor::deferredStartup()
         }
         presetGen.fetch_add (1, std::memory_order_release);
 
+        // The shipped banned-skeleton index (injected into the bundle at packaging) and the
+        // owner's private hashed reference index, if there are (Generator/OriginalityJson.h).
+        // Without them every roll still passes the built-in originality rules.
+        if (! startupStop.load())
+        {
+            orig::setBuiltinIndex (orig::loadIndex (orig::builtinIndexFile()));
+            orig::setIndex (orig::loadIndex (orig::defaultIndexFile()));
+        }
+
         if (! startupStop.load() && grooveEpoch.load (std::memory_order_relaxed) == 0)
         {
             const uint32_t seeds[NumParts] = { 0x0B17u, 0x51ABu, 0x19C3u, 0x77E1u, 0x0A11u, 0xBEEFu, 0x0909u };
             Groove initial {};
-            generate (initial, currentSettings(), seeds, 0x7fu);
+            // A refused first roll (originality floor) leaves `initial` empty: an
+            // empty phrase is published rather than anything that copies.
+            if (! generate (initial, currentSettings(), seeds, 0x7fu))
+                setRollNotice ("First roll refused: too close to a reference, press ROLL");
             publishInitial (initial);
         }
 
@@ -507,8 +881,11 @@ void RollaProcessor::parameterChanged (const juce::String& parameterID, float ne
         return;
     }
 
+    // A scale change reshapes the unkept lanes on their own seeds, like a knob,
+    // so they land in the new scale without a re-roll.
     if (parameterID == "dark" || parameterID == "busy" || parameterID == "bounce" || parameterID == "stab"
-        || parameterID == "styleIntensity" || parameterID == "fill" || parameterID == "hitsInStab")
+        || parameterID == "styleIntensity" || parameterID == "fill" || parameterID == "hitsInStab"
+        || parameterID == "scale")
     {
         requestReshape();
         return;
@@ -592,6 +969,7 @@ Settings RollaProcessor::currentSettings() const
     s.styleIntensity = raw (apvts, "styleIntensity");
     s.dialect = (int) raw (apvts, "dialect");
     s.key = (int) raw (apvts, "key");
+    s.scale = (int) raw (apvts, "scale");
     s.bars = barsFromIndex ((int) raw (apvts, "length"));
     s.fill = raw (apvts, "fill") >= 0.5f;
     s.hitsInStab = raw (apvts, "hitsInStab") >= 0.5f;
@@ -605,6 +983,9 @@ void RollaProcessor::regenerate (int onlyPart)
     Groove next = copySource();
     uint32_t seeds[NumParts] {};
     uint32_t mask = 0;
+    int presetFor[NumParts];
+    for (int i = 0; i < NumParts; ++i)
+        presetFor[i] = (int) std::lround (raw (apvts, (juce::String (partId (i)) + "Preset").toRawUTF8()));
 
     for (int i = 0; i < NumParts; ++i)
     {
@@ -621,26 +1002,177 @@ void RollaProcessor::regenerate (int onlyPart)
         {
             seeds[i] = freshSeed();
             mask |= 1u << (unsigned) i;
-            samplePick[i].store ((int) (seeds[i] % 10007u), std::memory_order_relaxed);
-            const int picked = sound != nullptr ? pickPresetForRoll (*sound, i, s.dialect, seeds[i]) : -1;
-            if (picked >= 0)
-            {
-                if (auto* param = apvts.getParameter (juce::String (partId (i)) + "Preset"))
-                {
-                    const float norm = param->convertTo0to1 ((float) picked);
-                    if (std::fabs (param->getValue() - norm) >= 1.0e-4f)
-                        param->setValueNotifyingHost (norm);
-                }
-            }
         }
     }
 
     if (mask == 0)
         return;
 
-    reshapeLanes (next, s, seeds, mask);
+    // The originality floor can refuse a roll (Generator.h). Then nothing
+    // changes: the previous roll, its presets and sample picks stay.
+    if (! reshapeLanes (next, s, seeds, mask))
+    {
+        setRollNotice (onlyPart >= 0 ? "Shuffle refused: too close to a reference, kept previous roll"
+                                     : "Roll refused: too close to a reference, kept previous roll");
+        return;
+    }
+    setRollNotice ({});
+
+    for (int i = 0; i < NumParts; ++i)
+    {
+        if ((mask & (1u << (unsigned) i)) == 0)
+            continue;
+        samplePick[i].store ((int) (seeds[i] % 10007u), std::memory_order_relaxed);
+        // A re-rolled kit drops the last genre draw; applyGenreBrain may set new picks.
+        if (i == Drums)
+            for (auto& pick : drumPick)
+                pick.store (-1, std::memory_order_relaxed);
+        const int picked = sound != nullptr ? pickPresetForRoll (*sound, i, s.dialect, seeds[i]) : -1;
+        if (picked >= 0)
+        {
+            presetFor[i] = picked;
+            if (auto* param = apvts.getParameter (juce::String (partId (i)) + "Preset"))
+            {
+                const float norm = param->convertTo0to1 ((float) picked);
+                if (std::fabs (param->getValue() - norm) >= 1.0e-4f)
+                    param->setValueNotifyingHost (norm);
+            }
+        }
+    }
+    // The genre brain picks each re-rolled lane's file once the roll stands.
+    applyGenreBrain (mask, s, seeds, presetFor);
     storeSource (next);
+    // A new roll clears the notice; the guard sets it again on its next tick if
+    // a lane still has no surviving file.
+    setRetuneNotice ({});
     publishDerived();
+}
+
+struct RollaProcessor::GenreBrainState
+{
+    genre::GenreTargets targets;
+    genre::FeatureIndex features;
+    genre::MeshRules mesh = genre::MeshRules::fromMixSpec();
+    genre::Kit last;
+};
+
+// The genre brain picks each re-rolled melodic lane's file from its pool: one seeded
+// kit draw weighted by fit to the style's targets (SoundSelector.h). The choice goes
+// back as samplePick, so the existing pick path plays it. Drum voices draw in the
+// same kit and go back as drumPick[voice] (takeDrum reads it for the voice's pool).
+// No feature data (tests, CI, a build without Genre/): nothing changes.
+void RollaProcessor::applyGenreBrain (std::uint32_t mask, const Settings& s, const std::uint32_t* seeds, const int* presetFor)
+{
+    if (genreBrain == nullptr)
+    {
+        // ROLLA_GENRE_DATA_DIR (box, tests), else <bundle>/Contents/Resources/Genre,
+        // beside the injected sample pack. Not the host's executable folder.
+        const auto env = juce::SystemStats::getEnvironmentVariable ("ROLLA_GENRE_DATA_DIR", {});
+        const juce::File dir = env.isNotEmpty() ? juce::File (env) : SampleLibrary::bundledRoot().getSiblingFile ("Genre");
+        genreBrain = std::make_shared<GenreBrainState>();
+        genreBrain->features = genre::loadSampleFeatures (dir.getChildFile ("sample_features.json"));
+        genreBrain->targets = genre::loadGenreTargets (dir.getChildFile ("genre_targets.json"));
+        genreBrain->mesh = genre::loadMeshRules (dir.getChildFile ("mesh_rules.json"));
+        if (genreBrain->features.size() > 0)
+            juce::Logger::writeToLog ("ROLLA genre brain: " + juce::String ((int) genreBrain->features.size()) + " sample features, targets "
+                                      + (genreBrain->targets.fromData ? "from data" : "neutral"));
+        else if (genreBrain->features.fromData)
+            // A file that parsed to nothing (wrong shape) must never fail silently.
+            juce::Logger::writeToLog ("ROLLA genre brain: ERROR sample_features.json loaded 0 entries (wrong format?); "
+                                      "sounds use the seed draw");
+    }
+    auto& genreState = *genreBrain;
+    if (genreState.features.size() == 0)
+        return;
+    const auto index = library.index();
+    const auto bank = sharePresets();
+    if (index == nullptr || bank == nullptr)
+        return;
+
+    std::array<std::vector<genre::SampleFeatures>, genre::kLanes> pools;
+    std::uint64_t seed = 0x9e3779b97f4a7c15ull;
+    bool any = false;
+    for (int part : { Bass, Stab, Hits, Pluck, Pad, Vox })
+    {
+        if ((mask & (1u << (unsigned) part)) == 0)
+            continue;
+        const auto& spec = sampleSpecFor (*bank, part, presetSlot (*bank, part, presetFor[part]));
+        if (! spec.filter.on)
+            continue; // a fixed preset file, not a pool
+        const genre::Lane lane = genre::laneForPart (part, -1);
+        const PoolFilter filter = poolFilterFor (spec, part, spec.filter.voice, s.dialect);
+        pools[(size_t) lane] = genre::featurePool (*index, part, filter, genreState.features, lane);
+        any = any || ! pools[(size_t) lane].empty();
+        seed = (seed ^ seeds[part]) * 0x100000001b3ull;
+    }
+
+    // Drums: each voice's scanned pool joins the same draw, so the kick anchors the
+    // pack tendency and meshes with the bass. A voice with an explicit voicePool keeps
+    // today's pick. Rim shares the PERC lane with Perc, so Perc fills it and Rim keeps
+    // the shared pick; the toms follow Perc's draw (same pool) with today's +1/+2 offset.
+    std::array<int, genre::kLanes> drumVoiceOf {};
+    drumVoiceOf.fill (-1);
+    const bool drumsRolled = (mask & (1u << (unsigned) Drums)) != 0;
+    const int drumKit = presetSlot (*bank, Drums, presetFor[Drums]);
+    if (drumsRolled)
+    {
+        const auto& drums = sampleSpecFor (*bank, Drums, drumKit);
+        for (int voice : { Kick, Snare, Clap, HatC, HatO, Ride, Perc })
+        {
+            if (! bank->drums[drumKit].voicePool[voice].empty())
+                continue;
+            const genre::Lane lane = genre::laneForPart (Drums, voice);
+            if (lane == genre::Lane::Count || drumVoiceOf[(size_t) lane] >= 0)
+                continue;
+            const PoolFilter filter = poolFilterFor (drums, Drums, voice, s.dialect);
+            pools[(size_t) lane] = genre::featurePool (*index, Drums, filter, genreState.features, lane);
+            if (pools[(size_t) lane].empty())
+                continue;
+            drumVoiceOf[(size_t) lane] = voice;
+            any = true;
+        }
+        seed = (seed ^ seeds[Drums]) * 0x100000001b3ull;
+    }
+    if (! any)
+        return;
+
+    const auto style = (genre::Style) std::clamp (s.dialect, 0, genre::kStyles - 1);
+    // Meshing (KitMesh.h): a candidate that clashes with the lanes already drawn
+    // (kick/bass sub, bass/stab low mids, stab/pad crowding, key fit after retune)
+    // is re-drawn. The roll's key; natural minor until the scale picker lands.
+    genre::MeshContext ctx;
+    ctx.keyRootPc = ((s.key % 12) + 12) % 12;
+    ctx.scaleMask = genre::kScaleMinor;
+    ctx.degreeWeights = genreState.targets.lane (style, genre::Lane::Stab).pcWeights;
+    ctx.chordAsk = true;
+    ctx.rules = genreState.mesh;
+    genre::SelectorOptions opt;
+    opt.pairPenalty = genre::pairPenaltyHook (ctx);
+    opt.maxTries = 8;
+    const genre::Kit kit = genre::drawKit (pools, style, genreState.targets, seed, &genreState.last, opt);
+    for (int part : { Bass, Stab, Hits, Pluck, Pad, Vox })
+    {
+        const genre::Lane lane = genre::laneForPart (part, -1);
+        const int chosen = kit.at (lane);
+        if ((mask & (1u << (unsigned) part)) == 0 || chosen < 0)
+            continue;
+        samplePick[part].store (chosen, std::memory_order_relaxed);
+        genreState.last.pick[(size_t) lane] = chosen;
+    }
+    for (int li = 0; li < genre::kLanes; ++li)
+    {
+        const int voice = drumVoiceOf[(size_t) li];
+        const int chosen = kit.pick[(size_t) li];
+        if (voice < 0 || chosen < 0)
+            continue;
+        drumPick[voice].store (chosen, std::memory_order_relaxed);
+        genreState.last.pick[(size_t) li] = chosen;
+        if (voice != Perc)
+            continue;
+        for (int tom : { TomMid, TomLow })
+            if (bank->drums[drumKit].voicePool[tom].empty())
+                drumPick[tom].store (chosen + (tom == TomMid ? 1 : 2), std::memory_order_relaxed);
+    }
 }
 
 void RollaProcessor::requestReshape()
@@ -677,6 +1209,26 @@ void RollaProcessor::requestReshape()
     });
 }
 
+void RollaProcessor::setRollNotice (const juce::String& text)
+{
+    {
+        std::lock_guard<std::mutex> lock (noticeMu);
+        if (notice.text == text)
+            return;
+        notice.text = text;
+        ++notice.serial;
+    }
+    // Logged in every build, not only debug: a refusal is a hard-rule event.
+    if (text.isNotEmpty())
+        juce::Logger::writeToLog ("ROLLA originality: " + text);
+}
+
+RollaProcessor::RollNotice RollaProcessor::rollNotice() const
+{
+    std::lock_guard<std::mutex> lock (noticeMu);
+    return notice;
+}
+
 void RollaProcessor::reshapeUnkept()
 {
     if (restoring.load (std::memory_order_acquire) || ! startupDone.load (std::memory_order_acquire))
@@ -703,7 +1255,13 @@ void RollaProcessor::reshapeUnkept()
     if (mask == 0)
         return;
 
-    reshapeLanes (next, s, seeds, mask);
+    // A refused reshape (originality floor) keeps the previous roll.
+    if (! reshapeLanes (next, s, seeds, mask))
+    {
+        setRollNotice ("Change refused: too close to a reference, kept previous roll");
+        return;
+    }
+    setRollNotice ({});
     storeSource (next);
     publishDerived();
 }
@@ -775,6 +1333,7 @@ EngineParams RollaProcessor::readParams (std::shared_ptr<const PresetBank>& hold
     params.bars = barsFromIndex ((int) raw (apvts, "length"));
     params.key = (int) raw (apvts, "key");
     params.dialect = (int) raw (apvts, "dialect");
+    params.scale = (int) raw (apvts, "scale");
     params.library = &library;
     params.userSlots = slots.published();
     params.sampleShaping = true;
@@ -787,6 +1346,7 @@ EngineParams RollaProcessor::readParams (std::shared_ptr<const PresetBank>& hold
         params.mute[i] = raw (apvts, (id + "Mute").toRawUTF8()) >= 0.5f;
         params.preset[i] = (int) raw (apvts, (id + "Preset").toRawUTF8());
         params.samplePick[i] = samplePick[i].load (std::memory_order_relaxed);
+        params.retuneMute[i] = retuneMuted[i].load (std::memory_order_relaxed);
     }
     // Solo is folded in here, after the mute read, so playback, the drums bus, the full
     // bounce and the stems all hear it. regenerate() reads the raw Mute parameter, so
@@ -795,8 +1355,10 @@ EngineParams RollaProcessor::readParams (std::shared_ptr<const PresetBank>& hold
     for (int i = 0; i < NumParts; ++i)
         solo[i] = raw (apvts, (juce::String (partId (i)) + "Solo").toRawUTF8()) >= 0.5f;
     foldSolo (params.mute, solo);
+    params.kickKeyFollow = true;
     for (int v = 0; v < NumDrumVoices; ++v)
     {
+        params.drumPick[v] = drumPick[v].load (std::memory_order_relaxed);
         const auto id = juce::String (v);
         params.drumTuneSt[v] = raw (apvts, ("dTune" + id).toRawUTF8());
         params.drumDecay[v] = raw (apvts, ("dDecay" + id).toRawUTF8());
@@ -990,6 +1552,16 @@ void RollaProcessor::getStateInformation (juce::MemoryBlock& destData)
         for (int i = 0; i < NumParts; ++i)
             tree.setProperty ("samplePick" + juce::String (i), samplePick[i].load(), nullptr);
     }
+    // Only drawn voices are written, so a session without genre picks saves as before.
+    for (int v = 0; v < NumDrumVoices; ++v)
+    {
+        const auto key = "drumPick" + juce::String (v);
+        const int pick = drumPick[v].load (std::memory_order_relaxed);
+        if (pick >= 0)
+            tree.setProperty (key, pick, nullptr);
+        else
+            tree.removeProperty (key, nullptr);
+    }
     {
         std::lock_guard<std::mutex> lock (sampleMu);
         for (int v = 0; v < NumDrumVoices; ++v)
@@ -1087,6 +1659,13 @@ void RollaProcessor::setStateInformation (const void* data, int sizeInBytes)
     for (int i = 0; i < NumParts; ++i)
         if (tree.hasProperty ("samplePick" + juce::String (i)))
             samplePick[i].store ((int) tree.getProperty ("samplePick" + juce::String (i)), std::memory_order_relaxed);
+    // An old session has no drumPick: every voice goes back to the shared drum pick.
+    for (int v = 0; v < NumDrumVoices; ++v)
+    {
+        const auto key = "drumPick" + juce::String (v);
+        const int pick = tree.hasProperty (key) ? (int) tree.getProperty (key) : -1;
+        drumPick[v].store (pick < 0 ? -1 : pick, std::memory_order_relaxed);
+    }
 
     slots.readState (tree);
     // The sound panel is editor-only. A project load closes it; it is not restored.
@@ -1468,7 +2047,8 @@ juce::String RollaProcessor::getDrumSampleName (int voice) const
 
 juce::String RollaProcessor::exportMidiToDocuments()
 {
-    return exportMidiTo (juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("ROLLA"));
+    return exportMidiTo (settings::guardPath (juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("ROLLA"),
+                                              "MIDI export folder", "Documents/ROLLA"));
 }
 
 juce::File RollaProcessor::exportCache() const
@@ -1489,6 +2069,7 @@ juce::File RollaProcessor::exportCache() const
                   .getChildFile (".cache").getChildFile ("ROLLA");
        #endif
     }
+    dir = settings::guardPath (dir, "export cache", "cache/ROLLA");
     dir.createDirectory();
     return dir;
 }

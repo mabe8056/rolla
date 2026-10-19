@@ -25,6 +25,9 @@ import tempfile
 import wave
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "common"))
+from scratch_env import scratch_env  # noqa: E402
+
 SR = 48000
 NOTE_NAMES = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"]
 
@@ -221,8 +224,13 @@ def stab_notes(rolls, style, seed, value, out, cache):
     return total
 
 
+def profile_env(cache):
+    # Scratch profile rooted at the work folder (the cache's parent): never the real one.
+    return scratch_env(Path(cache).parent, cache=cache)
+
+
 def run(rolls, args, cache):
-    env = dict(os.environ, ROLLA_CACHE_DIR=str(cache))
+    env = profile_env(cache)
     res = subprocess.run([rolls] + args, env=env, capture_output=True, text=True)
     if res.returncode != 0:
         sys.stdout.write(res.stdout[-4000:])
@@ -236,8 +244,8 @@ def run(rolls, args, cache):
 
 def render_set(rolls, pack, out, cache, seed, count, stem_lanes, jobs):
     """One rolla-rolls per style; up to `jobs` at a time."""
-    styles = ["ukmin", "long", "pop", "gaskin"]
-    env = dict(os.environ, ROLLA_CACHE_DIR=str(cache))
+    styles = ["ukmin", "long", "pop", "jackin"]
+    env = profile_env(cache)
     pending, running, logs = list(styles), [], {}
     while pending or running:
         while pending and len(running) < max(1, jobs):
@@ -314,7 +322,7 @@ def main():
         fails.append(f"files written into the sample folder: {extra[:5]}")
 
     if a.stab_sweep and a.part in ("all", "stab"):
-        for style in ("ukmin", "long", "pop", "gaskin"):
+        for style in ("ukmin", "long", "pop", "jackin"):
             lo = stab_notes(a.rolls, style, 7, 0.0, out, cache)
             mid = stab_notes(a.rolls, style, 7, 0.55, out, cache)
             hi = stab_notes(a.rolls, style, 7, 1.0, out, cache)

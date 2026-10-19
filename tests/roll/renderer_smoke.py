@@ -22,10 +22,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 sys.path.insert(0, os.path.join(REPO, "tests", "mix"))
 from mix_check import measure  # noqa: E402
+sys.path.insert(0, os.path.join(REPO, "tests", "common"))
+from scratch_env import scratch_env  # noqa: E402
 
 
 SR = 48000
-STYLES = ("ukmin", "long", "pop", "gaskin")
+STYLES = ("ukmin", "long", "pop", "jackin")
 
 
 def write_tone(path, seconds, fund=58.0, side_hz=42.0, side=0.22, decay=0.0):
@@ -84,7 +86,7 @@ def build_pack(root):
     write_tone(os.path.join(root, "HITS", "303saw_D4.wav"), 0.4, 293.7, 210.0, 0.16, decay=4.0)
     write_tone(os.path.join(root, "HITS", "noise_riser_D4.wav"), 0.6, 440.0, 330.0, 0.16, decay=2.0)
     for i in range(4):
-        # Kicks stay above the 120 Hz correlation band. GASKIN's drum plate
+        # Kicks stay above the 120 Hz correlation band. JACKIN's drum plate
         # (room 0.28, width 0.68) would otherwise turn a sub kick into a long
         # stereo tail and pull corr<120 under 0.99. The bass lane carries the
         # low side the mix program has to collapse.
@@ -140,6 +142,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix="rolla-smoke-") as tmp:
         pack = os.path.join(tmp, "pack")
         out = os.path.join(tmp, "out")
+        # rolla-rolls runs on this scratch profile, never the real one.
+        env = scratch_env(os.path.join(tmp, "profile"))
         build_pack(pack)
         cmd = [
             args.rolls,
@@ -152,7 +156,7 @@ def main():
             "--knob", "INTENSITY=75",
         ]
         print(" ", " ".join(cmd))
-        run = subprocess.run(cmd, cwd=REPO)
+        run = subprocess.run(cmd, cwd=REPO, env=env)
         if run.returncode != 0:
             return fail(f"rolla-rolls exited {run.returncode}")
 
@@ -179,7 +183,7 @@ def main():
                     problems.append(f"{style} roll_{roll:02d} kick midi at {meta.get('kickMidiSample')}")
                 if meta.get("style") != style:
                     problems.append(f"sidecar style {meta.get('style')} != {style}")
-                expect_mute = style != "gaskin"
+                expect_mute = style != "jackin"
                 if bool(meta.get("hitsMute")) != expect_mute:
                     problems.append(f"{style} hitsMute {meta.get('hitsMute')}")
                 presets = meta.get("presets", {})
@@ -227,7 +231,7 @@ def main():
             "--knob", "INTENSITY=100",
         ]
         print(" ", " ".join(stem_cmd))
-        stem_run = subprocess.run(stem_cmd, cwd=REPO)
+        stem_run = subprocess.run(stem_cmd, cwd=REPO, env=env)
         if stem_run.returncode != 0:
             return fail(f"stem render exited {stem_run.returncode}")
         stem_dir = os.path.join(stem_out, "ukmin", "roll_00")
@@ -246,7 +250,7 @@ def main():
             "--seed", "1", "--out", quiet_out, "--knob", "INTENSITY=0",
         ]
         print(" ", " ".join(quiet_cmd))
-        quiet_run = subprocess.run(quiet_cmd, cwd=REPO)
+        quiet_run = subprocess.run(quiet_cmd, cwd=REPO, env=env)
         if quiet_run.returncode != 0:
             return fail(f"intensity 0 render exited {quiet_run.returncode}")
         quiet_dir = os.path.join(quiet_out, "ukmin", "roll_00")

@@ -18,6 +18,8 @@ struct UserSlotView;
 class DrumSampleSlot;
 struct MixProgram;
 
+static_assert (NumDrumVoices == 10, "EngineParams::drumPick lists one -1 per drum voice");
+
 struct EngineParams
 {
     float tone[NumParts] {};
@@ -27,7 +29,7 @@ struct EngineParams
     int preset[NumParts] {};
     bool duck = true;
     bool drumsToMain = true;
-    float swing = 0.52f;
+    float swing = 0.537f; // model v1.2 hat swing target (53-57%)
     float outputDb = 0.f;
     float drumsAccent = 0.6f;
     // Per-voice drum panel. Defaults are an identity: tune 0 st, decay 0.5, level 0 dB, accent off.
@@ -39,13 +41,28 @@ struct EngineParams
     int bars = 8;
     int key = 2;
     int dialect = UkMin;
+    // ScaleMode (Generator/Scale.h). Auto leaves preset chord memory as written;
+    // a locked scale folds its parallel intervals into the scale.
+    int scale = 0;
     const PresetBank* presets = nullptr;
     const SampleLibrary* library = nullptr;
     // Published sample-folder index. Null until the background scan finishes.
     const SampleIndex* sampleIndex = nullptr;
     // Published by UserSlots. Null keeps the preset sample block only.
     const UserSlotView* userSlots = nullptr;
+    // Adaptive per-sample treatments set at roll time (Sampler.h). Null plays
+    // every sample as recorded, exactly as before.
+    const TreatmentSet* treatments = nullptr;
     int samplePick[NumParts] {};
+    // Retune guard, key locked: no file in the lane's pool survives the key, so the
+    // sampler stays silent on that lane (its MIDI still goes out). Set off the audio thread.
+    bool retuneMute[NumParts] {};
+    // Per-voice drum pick into the voice's scanned pool (genre brain). -1 keeps the
+    // shared samplePick[Drums] + tom shift, so old sessions and tests play as before.
+    int drumPick[NumDrumVoices] { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
+    // Kick key follow (PRESET_SPEC 9.2): a pitched sampled kick is tuned toward
+    // kickHzForKey (key). Off by default so tools and frozen renders stay identical.
+    bool kickKeyFollow = false;
     float bpm = 130.f;
     // Baked mix strip (MIX_SPEC). Null keeps the legacy sum.
     const MixProgram* mix = nullptr;

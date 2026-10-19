@@ -5,6 +5,7 @@
 #include "Generator/Presets.h"
 #include "Mix/MixProgram.h"
 #include "Mix/MixRuntime.h"
+#include "../tests/common/ScratchProfile.h"
 
 #include <juce_dsp/juce_dsp.h>
 
@@ -32,7 +33,7 @@ constexpr double kBpm = 126.0;
 constexpr int kBars = 8;
 constexpr int kBlock = 256;
 
-const char* kStyle[rolla::NumDialects] = { "UKMIN", "LONG", "POP", "GASKIN" };
+const char* kStyle[rolla::NumDialects] = { "UKMIN", "LONG", "POP", "JACKIN" };
 
 struct LaneId
 {
@@ -110,6 +111,9 @@ rolla::EngineParams makeParams (const rolla::PresetBank& bank, const rolla::MixP
     // FULL unmutes every MAIN lane, so the frozen mask is all six bits.
     params.sumMask = 63;
     params.bypassSumTrim = bypassSum;
+    // Every lane's chosen file in memory before the first block (bounded, logged).
+    if (library != nullptr && index != nullptr)
+        rolla::prefetchPlayFiles (*library, bank, *index, params.preset, params.samplePick, dialect, 20000, "mix-render");
     return params;
 }
 
@@ -630,7 +634,7 @@ int renderSet (const rolla::PresetBank& bank, const rolla::MixProgram& mix, cons
 
 int dialectIndex (const std::string& name)
 {
-    const char* names[] = { "UKMIN", "LONG", "POP", "GASKIN" };
+    const char* names[] = { "UKMIN", "LONG", "POP", "JACKIN" };
     const juce::String n (name);
     for (int d = 0; d < 4; ++d)
         if (n.equalsIgnoreCase (names[d]))
@@ -640,6 +644,10 @@ int dialectIndex (const std::string& name)
 
 int main (int argc, char** argv)
 {
+    // Never the real user profile: settings, caches and ~/Music/ROLLA/Samples go
+    // to a scratch folder. `--samples DIR` renders with that pack, read only.
+    if (rolla::test::useScratchProfile ("mix", true).empty() || ! rolla::test::useSamplesArg (argc, argv))
+        return fail ("could not set up a scratch profile");
     juce::ScopedJuceInitialiser_GUI juceInit;
     bool doSelf = false;
     bool solosOnly = false;
@@ -674,6 +682,8 @@ int main (int argc, char** argv)
             if (switchLane < 0)
                 return fail ("unknown lane");
         }
+        else if (a == "--samples" && i + 1 < argc)
+            ++i; // read by useSamplesArg above
         else if (a == "--makeup" && i + 1 < argc)
             makeup = juce::File (argv[++i]);
         else if (a == "--dialect" && i + 1 < argc)
@@ -684,7 +694,7 @@ int main (int argc, char** argv)
         }
         else if (a == "--help")
         {
-            std::cout << "rolla-mix-render [--self-test] [--solos] [--bypass-sum] [--makeup file] [--dialect NAME] <outDir>\n"
+            std::cout << "rolla-mix-render [--self-test] [--solos] [--bypass-sum] [--makeup file] [--dialect NAME] [--samples DIR] <outDir>\n"
                       << "rolla-mix-render --switch --stim in.wav --from UKMIN --to LONG --at 1.0 --lane STAB <out.wav>\n";
             return 0;
         }

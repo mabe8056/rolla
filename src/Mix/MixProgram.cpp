@@ -14,7 +14,7 @@ const char* kLaneNames[kMixLanes] = {
     "KICK", "SNARE", "CLAP", "RIM", "CH", "OH", "RIDE", "PERC",
 };
 
-const char* kDialects[kMixDialects] = { "UKMIN", "LONG", "POP", "GASKIN" };
+const char* kDialects[kMixDialects] = { "UKMIN", "LONG", "POP", "JACKIN" };
 
 const char* kMelodic[kMixMelodic] = { "BASS", "STAB", "HITS", "PLUCK", "PAD", "VOX" };
 
