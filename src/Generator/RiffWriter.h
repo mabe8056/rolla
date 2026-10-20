@@ -545,12 +545,20 @@ inline void layOutGhost (Lane& lane, const Cell* bars, int nb) noexcept
 //   HookRepeat     long root anchor, down a 4th to the 5, then a hook pitch repeated three times
 //   PedalCall      call bar: the root alone in rhythm; answer bar: 5 then b3 repeated, no root;
 //                  every 4th bar's last cell turns to the 4 to lead back (period 4)
-enum GrooveContour : int { Climb = 0, RiseDropBelow, HookRepeat, PedalCall, kContours };
+// Three more from the last verified splits (Keep on Dancing, Can You Feel The Bass, All Day):
+//   CallRootAnswer  call bar climbs b3 (repeated) to b6 / 5 and never touches the root, a pickup
+//                   leads on; the answer bar falls to the root, repeated to the bar line (period 2)
+//   NeighbourLoop   a 3-5 semitone loop: starts on the b3 just after beat 1, sits on the root, a
+//                   2nd (or the b7 below) at the end leads back up across the bar line
+//   OctaveDisco     low notes on the kicks, the same note an octave up in between, the second half
+//                   slides down (1 -> maj7 -> b7, or 1 -> b7 -> b6 / 5) and climbs home
+// The 2nd, b6 and one chromatic note appear here only as passing / leading notes (3 of 7 splits).
+enum GrooveContour : int { Climb = 0, RiseDropBelow, HookRepeat, PedalCall, CallRootAnswer, NeighbourLoop, OctaveDisco, kContours };
 inline constexpr float kContourW[4][kContours] = {
-    { 0.25f, 0.30f, 0.25f, 0.20f }, // ROLLER
-    { 0.20f, 0.25f, 0.25f, 0.30f }, // DEEP (Tonight)
-    { 0.25f, 0.25f, 0.30f, 0.20f }, // BOUNCY (House Party)
-    { 0.30f, 0.25f, 0.30f, 0.15f }, // JACKIN (Mambos)
+    { 0.16f, 0.18f, 0.14f, 0.10f, 0.14f, 0.14f, 0.14f }, // ROLLER
+    { 0.12f, 0.14f, 0.14f, 0.15f, 0.17f, 0.14f, 0.14f }, // DEEP
+    { 0.12f, 0.14f, 0.18f, 0.10f, 0.14f, 0.14f, 0.18f }, // BOUNCY
+    { 0.16f, 0.12f, 0.16f, 0.08f, 0.14f, 0.14f, 0.20f }, // JACKIN
 };
 
 struct GrooveHit
@@ -661,8 +669,35 @@ inline Cell grooveBar (int contour, const int* set, int nSet, bool b5, Rng& r, b
 {
     auto has = [&] (int iv) { for (int i = 0; i < nSet; ++i) if (set[i] == iv) return true; return false; };
     const bool longAnchor = contour == HookRepeat || (contour == PedalCall && ! answer);
-    const bool restDownbeat = contour == PedalCall && answer;
-    const GrooveRhythm g = drawGrooveRhythm (r, longAnchor, restDownbeat);
+    const bool restDownbeat = (contour == PedalCall && answer) || contour == NeighbourLoop || (contour == CallRootAnswer && answer);
+    GrooveRhythm g = drawGrooveRhythm (r, longAnchor, restDownbeat);
+    if (contour == OctaveDisco)
+    {
+        // kicks 0 / 8 / 12 (low) plus 3-4 sixteenths in between (high), a rest on one 16th before a beat
+        bool on[16] {};
+        on[0] = true;
+        if (r.next() < 0.7) on[8] = true;
+        if (r.next() < 0.6) on[12] = true;
+        static constexpr int kMid[7] = { 2, 3, 6, 7, 10, 14, 15 };
+        float w[7] = { 0.5f, 0.6f, 0.6f, 0.5f, 0.5f, 0.4f, 0.4f };
+        int cnt = 0;
+        for (bool b : on) cnt += b ? 1 : 0;
+        while (cnt < 6)
+        {
+            const int j = pickW (w, 7, r.next());
+            if (j < 0) break;
+            on[kMid[j]] = true;
+            w[j] = 0.f;
+            ++cnt;
+        }
+        if (on[3] && on[7] && on[11] && on[15])
+            on[15] = false;
+        g.n = 0;
+        for (int k = 0; k < 16; ++k)
+            if (on[k])
+                g.slot[g.n++] = k;
+        g.anchorLen = 1.f;
+    }
     int ups[5];
     int nu = 0;
     for (int iv : { 3, 5, 7, 10 })
@@ -718,6 +753,61 @@ inline Cell grooveBar (int contour, const int* set, int nSet, bool b5, Rng& r, b
         for (int i = 2; i < n; ++i)
             pitch[i] = hook > 7 ? hook - 12 : hook;
     }
+    else if (contour == CallRootAnswer)
+    {
+        const int x = has (3) ? 3 : 5;
+        const int y = phrase::inMode (8, 1) && r.next() < 0.6 ? 8 : 7; // b6 or 5
+        const int z = r.next() < 0.5 ? 7 : 10;                          // the pickup: 5 or b7
+        if (! answer)
+        {
+            const int splitAt = std::max (1, (n * 3) / 5);
+            for (int i = 0; i < n; ++i)
+                pitch[i] = i < splitAt ? x : y;
+            pitch[n - 1] = z;
+        }
+        else
+        {
+            const int lead = std::max (1, n / 3);
+            for (int i = 0; i < n; ++i)
+                pitch[i] = i < lead ? (i == 0 ? z : x) : 0;
+        }
+    }
+    else if (contour == NeighbourLoop)
+    {
+        const int up = has (3) ? 3 : 2;
+        const int back = r.next() < 0.6 ? 2 : -2; // the 2nd leads up to the b3, the b7 below to the root
+        for (int i = 0; i < n; ++i)
+            pitch[i] = 0;
+        pitch[0] = up;
+        pitch[n - 1] = back;
+        if (n > 3 && r.next() < 0.35)
+            pitch[n - 2] = up; // a second touch of the neighbour before the turn
+    }
+    else if (contour == OctaveDisco)
+    {
+        // second half slides down to a target and the last note leads home from the b7 below
+        const int target = r.next() < 0.5 ? 10 : (r.next() < 0.5 ? 8 : 7);
+        int path[3] = { 0, 0, 0 };
+        if (target == 10)
+        {
+            path[0] = r.next() < 0.6 ? -1 : 0; // the chromatic maj7 below the root, or straight on
+            path[1] = -2;
+            path[2] = -2;
+        }
+        else
+        {
+            path[0] = -2;
+            path[1] = target - 12;
+            path[2] = -2;
+        }
+        const int half = std::max (1, n / 2);
+        for (int i = 0; i < n; ++i)
+        {
+            const int base = i < half ? 0 : path[std::min (2, i - half)];
+            // low on a kick 16th, the octave up in between
+            pitch[i] = (g.slot[i] & 3) == 0 ? base : base + 12;
+        }
+    }
     else // PedalCall
     {
         if (! answer)
@@ -744,7 +834,10 @@ inline Cell grooveBar (int contour, const int* set, int nSet, bool b5, Rng& r, b
     {
         const int k = g.slot[i];
         const float len = i == 0 ? g.anchorLen : (r.next() < 0.6 ? 1.f : 2.f);
-        h[i] = { k, pitch[i], len, gVel (k, i == accent) };
+        int vel = gVel (k, i == accent);
+        if (contour == OctaveDisco && (k & 3) == 0)
+            vel = 94; // the disco low note on the kick is part of the figure
+        h[i] = { k, pitch[i], len, vel };
     }
     putHits (c, h, n);
     return c;
@@ -839,7 +932,7 @@ inline int compose (Lane& lane, int dialect, int mode, int bars, std::uint32_t s
         const bool b5 = r.next() < 0.25;
         const bool ghosts = r.next() < 0.5;
         // period: PedalCall is 4 bars; the others 1 bar (.67) or 2 (bar 2 changes its first onset)
-        const int period = contour == PedalCall ? 4 : (r.next() < 0.67 ? 1 : 2);
+        const int period = contour == PedalCall ? 4 : (contour == CallRootAnswer ? 2 : (r.next() < 0.67 ? 1 : 2));
         Cell cells[4];
         for (int i = 0; i < period; ++i)
         {
