@@ -533,6 +533,12 @@ inline bool canMove (const Ctx& c, int s, int t) noexcept
     // written: DEEP's answers in the gaps and BOUNCY's stabs on the bass attacks hold.
     if (c.keepBassClass && bassClass (c.g->lane[Bass], s) != bassClass (c.g->lane[Bass], t))
         return false;
+    // The other way round: a bass hook's stab rides its rhythm (BOUNCY's stabs land on the bass
+    // attacks), so a bass onset a stab hits with, in any bar the cell plays in, stays put.
+    if (c.part == Bass)
+        for (int k = 0; k < c.nCopies[bar]; ++k)
+            if (occupied (c.g->lane[Stab], s + (c.copies[bar][k] - bar) * kStepsPerBar))
+                return false;
     for (int i = 0; i < l.count; ++i)
     {
         const Note& n = l.notes[i];
@@ -584,7 +590,9 @@ inline void moveOnset (Ctx& c, int s, int t) noexcept
         n.start += dt;
         moved = n.start;
         if (mono)
-            n.length = dt < 0.f ? n.length - dt : (n.length > 1.25f ? n.length - dt : n.length);
+            // Moved later, it keeps its end only while a 16th of it is left (a lone hit moves by
+            // two 16ths to its 'and': a shorter note would end before it starts).
+            n.length = dt < 0.f ? n.length - dt : (n.length > dt + 0.25f ? n.length - dt : n.length);
     }
     if (moved < 0.f)
         return;
