@@ -5,6 +5,7 @@
 #include "RuleTables.h"
 #include "PhraseLock.h"
 #include "HookPlan.h"
+#include "ChordLoop.h"
 
 #include <algorithm>
 #include <bitset>
@@ -6376,6 +6377,9 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
         replayBar2AtTurn (g.drums, s.bars, s.fill ? kStepsPerBar - 4 : kStepsPerBar);
         bar8DrumMove (g.drums, s.bars, s.fill);
     }
+    // The roll's chord loop is the stab's two chords, also when the plan below leaves the stab out
+    // (a pad under a vox hook still plays them): ChordLoop.h.
+    const Lane loopStab = g.lane[Stab];
     // Intentional arrangement: drums + bass, one hook lane, at most one support part (HookPlan.h).
     // Only a full roll is re-planned; a partial reroll keeps the lanes the user is not rolling.
     if ((partMask & 0x7fu) == 0x7fu)
@@ -6410,7 +6414,24 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
     // DEEP's jazz voicings leave the bass note to the bass that ships (RuleComposer deepJazzStab).
     if (s.dialect == Long && regen (Stab))
         leaveBassNoteToBass (g.lane[Stab], g.lane[Bass], s.bars);
-        // A locked scale is the last pitch step, after the roll-mode pass, so the
+    // One chord loop (catchiness research #5): a rolled pad and rolled chord hits play the stab's
+    // chord of their bar (a kept stab's too), in their own voicing; then they give way to the bass
+    // again. A kept pad or hits lane is the user's and stays as locked.
+    {
+        const Lane& chords = chord_loop::anyHit (g.lane[Stab]) ? g.lane[Stab] : loopStab;
+        if (regen (Pad))
+            chord_loop::padFollowsStab (g.lane[Pad], chords, g.lane[Bass], s.bars);
+        if (regen (Hits))
+            chord_loop::hitsFollowStab (g.lane[Hits], chords, g.lane[Bass], s.bars);
+        for (int part : { (int) Pad, (int) Hits })
+            if (regen (part))
+            {
+                fixUpperClashes (g, part);
+                dedupeNoteOns (g.lane[part]);
+                trimSamePitchOverlaps (g.lane[part]);
+            }
+    }
+    // A locked scale is the last pitch step, after the roll-mode pass, so the
     // user's scale always wins and Auto rolls are untouched byte for byte. Only
     // regenerated lanes move: a kept lane stays as the user locked it.
     if (s.scale != ScaleAuto)
@@ -6431,6 +6452,19 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
     {
         capBassOnKicks (g.lane[Bass], s.bars, 0.15f, bassSeed);
         giveWayToBass (g, ~partMask);
+    }
+    // Accents that repeat (catchiness research #6): the rolled stab, pluck and hits each take a
+    // per-roll accent pattern over their 2-bar cell, carried into the restated bars (ChordLoop.h).
+    // IN STAB hits are a layer on the stab, so they take the stab's pattern. Velocity only: no
+    // onset, length or pitch moves, and a kept lane keeps its velocities.
+    {
+        const accent::Table stabAccent = accent::draw (g.lane[Stab], 0xACC5u);
+        if (regen (Stab))
+            accent::apply (g.lane[Stab], stabAccent);
+        if (regen (Pluck))
+            accent::apply (g.lane[Pluck], accent::draw (g.lane[Pluck], 0xACC6u));
+        if (regen (Hits))
+            accent::apply (g.lane[Hits], s.hitsInStab && stabAccent.any ? stabAccent : accent::draw (g.lane[Hits], 0xACC7u));
     }
     g.mode = mode;
     g.guardScore = shippedHard ? 0.f : 1.f;

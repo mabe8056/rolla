@@ -3532,6 +3532,124 @@ void testVoxHookShape()
     expect (restated * 100 >= lanes * 95, "vox call bars repeat one cell (>= 95%)");
 }
 
+// One chord loop and accents that repeat (ChordLoop.h, catchiness research #5 / #6). A reroll of
+// every pitched lane (no hook plan, so stab, pad, pluck and hits all play) with IN STAB on:
+//  - every pad note plays a pitch-class set inside a stab chord of its bar (the clash rule may
+//    thin it), and most play exactly that set (was 0-20% before the change);
+//  - every IN STAB hit plays the pitch-class set of the stab hit it lands on;
+//  - the stab and the pluck no longer play one velocity in bars 1-2;
+//  - a bar 3-7 that restates its source bar's notes restates its velocities too.
+void testChordLoopAccents()
+{
+    auto pcsOf = [] (const rolla::Note& n) {
+        unsigned m = 0;
+        for (int c = 0; c < std::max (1, (int) n.nChord) && c < 4; ++c)
+            m |= 1u << pcOfNote (n.chord[c]);
+        return m;
+    };
+    auto barOf = [] (float t) { return (int) std::floor ((t + 1.0e-3f) / 16.f); };
+    int padNotes = 0, padNested = 0, padExact = 0, hitNotes = 0, hitExact = 0;
+    int velLanes = 0, velFlat = 0, restBars = 0, restVelSame = 0;
+    for (int style = 0; style < 4; ++style)
+        for (int roll = 0; roll < 20; ++roll)
+        {
+            rolla::Settings s;
+            s.dialect = style;
+            s.bars = 8;
+            s.hitsInStab = true;
+            std::uint32_t seeds[rolla::NumParts] {};
+            for (int p = 0; p < rolla::NumParts; ++p)
+                seeds[p] = 2026101990u + (std::uint32_t) roll * 0x9E3779B9u + (std::uint32_t) p * 17u + (std::uint32_t) style * 101u;
+            auto g = std::make_unique<rolla::Groove>();
+            if (! rolla::generate (*g, s, seeds, 0x3fu))
+                continue;
+            const auto& stab = g->lane[rolla::Stab];
+            const auto& pad = g->lane[rolla::Pad];
+            for (int i = 0; i < pad.count; ++i)
+            {
+                if (pad.notes[i].vel <= 2)
+                    continue;
+                const unsigned p = pcsOf (pad.notes[i]);
+                bool any = false, nested = false, exact = false;
+                for (int k = 0; k < stab.count; ++k)
+                    if (stab.notes[k].vel > 2 && barOf (stab.notes[k].start) == barOf (pad.notes[i].start))
+                    {
+                        const unsigned q = pcsOf (stab.notes[k]);
+                        any = true;
+                        nested = nested || (p & q) == p || (p & q) == q;
+                        exact = exact || p == q;
+                    }
+                if (! any)
+                    continue;
+                ++padNotes;
+                padNested += nested ? 1 : 0;
+                padExact += exact ? 1 : 0;
+            }
+            const auto& hits = g->lane[rolla::Hits];
+            for (int i = 0; i < hits.count; ++i)
+                for (int k = 0; k < stab.count; ++k)
+                    if (hits.notes[i].vel > 2 && std::fabs (hits.notes[i].start - stab.notes[k].start) < 0.01f)
+                    {
+                        ++hitNotes;
+                        hitExact += pcsOf (hits.notes[i]) == pcsOf (stab.notes[k]) ? 1 : 0;
+                        break;
+                    }
+            for (int part : { (int) rolla::Stab, (int) rolla::Pluck, (int) rolla::Hits })
+            {
+                const auto& l = g->lane[part];
+                std::set<long> onsets;
+                std::set<int> vels;
+                for (int i = 0; i < l.count; ++i)
+                    if (l.notes[i].vel > 2 && barOf (l.notes[i].start) < 2)
+                    {
+                        onsets.insert (std::lround (l.notes[i].start));
+                        vels.insert (l.notes[i].vel);
+                    }
+                if (part != rolla::Hits && onsets.size() >= 2)
+                {
+                    ++velLanes;
+                    velFlat += vels.size() == 1 ? 1 : 0;
+                }
+                for (int b = 2; b < g->bars - 1; ++b)
+                {
+                    const int src = b % 2;
+                    std::vector<std::pair<long, int>> x, y, xv, yv;
+                    for (int i = 0; i < l.count; ++i)
+                    {
+                        const auto& n = l.notes[i];
+                        const long at = std::lround (n.start) % 16;
+                        if (barOf (n.start) == b)
+                        {
+                            x.push_back ({ at, (int) pcsOf (n) });
+                            xv.push_back ({ at, n.vel });
+                        }
+                        else if (barOf (n.start) == src)
+                        {
+                            y.push_back ({ at, (int) pcsOf (n) });
+                            yv.push_back ({ at, n.vel });
+                        }
+                    }
+                    std::sort (x.begin(), x.end());
+                    std::sort (y.begin(), y.end());
+                    if (x.empty() || x != y)
+                        continue;
+                    std::sort (xv.begin(), xv.end());
+                    std::sort (yv.begin(), yv.end());
+                    ++restBars;
+                    restVelSame += xv == yv ? 1 : 0;
+                }
+            }
+        }
+    std::cout << "Chord loop: pad in a stab chord " << padNested << "/" << padNotes << " exact " << padExact << "/" << padNotes
+              << " IN STAB hits exact " << hitExact << "/" << hitNotes << "; accents: flat stab/pluck cells " << velFlat << "/"
+              << velLanes << " restated bars keep velocity " << restVelSame << "/" << restBars << "\n";
+    expect (padNotes > 0 && padNested * 100 >= padNotes * 97, "pad plays inside the stab's chord of its bar (>= 97%)");
+    expect (padExact * 100 >= padNotes * 75, "pad plays the stab's chord of its bar exactly (>= 75%)");
+    expect (hitNotes > 0 && hitExact * 100 >= hitNotes * 95, "IN STAB hits play the stab hit's chord (>= 95%)");
+    expect (velLanes > 0 && velFlat * 10 <= velLanes, "stab / pluck cells carry accents (<= 10% flat)");
+    expect (restBars > 0 && restVelSame == restBars, "restated bars carry bars 1-2's accents");
+}
+
 } // namespace
 
 
@@ -3583,6 +3701,7 @@ int main()
     testHookCellRules();
     testBassRepeatBand();
     testVoxHookShape();
+    testChordLoopAccents();
 
     if (fails == 0)
         std::cout << "roll tests passed\n";
