@@ -52,13 +52,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout (const PresetBa
     add (std::make_unique<AudioParameterFloat> (
         ParameterID { "styleIntensity", 1 }, "Style Intensity", unit, 0.5f));
     add (std::make_unique<AudioParameterInt> (
-        ParameterID { "intensity", 1 }, "Intensity", 0, 100, 75));
+        ParameterID { "intensity", 1 }, "Intensity", 0, 100, 100));
 
     StringArray styleNames;
     for (int i = 0; i < NumDialects; ++i)
         styleNames.add (dialectName (i));
     add (std::make_unique<AudioParameterChoice> (
-        ParameterID { "dialect", 1 }, "Dialect", styleNames, 0));
+        ParameterID { "dialect", 1 }, "Dialect", styleNames, Long));
 
     add (std::make_unique<AudioParameterChoice> (
         ParameterID { "key", 1 }, "Key",
@@ -319,6 +319,29 @@ RollaProcessor::RollaProcessor()
     startupT0 = juce::Time::getMillisecondCounterHiRes();
     startupThread = std::thread ([this] { deferredStartup(); });
     prefetchTimer.startTimer (50);
+    post ([] (RollaProcessor& self) { self.lockToApproved(); });
+}
+
+// Oct 21: the plugin is the approved DEEP drop (drums + riff bass) with no knobs. The style, length
+// and intensity parameters stay registered (saved FL projects load) but are held at DEEP, 8 bars,
+// the full drop, so every path that reads them (presets, swing, auto key, MIDI export) agrees.
+void RollaProcessor::lockToApproved()
+{
+    auto hold = [this] (const char* id, float value)
+    {
+        if (auto* p = apvts.getParameter (id))
+        {
+            const float norm = p->convertTo0to1 (value);
+            if (std::fabs (p->getValue() - norm) >= 1.0e-4f)
+                p->setValueNotifyingHost (norm);
+        }
+    };
+    const bool wasDeep = (int) raw (apvts, "dialect") == Long;
+    hold ("length", (float) indexFromBars (8));
+    hold ("intensity", 100.f);
+    hold ("dialect", (float) Long);
+    if (wasDeep)
+        applyDialect (Long); // the listener only fires on a change: DEEP's presets and swing now
 }
 
 RollaProcessor::~RollaProcessor()
@@ -983,7 +1006,7 @@ Settings RollaProcessor::currentSettings() const
     s.chords = 0;
     s.key = (int) raw (apvts, "key");
     s.scale = (int) raw (apvts, "scale");
-    s.bars = barsFromIndex ((int) raw (apvts, "length"));
+    s.bars = 8;
     s.fill = raw (apvts, "fill") >= 0.5f;
     s.hitsInStab = raw (apvts, "hitsInStab") >= 0.5f;
     return s;
@@ -1348,7 +1371,7 @@ EngineParams RollaProcessor::readParams (std::shared_ptr<const PresetBank>& hold
     params.swing = hold != nullptr && hold->dialect[Long].swing > 0.f ? hold->dialect[Long].swing : 0.54f;
     params.outputDb = raw (apvts, "output");
     params.drumsAccent = raw (apvts, "drumsAccent");
-    params.bars = barsFromIndex ((int) raw (apvts, "length"));
+    params.bars = 8;
     params.key = (int) raw (apvts, "key");
     params.dialect = Long;
     params.scale = (int) raw (apvts, "scale");
@@ -1379,11 +1402,13 @@ EngineParams RollaProcessor::readParams (std::shared_ptr<const PresetBank>& hold
     {
         params.drumPick[v] = drumPick[v].load (std::memory_order_relaxed);
         const auto id = juce::String (v);
-        params.drumTuneSt[v] = raw (apvts, ("dTune" + id).toRawUTF8());
-        params.drumDecay[v] = raw (apvts, ("dDecay" + id).toRawUTF8());
-        params.drumLevelDb[v] = raw (apvts, ("dLevel" + id).toRawUTF8());
-        params.drumAccentOn[v] = raw (apvts, ("dAccent" + id).toRawUTF8()) >= 0.5f;
-        params.drumAccentAmt[v] = raw (apvts, ("dAccAmt" + id).toRawUTF8());
+        // the approved drums: every voice as recorded (no knobs; automation cannot move them)
+        juce::ignoreUnused (id);
+        params.drumTuneSt[v] = 0.f;
+        params.drumDecay[v] = 0.5f;
+        params.drumLevelDb[v] = 0.f;
+        params.drumAccentOn[v] = false;
+        params.drumAccentAmt[v] = 0.6f;
     }
     return params;
 }
@@ -1691,6 +1716,7 @@ void RollaProcessor::setStateInformation (const void* data, int sizeInBytes)
     projectEditorSerial.fetch_add (1, std::memory_order_relaxed);
 
     restoring.store (false);
+    post ([] (RollaProcessor& self) { self.lockToApproved(); }); // an older project comes back as the approved DEEP drop
     if (sourceReady.load (std::memory_order_relaxed))
         publishDerived();
 }

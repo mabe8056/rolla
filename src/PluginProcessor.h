@@ -254,6 +254,7 @@ private:
 
     void parameterChanged (const juce::String& parameterID, float newValue) override;
     void applyDialect (int dialect);
+    void lockToApproved();
     void regenerate (int onlyPart);
     void setRollNotice (const juce::String& text);
     mutable std::mutex noticeMu;
