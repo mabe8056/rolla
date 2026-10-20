@@ -8,7 +8,7 @@
 #include "ChordLoop.h"
 #include "PackHarmony.h"
 #include "RiffWriter.h"
-#include "BassChords.h"
+#include "UpperPart.h"
 
 #include <algorithm>
 #include <bitset>
@@ -3394,7 +3394,8 @@ void fixUpperClashes (Groove& g, int part)
         // The engine's stab chord memory turns a one-tone stab back into a full chord,
         // which would put the clashing tones back (and play notes the MIDI file lacks).
         // A lone surviving tone gets its octave, so the stab plays as written.
-        if (part == Stab && w == 1)
+        // A written line (the CHORDS hook, NoteLine) is one voice by design and keeps it.
+        if (part == Stab && w == 1 && (n.flags & NoteLine) == 0)
             keep[w++] = (std::int8_t) (keep[0] + (keep[0] <= 36 ? 12 : -12));
         n.nChord = (std::uint8_t) w;
         for (int c = 0; c < 4; ++c)
@@ -6740,19 +6741,28 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
             trimSamePitchOverlaps (g.lane[part]);
         }
     }
-    // CHORDS: the stab's chords take the bass riff's notes as roots (BassChords.h); its voicings are
-    // already rootless, so the bass-note thinning below stays off.
+    // CHORDS (UpperPart.h): the part over the riff. 1 HOOK: a single-voice 2-bar hook on the tonic set;
+    // 2 STAB: DEEP's chords (rules::jazzRevoice) on a fixed 2-bar call / answer stab cell. Either way
+    // the upper part does not re-root on the bass notes (round 8, rejected, did).
     if (s.chords > 0 && regen (Stab))
     {
-        const int st = clampi (s.dialect, 0, rules::tables::kStyles - 1);
-        const int lo = rules::tables::kStabRegLo[st];
-        const int hi = rules::tables::kStabRegHi[st] + 3;
-        const std::uint32_t cs = postHash (g.lane[Stab].seed ? g.lane[Stab].seed : 1u, 0x43484F52u);
-        const int grain = s.chords == 2 ? 16 : 8;
-        bass_chords::write (g.lane[Stab], g.lane[Bass], mode, s.bars, grain, cs, lo, hi);
-        bass_chords::write (loopStab, g.lane[Bass], mode, s.bars, grain, cs, lo, hi);
-        for (int part : { (int) Pluck, (int) Hits, (int) Vox })
-            fixUpperClashes (g, part);
+        const std::uint32_t cs = postHash (g.lane[Stab].seed ? g.lane[Stab].seed : 1u, 0x55505052u);
+        if (s.chords == 1)
+            upper::writeHook (g.lane[Stab], g.lane[Bass], mode, s.bars, s.key, cs);
+        else
+        {
+            const Lane before = g.lane[Stab];
+            upper::stabCell (g.lane[Stab], g.lane[Bass], s.bars, cs);
+            const std::uint32_t js = postHash (cs, 0x4A415A5Au);
+            if (rules::jazzRevoice (g.lane[Stab], g.lane[Bass], mode, s.bars, false, js))
+            {
+                fixUpperClashes (g, Stab);
+                leaveBassNoteToBass (g.lane[Stab], g.lane[Bass], s.bars);
+            }
+            else
+                g.lane[Stab] = before;
+        }
+        loopStab = g.lane[Stab];
         for (int part : { (int) Stab, (int) Pluck, (int) Hits, (int) Vox })
         {
             dedupeNoteOns (g.lane[part]);
@@ -6808,7 +6818,7 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
     // onset, length or pitch moves, and a kept lane keeps its velocities.
     {
         const accent::Table stabAccent = accent::draw (g.lane[Stab], 0xACC5u);
-        if (regen (Stab))
+        if (regen (Stab) && s.chords == 0) // CHORDS writes its own accents (the push into bar 1)
             accent::apply (g.lane[Stab], stabAccent);
         if (regen (Pluck))
             accent::apply (g.lane[Pluck], accent::draw (g.lane[Pluck], 0xACC6u));

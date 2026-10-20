@@ -132,7 +132,7 @@ struct Knobs
     bool drop = false;         // --knob DROP=0|1 (Settings::drop: the roll is the 8-bar peak drop)
     bool riff = false;         // --knob RIFF=0|1 (Settings::riff: the bass is a designed riff)
     int riffShape = -1;        // --knob RIFFSHAPE=0..5 (force a RiffWriter shape; -1 drawn)
-    int chords = 0;            // --knob CHORDS=0..2 (stab chords on the bass riff's roots; BassChords.h)
+    int chords = 0;            // --knob CHORDS=0..2 (1 hook, 2 stab cell over the riff; UpperPart.h)
     bool duck = false;         // --knob DUCK=0|1 (EngineParams::duck: the bass pumps on the kick)
     bool stems = false;
     bool midiOnly = false;     // --midi-only: write the MIDI and roll.json, no WAV render

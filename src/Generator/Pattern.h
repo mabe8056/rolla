@@ -53,7 +53,10 @@ enum NoteFlags : std::uint8_t
     NoteGhost = 2,
     // A STYLE overlay note: a line phrased over the whole loop (the pluck's 3/5/7-sixteenth
     // line). The hook restatement leaves it where it was written (PhraseLock.h).
-    NoteLayer = 4
+    NoteLayer = 4,
+    // A single-voice line written over the riff (the CHORDS hook, UpperPart.h): it stays one voice
+    // (fixUpperClashes adds no octave to it).
+    NoteLine = 8
 };
 
 struct Note
@@ -163,8 +166,8 @@ struct Settings
     bool riff = false;
     // RIFF shape override for listening rounds (-1: drawn per style; RiffWriter.h Shape).
     int riffShape = -1;
-    // CHORDS (Oct 20, round 4: "starting on the chord note ... we have a chord structure"): the stab
-    // takes the riff's bass notes as chord roots (BassChords.h). 0 off, 1 a chord per half bar, 2 per bar.
+    // CHORDS (Oct 20, UpperPart.h): the part over the bass riff. 0 as before, 1 HOOK (a single-voice
+    // 2-bar hook on the tonic set), 2 STAB (DEEP's chords on a fixed 2-bar call / answer stab cell).
     int chords = 0;
 };
 
