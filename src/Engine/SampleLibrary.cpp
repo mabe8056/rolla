@@ -644,6 +644,8 @@ void SampleLibrary::loadOne (const std::string& relative)
     audio->namedRoot = midiFromFilename (relative.c_str());
     audio->namedMinor = minorFromFilename (relative.c_str());
     audio->flatness = spectralFlatness (audio->left.data(), audio->frames);
+    measureEnvelope (audio->left.data(), audio->right.size() == audio->left.size() ? audio->right.data() : nullptr,
+                     std::min (audio->frames, (int) audio->left.size()), audio->rate, audio->attackMs, audio->bodyDb, audio->ringMs);
     audio->loudStart = loudestRegionStart (audio->left.data(), audio->frames, audio->rate);
     audio->voicedCount = voicedOnsets (audio->left.data(), audio->right.empty() ? nullptr : audio->right.data(),
                                        audio->frames, audio->rate, audio->slices, audio->sliceCount, audio->loudStart,

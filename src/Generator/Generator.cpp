@@ -6446,7 +6446,7 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
     // 1: the stab plays the roll's chord of each bar as a triad / 7th with a led top voice; 2: the
     // bass and pluck riffs move with the chords too. A kept stab keeps its own chords, and the bass
     // only follows a plan the stab is rolled with.
-    if (s.harmony > 0 && regen (Stab))
+    if (s.harmony >= 1 && s.harmony <= 2 && regen (Stab))
     {
         const pack_harmony::Plan hp = pack_harmony::draw (postHash (seeds[Bass] ? seeds[Bass] : 1u, 0x48524D4Eu), mode,
                                                           s.bars, s.dialect == Long);
@@ -6468,8 +6468,36 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
             trimSamePitchOverlaps (g.lane[part]);
         }
     }
-    // DEEP's jazz voicings leave the bass note to the bass that ships (RuleComposer deepJazzStab).
-    if (s.dialect == Long && regen (Stab))
+    // HARMONY 3 (Melak, Oct 20: "deeps chords sound the most like music"): DEEP's chord writer on
+    // every other style's finished stab rhythm (rules::jazzRevoice); DEEP already wrote them. When no
+    // chord pair fits, the pack-learned plan in its colourful setting stands in.
+    if (s.harmony == 3 && regen (Stab) && s.dialect != Long)
+    {
+        const std::uint32_t js = postHash (g.lane[Stab].seed ? g.lane[Stab].seed : 1u, 0x4A415A5Au);
+        const bool byHit = s.dialect == UkMin;
+        const bool ok = rules::jazzRevoice (g.lane[Stab], g.lane[Bass], mode, s.bars, byHit, js);
+        rules::jazzRevoice (loopStab, g.lane[Bass], mode, s.bars, byHit, js);
+        if (! ok)
+        {
+            const pack_harmony::Plan hp = pack_harmony::draw (postHash (seeds[Bass] ? seeds[Bass] : 1u, 0x48524D4Eu), mode,
+                                                              s.bars, true);
+            const int st = clampi (s.dialect, 0, rules::tables::kStyles - 1);
+            pack_harmony::voiceStab (g.lane[Stab], hp, mode, g.lane[Bass], s.bars, rules::tables::kStabRegLo[st], rules::tables::kStabRegHi[st]);
+            pack_harmony::voiceStab (loopStab, hp, mode, g.lane[Bass], s.bars, rules::tables::kStabRegLo[st], rules::tables::kStabRegHi[st]);
+            const size_t used = std::strlen (g.brokenRules);
+            if (used + 6 < sizeof g.brokenRules)
+                std::snprintf (g.brokenRules + used, sizeof g.brokenRules - used, "|h3fb");
+        }
+        for (int part : { (int) Stab, (int) Pluck, (int) Hits, (int) Vox })
+        {
+            fixUpperClashes (g, part);
+            dedupeNoteOns (g.lane[part]);
+            trimSamePitchOverlaps (g.lane[part]);
+        }
+    }
+    // DEEP's jazz voicings leave the bass note to the bass that ships (RuleComposer deepJazzStab);
+    // so do HARMONY 3's.
+    if ((s.dialect == Long || s.harmony == 3) && regen (Stab))
         leaveBassNoteToBass (g.lane[Stab], g.lane[Bass], s.bars);
     // One chord loop (catchiness research #5): a rolled pad and rolled chord hits play the stab's
     // chord of their bar (a kept stab's too), in their own voicing; then they give way to the bass

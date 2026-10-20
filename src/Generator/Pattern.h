@@ -150,7 +150,7 @@ struct Settings
     // A locked scale quantizes every regenerated melodic lane after the draw.
     int scale = 0;
     // Pack-learned harmony (PackHarmony.h): 0 off, 1 the stab plays the roll's chord progression,
-    // 2 the bass and pluck move with it too.
+    // 2 the bass and pluck move with it too, 3 DEEP's chord writer for every style (rules::jazzRevoice).
     int harmony = 0;
 };
 

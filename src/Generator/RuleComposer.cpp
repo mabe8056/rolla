@@ -1,5 +1,6 @@
 #include "RuleComposer.h"
 #include "RuleTables.h"
+#include "PhraseLock.h"
 
 #include <algorithm>
 #include <bitset>
@@ -1497,6 +1498,109 @@ bool deepJazzStab (int mode, std::uint32_t seed, const JazzHit* hits, int nh, in
 }
 
 } // namespace
+
+// HARMONY 3 (Melak, Oct 20: "deeps chords sound the most like music"): DEEP's own chord writer
+// (deepJazzStab, its tables unchanged) on a finished stab lane of any style. One chord per
+// distinct (source bar, 16th) so restated bars keep identical chords; onsets, lengths and
+// velocities are never touched.
+bool jazzRevoice (Lane& stab, const Lane& bass, int mode, int bars, bool byHit, std::uint32_t seed) noexcept
+{
+    const int nb = std::clamp (bars, 1, kMaxBars);
+    constexpr int kCap = kMaxBars * 4;
+    struct Key
+    {
+        int src = 0;
+        int slot = 0;
+    };
+    Key keys[kCap];
+    int nk = 0;
+    auto keyOf = [&] (const Note& n) noexcept
+    {
+        const int bar = std::clamp (phrase_lock::barOf (n.start), 0, nb - 1);
+        Key k;
+        k.src = nb >= 4 ? phrase_lock::sourceBar (bar, nb) : bar;
+        k.slot = std::clamp (phrase_lock::slotIn (n.start, bar), 0, kBar - 1);
+        return k;
+    };
+    auto find = [&] (const Key& k) noexcept
+    {
+        for (int i = 0; i < nk; ++i)
+            if (keys[i].src == k.src && keys[i].slot == k.slot)
+                return i;
+        return -1;
+    };
+    for (int i = 0; i < stab.count; ++i)
+    {
+        if (stab.notes[i].vel <= 2)
+            continue;
+        const Key k = keyOf (stab.notes[i]);
+        if (find (k) < 0)
+        {
+            if (nk >= kCap)
+                return false;
+            keys[nk++] = k;
+        }
+    }
+    if (nk == 0)
+        return false;
+    std::sort (keys, keys + nk, [] (const Key& a, const Key& b) { return a.src != b.src ? a.src < b.src : a.slot < b.slot; });
+
+    auto bassPcAt = [&] (float t) noexcept
+    {
+        int pc = -1;
+        for (int i = 0; i < bass.count; ++i)
+        {
+            const Note& b = bass.notes[i];
+            if (b.vel > 2 && b.start <= t + 1.0e-3f && b.start + b.length > t + 1.0e-3f)
+                pc = pcOf (b.chord[0]);
+        }
+        return pc;
+    };
+    JazzHit jh[kCap];
+    for (int k = 0; k < nk; ++k)
+    {
+        jh[k].cls = byHit ? (k & 1) : (keys[k].src & 1);
+        jh[k].slot = keys[k].slot;
+        jh[k].bassPc = -2;
+        jh[k].bassMask = 0u;
+    }
+    for (int i = 0; i < stab.count; ++i)
+    {
+        const Note& n = stab.notes[i];
+        if (n.vel <= 2)
+            continue;
+        const int k = find (keyOf (n));
+        const int pc = bassPcAt (n.start);
+        jh[k].bassPc = jh[k].bassPc == -2 ? pc : (jh[k].bassPc == pc ? pc : -1);
+        const float a = n.start;
+        const float b = n.start + std::max (0.25f, n.length);
+        for (int j = 0; j < bass.count; ++j)
+        {
+            const Note& bn = bass.notes[j];
+            if (bn.vel > 2 && bn.start < b - 1.0e-3f && a < bn.start + bn.length - 1.0e-3f)
+                jh[k].bassMask |= 1u << (unsigned) pcOf (bn.chord[0]);
+        }
+    }
+    for (int k = 0; k < nk; ++k)
+        if (jh[k].bassPc == -2)
+            jh[k].bassPc = -1;
+    int tones[kCap][4] {};
+    int nTones[kCap] {};
+    if (! deepJazzStab (mode, seed, jh, nk, tones, nTones))
+        return false;
+    for (int i = 0; i < stab.count; ++i)
+    {
+        Note& n = stab.notes[i];
+        if (n.vel <= 2)
+            continue;
+        const int k = find (keyOf (n));
+        const int m = std::clamp (nTones[k], 1, 4);
+        n.nChord = (std::uint8_t) m;
+        for (int c = 0; c < 4; ++c)
+            n.chord[c] = (std::int8_t) (c < m ? tones[k][c] : 0);
+    }
+    return true;
+}
 
 int drawMode (int dialect, float dark, std::uint32_t bassSeed) noexcept
 {

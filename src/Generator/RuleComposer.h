@@ -120,6 +120,11 @@ struct StabParams
 // left to the bass when the bass plays it); the palette pair is its fallback.
 void composeStab (Lane& lane, const Lane& bass, const StabParams& p, std::uint32_t seed);
 
+// HARMONY 3: DEEP's jazz-house chord writer on a finished stab lane (any style). One chord per
+// (source bar, 16th), so restated bars stay identical; byHit alternates the two chords hit by hit
+// (ROLLER, DEEP), else by bar parity. Pitches only. False (lane untouched) when no chord pair fits.
+bool jazzRevoice (Lane& stab, const Lane& bass, int mode, int bars, bool byHit, std::uint32_t seed) noexcept;
+
 // One chord from the style's palette under the mode: up to 4 tones in `out`.
 void stabVoicing (int dialect, int mode, std::uint32_t hash, int* out, int& n) noexcept;
 

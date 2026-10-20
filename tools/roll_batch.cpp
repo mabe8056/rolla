@@ -125,7 +125,7 @@ struct Knobs
     float punch[rolla::NumParts] {};
     float levelDb[rolla::NumParts] {};
     int intensity = 75;
-    int harmony = 0;           // --knob HARMONY=0|1|2 (Settings::harmony)
+    int harmony = 0;           // --knob HARMONY=0|1|2|3 (Settings::harmony)
     bool stems = false;
     bool midiOnly = false;     // --midi-only: write the MIDI and roll.json, no WAV render
     bool styleFolders = false; // --folder-names styles
@@ -181,7 +181,7 @@ bool parseKnob (const std::string& text, Knobs& knobs)
     else if (name == "LEVEL")
         for (int i = 0; i < rolla::NumParts; ++i) knobs.levelDb[i] = value;
     else if (name == "HARMONY")
-        knobs.harmony = std::clamp ((int) std::lround (value), 0, 2);
+        knobs.harmony = std::clamp ((int) std::lround (value), 0, 3);
     else if (name == "INTENSITY")
         knobs.intensity = std::clamp ((int) std::lround (value), 0, 100);
     else
@@ -481,6 +481,53 @@ std::string pickedFile (const rolla::SampleIndex* index, const rolla::SampleSpec
     return entry != nullptr ? entry->path : "";
 }
 
+// HARMONY 3 stab rule (Oct 20 forensics: DEEP's liked chords came from a clean single-note synth;
+// a recorded chord sounds once from its first note, so the written chord is not heard): the stab
+// file must be one pitched tone with a body. Attack ceiling 150 ms for ROLLER / DEEP, 30 ms for the
+// short BOUNCY / JACKIN hits.
+bool stabChordable (const rolla::SampleAudio& a, int dialect) noexcept
+{
+    const float attackMax = (dialect == rolla::Pop || dialect == rolla::Jackin) ? 30.f : 150.f;
+    return a.pitch.pitched() && ! a.pitch.isChord && a.pitch.conf >= 0.80f && a.bodyDb >= -12.f && a.attackMs <= attackMax;
+}
+
+// Every file of the lane's pool that `ok` accepts, then the seed's pick among them (so the rule
+// narrows the pool without collapsing it onto the first passing file); -1 when none passes (the
+// seed pick stands). Loads each candidate (bounded wait), never writes a file.
+template <typename Ok>
+int walkPick (rolla::SampleLibrary& library, const rolla::SampleIndex& index, const rolla::SampleSpec& spec, int part,
+              int pick, int dialect, Ok ok, std::string& why)
+{
+    const rolla::PoolFilter filter = rolla::poolFilterWithFiles (index, spec, part, spec.filter.voice, dialect);
+    const int n = rolla::sampleIndexCount (index, part, filter);
+    std::vector<int> pass;
+    for (int at = 0; at < n; ++at)
+    {
+        const auto* entry = rolla::sampleIndexAt (index, part, filter, at);
+        if (entry == nullptr)
+            continue;
+        rolla::waitForSampleFiles (library, { std::string (entry->path) }, 60000, "walk");
+        const rolla::SampleAudio* audio = library.tryGet (entry->path);
+        if (audio != nullptr && ok (*audio))
+            pass.push_back (at);
+    }
+    if (pass.empty())
+    {
+        why = "none of " + std::to_string (n);
+        return -1;
+    }
+    const int at = pass[(size_t) ((unsigned) std::max (0, pick) % (unsigned) pass.size())];
+    const auto* entry = rolla::sampleIndexAt (index, part, filter, at);
+    const rolla::SampleAudio* audio = entry != nullptr ? library.tryGet (entry->path) : nullptr;
+    char buf[256];
+    std::snprintf (buf, sizeof buf, "%d of %d pass; %s conf %.2f chord %d attack %.0f ms body %.1f dB ring %.0f ms",
+                   (int) pass.size(), n, entry != nullptr ? entry->path : "?", audio ? audio->pitch.conf : 0.f,
+                   audio ? (int) audio->pitch.isChord : -1, audio ? audio->attackMs : 0.f, audio ? audio->bodyDb : 0.f,
+                   audio ? audio->ringMs : 0.f);
+    why = buf;
+    return at;
+}
+
 void writeSidecar (const juce::File& wav, int style, const Knobs& knobs, bool hitsMute, float swing,
                    const rolla::PresetBank& bank, const int preset[rolla::NumParts],
                    const int samplePick[rolla::NumParts], const std::string fileOf[rolla::NumParts],
@@ -632,6 +679,16 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
             std::string drumOf[rolla::NumDrumVoices];
             if (index != nullptr && library != nullptr)
             {
+                if (knobs.harmony == 3)
+                {
+                    std::string why;
+                    const int at = walkPick (*library, *index, rolla::specAt (bank, rolla::Stab, preset[rolla::Stab]), rolla::Stab,
+                                             samplePick[rolla::Stab], style,
+                                             [&] (const rolla::SampleAudio& a) { return stabChordable (a, style); }, why);
+                    if (at >= 0)
+                        samplePick[rolla::Stab] = at;
+                    std::cerr << "H3_STAB " << why << "\n";
+                }
                 for (int p = 0; p < rolla::Drums; ++p)
                     fileOf[p] = pickedFile (index.get(), rolla::specAt (bank, p, preset[p]), p, -1, samplePick[p], style);
                 const auto& drums = rolla::specAt (bank, rolla::Drums, preset[rolla::Drums]);

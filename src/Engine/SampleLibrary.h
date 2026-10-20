@@ -1,4 +1,5 @@
 #pragma once
+#include <cmath>
 
 #include "SampleChop.h"
 #include "SampleSpec.h"
@@ -515,7 +516,67 @@ struct SampleAudio
     int voicedCount = 0;
     int voiced[24] { 0 };
     float voicedFloor = 0.f;
+    // Envelope at load (measureEnvelope, 5 ms RMS frames): onset to within 1 dB of the peak,
+    // the mean level 30-230 ms after onset against the peak, and the time from the peak until
+    // the level stays under peak -30 dB (how long the sound rings).
+    float attackMs = 1.0e4f;
+    float bodyDb = -100.f;
+    float ringMs = 0.f;
 };
+
+// Envelope of a loaded buffer (SampleAudio::attackMs / bodyDb / ringMs). Never writes the audio.
+inline void measureEnvelope (const float* l, const float* r, int frames, double rate, float& attackMs, float& bodyDb,
+                             float& ringMs) noexcept
+{
+    attackMs = 1.0e4f;
+    bodyDb = -100.f;
+    ringMs = 0.f;
+    if (l == nullptr || frames <= 0 || rate <= 0.0)
+        return;
+    const int hop = std::max (1, (int) (rate * 0.005));
+    const int n = frames / hop;
+    if (n < 2)
+        return;
+    std::vector<float> db ((size_t) n);
+    float peak = -200.f;
+    int at = 0;
+    for (int f = 0; f < n; ++f)
+    {
+        double e = 0.0;
+        for (int i = f * hop; i < (f + 1) * hop; ++i)
+        {
+            const double x = r != nullptr ? 0.5 * ((double) l[i] + (double) r[i]) : (double) l[i];
+            e += x * x;
+        }
+        db[(size_t) f] = (float) (10.0 * std::log10 (e / (double) hop + 1.0e-20));
+        if (db[(size_t) f] > peak)
+        {
+            peak = db[(size_t) f];
+            at = f;
+        }
+    }
+    int onset = 0;
+    while (onset < n && db[(size_t) onset] < peak - 20.f)
+        ++onset;
+    int full = onset;
+    while (full < n && db[(size_t) full] < peak - 1.f)
+        ++full;
+    attackMs = 5.f * (float) (full - onset);
+    const int b0 = onset + 6;
+    const int b1 = std::min (n, onset + 46);
+    if (b1 > b0)
+    {
+        double sum = 0.0;
+        for (int f = b0; f < b1; ++f)
+            sum += db[(size_t) f];
+        bodyDb = (float) (sum / (double) (b1 - b0)) - peak;
+    }
+    int last = at;
+    for (int f = at; f < n; ++f)
+        if (db[(size_t) f] >= peak - 30.f)
+            last = f;
+    ringMs = 5.f * (float) (last - at + 1);
+}
 
 // Loads preset-referenced files from the user sample folder on a background thread.
 // The audio thread only reads atomics. Samples are never embedded in the plugin.
