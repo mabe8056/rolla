@@ -100,6 +100,11 @@ inline double cost (double s) noexcept
 inline constexpr double kWinLo = -12.0; // per-note window (his FL sampled bass runs -9..+20)
 inline constexpr double kWinHi = 19.0;
 
+// The key root (the line's 0) sounds between F1 and G2 (MIDI 29-43, ~44-98 Hz): his favourite
+// basslines sit at f0 ~45-80 Hz; a D1 root (37 Hz) was "too low octave" (Oct 20, round 3 #6).
+inline constexpr int kRootSoundLo = 29;
+inline constexpr int kRootSoundHi = 43;
+
 // Octave for the whole line (k octaves on top of the written register), ties to the higher k.
 inline int octaveFor (const Line& l, int base, double root) noexcept
 {
@@ -107,7 +112,8 @@ inline int octaveFor (const Line& l, int base, double root) noexcept
     double bestCost = 1.0e18;
     for (int k = 3; k >= -3; --k)
     {
-        double c = 0.0;
+        const int rootSound = base + 12 * k;
+        double c = (rootSound < kRootSoundLo || rootSound > kRootSoundHi) ? 40.0 * (double) std::max (1, l.notes) : 0.0;
         for (int b = 0; b < kBins; ++b)
         {
             if (l.count[b] == 0)
