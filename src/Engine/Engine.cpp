@@ -859,7 +859,7 @@ void Engine::process (const Groove& groove,
             }
             else if (incoming[e].ch == 2 && incoming[e].on)
             {
-                const int nIv = (sp.chordOn && sp.chordN > 1) ? std::min (4, sp.chordN) : 1;
+                const int nIv = (sp.chordOn && sp.chordN > 1 && ! params.sampleTrue) ? std::min (4, sp.chordN) : 1;
                 const ChordAsk ask = nIv > 1 ? chordAskOf (sp.chordIv, nIv) : ChordAsk {};
                 bool chordSounding = false;
                 for (int c = 0; c < nIv; ++c)
@@ -2351,7 +2351,8 @@ void Engine::process (const Groove& groove,
         {
             // Linear sum. The shared fastTanh was the mute leak: MUTE − (FULL − SOLO)
             // left a common 250 Hz–4 kHz residual from the cubic term of the sum.
-            const float sg = params.sampleTrue ? 1.f : E.mixRt.sumGain();
+            const float sg = params.sampleTrue ? dbToGain (kSampleTrueMasterDb[std::clamp (params.dialect, 0, 3)])
+                                               : E.mixRt.sumGain();
             // Mono below 120 Hz on the master: the plate, the delay and the unstripped
             // toms / slot kicks put side energy under the lanes' own mono-below.
             // LR4 on the side, mid untouched. Linear, so MUTE − (FULL − SOLO) still nulls.

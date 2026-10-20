@@ -1091,7 +1091,7 @@ bool Sampler::playUserSlot (int part, int drumVoice, int midiNote, int velocity,
                              ? (double) params.drumTuneSt[drumVoice] + (double) decision.cents / 100.0
                              : (double) (midiNote - decision.root) + (double) decision.cents / 100.0;
     const double ratioMin = drumVoice >= 0 ? 0.25 : 0.05;
-    const double ratioMax = drumVoice >= 0 ? 4.0 : 16.0;
+    const double ratioMax = drumVoice >= 0 ? 8.0 : 16.0;
     Voice fresh;
     fresh.on = true;
     fresh.part = voicePart;
@@ -1704,7 +1704,8 @@ float Sampler::takeDrum (int voice, int velocity, const PresetBank& bank, const 
     fresh.audio = audio;
     notePicked (Drums, voice, audio);
     fresh.reverse = spec.reverse;
-    fresh.ratio = std::clamp (tune * (audio->rate / sr) * keyFollow, 0.25, 4.0);
+    // 0.25-8: a 192 kHz hit in a 44.1 kHz session needs 4.35 and must not play flat.
+    fresh.ratio = std::clamp (tune * (audio->rate / sr) * keyFollow, 0.25, 8.0);
     fresh.end16 = 1.0e9f;
     fresh.fade = 0.f;
     fresh.fadeInc = 1.f / std::max (8.f, 0.002f * (float) sr);
