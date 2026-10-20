@@ -59,6 +59,7 @@ struct Bass
     BassNote n[kMaxNotes];
     int count = 0;
     int steps = 0;
+    int wrap = -1; // the main note ringing into bar 1: the last one of the riff's first cycle
 };
 
 inline Bass bassOf (const Lane& lane, int bars) noexcept
@@ -78,6 +79,39 @@ inline Bass bassOf (const Lane& lane, int bars) noexcept
         o.ghost = x.vel < kGhostVel;
     }
     std::sort (b.n, b.n + b.count, [] (const BassNote& p, const BassNote& q) { return p.start < q.start; });
+    // the riff's period in bars (bar 8 may vary): bar 1 comes round after the cycle's last bar, so that
+    // bar's last note rings into it (not bar 8's, which would make bar 1 differ from bar 5)
+    const int nb = b.steps / 16;
+    auto same = [&] (int x, int y) {
+        int i = 0, j = 0;
+        auto next = [&] (int& k, int bar) { while (k < b.count && (b.n[k].start < bar * 16.f - 0.01f || b.n[k].start >= bar * 16.f + 15.99f)) ++k; };
+        for (;;)
+        {
+            next (i, x);
+            next (j, y);
+            if (i >= b.count || j >= b.count)
+                return i >= b.count && j >= b.count;
+            if (std::fabs ((b.n[i].start - x * 16.f) - (b.n[j].start - y * 16.f)) > 0.01f || b.n[i].v != b.n[j].v)
+                return false;
+            ++i;
+            ++j;
+        }
+    };
+    int period = nb;
+    for (int p : { 1, 2, 4 })
+    {
+        bool ok = p < nb;
+        for (int x = 0; x + p < nb - 1 && ok; ++x)
+            ok = same (x, x + p);
+        if (ok)
+        {
+            period = p;
+            break;
+        }
+    }
+    for (int i = 0; i < b.count; ++i)
+        if (! b.n[i].ghost && b.n[i].start < period * 16.f - 0.01f)
+            b.wrap = i;
     return b;
 }
 
@@ -85,15 +119,11 @@ inline Bass bassOf (const Lane& lane, int bars) noexcept
 // loop's last main note (it rings into bar 1 when the loop comes round). -1 for a bass of ghosts.
 inline int ctxAt (const Bass& b, float t) noexcept
 {
-    int k = -1, last = -1;
+    int k = -1;
     for (int i = 0; i < b.count; ++i)
-        if (! b.n[i].ghost)
-        {
-            last = i;
-            if (b.n[i].start <= t + 0.26f)
-                k = i;
-        }
-    return k >= 0 ? k : last;
+        if (! b.n[i].ghost && b.n[i].start <= t + 0.26f)
+            k = i;
+    return k >= 0 ? k : b.wrap;
 }
 
 inline bool sounding (const Bass& b, int step) noexcept
@@ -181,7 +211,7 @@ struct Chord
     int iv[4] {};
 };
 
-inline Chord chordOn (int root, int mode, Rng& r) noexcept
+inline Chord chordOn (int root, int mode, Rng& r, int force = -1) noexcept
 {
     int deg = 0;
     for (int d = 0; d < 7; ++d)
@@ -192,7 +222,8 @@ inline Chord chordOn (int root, int mode, Rng& r) noexcept
     Chord c;
     c.root = root;
     auto set = [&] (std::initializer_list<int> t) { c.n = 0; for (int x : t) c.iv[c.n++] = x; };
-    const double x = r.next();
+    // force: 0 the plain chord (m7 / add9), 1 the other colour (m11 / 6/9 or 9sus)
+    const double x = force == 0 ? 0.99 : (force == 1 ? 0.5 : r.next());
     if (third == 3)
     {
         if (ninth == 14 && x < 0.45)
@@ -276,10 +307,9 @@ inline float topWeight (int topOverBass) noexcept
     switch (pcOf (topOverBass))
     {
         case 0: case 5: case 7: return 1.f;
-        case 3: case 4: case 8: case 9: return 0.8f;
-        case 10: return 0.45f;
-        case 2: return 0.2f;
-        default: return 0.f;
+        case 3: case 4: case 8: case 9: return 0.75f;
+        case 10: return 0.3f;
+        default: return 0.f; // the 9th on top sounds unresolved; b9 / tritone / maj7 clash
     }
 }
 
@@ -328,10 +358,18 @@ inline void writeLock (Lane& lane, const Lane& bassLane, int mode, int bars, int
     int nv[4] {};
     for (int k = 0; k < nRoots; ++k)
     {
-        chord[k] = chordOn (roots[k], mode, r);
-        chord[k].root = rootV[k]; // tones sit over the bass note as played
-        // the top 22-33 semitones over the bass: stab value = bass value + (22..33) - over
-        nv[k] = voicingsOf (chord[k], rootV[k] + 22 - over, rootV[k] + 33 - over, voic[k], kCap);
+        // the drawn colour, unless no voicing of it puts a unison / 4th / 5th / 3rd / 6th on top inside
+        // the hand (a minor 9 keeps its 9th on top there): then the plain chord, then the other colour
+        bool good = false;
+        for (int attempt = 0; attempt < 3 && ! good; ++attempt)
+        {
+            chord[k] = chordOn (roots[k], mode, r, attempt == 0 ? -1 : (attempt == 1 ? 0 : 1));
+            chord[k].root = rootV[k]; // tones sit over the bass note as played
+            // the top 22-33 semitones over the bass: stab value = bass value + (22..33) - over
+            nv[k] = voicingsOf (chord[k], rootV[k] + 22 - over, rootV[k] + 33 - over, voic[k], kCap);
+            for (int v = 0; v < nv[k] && ! good; ++v)
+                good = topWeight (voic[k][v].p[voic[k][v].n - 1] - rootV[k]) >= 0.75f;
+        }
         if (nv[k] == 0)
             return;
     }
@@ -382,7 +420,7 @@ inline void writeLock (Lane& lane, const Lane& bassLane, int mode, int bars, int
         {
             const Voicing& v = voic[k][pick[k]];
             const float w = topWeight (v.p[v.n - 1] - rootV[k]);
-            cost += w <= 0.f ? 100.f : 3.f * (1.f - w);
+            cost += w <= 0.f ? 100.f : 6.f * (1.f - w);
         }
         for (int c = 0; c < nch; ++c)
         {
@@ -471,8 +509,18 @@ inline void writeLock (Lane& lane, const Lane& bassLane, int mode, int bars, int
             s += 0.01f * (float) ((std::uint32_t) (seed >> (slot & 15)) & 7u);
             cand[nc++] = { i, s };
         }
+        // where the bass changes pitch the chord changes with it: those attacks always get a chord
+        for (int c = 0; c < nc; ++c)
+        {
+            const int prev = ctxAt (b, b.n[cand[c].i].start - 0.3f);
+            if (prev < 0 || pcOf (b.n[prev].v) != pcOf (b.n[cand[c].i].v))
+                cand[c].score += 10.f;
+        }
+        int must = 0;
+        for (int c = 0; c < nc; ++c)
+            must += cand[c].score >= 10.f ? 1 : 0;
         std::sort (cand, cand + nc, [] (const Cand& p, const Cand& q) { return p.score > q.score; });
-        const int take = std::min (nc, perBar);
+        const int take = std::min (nc, std::min (6, std::max (perBar, must)));
         std::sort (cand, cand + take, [] (const Cand& p, const Cand& q) { return p.i < q.i; });
         for (int h = 0; h < take && lane.count < kMaxNotes; ++h)
         {
@@ -485,7 +533,8 @@ inline void writeLock (Lane& lane, const Lane& bassLane, int mode, int bars, int
             const float change = nextChange (b, x.start, x.v, (float) (src * 16 + 16)) + shift;
             Note n;
             n.start = at;
-            n.length = std::max (0.5f, std::min (hitLen, change - at - 0.25f));
+            // the release tail must not ring into a new bass note: end 3/4 of a 16th before it
+            n.length = std::max (0.5f, std::min (hitLen, change - at - 0.75f));
             const int slot = (int) std::lround (x.start) - src * 16;
             n.vel = (std::uint8_t) (x.vel >= 110 ? 118 : ((slot % 4) != 0 ? 104 : 92));
             n.flags = NoteLine;
@@ -508,11 +557,6 @@ inline void writeAnswer (Lane& lane, const Lane& bassLane, int mode, int bars, i
     if (b.count == 0)
         return;
     const int perBar = 3 + (int) (r.next() * 3.0); // 3-5 notes a bar
-    // per-roll pitch habits: how often the octave, the 5th / 4th, a 3rd / 6th, a 2nd / b7
-    const float wOct = 0.34f + 0.1f * (float) r.next();
-    const float wFifth = 0.20f;
-    const float wThird = 0.30f;
-    const float wStep = 0.10f;
     std::uint64_t sigs[kMaxBars];
     int firstBarOf[kMaxBars];
     for (int bar = 0; bar < nb; ++bar)
@@ -576,7 +620,45 @@ inline void writeAnswer (Lane& lane, const Lane& bassLane, int mode, int bars, i
                 chosen[n++] = cand[i].step;
         }
         std::sort (chosen, chosen + n);
-        int lastBassV = -1000;
+        // the bass and the answers together cover at most 70% of the bar (the pack's loops sit at
+        // 49-57%; denser reads as crowded): shorter answers first, then fewer (never under 3)
+        int covB = 0;
+        for (int st = 0; st < 16; ++st)
+            covB += (sounding (b, bar * 16 + st) || attackAt (b, bar * 16 + st)) ? 1 : 0;
+        float lens[8];
+        for (int i = 0; i < n; ++i)
+            lens[i] = std::max (0.5f, std::min (2.f, nextAttack (b, (float) chosen[i], (float) (bar * 16 + 16)) - (float) chosen[i] - 0.25f));
+        auto covered = [&] () {
+            bool on[16] {};
+            for (int i = 0; i < n; ++i)
+                for (int k = 0; k < (int) std::ceil (lens[i] - 0.01f); ++k)
+                    if (chosen[i] - bar * 16 + k < 16)
+                        on[chosen[i] - bar * 16 + k] = true;
+            int c = covB;
+            for (int st = 0; st < 16; ++st)
+                c += on[st] && ! (sounding (b, bar * 16 + st) || attackAt (b, bar * 16 + st)) ? 1 : 0;
+            return c;
+        };
+        if (covered() > 11)
+            for (int i = 0; i < n; ++i)
+                lens[i] = std::min (lens[i], 1.f);
+        while (covered() > 11 && n > 3)
+        {
+            // drop the answer that is neither the bar's pickup nor right after a bass note
+            int drop = n - 1;
+            for (int i = n - 1; i >= 0; --i)
+                if ((chosen[i] - bar * 16) != 15 && ! sounding (b, chosen[i] - 1) && ! attackAt (b, chosen[i] - 1))
+                {
+                    drop = i;
+                    break;
+                }
+            for (int i = drop; i + 1 < n; ++i)
+            {
+                chosen[i] = chosen[i + 1];
+                lens[i] = lens[i + 1];
+            }
+            --n;
+        }
         for (int i = 0; i < n; ++i)
         {
             const float t = (float) chosen[i];
@@ -584,51 +666,49 @@ inline void writeAnswer (Lane& lane, const Lane& bassLane, int mode, int bars, i
             const int bv = ci >= 0 ? b.n[ci].v : 0;
             // stab value that sounds `iv` over this bass note
             auto at = [&] (int iv) { return bv + iv - over; };
-            const bool fresh = bv != lastBassV; // the bass moved since the last answer: sit on it
-            lastBassV = bv;
-            // diatonic candidates 10-24 semitones over the bass
-            struct Opt { int iv; float w; };
-            Opt opt[16];
-            int no = 0;
+            // the bass changed pitch since the last answer (or since the bar began): sit on the new note
+            const int before = ctxAt (b, i > 0 ? (float) chosen[i - 1] : (float) (bar * 16) - 0.3f);
+            const bool fresh = before < 0 || pcOf (b.n[before].v) != pcOf (bv);
+            // the interval family first (octave / 5th-4th / 3rd-6th / step), then its note nearest the
+            // last answer, diatonic, 10-24 semitones over the bass
+            static constexpr float kSettled[4] = { 0.36f, 0.20f, 0.32f, 0.12f };
+            static constexpr float kFresh[4] = { 0.6f, 0.15f, 0.25f, 0.f };
+            auto famOf = [] (int iv) { const int c = iv % 12; return c == 0 ? 0 : (c == 5 || c == 7 ? 1 : (c == 3 || c == 4 || c == 8 || c == 9 ? 2 : (c == 2 || c == 10 ? 3 : -1))); };
+            float fw[4];
+            bool has[4] {};
             for (int iv = 10; iv <= 24; ++iv)
+                if (phrase::inMode (at (iv), mode) && famOf (iv) >= 0)
+                    has[famOf (iv)] = true;
+            float tot = 0.f;
+            for (int f = 0; f < 4; ++f)
+                tot += (fw[f] = has[f] ? (fresh ? kFresh[f] : kSettled[f]) : 0.f);
+            int fam = 0;
+            if (tot > 0.f)
             {
-                const int p = at (iv);
-                if (! phrase::inMode (p, mode))
-                    continue;
-                const int c = iv % 12;
-                float w = 0.f;
-                if (c == 0)
-                    w = fresh ? 0.6f : wOct;
-                else if (c == 5 || c == 7)
-                    w = fresh ? 0.4f : wFifth * 0.5f;
-                else if (c == 3 || c == 4 || c == 8 || c == 9)
-                    w = fresh ? 0.f : wThird * 0.5f;
-                else if (c == 2 || c == 10)
-                    w = fresh ? 0.f : wStep * 0.5f;
-                if (w <= 0.f)
-                    continue;
-                if (prevPitch > -100)
-                    w *= std::abs (p - prevPitch) <= 5 ? 1.f : 0.4f; // small steps between answers
-                opt[no++] = { iv, w };
+                float x = (float) br.next() * tot;
+                for (; fam < 3; ++fam)
+                    if ((x -= fw[fam]) <= 0.f && fw[fam] > 0.f)
+                        break;
+                while (fw[fam] <= 0.f)
+                    fam = (fam + 1) % 4;
             }
             int p = at (12);
-            if (no > 0)
+            int bestD = 1000;
+            for (int iv = 10; iv <= 24; ++iv)
             {
-                float tot = 0.f;
-                for (int k = 0; k < no; ++k)
-                    tot += opt[k].w;
-                float x = (float) br.next() * tot;
-                int k = 0;
-                for (; k < no - 1; ++k)
-                    if ((x -= opt[k].w) <= 0.f)
-                        break;
-                p = at (opt[k].iv);
+                if (famOf (iv) != fam || ! phrase::inMode (at (iv), mode))
+                    continue;
+                const int d = prevPitch > -100 ? std::abs (at (iv) - prevPitch) : std::abs (iv - 14);
+                if (d < bestD)
+                {
+                    bestD = d;
+                    p = at (iv);
+                }
             }
             prevPitch = p;
-            const float until = nextAttack (b, t, (float) (bar * 16 + 16)) - t - 0.25f;
             Out& o = barOut[bar][barN[bar]++];
             o.t = t - (float) (bar * 16);
-            o.len = std::max (0.5f, std::min (2.f, until));
+            o.len = lens[i];
             o.p = p;
             const int s = chosen[i] - bar * 16;
             o.vel = s == 15 ? 112 : ((s % 4) == 0 ? 96 : 102);
