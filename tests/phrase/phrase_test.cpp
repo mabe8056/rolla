@@ -435,6 +435,15 @@ void runModelTables()
     }
     check (bad == 0 && kStabHitsCap <= 3 && kHatSwingLo >= 0.53f && kHatSwingHi <= 0.57f,
            "model tables: sums, 0.60 cell ceiling, entropy floors, removed voicings, stab cap 3, swing band", why);
+
+    // v1.4 vox chop grid (catchiness research #4): one all-style grid, every weight inside the
+    // model's vox floor / ceiling (0.02 / 0.40), at or over the vox onset entropy floor (0.55),
+    // and the off-bass share the model's avoid_bass_onsets_pct_min (60).
+    bool voxOk = entropyOf (kVoxOnset, 16) >= 0.55f && std::fabs (kVoxOffBassMin - 0.6f) < 1.0e-4f;
+    for (float w : kVoxOnset)
+        voxOk = voxOk && w >= kVoxOnsetFloor - 1.0e-6f && w <= 0.40f + 1.0e-6f;
+    const float chopsW = kVoxChopsWeight[0] + kVoxChopsWeight[1] + kVoxChopsWeight[2];
+    check (voxOk && std::fabs (chopsW - 1.f) < 0.002f, "vox grid: floor / ceiling, entropy floor, off-bass 60%, chop weights sum to 1");
 }
 
 // Composer-level v1.2 checks per style: density near the style median,

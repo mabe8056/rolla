@@ -3,6 +3,7 @@
 #include "Generator.h"
 #include "Pattern.h"
 #include "PhraseLock.h"
+#include "RuleTables.h"
 
 #include <algorithm>
 #include <bitset>
@@ -303,6 +304,319 @@ inline void stabOnBass (Lane& stab, const Lane& bass, int bars, const bool* avoi
         barCount[b] = stab.count - first;
     }
     std::sort (stab.notes, stab.notes + stab.count, [] (const Note& a, const Note& b) { return a.start < b.start; });
+}
+
+// The hook cell's rhythm rules on one bar's chop slots (bit q = 16th q): an anchor (a beat or an
+// 'and'), an event off the kick slots, and an e / a share in the vox band 0.20-0.60.
+inline bool voxBarRulesHold (std::uint32_t slots) noexcept
+{
+    int n = 0, odd = 0;
+    bool anchor = false, offKick = false;
+    for (int q = 0; q < kStepsPerBar; ++q)
+        if (((slots >> q) & 1u) != 0)
+        {
+            ++n;
+            odd += q % 2;
+            anchor = anchor || q % 2 == 0;
+            offKick = offKick || q % 4 != 0;
+        }
+    if (n == 0)
+        return true;
+    const float ea = (float) odd / (float) n;
+    return anchor && offKick && ea >= 0.20f - 1.0e-4f && ea <= 0.60f + 1.0e-4f;
+}
+
+// Vox chops off the bass attacks and off `avoid` (catchiness research #4; the pooled vox rule
+// avoid_bass_onsets_pct_min: at least `minOff` of the chops sit off a bass onset). Works on in-bar
+// slots so restated bars stay restated: every chop on 16th q of its bar moves together, by the
+// smallest step that works (two 16ths keep the e / a class, then one, three, four), onto a slot that
+//   - is not a clap slot (4, 12) and holds no other chop of those bars;
+//   - keeps the hook cell's rhythm rules in every bar where they held (voxBarRulesHold);
+//   - lands on fewer bass attacks than q (the bass pass), and never on an `avoid` step.
+// `avoid` (optional, kMaxSteps) marks the hook's onsets when the vox is the support: chops there
+// move first; a chop with nowhere to go leaves the turn (when only the turn meets the hook) or the
+// cell in every bar, unless a bar would keep fewer than two chops (then it stays on the hook).
+// Nothing is stored or drawn: the moves read the roll's own bass and chops. Lengths end where the
+// next chop starts; then one pitch for all chops.
+inline void voxOffBass (Lane& v, const Lane& bass, int bars, const bool* avoid, float minOff) noexcept
+{
+    const int nb = std::clamp (bars, 1, kMaxBars);
+    if (v.count <= 0)
+        return;
+    bool bassOn[kMaxSteps] {};
+    for (int i = 0; i < bass.count; ++i)
+    {
+        const int s = slotOf (bass.notes[i].start);
+        if (bass.notes[i].vel > 2 && s >= 0 && s < kMaxSteps)
+            bassOn[s] = true;
+    }
+    auto on = [&] (const bool* m, int step) { return m != nullptr && step >= 0 && step < kMaxSteps && m[step]; };
+    auto barSlots = [&] (int b) {
+        std::uint32_t m = 0;
+        for (int i = 0; i < v.count; ++i)
+        {
+            const int q = slotOf (v.notes[i].start) - b * kStepsPerBar;
+            if (v.notes[i].vel > 2 && phrase_lock::barOf (v.notes[i].start) == b && q >= 0 && q < kStepsPerBar)
+                m |= 1u << q;
+        }
+        return m;
+    };
+    // Chops on in-bar slot q, by bar (bit b), and how many of them meet the bass / `avoid`.
+    auto barsAt = [&] (int q) {
+        std::uint32_t m = 0;
+        for (int i = 0; i < v.count; ++i)
+        {
+            const int s = slotOf (v.notes[i].start);
+            if (v.notes[i].vel > 2 && s - phrase_lock::barOf (v.notes[i].start) * kStepsPerBar == q)
+                m |= 1u << phrase_lock::barOf (v.notes[i].start);
+        }
+        return m;
+    };
+    auto hits = [&] (std::uint32_t barsMask, int q, const bool* m) {
+        int c = 0;
+        for (int b = 0; b < nb; ++b)
+            if (((barsMask >> b) & 1u) != 0 && on (m, b * kStepsPerBar + q))
+                ++c;
+        return c;
+    };
+    // The best legal move of the chops on q: the smallest (two 16ths before one, which changes the
+    // e / a class, then three, then four), then the fewest bass attacks, then no neighbour; -1 when
+    // none lands on fewer than `limit` bass attacks.
+    const std::uint32_t salt = v.seed ? v.seed : 1u;
+    auto bestMove = [&] (int q, std::uint32_t barsMask, int limit) {
+        int best = -1;
+        long bestKey = 0;
+        for (int d : { 2, -2, 1, -1, 3, -3, 4, -4 })
+        {
+            const int ad = std::abs (d);
+            const int t = q + d;
+            if (t < 0 || t >= kStepsPerBar || t == 4 || t == 12)
+                continue;
+            bool ok = true;
+            bool neighbour = false;
+            for (int b = 0; b < nb && ok; ++b)
+            {
+                if (((barsMask >> b) & 1u) == 0)
+                    continue;
+                const std::uint32_t was = barSlots (b);
+                if (((was >> t) & 1u) != 0 || on (avoid, b * kStepsPerBar + t))
+                    ok = false;
+                const std::uint32_t now = (was & ~(1u << q)) | (1u << t);
+                if (voxBarRulesHold (was) && ! voxBarRulesHold (now))
+                    ok = false;
+                neighbour = neighbour || (t > 0 && ((was >> (t - 1)) & 1u) != 0 && t - 1 != q)
+                         || (t < kStepsPerBar - 1 && ((was >> (t + 1)) & 1u) != 0 && t + 1 != q);
+            }
+            const int h = hits (barsMask, t, bassOn);
+            if (! ok || h >= limit)
+                continue;
+            const long key = (long) (ad == 2 ? 0 : (ad == 1 ? 1 : ad)) * 10000000L + (long) h * 100000L
+                           + (neighbour ? 10000L : 0L) + (long) (slotHash (salt, t) % 10000u);
+            if (best < 0 || key < bestKey)
+            {
+                best = t;
+                bestKey = key;
+            }
+        }
+        return best;
+    };
+    auto moveSlot = [&] (int q, int t) {
+        for (int i = 0; i < v.count; ++i)
+        {
+            Note& n = v.notes[i];
+            const int b = phrase_lock::barOf (n.start);
+            if (n.vel > 2 && slotOf (n.start) - b * kStepsPerBar == q)
+            {
+                n.start += (float) (t - q);
+                n.length = std::max (0.5f, std::min (n.length, (float) ((b + 1) * kStepsPerBar) - n.start));
+            }
+        }
+    };
+    // 1) Off the hook's onsets (support only).
+    if (avoid != nullptr)
+        for (int q = 0; q < kStepsPerBar; ++q)
+        {
+            const std::uint32_t at = barsAt (q);
+            if (at == 0 || hits (at, q, avoid) == 0)
+                continue;
+            const int t = bestMove (q, at, 1 << 20);
+            if (t >= 0)
+            {
+                moveSlot (q, t);
+                continue;
+            }
+            // Nowhere to go: the chop leaves the turn alone when only the turn meets the hook, else
+            // the cell in every bar (restated bars stay restated), as long as each bar it leaves
+            // keeps two chops; otherwise it stays on the hook (2 chops a bar).
+            std::uint32_t meets = 0;
+            for (int b = 0; b < nb; ++b)
+                if (((at >> b) & 1u) != 0 && on (avoid, b * kStepsPerBar + q))
+                    meets |= 1u << b;
+            const std::uint32_t leave = (meets & ~(1u << (nb - 1))) == 0 ? meets : at;
+            bool keepsTwo = true;
+            for (int b = 0; b < nb; ++b)
+                if (((leave >> b) & 1u) != 0)
+                {
+                    int others = 0;
+                    for (std::uint32_t m = barSlots (b) & ~(1u << q); m != 0; m &= m - 1)
+                        ++others;
+                    keepsTwo = keepsTwo && others >= 2;
+                }
+            if (! keepsTwo)
+                continue;
+            for (int i = 0; i < v.count; ++i)
+            {
+                const int b = phrase_lock::barOf (v.notes[i].start);
+                if (v.notes[i].vel > 2 && ((leave >> b) & 1u) != 0 && slotOf (v.notes[i].start) - b * kStepsPerBar == q)
+                    v.notes[i].vel = 0;
+            }
+        }
+    // 2) Off the bass attacks, one in-bar slot at a time, until `minOff` of the chops are.
+    for (int guard = 0; guard < kStepsPerBar; ++guard)
+    {
+        int total = 0, onBass = 0;
+        for (int i = 0; i < v.count; ++i)
+            if (v.notes[i].vel > 2)
+            {
+                ++total;
+                onBass += on (bassOn, slotOf (v.notes[i].start)) ? 1 : 0;
+            }
+        if (total == 0 || (float) (total - onBass) >= minOff * (float) total - 1.0e-4f)
+            break;
+        int order[kStepsPerBar];
+        int nq = 0;
+        for (int q = 0; q < kStepsPerBar; ++q)
+            if (hits (barsAt (q), q, bassOn) > 0)
+                order[nq++] = q;
+        std::sort (order, order + nq, [&] (int a, int b) {
+            const int ha = hits (barsAt (a), a, bassOn), hb = hits (barsAt (b), b, bassOn);
+            return ha != hb ? ha > hb : slotHash (salt, a) < slotHash (salt, b);
+        });
+        bool moved = false;
+        for (int k = 0; k < nq && ! moved; ++k)
+        {
+            const int q = order[k];
+            const std::uint32_t at = barsAt (q);
+            const int t = bestMove (q, at, hits (at, q, bassOn));
+            if (t >= 0)
+            {
+                moveSlot (q, t);
+                moved = true;
+            }
+        }
+        if (! moved)
+            break;
+    }
+    int w = 0;
+    for (int i = 0; i < v.count; ++i)
+        if (v.notes[i].vel > 0)
+            v.notes[w++] = v.notes[i];
+    v.count = w;
+    std::sort (v.notes, v.notes + v.count, [] (const Note& a, const Note& b) { return a.start < b.start; });
+    for (int i = 0; i + 1 < v.count; ++i)
+        if (v.notes[i + 1].start > v.notes[i].start + 1.0e-3f)
+            v.notes[i].length = std::max (0.5f, std::min (v.notes[i].length, v.notes[i + 1].start - v.notes[i].start));
+
+    // One pitch for every chop, clear of the bass in every bar (the clash rule would otherwise
+    // retarget a chop bar by bar where a bass note rings over a barline, and the restated bars
+    // would differ). The pitch is the nearest of the bass's own pitch classes a semitone from no
+    // bass note under any chop; with none, the clash rule handles each chop as before.
+    std::uint32_t bad = 0;
+    int from = 999;
+    bool uniform = true;
+    for (int i = 0; i < v.count; ++i)
+    {
+        const Note& n = v.notes[i];
+        if (n.vel <= 2)
+            continue;
+        if (from == 999)
+            from = n.chord[0];
+        uniform = uniform && n.chord[0] == from && n.nChord <= 1;
+        for (int k = 0; k < bass.count; ++k)
+        {
+            const Note& b = bass.notes[k];
+            if (b.vel > 2 && b.start < n.start + n.length - 1.0e-3f && n.start < b.start + b.length - 1.0e-3f)
+            {
+                const int p = pcOfSemi (b.chord[0]);
+                bad |= (1u << ((p + 1) % 12)) | (1u << ((p + 11) % 12));
+            }
+        }
+    }
+    if (from == 999)
+        return;
+    // Vox is written from MIDI 64, four semitones over the key: its sounding pitch class is +4.
+    const int mine = pcOfSemi (from + 4);
+    if (uniform && ((bad >> mine) & 1u) == 0)
+        return;
+    std::uint32_t roll = 0;
+    for (int k = 0; k < bass.count; ++k)
+        if (bass.notes[k].vel > 2)
+            roll |= 1u << pcOfSemi (bass.notes[k].chord[0]);
+    int bestD = 99;
+    if (((bad >> mine) & 1u) == 0)
+        bestD = 0;
+    for (int d = 0; d <= 6 && bestD == 99; ++d)
+        for (int sgn : { -1, 1 })
+        {
+            const int p = pcOfSemi (from + 4 + sgn * d);
+            if (((roll >> p) & 1u) != 0 && ((bad >> p) & 1u) == 0)
+            {
+                bestD = sgn * d;
+                break;
+            }
+        }
+    if (bestD == 99)
+        return;
+    for (int i = 0; i < v.count; ++i)
+    {
+        v.notes[i].chord[0] = (std::int8_t) (from + bestD);
+        v.notes[i].nChord = 1;
+    }
+}
+
+// A vox support's layout (catchiness research #4: a vox that plays sounds in at least 4 of 8
+// bars). From bar 1 it keeps its call bars (1, 3, 5, 7) and its turn; entering at bar 5 as the
+// lift, it says its call cell in every bar from there (4 bars), the turn still last. The cell is
+// the lane's own first call bar, at support level (8 velocity steps under the hook).
+inline void voxSupportLayout (Lane& v, int bars, int fromBar) noexcept
+{
+    const int nb = std::clamp (bars, 1, kMaxBars);
+    if (v.count <= 0)
+        return;
+    const int src = phrase_lock::barOf (v.notes[0].start);
+    Lane cell, turn;
+    for (int i = 0; i < v.count; ++i)
+    {
+        const int b = phrase_lock::barOf (v.notes[i].start);
+        Note n = v.notes[i];
+        n.vel = (std::uint8_t) std::max (40, (int) n.vel - 8);
+        if (b == src && cell.count < kMaxNotes)
+        {
+            n.start -= (float) (src * kStepsPerBar);
+            cell.notes[cell.count++] = n;
+        }
+        else if (b == nb - 1 && nb >= 8 && b != src && turn.count < kMaxNotes)
+            turn.notes[turn.count++] = n;
+    }
+    v.count = 0;
+    for (int b = std::max (0, fromBar); b < nb; ++b)
+    {
+        if (b == nb - 1 && turn.count > 0)
+        {
+            for (int i = 0; i < turn.count && v.count < kMaxNotes; ++i)
+                v.notes[v.count++] = turn.notes[i];
+            continue;
+        }
+        if (fromBar <= 0 && b % 2 != 0)
+            continue;
+        for (int i = 0; i < cell.count && v.count < kMaxNotes; ++i)
+        {
+            Note n = cell.notes[i];
+            n.start += (float) (b * kStepsPerBar);
+            n.length = std::min (n.length, (float) ((b + 1) * kStepsPerBar) - n.start);
+            v.notes[v.count++] = n;
+        }
+    }
 }
 } // namespace hook_detail
 
@@ -1141,6 +1455,19 @@ inline void applyHookPlan (Groove& g, const HookPlan& plan, int bars, std::uint3
         for (int b = 0; b < bars && b < kMaxBars; ++b)
             plays[b] = ! (b == bars - 1 && last.count > 0);
         hook_cell::shapeHookCell (g, Vox, cell, 1, bars, plays);
+        // writeVox drew a turn (bar 8 = the cell + one move): the same move on the shaped cell.
+        if (last.count > 0 && bars >= 8 && src != bars - 1)
+        {
+            Lane turn;
+            voxTurn (cell, v.seed, turn);
+            last.count = 0;
+            for (int i = 0; i < turn.count && last.count < kMaxNotes; ++i)
+            {
+                Note n = turn.notes[i];
+                n.start += (float) ((bars - 1) * kStepsPerBar);
+                last.notes[last.count++] = n;
+            }
+        }
         v.count = 0;
         for (int b = 0; b < bars; ++b)
         {
@@ -1158,6 +1485,9 @@ inline void applyHookPlan (Groove& g, const HookPlan& plan, int bars, std::uint3
                 v.notes[v.count++] = n;
             }
         }
+        // Every bar now meets both bass bars (A and B) and the turn: the chops step off the bass
+        // attacks again where they pile up (in-bar moves, so every bar stays the cell).
+        voxOffBass (v, g.lane[Bass], bars, nullptr, rules::tables::kVoxOffBassMin);
     }
 
     // The other hook lanes: the cell rules on bars 1-2, then the A B A B A B A B'' restatement.
@@ -1203,7 +1533,15 @@ inline void applyHookPlan (Groove& g, const HookPlan& plan, int bars, std::uint3
                 h.notes[i].vel = (std::uint8_t) std::min (127, h.notes[i].vel + 10);
         }
     }
-    if (plan.support >= 0 && regen (plan.support))
+    if (plan.support == Vox && regen (Vox))
+    {
+        // A vox support keeps its whole cell: laid out from its entry bar, then stepped off the
+        // hook's onsets (and the bass attacks) instead of losing chops there.
+        Lane& v = g.lane[Vox];
+        voxSupportLayout (v, bars, plan.supportFromBar);
+        voxOffBass (v, g.lane[Bass], bars, hookAt, rules::tables::kVoxOffBassMin);
+    }
+    else if (plan.support >= 0 && regen (plan.support))
     {
         Lane& sp = g.lane[plan.support];
         const Lane src = sp;

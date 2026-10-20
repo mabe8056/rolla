@@ -3445,6 +3445,93 @@ void testHookCellRules()
     expect (restated * 100 >= restateCells * 90, "hook cells are restated through bar 7 (>= 90%)");
 }
 
+// Oct 19 vox hook shape (catchiness research #4, writeVox + HookPlan voxOffBass): chops are drawn on
+// the pooled vox grid with the clap slots (4, 12) at the floor, 2-4 to a bar; a vox that plays sounds
+// in at least 4 of 8 bars (a vox hook in every bar); at least 60% of a vox hook's chops sit off a
+// bass attack (the model's avoid_bass_onsets_pct_min); call bars repeat one cell. Before this pass
+// the chops were uniform over 16ths 2-13: 27% of ROLLER's sat on the clap and 1-3 chops a bar.
+void testVoxHookShape()
+{
+    int lanes = 0, lanesFew = 0, hooks = 0, hooksFew = 0, hooksLowOff = 0;
+    int chops = 0, clap = 0, bars = 0, barsInBand = 0, hookChops = 0, hookOff = 0, restated = 0;
+    for (int style = 0; style < 4; ++style)
+        for (int roll = 0; roll < 20; ++roll)
+        {
+            rolla::Settings s;
+            s.dialect = style;
+            s.bars = 8;
+            std::uint32_t seeds[rolla::NumParts] {};
+            for (int p = 0; p < rolla::NumParts; ++p)
+                seeds[p] = 2026101975u + (std::uint32_t) roll * 0x9E3779B9u + (std::uint32_t) p * 17u + (std::uint32_t) style * 101u;
+            auto g = std::make_unique<rolla::Groove>();
+            if (! rolla::generate (*g, s, seeds, 0x7fu))
+                continue;
+            const auto& v = g->lane[rolla::Vox];
+            const auto& bass = g->lane[rolla::Bass];
+            std::set<int> bassOn;
+            for (int i = 0; i < bass.count; ++i)
+                if (bass.notes[i].vel > 2)
+                    bassOn.insert ((int) std::lround (bass.notes[i].start));
+            int perBar[8] {};
+            unsigned slotsOf[8] {};
+            int n = 0, off = 0;
+            for (int i = 0; i < v.count; ++i)
+            {
+                if (v.notes[i].vel <= 2)
+                    continue;
+                const int at = (int) std::lround (v.notes[i].start);
+                if (at < 0 || at >= 128)
+                    continue;
+                ++perBar[at / 16];
+                slotsOf[at / 16] |= 1u << (at % 16);
+                ++n;
+                clap += (at % 16 == 4 || at % 16 == 12) ? 1 : 0;
+                off += bassOn.count (at) == 0 ? 1 : 0;
+            }
+            if (n == 0)
+                continue;
+            chops += n;
+            ++lanes;
+            int active = 0;
+            unsigned first = 0;
+            bool same = true;
+            for (int b = 0; b < 8; ++b)
+                if (perBar[b] > 0)
+                {
+                    ++active;
+                    ++bars;
+                    barsInBand += (perBar[b] >= 2 && perBar[b] <= 4) ? 1 : 0;
+                    if (b < 7)
+                    {
+                        if (first == 0)
+                            first = slotsOf[b];
+                        same = same && slotsOf[b] == first;
+                    }
+                }
+            restated += same ? 1 : 0;
+            lanesFew += active < 4 ? 1 : 0;
+            if (rolla::lastHookPlan().hook == rolla::Vox)
+            {
+                ++hooks;
+                hooksFew += active < 6 ? 1 : 0;
+                hookChops += n;
+                hookOff += off;
+                hooksLowOff += off * 10 < n * 6 ? 1 : 0;
+            }
+        }
+    std::cout << "Vox hook shape: lanes " << lanes << " (<4 bars " << lanesFew << ") hooks " << hooks << " (<6 bars "
+              << hooksFew << ", <60% off the bass " << hooksLowOff << ") clap " << clap << "/" << chops << " bars of 2-4 chops "
+              << barsInBand << "/" << bars << " hook chops off bass onsets " << hookOff << "/" << hookChops << " restated "
+              << restated << "/" << lanes << "\n";
+    expect (lanes > 0 && hooks > 0, "some rolls play the vox, some as the hook");
+    expect (clap * 100 <= chops * 8, "vox chops stay off the clap (<= 8% on 16ths 4 and 12)");
+    expect (barsInBand * 100 >= bars * 95, "vox bars carry 2-4 chops (>= 95%)");
+    expect (lanesFew == 0, "a vox that plays sounds in at least 4 of 8 bars");
+    expect (hooksFew == 0, "a vox hook sounds in at least 6 of 8 bars");
+    expect (hookOff * 100 >= hookChops * 60 && hooksLowOff * 10 <= hooks, "vox hook chops sit off the bass attacks (>= 60%; 90% of hooks)");
+    expect (restated * 100 >= lanes * 95, "vox call bars repeat one cell (>= 95%)");
+}
+
 } // namespace
 
 
@@ -3495,6 +3582,7 @@ int main()
     // Last too: it rolls fresh batches.
     testHookCellRules();
     testBassRepeatBand();
+    testVoxHookShape();
 
     if (fails == 0)
         std::cout << "roll tests passed\n";

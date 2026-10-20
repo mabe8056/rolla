@@ -1,7 +1,7 @@
 {
  "schema": "rolla.genre_writing_model/1",
- "version": "1.3",
- "based_on": "1.2 plus the songwriting layer (melodic phrase shape, repeat cycle, bar-8 change rate) pooled over the reference set",
+ "version": "1.4",
+ "based_on": "1.2 plus the songwriting layer (melodic phrase shape, repeat cycle, bar-8 change rate, one all-style vox chop grid) pooled over the reference set",
  "privacy": "Pooled, smoothed aggregate statistics only. No note sequences, motifs, rhythm cells, n-grams above first order, per-source tables, source counts or names.",
  "conventions": {
   "grid": "16 slots per bar, 0-15 (0 = beat 1); kick steps 0/4/8/12",
@@ -119,7 +119,14 @@
    "4": 0.294
   },
   "bar8_change_rate": 0.625,
-  "bar2to7_change_rate": 0.229
+  "bar2to7_change_rate": 0.229,
+  "vox": {
+   "scope": "one grid for every style: the four style body grids of the vox chop lane averaged with equal style weight (so no source holds more than 25%), mixed 15% toward flat (expected count kept), floored and capped",
+   "onset_prob_body": [0.1075, 0.0433, 0.1806, 0.0882, 0.0608, 0.1064, 0.1075, 0.0686, 0.1465, 0.0498, 0.076, 0.129, 0.0887, 0.0533, 0.1299, 0.0372],
+   "onset_floor": 0.02,
+   "onset_ceiling": 0.4,
+   "avoid_bass_onsets_pct_min": 60
+  }
  },
  "styles": {
   "ROLLER": {

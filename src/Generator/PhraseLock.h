@@ -269,6 +269,53 @@ inline void replayBar2AtTurn (Lane& lane, int bars) noexcept
     std::stable_sort (lane.notes, lane.notes + lane.count, [] (const Note& a, const Note& b) { return a.start < b.start; });
 }
 
+// The vox turn (catchiness research #4): the last bar of a phrase changes the vox call cell by at
+// most one move, never a fresh draw. `cell` is one bar of chops (starts 0-15, in order); `out`
+// gets the cell with one of the moves that fit it, picked by `seed`:
+//   - drop the last chop (a cell of 3 or more, so the bar still has two);
+//   - hold the last chop on to the end of the bar (at least a 16th and a half longer);
+//   - a stutter: the last chop cut to one 16th and said again on the next 16th (a cell of 2 or 3,
+//     so the bar keeps at most 4 chops; never on a clap slot, 4 or 12).
+// The same seed and cell always give the same turn, so the hook pass can rebuild it on its cell.
+inline void voxTurn (const Lane& cell, std::uint32_t seed, Lane& out) noexcept
+{
+    out = cell;
+    if (cell.count <= 0)
+        return;
+    const Note& last = cell.notes[cell.count - 1];
+    const int slot = (int) std::lround (last.start);
+    bool legal[3] {};
+    legal[0] = cell.count >= 3;
+    legal[1] = 16.f - last.start >= last.length + 1.5f;
+    legal[2] = slot + 1 <= 15 && slot + 1 != 4 && slot + 1 != 12 && cell.count < 4;
+    int nLegal = 0;
+    for (bool l : legal)
+        nLegal += l ? 1 : 0;
+    if (nLegal == 0)
+        return;
+    std::uint32_t h = seed * 0x9E3779B9u + 0x7F4A7C15u;
+    h ^= h >> 15;
+    h *= 0x2C1B3C6Du;
+    h ^= h >> 12;
+    int pick = (int) (h % (std::uint32_t) nLegal);
+    int move = 0;
+    for (; move < 3; ++move)
+        if (legal[move] && pick-- == 0)
+            break;
+    if (move == 0)
+        --out.count;
+    else if (move == 1)
+        out.notes[out.count - 1].length = 16.f - last.start;
+    else
+    {
+        Note again = last;
+        again.start = last.start + 1.f;
+        again.length = std::max (0.5f, std::min (last.length, 16.f - again.start));
+        out.notes[out.count - 1].length = 1.f;
+        out.notes[out.count++] = again;
+    }
+}
+
 // The bass is one voice: after a restatement a held note may run into the next bar's first
 // note. Trim it to end where the next note starts (DEEP keeps its held overlaps: legato ties).
 inline void keepMonophonic (Lane& lane, bool keepTies) noexcept

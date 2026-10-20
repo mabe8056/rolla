@@ -16,6 +16,17 @@ Style keys: ROLLER = `ukmin`, DEEP = `long`, BOUNCY = `pop`, JACKIN = `jackin`.
 Slots are 0-15 in the JSON (0 = beat 1; kick steps 0/4/8/12).
 
 ## Changelog
+- **v1.4**: one pooled vox chop grid (`songwriting.vox`, read by `writeVox`).
+  - `onset_prob_body`: the four style body grids of the vox lane averaged with
+    equal style weight (so no source holds more than 25%), mixed 15% toward
+    flat (expected count kept), floored at 0.02 and capped at 0.40. It leans
+    on the 'and' of beat 1, beats 1 and 3, the 'a' of beat 3 and the 'and' of
+    beat 4; the clap slots carry about 10% of it. The per-style vox grids stay
+    stripped: each rests on too few sources to stand alone.
+  - `avoid_bass_onsets_pct_min` (60): at least 60% of vox chops sit off a bass
+    attack.
+  - The composer holds the clap slots (4, 12) at the floor and draws 2-4 chops
+    a call bar (`kVoxChopsWeight`, a composer rule in `gen_rule_tables.py`).
 - **v1.2**: built on v1.1 (the de-peaked stab grids and the songwriting layer).
   The changes, by JSON field:
   - **Bass density** (`styles.S.bass.density_curve`, `density_median`): the means

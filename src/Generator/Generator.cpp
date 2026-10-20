@@ -2070,34 +2070,94 @@ void writeVox (Lane& lane, const Settings& s, Rng& rng)
 {
     clearLane (lane, lane.seed);
     namespace rt = rules::tables;
-    // One to three cuts open every figure; the figure's cycle (2 or 4 bars,
-    // from the pooled repeat cycle) sets which bars the cuts come back on, and
-    // the last cycle rewrites its cut slots at the pooled bar-8 rate.
-    const int nCuts = 1 + (int) (rng.next() * 3);
-    int slots[3];
-    for (int i = 0; i < nCuts; ++i)
-        slots[i] = (int) (2 + rng.next() * 12);
+    // Vox hook shape (catchiness research #4). One call cell a roll: 2-4 chops drawn without
+    // replacement on the pooled vox onset grid (RuleTables kVoxOnset: the style grids averaged,
+    // mixed toward flat; it leans on the 'and' of beat 1, beats 1 and 3, the 'a' of beat 3 and
+    // the 'and' of beat 4). The clap slots (4, 12) sit at the grid floor and a bar takes at most
+    // one of them (the clap masks a chop); a chop's next-door 16ths stay free. Each chop draws
+    // one length, so every call bar sounds the same (sample-true playback starts the file at its
+    // first frame: same spot + same length = the same word). Nothing is stored: the cell is drawn
+    // fresh per roll, and HookPlan / voxOffBass place it against the bass that ships.
+    const double u = rng.next();
+    const int nCuts = u < (double) rt::kVoxChopsWeight[0] ? 2
+                    : (u < (double) (rt::kVoxChopsWeight[0] + rt::kVoxChopsWeight[1]) ? 3 : 4);
+    float w[16];
+    for (int k = 0; k < 16; ++k)
+        w[k] = (k == 4 || k == 12) ? rt::kVoxOnsetFloor : rt::kVoxOnset[k];
+    int slots[4] {};
+    int n = 0;
+    for (; n < nCuts; ++n)
+    {
+        float total = 0.f;
+        int lastOpen = -1;
+        for (int k = 0; k < 16; ++k)
+            if (w[k] > 0.f)
+            {
+                total += w[k];
+                lastOpen = k;
+            }
+        if (lastOpen < 0)
+            break;
+        float x = (float) rng.next() * total;
+        int pick = lastOpen;
+        for (int k = 0; k < 16; ++k)
+        {
+            if (w[k] > 0.f && x < w[k])
+            {
+                pick = k;
+                break;
+            }
+            x -= w[k];
+        }
+        slots[n] = pick;
+        w[pick] = 0.f;
+        if (pick > 0)
+            w[pick - 1] = 0.f;
+        if (pick < 15)
+            w[pick + 1] = 0.f;
+        if (pick == 4 || pick == 12)
+            w[4] = w[12] = 0.f;
+    }
+    std::sort (slots, slots + n);
     const int shift = (int) (rng.next() * 11) - 5;
     const bool ghost = rng.next() < 0.3;
-    const int loopBars = std::min (s.bars, 8);
-    const int cyc = drawCycleBars (rng, std::max (2, loopBars), false);
-    for (int bar = 0; bar < loopBars; bar += cyc)
+    Lane cell;
+    cell.seed = lane.seed;
+    for (int i = 0; i < n; ++i)
     {
-        if (bar + cyc >= loopBars && bar > 0 && loopBars >= 8 && rng.next() < (double) rt::kBar8ChangeRate)
-            for (int i = 0; i < nCuts; ++i)
-                slots[i] = (int) (2 + rng.next() * 12);
-        for (int i = 0; i < nCuts; ++i)
+        Note& c = cell.notes[cell.count++];
+        const float next = i + 1 < n ? (float) slots[i + 1] : 16.f;
+        c.start = (float) slots[i];
+        c.length = std::min (1.5f + (float) ((int) (rng.next() * 8)) * 0.5f, next - c.start);
+        c.nChord = 1;
+        // chord is an offset from MIDI 64, so subtract that bias before storing a scale degree.
+        c.chord[0] = (std::int8_t) (snapScale (s.dialect, shift) - 4);
+        c.vel = ghost && i > 0 ? 80 : 100;
+        c.flags = ghost && i > 0 ? (std::uint8_t) NoteGhost : 0;
+    }
+    // The call bars (1, 3, 5, 7: the pooled vox sits in odd bars more than even ones) carry the
+    // cell; the turn (bar 8) changes it by one move at the pooled bar-8 rate, else rests. A vox
+    // hook is laid out in every bar by HookPlan, which rebuilds the same turn on its cell.
+    const int loopBars = std::min (s.bars, 8);
+    Lane turn;
+    const bool turned = loopBars >= 8 && rng.next() < (double) rt::kBar8ChangeRate;
+    if (turned)
+        voxTurn (cell, lane.seed, turn);
+    for (int bar = 0; bar < loopBars; ++bar)
+    {
+        const Lane* src = bar % 2 == 0 ? &cell : (turned && bar == loopBars - 1 ? &turn : nullptr);
+        if (src == nullptr)
+            continue;
+        for (int i = 0; i < src->count; ++i)
         {
+            const Note& c = src->notes[i];
             Ev e;
-            e.start = (float) (bar * 16 + (slots[i] % 14));
-            e.len = 1.5f + (float) ((int) (rng.next() * 8)) * 0.5f;
-            if (e.start + e.len > (float) ((bar + 1) * 16))
-                e.len = (float) ((bar + 1) * 16) - e.start;
+            e.start = (float) (bar * 16) + c.start;
+            e.len = c.length;
             e.nChord = 1;
-            // chord is an offset from MIDI 64, so subtract that bias before storing a scale degree.
-            e.chord[0] = (std::int8_t) (snapScale (s.dialect, shift) - 4);
-            e.vel = ghost && i > 0 ? 80 : 100;
-            e.flags = ghost && i > 0 ? (std::uint8_t) NoteGhost : 0;
+            e.chord[0] = c.chord[0];
+            e.vel = c.vel;
+            e.flags = c.flags;
             pushEv (lane, e, s.bars);
         }
     }
@@ -6297,6 +6357,10 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
         if (((partMask >> part) & 1u) != 0)
         {
             restateMotif (g.lane[part], s.bars);
+            // Vox chops step off the attacks of the bass that ships (pooled vox rule: at least
+            // 60% off a bass onset), whole in-bar slots at a time so call bars stay one cell.
+            if (part == Vox)
+                hook_detail::voxOffBass (g.lane[Vox], g.lane[Bass], s.bars, nullptr, rules::tables::kVoxOffBassMin);
             // The bass under a restated bar can differ by a finishing pass: give way to it again.
             fixUpperClashes (g, part);
             dedupeNoteOns (g.lane[part]);
