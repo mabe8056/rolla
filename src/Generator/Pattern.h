@@ -158,6 +158,9 @@ struct Settings
     // the roll is the 8-bar peak of a drop. Drums: kick on every beat (bar 8 may only dip the kick),
     // a hat on every offbeat 8th plus a few 16ths, the ride for all 8 bars when it plays.
     bool drop = false;
+    // RIFF (Oct 20: "its not good bass riffs"): the bass is a designed riff (RiffWriter.h), not
+    // the note-by-note rule composer; its finishing passes leave the riff alone.
+    bool riff = false;
 };
 
 enum BassMode : int

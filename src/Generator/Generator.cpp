@@ -7,6 +7,7 @@
 #include "HookPlan.h"
 #include "ChordLoop.h"
 #include "PackHarmony.h"
+#include "RiffWriter.h"
 
 #include <algorithm>
 #include <bitset>
@@ -6224,8 +6225,13 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
             bp.dark = s.dark;
             bp.sub = bassSub;
             bp.match = s.bassMatch;
-            const int arc = rules::composeBass (g.lane[Bass], bp, composeSeed);
-            planName = rules::tables::kArcNames[clampi (arc, 0, rules::tables::kArcShapes - 1)];
+            if (s.riff)
+                planName = riff::kShapeNames[riff::compose (g.lane[Bass], s.dialect, mode, s.bars, composeSeed)];
+            else
+            {
+                const int arc = rules::composeBass (g.lane[Bass], bp, composeSeed);
+                planName = rules::tables::kArcNames[clampi (arc, 0, rules::tables::kArcShapes - 1)];
+            }
             g.lane[Bass].seed = bassSeed;
         }
         else
@@ -6349,7 +6355,11 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
         g.bassMode = popMode;
     else if (s.dialect != Pop)
         g.bassMode = BassModeNone;
-    if (regen (Bass))
+    // RIFF: the chosen riff is kept as drawn; the rule passes below still run (other lanes read
+    // them) and the riff is laid back before the stabs are written and after the hook plan.
+    const Lane riffLane = g.lane[Bass];
+    const bool keepRiff = s.riff && regen (Bass);
+    if (regen (Bass) && ! keepRiff)
     {
         // The chosen candidate's composed line gets the rule passes. BOUNCE
         // needs bar-to-bar density movement (onset sd >= 0.7): further lines are
@@ -6434,6 +6444,8 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
             holdBassNotes (g.lane[Bass], s.dialect, s.bars, bassSeed);
         enforceMonophonic (g.lane[Bass]);
     }
+    if (keepRiff)
+        g.lane[Bass] = riffLane;
     // Stabs are rewritten on the bass that ships, in its gaps and over its
     // sustains by the style's shares (RuleTables kStabGapShare).
     if (regen (Stab))
@@ -6654,7 +6666,18 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
     // The style's octave share (A&R lane F7: pulse at most 8%, OCTAVE_PUMP over 26%) on the riff
     // that ships: bar 4's answer half gives up an octave move first (same pitch class, so no clash
     // with the upper lanes changes).
-    if (regen (Bass) && s.dialect != Jackin)
+    // RIFF: the riff ships as designed; the upper lanes give way to it.
+    if (keepRiff)
+    {
+        g.lane[Bass] = riffLane;
+        for (int part : { (int) Stab, (int) Pad, (int) Pluck, (int) Hits, (int) Vox })
+        {
+            fixUpperClashes (g, part);
+            dedupeNoteOns (g.lane[part]);
+            trimSamePitchOverlaps (g.lane[part]);
+        }
+    }
+    if (regen (Bass) && s.dialect != Jackin && ! keepRiff)
         capAnswerOctaves (g.lane[Bass], s.bars, bouncyOf == 2 ? 0.08f : 0.26f);
     // Pack-learned harmony (PackHarmony.h; Melak, Oct 20: learn from the pack MIDI, never import it).
     // 1: the stab plays the roll's chord of each bar as a triad / 7th with a led top voice; 2: the
@@ -6747,7 +6770,7 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
     // BOUNCY bounce: the A&R bounce lane wants 85% of the bass off the kick. The
     // last bass passes (pickup, turn, density) can land on kick steps, so the cap
     // is the final bass step; the upper lanes then give way to that bass.
-    if (regen (Bass) && popMode == BassModeBounce)
+    if (regen (Bass) && popMode == BassModeBounce && ! keepRiff)
     {
         capBassOnKicks (g.lane[Bass], s.bars, kickCapBounce, bassSeed);
         giveWayToBass (g, ~partMask);

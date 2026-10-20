@@ -129,6 +129,7 @@ struct Knobs
     int harmony = 0;           // --knob HARMONY=0|1|2|3 (Settings::harmony)
     int bassMatch = 0;         // --knob BASSMATCH=0|1|2 (Settings::bassMatch, EngineParams::bassMatch)
     bool drop = false;         // --knob DROP=0|1 (Settings::drop: the roll is the 8-bar peak drop)
+    bool riff = false;         // --knob RIFF=0|1 (Settings::riff: the bass is a designed riff)
     bool stems = false;
     bool midiOnly = false;     // --midi-only: write the MIDI and roll.json, no WAV render
     bool styleFolders = false; // --folder-names styles
@@ -185,6 +186,8 @@ bool parseKnob (const std::string& text, Knobs& knobs)
         for (int i = 0; i < rolla::NumParts; ++i) knobs.levelDb[i] = value;
     else if (name == "HARMONY")
         knobs.harmony = std::clamp ((int) std::lround (value), 0, 3);
+    else if (name == "RIFF")
+        knobs.riff = value >= 0.5f;
     else if (name == "DROP")
         knobs.drop = value >= 0.5f;
     else if (name == "BASSMATCH")
@@ -223,6 +226,7 @@ rolla::Settings rollSettings (int dialect, const Knobs& knobs)
     s.harmony = knobs.harmony;
     s.bassMatch = knobs.bassMatch;
     s.drop = knobs.drop;
+    s.riff = knobs.riff;
     return s;
 }
 
