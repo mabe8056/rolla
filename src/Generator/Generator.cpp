@@ -5366,6 +5366,20 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
             trimSamePitchOverlaps (g.lane[part]);
         }
     }
+    // The style's held-bass band (A&R 423): ROLLER / JACKIN >= 0.72, DEEP 0.72-0.88,
+    // BOUNCY pulse 0.85-0.975, bounce 0.29-0.50.
+    float heldLo = 0.72f, heldHi = 1.f;
+    if (s.dialect == Long)
+    {
+        heldLo = 0.79f; // DEEP's held-bass median sits at or over 0.78
+        heldHi = 0.88f;
+    }
+    if (s.dialect == Pop)
+    {
+        const bool pulse = g.bassMode == BassModePulse;
+        heldLo = pulse ? 0.85f : 0.29f;
+        heldHi = pulse ? 0.975f : 0.50f;
+    }
     // Hook structure: one 2-bar idea per lane, said again, varied at bars 4 and 8 (PhraseLock.h).
     // Pad keeps its swells. Kept lanes stay as the user locked them.
     // The bass is composed A B A B' A B A B'' by the rule composer (no back-half redraws), but its
@@ -5375,21 +5389,7 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
         voiceLead (g.lane[Bass], s.bars);
         restateMotif (g.lane[Bass], s.bars);
         keepMonophonic (g.lane[Bass], false);
-        // The style's held-bass band (A&R 423): ROLLER / JACKIN >= 0.72, DEEP 0.72-0.88,
-        // BOUNCY pulse 0.85-0.975, bounce 0.29-0.50.
-        float lo = 0.72f, hi = 1.f;
-        if (s.dialect == Long)
-        {
-            lo = 0.79f; // DEEP's held-bass median sits at or over 0.78
-            hi = 0.88f;
-        }
-        if (s.dialect == Pop)
-        {
-            const bool pulse = g.bassMode == BassModePulse;
-            lo = pulse ? 0.85f : 0.29f;
-            hi = pulse ? 0.975f : 0.50f;
-        }
-        shapeSounding (g.lane[Bass], s.bars, lo, hi);
+        shapeSounding (g.lane[Bass], s.bars, heldLo, heldHi);
         fixUpperClashes (g, Pad);
     }
     for (int part : { (int) Stab, (int) Pluck, (int) Hits, (int) Vox })
@@ -5407,9 +5407,13 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
     // Only a full roll is re-planned; a partial reroll keeps the lanes the user is not rolling.
     if ((partMask & 0x7fu) == 0x7fu)
     {
-        applyHookPlan (g, planHook (g, s.dialect, postHash (seeds[Bass] ? seeds[Bass] : 1u, 0x484F4F4Bu), partMask,
-                                    s.stab >= 0.5f),
-                       s.bars, partMask);
+        const HookPlan plan = planHook (g, s.dialect, postHash (seeds[Bass] ? seeds[Bass] : 1u, 0x484F4F4Bu), partMask,
+                                        s.stab >= 0.5f);
+        applyHookPlan (g, plan, s.bars, partMask);
+        // The hook cell pass can move a bass hook's onsets by a 16th: the held-bass band is fitted
+        // again (one rule for every note, so the restated bars stay identical).
+        if (plan.hook == Bass)
+            shapeSounding (g.lane[Bass], s.bars, heldLo, heldHi);
         for (int part : { (int) Stab, (int) Pad, (int) Pluck, (int) Hits, (int) Vox })
         {
             fixUpperClashes (g, part);

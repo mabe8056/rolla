@@ -2,6 +2,7 @@
 
 #include "Pattern.h"
 
+#include <algorithm>
 #include <cmath>
 
 // Hook structure for every roll (Melak, Oct 19: the songs were not catchy). A producer's

@@ -2,6 +2,7 @@
 #include "../common/ScratchProfile.h"
 #include "Generator/MidiFile.h"
 #include "Generator/Generator.h"
+#include "Generator/HookPlan.h"
 #include "Generator/Originality.h"
 #include "Generator/OriginalityJson.h"
 #include "Generator/Intensity.h"
@@ -509,8 +510,11 @@ void testEarReview()
     // Per mode, as the A&R lane F7 reads a roll: bounce 15-26%, pulse 0-8.5%.
     // Floor 15 -> 8 (Oct 19): the catchiness research found BOUNCY's bass leaps far more than the
     // references (5+ st moves 74% vs 34%); the restated riff makes its octave moves at fixed spots.
-    expect (bounceN > 0 && bounceOct / bounceN >= 8.0 && bounceOct / bounceN <= 26.0,
-            "BOUNCY bounce octaves land in 8-26%");
+    // Floor 8 -> 6 (Oct 19, hook cell rules, HookPlan.h): a bass hook's 2-bar cell leaps (octaves
+    // included) on at most a quarter of its moves, per the research; the octave stays its preferred
+    // leap, but a bass-hook bounce riff keeps one or two octave pumps a cell (this batch: 13.1% -> 8.0%).
+    expect (bounceN > 0 && bounceOct / bounceN >= 6.0 && bounceOct / bounceN <= 26.0,
+            "BOUNCY bounce octaves land in 6-26%");
     expect (pulseOctMax <= 8.5, "BOUNCY pulse octaves stay at or under 8.5%");
     expect (pulseN >= 3, "BOUNCY has a pulse mode");
     expect (jackinRhythms.size() >= 18, "JACKIN 8-bar rhythms are almost all distinct");
@@ -1188,7 +1192,9 @@ void testBouncyModes()
               << "/40 octave-move median " << octMed << "%; DEEP sounding median " << deepMed << "\n";
     // Genre model v1.2: pulse is a 30-40% batch quota through the seed index.
     expect (share >= 30.0 && share <= 40.0, "BOUNCY pulse share lands in 30-40%");
-    expect (octMed >= 10.0 && octMed <= 30.0, "BOUNCY bounce octave moves land in 10-30%");
+    // Floor 10 -> 8 (Oct 19, hook cell rules, HookPlan.h): a bass hook's cell leaps (octaves included)
+    // on at most a quarter of its moves, per the catchiness research (this batch: median 10.8% -> 9.5%).
+    expect (octMed >= 8.0 && octMed <= 30.0, "BOUNCY bounce octave moves land in 8-30%");
     expect (deepMed >= 0.78, "DEEP held bass median sounding >= 0.78");
 }
 
@@ -3261,6 +3267,108 @@ void testKeyScaleState()
             "state round-trips Auto for both");
 }
 
+// Oct 19 hook cell rules (catchiness research, HookPlan.h hook_cell): the hook lane's bars 1-2.
+// Every cell bar has an anchor (a beat or an 'and') and an event off the kick; the e / a share of the
+// cell sits in 0.20-0.50 (vox 0.60); a pitched hook (stab top line, pluck, bass) plays 2-4 pitch
+// classes with 1..max(1, moves / 4) moves of 4+ semitones; bars 3-7 restate bars 1-2. The pass leaves
+// a cell alone when no octave re-placement or single swap fixes it (ROLLER's one stab a bar cannot
+// hold both an anchor in each bar and an e / a event), so these are shares, not every roll.
+void testHookCellRules()
+{
+    int bars = 0, anchor = 0, offKick = 0, cells = 0, eaOk = 0, pitched = 0, pcsOk = 0, sigOk = 0, restated = 0;
+    for (int style = 0; style < 4; ++style)
+        for (int roll = 0; roll < 20; ++roll)
+        {
+            rolla::Settings s;
+            s.dialect = style;
+            s.bars = 8;
+            std::uint32_t seeds[rolla::NumParts] {};
+            for (int p = 0; p < rolla::NumParts; ++p)
+                seeds[p] = 2026101975u + (std::uint32_t) roll * 0x9E3779B9u + (std::uint32_t) p * 17u + (std::uint32_t) style * 101u;
+            auto g = std::make_unique<rolla::Groove>();
+            if (! rolla::generate (*g, s, seeds, 0x7fu))
+                continue;
+            const int h = rolla::lastHookPlan().hook;
+            if (h < 0)
+                continue;
+            const auto& lane = g->lane[h];
+            // Onset -> top pitch, per 16th of the 8-bar loop.
+            std::map<int, int> top;
+            for (int i = 0; i < lane.count; ++i)
+            {
+                const auto& n = lane.notes[i];
+                if (n.vel <= 2)
+                    continue;
+                int t = n.chord[0];
+                for (int c = 1; c < std::max (1, (int) n.nChord); ++c)
+                    t = std::max (t, (int) n.chord[c]);
+                const int at = (int) std::lround (n.start);
+                top[at] = top.count (at) ? std::max (top[at], t) : t;
+            }
+            std::vector<int> line;
+            int odd = 0;
+            for (int b = 0; b < 2; ++b)
+            {
+                bool a = false, o = false;
+                for (const auto& [at, t] : top)
+                    if (at / 16 == b)
+                    {
+                        a = a || at % 2 == 0;
+                        o = o || at % 4 != 0;
+                        odd += at % 2;
+                        line.push_back (t);
+                    }
+                ++bars;
+                anchor += a ? 1 : 0;
+                offKick += o ? 1 : 0;
+            }
+            ++cells;
+            const int n = (int) line.size();
+            const double ea = n > 0 ? (double) odd / n : 0.0;
+            eaOk += (ea >= 0.20 - 1.0e-9 && ea <= (h == rolla::Vox ? 0.60 : 0.50) + 1.0e-9) ? 1 : 0;
+            if (h == rolla::Bass || h == rolla::Stab || h == rolla::Pluck)
+            {
+                ++pitched;
+                unsigned pcs = 0;
+                int big = 0;
+                for (int i = 0; i < n; ++i)
+                {
+                    pcs |= 1u << (((line[(size_t) i] % 12) + 12) % 12);
+                    if (i > 0 && std::abs (line[(size_t) i] - line[(size_t) i - 1]) >= 4)
+                        ++big;
+                }
+                int npc = 0;
+                for (; pcs != 0; pcs &= pcs - 1)
+                    ++npc;
+                pcsOk += (npc >= 2 && npc <= 4) ? 1 : 0;
+                sigOk += (big >= 1 && big <= std::max (1, (n - 1) / 4)) ? 1 : 0;
+            }
+            bool same = true;
+            for (const auto& [at, t] : top)
+            {
+                const int b = at / 16;
+                if (b < 2 || b > 6)
+                    continue;
+                const auto it = top.find (at - (b - b % 2) * 16);
+                same = same && it != top.end() && it->second == t;
+            }
+            for (const auto& [at, t] : top)
+                if (at / 16 < 2)
+                    for (int b = at / 16 + 2; b <= 6; b += 2)
+                        same = same && top.count (at + (b - at / 16) * 16) == 1;
+            restated += same ? 1 : 0;
+        }
+    std::cout << "Hook cells: anchor " << anchor << "/" << bars << " off-kick " << offKick << "/" << bars << " e/a band "
+              << eaOk << "/" << cells << " pitch classes " << pcsOk << "/" << pitched << " signature " << sigOk << "/"
+              << pitched << " restated " << restated << "/" << cells << "\n";
+    expect (anchor * 100 >= bars * 95, "hook cell bars have an anchor (>= 95%)");
+    expect (offKick * 100 >= bars * 95, "hook cell bars have an event off the kick (>= 95%)");
+    expect (eaOk * 100 >= cells * 75, "hook cells keep the e / a share in band (>= 75%)");
+    expect (pcsOk * 100 >= pitched * 85, "pitched hook cells play 2-4 pitch classes (>= 85%)");
+    expect (sigOk * 100 >= pitched * 75, "pitched hook cells carry a signature interval (>= 75%)");
+    expect (restated * 100 >= cells * 90, "hook cells are restated through bar 7 (>= 90%)");
+}
+
 } // namespace
 
 int main()
@@ -3307,6 +3415,8 @@ int main()
     testLanePatternDiversity();
     testThinBackHalfSweep();
     testOfflineIndexOverlap();
+    // Last too: it rolls fresh batches.
+    testHookCellRules();
 
     if (fails == 0)
         std::cout << "roll tests passed\n";

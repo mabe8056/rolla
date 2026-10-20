@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <bitset>
 #include <cmath>
+#include <cstring>
+#include <vector>
 
 // Intentional arrangement (Melak, Oct 19: "you don't have to include every sound in every roll",
 // "add things intentionally"). Every roll is: drums + bass (the floor), ONE hook lane, and at most
@@ -29,6 +31,14 @@ struct HookPlan
     int support = -1;
     int supportFromBar = 0;
 };
+
+// The plan the last full roll on this thread shipped with. Read by the roll tests and the
+// measuring tools only; generation never reads it.
+inline HookPlan& lastHookPlan() noexcept
+{
+    static thread_local HookPlan plan;
+    return plan;
+}
 
 namespace hook_detail
 {
@@ -344,10 +354,739 @@ inline HookPlan planHook (const Groove& g, int dialect, std::uint32_t seed, std:
     return plan;
 }
 
+// Hook cell rules (catchiness research, Oct 19). The hook lane's cell (bars 1-2, the motif every
+// repeat restates; a vox hook's cell is its one bar) is held to the pooled hook-cell statistics:
+//  rhythm: every cell bar has an anchor (an event on a beat or an 'and': slot % 2 == 0) and an
+//    event off the kick slots (0, 4, 8, 12); the share of events on e / a slots (odd 16ths) sits in
+//    0.20-0.50 (vox 0.20-0.60). A repair moves one onset by one 16th (a lone bar hit on a kick
+//    slot moves to its 'and'), never onto a kick slot and never out of its bar.
+//  pitch (stab top line, pluck, bass): 2-4 pitch classes and a signature interval: at least one
+//    move of 4+ semitones, and at most a quarter of the moves that big (at least one is allowed,
+//    so a short cell has exactly one). The restatement puts it at the same spot in every repeat.
+//    A repair only re-places notes by octaves (a stab is re-voiced on its own chord tones) or swaps
+//    one note (two when the line has six pitch classes) to a tone already in the roll.
+// Nothing is stored or reference-derived: the search runs on the roll's own notes. No repair adds
+// a semitone against the bass (or, for the bass, against the stab / pad over it), a b2, the banned
+// 2&4 root figure or a bass note on the kick; a cell no such repair fixes is left as it was.
+namespace hook_cell
+{
+inline int pcOf (int v) noexcept
+{
+    const int p = v % 12;
+    return p < 0 ? p + 12 : p;
+}
+
+inline int slotOf (float t) noexcept
+{
+    return (int) std::lround (t);
+}
+
+inline std::uint32_t semitoneMask (std::uint32_t pcs) noexcept
+{
+    std::uint32_t m = 0;
+    for (int p = 0; p < 12; ++p)
+        if (((pcs >> p) & 1u) != 0)
+            m |= (1u << ((p + 1) % 12)) | (1u << ((p + 11) % 12));
+    return m;
+}
+
+// Sounding pitch classes of a note (vox is written from MIDI 64, four semitones over the key).
+inline std::uint32_t tonesOf (const Note& n, int part) noexcept
+{
+    std::uint32_t m = 0;
+    const int bias = part == Vox ? 4 : 0;
+    const int nc = std::clamp ((int) n.nChord, 1, 4);
+    for (int c = 0; c < nc; ++c)
+        m |= 1u << pcOf (n.chord[c] + bias);
+    return m;
+}
+
+inline std::uint32_t pcsOver (const Lane& l, int part, float t0, float t1) noexcept
+{
+    std::uint32_t m = 0;
+    for (int i = 0; i < l.count; ++i)
+    {
+        const Note& n = l.notes[i];
+        if (n.vel > 2 && n.start < t1 - 1.0e-3f && t0 < n.start + n.length - 1.0e-3f)
+            m |= tonesOf (n, part);
+    }
+    return m;
+}
+
+inline void sortLane (Lane& l) noexcept
+{
+    std::stable_sort (l.notes, l.notes + l.count, [] (const Note& a, const Note& b) { return a.start < b.start; });
+}
+
+struct Ctx
+{
+    Groove* g = nullptr;
+    Lane* lane = nullptr; // the cell's notes (the hook lane, or a vox hook's one-bar cell)
+    int part = -1;
+    int cellBars = 2;
+    int copies[2][kMaxBars] {}; // the bars each cell bar is heard in (itself and its restatements)
+    int nCopies[2] {};
+    bool nudge = true;          // rhythm repairs allowed (not on a BOUNCY pulse grid)
+    bool keepBassClass = false; // DEEP / BOUNCY stab: a hit keeps its place against the bass
+    bool octaveSignature = false; // BOUNCY bass: the octave pump is the preferred signature
+    std::uint32_t seed = 1;
+};
+
+// The bars (bit k = copy k) in which [t0, t1) of cell bar cb meets the other side of the clash
+// rule a semitone from `sounding`: the bass for an upper lane, the stab / pad for the bass.
+inline std::uint32_t clashCopies (const Ctx& c, std::uint32_t sounding, float t0, float t1, int cb) noexcept
+{
+    const Groove& g = *c.g;
+    std::uint32_t hit = 0;
+    for (int k = 0; k < c.nCopies[cb]; ++k)
+    {
+        const float sh = (float) ((c.copies[cb][k] - cb) * kStepsPerBar);
+        std::uint32_t other = 0;
+        if (c.part == Bass)
+            other = pcsOver (g.lane[Stab], Stab, t0 + sh, t1 + sh) | pcsOver (g.lane[Pad], Pad, t0 + sh, t1 + sh);
+        else
+            other = pcsOver (g.lane[Bass], Bass, t0 + sh, t1 + sh);
+        if ((semitoneMask (other) & sounding) != 0)
+            hit |= 1u << k;
+    }
+    return hit;
+}
+
+// A repair may not add a clash: every bar that clashes after it clashed before it.
+inline bool addsNoClash (std::uint32_t was, std::uint32_t now) noexcept
+{
+    return (now & ~was) == 0;
+}
+
+inline bool occupied (const Lane& l, int abs) noexcept
+{
+    for (int i = 0; i < l.count; ++i)
+        if (slotOf (l.notes[i].start) == abs)
+            return true;
+    return false;
+}
+
+// 0 bass gap, 1 a held bass note, 2 a bass attack at 16th `abs`.
+inline int bassClass (const Lane& bass, int abs) noexcept
+{
+    int cls = 0;
+    for (int i = 0; i < bass.count; ++i)
+    {
+        const int a = slotOf (bass.notes[i].start);
+        const int b = slotOf (bass.notes[i].start + bass.notes[i].length);
+        if (a == abs)
+            return 2;
+        if (abs > a && abs < b)
+            cls = 1;
+    }
+    return cls;
+}
+
+inline bool rootAt (const Lane& l, int abs) noexcept
+{
+    for (int i = 0; i < l.count; ++i)
+        if (slotOf (l.notes[i].start) == abs && pcOf (l.notes[i].chord[0]) == 0)
+            return true;
+    return false;
+}
+
+// Sorted in-bar onset slots (vel > 2) of cell bar `bar`.
+inline int eventsInBar (const Lane& l, int bar, int* out) noexcept
+{
+    bool at[kStepsPerBar] {};
+    for (int i = 0; i < l.count; ++i)
+    {
+        const int s = slotOf (l.notes[i].start) - bar * kStepsPerBar;
+        if (l.notes[i].vel > 2 && s >= 0 && s < kStepsPerBar)
+            at[s] = true;
+    }
+    int n = 0;
+    for (int s = 0; s < kStepsPerBar; ++s)
+        if (at[s])
+            out[n++] = s;
+    return n;
+}
+
+// Can the onset at absolute slot s move to t (same bar, never a kick slot)?
+inline bool canMove (const Ctx& c, int s, int t) noexcept
+{
+    const Lane& l = *c.lane;
+    const int bar = s / kStepsPerBar;
+    if (t < bar * kStepsPerBar || t >= (bar + 1) * kStepsPerBar || t % 4 == 0 || occupied (l, t))
+        return false;
+    const int dt = t - s;
+    const int in = t % kStepsPerBar;
+    if (c.part == Bass)
+    {
+        // No e-and-a run on one beat (the A&R gate's eaa share).
+        const int beat = in / 4 * 4;
+        int run = 0;
+        for (int k = 1; k < 4; ++k)
+        {
+            const int abs = bar * kStepsPerBar + beat + k;
+            run += (abs == t || (abs != s && occupied (l, abs))) ? 1 : 0;
+        }
+        if (run == 3)
+            return false;
+    }
+    // DEEP and BOUNCY stab hits stay in the bass gap, over a held bass note or on a bass attack as
+    // written: DEEP's answers in the gaps and BOUNCY's stabs on the bass attacks hold.
+    if (c.keepBassClass && bassClass (c.g->lane[Bass], s) != bassClass (c.g->lane[Bass], t))
+        return false;
+    for (int i = 0; i < l.count; ++i)
+    {
+        const Note& n = l.notes[i];
+        if (slotOf (n.start) != s)
+            continue;
+        // The banned 2&4 root figure: a root on the bar's 16ths 2 and 4.
+        if (c.part == Bass && pcOf (n.chord[0]) == 0 && (in == 1 || in == 3)
+            && rootAt (l, bar * kStepsPerBar + (in == 1 ? 3 : 1)))
+            return false;
+        const std::uint32_t tones = tonesOf (n, c.part);
+        if (! addsNoClash (clashCopies (c, tones, n.start, n.start + n.length, bar),
+                           clashCopies (c, tones, n.start + (float) dt, n.start + (float) dt + n.length, bar)))
+            return false;
+    }
+    // A bass note that moves later leaves its held predecessor ringing one 16th more.
+    if (c.part == Bass && dt > 0)
+        for (int i = 0; i < l.count; ++i)
+        {
+            const Note& p = l.notes[i];
+            const float end = p.start + p.length;
+            if (p.vel > 2 && p.start < (float) s - 0.5f && end > (float) s - 0.26f && end <= (float) s + 1.0e-3f
+                && clashCopies (c, tonesOf (p, Bass), end, (float) t, bar) != 0)
+                return false;
+        }
+    return true;
+}
+
+// Moves the onset at s to t. The bass keeps its sounding time: a note moved earlier keeps its
+// end (its predecessor gives way), a note moved later hands that 16th to a held predecessor.
+inline void moveOnset (Ctx& c, int s, int t) noexcept
+{
+    Lane& l = *c.lane;
+    const float dt = (float) (t - s);
+    const bool mono = c.part == Bass;
+    if (mono && dt > 0.f)
+        for (int i = 0; i < l.count; ++i)
+        {
+            Note& p = l.notes[i];
+            const float end = p.start + p.length;
+            if (p.vel > 2 && p.start < (float) s - 0.5f && end > (float) s - 0.26f && end <= (float) s + 1.0e-3f)
+                p.length += dt;
+        }
+    float moved = -1.f;
+    for (int i = 0; i < l.count; ++i)
+    {
+        Note& n = l.notes[i];
+        if (slotOf (n.start) != s)
+            continue;
+        n.start += dt;
+        moved = n.start;
+        if (mono)
+            n.length = dt < 0.f ? n.length - dt : (n.length > 1.25f ? n.length - dt : n.length);
+    }
+    if (moved < 0.f)
+        return;
+    sortLane (l);
+    // Nothing rings into the moved onset, and the moved onset ends where the next one starts.
+    float next = 1.0e9f;
+    for (int i = 0; i < l.count; ++i)
+        if (l.notes[i].start > moved + 1.0e-3f)
+            next = std::min (next, l.notes[i].start);
+    for (int i = 0; i < l.count; ++i)
+    {
+        Note& n = l.notes[i];
+        if (n.start < moved - 1.0e-3f && n.start + n.length > moved + 1.0e-3f)
+            n.length = std::max (0.25f, moved - n.start);
+        else if (std::abs (n.start - moved) <= 1.0e-3f && n.start + n.length > next)
+            n.length = std::max (0.25f, next - n.start);
+    }
+}
+
+// Rhythm: an anchor and an off-kick event in every cell bar, then the cell's e / a share.
+inline void repairRhythm (Ctx& c, float eaHi) noexcept
+{
+    Lane& l = *c.lane;
+    auto tryMove = [&] (int s, int t) {
+        if (! canMove (c, s, t))
+            return false;
+        moveOnset (c, s, t);
+        return true;
+    };
+    for (int b = 0; b < c.cellBars; ++b)
+    {
+        int ev[kStepsPerBar];
+        const int n = eventsInBar (l, b, ev);
+        if (n == 0)
+            continue;
+        const int rot = (int) (c.seed % (std::uint32_t) n);
+        bool anchor = false, offKick = false;
+        for (int k = 0; k < n; ++k)
+        {
+            anchor = anchor || ev[k] % 2 == 0;
+            offKick = offKick || ev[k] % 4 != 0;
+        }
+        // Every event on an e / a: one moves to its 'and' (an anchor, still off the kick).
+        for (int k = 0; k < n && ! anchor; ++k)
+        {
+            const int s = b * kStepsPerBar + ev[(k + rot) % n];
+            anchor = tryMove (s, s + (s % 4 == 1 ? 1 : -1));
+        }
+        // Every event on a kick slot: one moves to the 'a' before it (or the 'e' after); a lone
+        // hit, which is also the bar's anchor, moves to its 'and' instead.
+        for (int k = 0; k < n && ! offKick; ++k)
+        {
+            const int s = b * kStepsPerBar + ev[(k + rot) % n];
+            offKick = n >= 2 ? (s % kStepsPerBar > 0 && tryMove (s, s - 1)) || tryMove (s, s + 1)
+                             : tryMove (s, s + 2) || (s % kStepsPerBar > 0 && tryMove (s, s - 2));
+        }
+    }
+    for (int guard = 0; guard < 4 * kStepsPerBar; ++guard)
+    {
+        int all[2 * kStepsPerBar];
+        int n = 0, odd = 0, evenIn[2] {};
+        for (int b = 0; b < c.cellBars; ++b)
+        {
+            int ev[kStepsPerBar];
+            const int m = eventsInBar (l, b, ev);
+            for (int k = 0; k < m; ++k)
+            {
+                all[n++] = b * kStepsPerBar + ev[k];
+                odd += ev[k] % 2;
+                evenIn[b] += 1 - ev[k] % 2;
+            }
+        }
+        if (n < 2)
+            return;
+        const int rot = (int) (c.seed % (std::uint32_t) n);
+        bool movedOne = false;
+        if ((float) odd > eaHi * (float) n + 1.0e-4f)
+        {
+            // Too many e / a events: one moves to its 'and'.
+            for (int k = 0; k < n && ! movedOne; ++k)
+            {
+                const int s = all[(k + rot) % n];
+                if (s % 2 == 1)
+                    movedOne = tryMove (s, s + (s % 4 == 1 ? 1 : -1));
+            }
+        }
+        else if ((float) odd < 0.20f * (float) n - 1.0e-4f)
+        {
+            // Too square: an event whose bar keeps another anchor moves to the 'a' (a push into
+            // the next beat), else the 'e'. The bass keeps its notes on the kick.
+            for (int k = 0; k < n && ! movedOne; ++k)
+            {
+                const int s = all[(k + rot) % n];
+                if (s % 2 != 0 || evenIn[s / kStepsPerBar] < 2 || (c.part == Bass && s % 4 == 0))
+                    continue;
+                if (s % 4 == 0)
+                    movedOne = (s % kStepsPerBar > 0 && tryMove (s, s - 1)) || tryMove (s, s + 1);
+                else
+                    movedOne = tryMove (s, s + 1) || tryMove (s, s - 1);
+            }
+        }
+        else
+            return;
+        if (! movedOne)
+            return;
+    }
+}
+
+// The pitch line of a cell: one value per onset (a chord's top tone), with what may replace it.
+struct Cand
+{
+    std::int8_t tones[4] {};
+    int nc = 1;
+    int top = 0;
+    float cost = 0.f;
+    bool swap = false;
+};
+
+struct LineEvent
+{
+    int note = -1; // lane index of the note that carries the line at this onset
+    Cand cand[24];
+    int nCand = 0;
+};
+
+inline int topOf (const Note& n) noexcept
+{
+    int t = n.chord[0];
+    for (int c = 1; c < std::clamp ((int) n.nChord, 1, 4); ++c)
+        t = std::max (t, (int) n.chord[c]);
+    return t;
+}
+
+inline int maxBigMoves (int moves) noexcept
+{
+    return std::max (1, moves / 4);
+}
+
+// The pitch rules on a line of values: 2-4 pitch classes, 1..maxBig moves of 4+ semitones.
+inline bool lineOk (const int* v, int n) noexcept
+{
+    if (n < 2)
+        return true;
+    std::uint32_t pcs = 0;
+    int big = 0;
+    for (int i = 0; i < n; ++i)
+    {
+        pcs |= 1u << pcOf (v[i]);
+        if (i > 0 && std::abs (v[i] - v[i - 1]) >= 4)
+            ++big;
+    }
+    int npc = 0;
+    for (; pcs != 0; pcs &= pcs - 1)
+        ++npc;
+    return npc >= 2 && npc <= 4 && big >= 1 && big <= maxBigMoves (n - 1);
+}
+
+// What a move of d semitones costs in the search: steps are free, a fourth, fifth or octave is
+// the preferred signature (BOUNCY's bass pumps the octave first), a tritone or a displaced ninth
+// is the last resort.
+inline float moveCost (int d, bool octaveFirst) noexcept
+{
+    d = std::abs (d);
+    if (d == 12 && octaveFirst)
+        return 0.05f;
+    if (d == 0)
+        return 0.05f;
+    if (d <= 2)
+        return 0.f;
+    if (d == 3)
+        return 0.15f;
+    if (d == 5 || d == 7)
+        return 0.15f;
+    if (d == 4)
+        return 0.3f;
+    if (d == 12)
+        return 0.25f;
+    if (d == 8 || d == 9)
+        return 0.6f;
+    if (d == 10 || d == 11)
+        return 0.9f;
+    return 1.2f;
+}
+
+// A stab voicing with `top` as its top tone: the tone of that pitch class goes to `top`, every
+// tone over it folds down by octaves, and no two tones share a pitch.
+inline bool revoice (const Note& n, int top, Cand& out) noexcept
+{
+    const int nc = std::clamp ((int) n.nChord, 1, 4);
+    int v[4] {};
+    int lo = 127;
+    int j = -1;
+    for (int c = 0; c < nc; ++c)
+    {
+        v[c] = n.chord[c];
+        lo = std::min (lo, v[c]);
+        if (pcOf (v[c]) == pcOf (top) && (j < 0 || std::abs (v[c] - top) < std::abs (v[j] - top)))
+            j = c;
+    }
+    if (j < 0)
+        return false;
+    int moved = v[j] != top ? 1 : 0;
+    v[j] = top;
+    for (int c = 0; c < nc; ++c)
+    {
+        if (c == j)
+            continue;
+        const int was = v[c];
+        while (v[c] >= top)
+            v[c] -= 12;
+        for (int k = 0; k < nc; ++k)
+            if (k != c && k < c && v[k] == v[c])
+                v[c] -= 12;
+        moved += v[c] != was ? 1 : 0;
+    }
+    for (int c = 0; c < nc; ++c)
+        if (v[c] < lo - 12 || v[c] < -36 || v[c] > 48)
+            return false;
+    out.nc = nc;
+    for (int c = 0; c < 4; ++c)
+        out.tones[c] = (std::int8_t) (c < nc ? v[c] : 0);
+    out.top = top;
+    // A recorded chord sample sounds from chord[0]: a voicing that keeps it keeps that register.
+    out.cost = moved == 0 ? 0.f
+                          : 0.6f + 0.04f * (float) std::abs (top - topOf (n)) + 0.1f * (float) moved
+                                + (v[0] != n.chord[0] ? 0.5f : 0.f);
+    return true;
+}
+
+// Pitch: re-place or swap as little as the rules need (a small Viterbi search over the cell).
+inline void repairPitch (Ctx& c, std::uint32_t rollPcs) noexcept
+{
+    Lane& l = *c.lane;
+    const Groove& g = *c.g;
+    LineEvent ev[2 * kStepsPerBar];
+    int n = 0;
+    for (int b = 0; b < c.cellBars; ++b)
+    {
+        int at[kStepsPerBar];
+        const int m = eventsInBar (l, b, at);
+        for (int k = 0; k < m; ++k)
+        {
+            const int abs = b * kStepsPerBar + at[k];
+            int best = -1;
+            for (int i = 0; i < l.count; ++i)
+                if (l.notes[i].vel > 2 && slotOf (l.notes[i].start) == abs
+                    && (best < 0 || topOf (l.notes[i]) > topOf (l.notes[best])))
+                    best = i;
+            ev[n++].note = best;
+        }
+    }
+    if (n < 2)
+        return;
+    int line[2 * kStepsPerBar];
+    std::uint32_t pcs = 0;
+    int lo = 127, hi = -128;
+    for (int i = 0; i < n; ++i)
+        line[i] = topOf (l.notes[ev[i].note]);
+    if (lineOk (line, n))
+        return;
+    for (int i = 0; i < l.count; ++i)
+        if (l.notes[i].vel > 2 && l.notes[i].nChord <= 1)
+        {
+            lo = std::min (lo, (int) l.notes[i].chord[0]);
+            hi = std::max (hi, (int) l.notes[i].chord[0]);
+        }
+    hi = std::max (hi, lo + 12);
+    for (int i = 0; i < n; ++i)
+        pcs |= 1u << pcOf (line[i]);
+    int npc = 0;
+    for (std::uint32_t m = pcs; m != 0; m &= m - 1)
+        ++npc;
+    const int swapBudget = npc > 4 ? std::min (2, npc - 4) : 1;
+
+    // Candidates per onset.
+    for (int i = 0; i < n; ++i)
+    {
+        LineEvent& e = ev[i];
+        const Note& note = l.notes[e.note];
+        const int cb = slotOf (note.start) / kStepsPerBar;
+        const int orig = line[i];
+        if (c.part == Stab || note.nChord > 1)
+        {
+            const int nc = std::clamp ((int) note.nChord, 1, 4);
+            for (int t = orig - 7; t <= orig + 7 && e.nCand < 24; ++t)
+            {
+                bool tone = false;
+                for (int k = 0; k < nc; ++k)
+                    tone = tone || pcOf (note.chord[k]) == pcOf (t);
+                Cand cd;
+                if (tone && revoice (note, t, cd))
+                    e.cand[e.nCand++] = cd;
+            }
+            continue;
+        }
+        auto add = [&] (int v, float cost, bool swap) {
+            if (e.nCand >= 24 || v < lo || v > hi)
+                return;
+            for (int k = 0; k < e.nCand; ++k)
+                if (e.cand[k].top == v)
+                    return;
+            Cand cd;
+            cd.tones[0] = (std::int8_t) v;
+            cd.top = v;
+            cd.cost = cost;
+            cd.swap = swap;
+            e.cand[e.nCand++] = cd;
+        };
+        for (int k = -2; k <= 2; ++k)
+            add (orig + 12 * k, 0.5f * (float) std::abs (k), false);
+        const int slot = slotOf (note.start);
+        const int in = slot % kStepsPerBar;
+        // Chord tones sounding with the note (stab / pad over the bass; bass and chords under a pluck).
+        std::uint32_t over = pcsOver (g.lane[Stab], Stab, note.start, note.start + note.length)
+                           | pcsOver (g.lane[Pad], Pad, note.start, note.start + note.length);
+        if (c.part != Bass)
+            over |= pcsOver (g.lane[Bass], Bass, note.start, note.start + note.length);
+        for (int p = 0; p < 12; ++p)
+        {
+            if (p == pcOf (orig) || p == 1 || ((rollPcs >> p) & 1u) == 0)
+                continue;
+            if (c.part == Bass && p == 0 && (in == 1 || in == 3) && rootAt (l, slot - in + (in == 1 ? 3 : 1)))
+                continue;
+            if (! addsNoClash (clashCopies (c, tonesOf (note, c.part), note.start, note.start + note.length, cb),
+                               clashCopies (c, 1u << p, note.start, note.start + note.length, cb)))
+                continue;
+            int d = p - pcOf (orig);
+            if (d > 6)
+                d -= 12;
+            if (d < -6)
+                d += 12;
+            const float base = ((pcs >> p) & 1u) != 0 ? 1.6f : (((over >> p) & 1u) != 0 ? 1.8f : 2.0f);
+            for (int k = -1; k <= 1; ++k)
+                add (orig + d + 12 * k, base + 0.04f * (float) std::abs (d + 12 * k) + 0.2f * (float) std::abs (k), true);
+        }
+    }
+
+    // Viterbi over (candidate, big moves, swaps, pitch classes).
+    struct St
+    {
+        std::uint32_t key;
+        float cost;
+        int prev;
+    };
+    const int maxBig = maxBigMoves (n - 1);
+    auto keyOf = [] (int cand, int big, int swaps, std::uint32_t p) {
+        return (std::uint32_t) cand | ((std::uint32_t) big << 5) | ((std::uint32_t) swaps << 9) | (p << 11);
+    };
+    std::vector<std::vector<St>> layer ((size_t) n);
+    for (int k = 0; k < ev[0].nCand; ++k)
+    {
+        const Cand& cd = ev[0].cand[k];
+        const int sw = cd.swap ? 1 : 0;
+        if (sw <= swapBudget)
+            layer[0].push_back ({ keyOf (k, 0, sw, 1u << pcOf (cd.top)), cd.cost, -1 });
+    }
+    for (int i = 1; i < n; ++i)
+    {
+        auto& out = layer[(size_t) i];
+        const auto& in = layer[(size_t) i - 1];
+        for (int si = 0; si < (int) in.size(); ++si)
+        {
+            const St& s = in[(size_t) si];
+            const int ci = (int) (s.key & 31u);
+            const int big = (int) ((s.key >> 5) & 15u);
+            const int sw = (int) ((s.key >> 9) & 3u);
+            const std::uint32_t p = s.key >> 11;
+            const int prevTop = ev[i - 1].cand[ci].top;
+            for (int k = 0; k < ev[i].nCand; ++k)
+            {
+                const Cand& cd = ev[i].cand[k];
+                const int d = cd.top - prevTop;
+                const int big2 = big + (std::abs (d) >= 4 ? 1 : 0);
+                const int sw2 = sw + (cd.swap ? 1 : 0);
+                if (big2 > maxBig || sw2 > swapBudget)
+                    continue;
+                // BOUNCY's bass keeps a written octave pump where it can.
+                const float lost = c.octaveSignature && std::abs (line[i] - line[i - 1]) == 12 && std::abs (d) != 12 ? 0.4f : 0.f;
+                out.push_back ({ keyOf (k, big2, sw2, p | (1u << pcOf (cd.top))),
+                                 s.cost + cd.cost + moveCost (d, c.octaveSignature) + lost, si });
+            }
+        }
+        // One state per key, the cheapest; a beam keeps the search small.
+        std::sort (out.begin(), out.end(), [] (const St& a, const St& b) {
+            return a.key != b.key ? a.key < b.key : a.cost < b.cost;
+        });
+        out.erase (std::unique (out.begin(), out.end(), [] (const St& a, const St& b) { return a.key == b.key; }), out.end());
+        if (out.size() > 3000)
+        {
+            std::nth_element (out.begin(), out.begin() + 3000, out.end(), [] (const St& a, const St& b) { return a.cost < b.cost; });
+            out.resize (3000);
+        }
+    }
+    int best = -1;
+    const auto& last = layer[(size_t) n - 1];
+    for (int si = 0; si < (int) last.size(); ++si)
+    {
+        const St& s = last[(size_t) si];
+        const int big = (int) ((s.key >> 5) & 15u);
+        int np = 0;
+        for (std::uint32_t m = s.key >> 11; m != 0; m &= m - 1)
+            ++np;
+        if (big >= 1 && np >= 2 && np <= 4 && (best < 0 || s.cost < last[(size_t) best].cost))
+            best = si;
+    }
+    if (best < 0)
+        return;
+    const Lane was = l;
+    for (int i = n - 1, si = best; i >= 0; --i)
+    {
+        const St& s = layer[(size_t) i][(size_t) si];
+        const Cand& cd = ev[i].cand[s.key & 31u];
+        si = s.prev;
+        if (cd.cost <= 0.f)
+            continue; // as written
+        Note& note = l.notes[ev[i].note];
+        note.nChord = (std::uint8_t) cd.nc;
+        for (int k = 0; k < 4; ++k)
+            note.chord[k] = cd.tones[k];
+    }
+    // Two swaps in one bar can meet as the banned 2&4 root figure: then the cell stays as written.
+    if (c.part == Bass)
+        for (int b = 0; b < c.cellBars; ++b)
+            if (rootAt (l, b * kStepsPerBar + 1) && rootAt (l, b * kStepsPerBar + 3))
+                l = was;
+}
+
+// The cell rules on one hook lane. For a vox hook `cell` is its one-bar cell (laid out after);
+// otherwise the hook lane's bars 1-2, restated through the phrase afterwards. True when a note moved.
+inline bool shapeHookCell (Groove& g, int part, Lane& cell, int cellBars, int bars, const bool* cellPlays) noexcept
+{
+    if (cell.count <= 0 || bars < 2)
+        return false;
+    Ctx c;
+    c.g = &g;
+    c.lane = &cell;
+    c.part = part;
+    c.cellBars = cellBars;
+    for (int b = 0; b < bars && b < kMaxBars; ++b)
+    {
+        const int cb = cellBars == 1 ? (cellPlays != nullptr && ! cellPlays[b] ? -1 : 0)
+                                     : (bars >= 4 ? phrase_lock::sourceBar (b, bars) : b);
+        if (cb == 0 || cb == 1)
+            c.copies[cb][c.nCopies[cb]++] = b;
+    }
+    c.nudge = ! (part == Bass && g.bassMode == BassModePulse);
+    c.keepBassClass = part == Stab && (g.dialect == Long || g.dialect == Pop);
+    c.octaveSignature = part == Bass && g.dialect == Pop;
+    c.seed = (cell.seed ? cell.seed : 1u) * 0x9E3779B9u;
+    c.seed ^= c.seed >> 16;
+    const Lane before = cell;
+    if (c.nudge)
+        repairRhythm (c, part == Vox ? 0.60f : 0.50f);
+    if (part == Bass || part == Stab || part == Pluck)
+    {
+        std::uint32_t roll = 0;
+        for (int p : { (int) Bass, (int) Stab, (int) Pad, (int) Pluck })
+            for (int i = 0; i < g.lane[p].count; ++i)
+                if (g.lane[p].notes[i].vel > 2)
+                    roll |= tonesOf (g.lane[p].notes[i], p);
+        repairPitch (c, roll);
+    }
+    if (before.count != cell.count)
+        return true;
+    for (int i = 0; i < cell.count; ++i)
+    {
+        const Note& a = before.notes[i];
+        const Note& b = cell.notes[i];
+        if (std::abs (a.start - b.start) > 1.0e-6f || std::abs (a.length - b.length) > 1.0e-6f || a.nChord != b.nChord
+            || std::memcmp (a.chord, b.chord, sizeof a.chord) != 0)
+            return true;
+    }
+    return false;
+}
+
+// restateMotif for the bass hook after the cell pass: held notes are copied as they ring (the
+// motif's own bar 1 is not cut at bar 2) and keepMonophonic ends each where the next one starts.
+inline void restateHeld (Lane& lane, int bars) noexcept
+{
+    if (bars < 4 || lane.count <= 0)
+        return;
+    const Lane src = lane;
+    lane.count = 0;
+    for (int b = 0; b < bars; ++b)
+    {
+        const int from = phrase_lock::sourceBar (b, bars);
+        for (int i = 0; i < src.count && lane.count < kMaxNotes; ++i)
+            if (phrase_lock::barOf (src.notes[i].start) == from)
+            {
+                Note n = src.notes[i];
+                n.start += (float) ((b - from) * kStepsPerBar);
+                lane.notes[lane.count++] = n;
+            }
+    }
+}
+} // namespace hook_cell
+
 // Applies the plan to the regenerated lanes (kept lanes are never touched).
 inline void applyHookPlan (Groove& g, const HookPlan& plan, int bars, std::uint32_t partMask) noexcept
 {
     using namespace hook_detail;
+    lastHookPlan() = plan;
     auto regen = [&] (int p) { return ((partMask >> p) & 1u) != 0; };
     // Silence every melodic lane that is not the floor, the hook or the support.
     for (int p : { (int) Stab, (int) Pluck, (int) Pad, (int) Hits, (int) Vox })
@@ -381,6 +1120,11 @@ inline void applyHookPlan (Groove& g, const HookPlan& plan, int bars, std::uint3
         for (int i = 0; i < v.count; ++i)
             if (phrase_lock::barOf (v.notes[i].start) == bars - 1 && last.count < kMaxNotes)
                 last.notes[last.count++] = v.notes[i];
+        // The hook cell rules on the one-bar cell, checked against every bar it plays in.
+        bool plays[kMaxBars] {};
+        for (int b = 0; b < bars && b < kMaxBars; ++b)
+            plays[b] = ! (b == bars - 1 && last.count > 0);
+        hook_cell::shapeHookCell (g, Vox, cell, 1, bars, plays);
         v.count = 0;
         for (int b = 0; b < bars; ++b)
         {
@@ -397,6 +1141,22 @@ inline void applyHookPlan (Groove& g, const HookPlan& plan, int bars, std::uint3
                 n.length = std::min (n.length, (float) ((b + 1) * kStepsPerBar) - n.start);
                 v.notes[v.count++] = n;
             }
+        }
+    }
+
+    // The other hook lanes: the cell rules on bars 1-2, then the A B A B A B A B'' restatement.
+    if ((plan.hook == Bass || plan.hook == Stab || plan.hook == Pluck) && regen (plan.hook))
+    {
+        Lane& h = g.lane[plan.hook];
+        if (hook_cell::shapeHookCell (g, plan.hook, h, 2, bars, nullptr))
+        {
+            if (plan.hook == Bass)
+            {
+                hook_cell::restateHeld (h, bars);
+                keepMonophonic (h, false);
+            }
+            else
+                restateMotif (h, bars);
         }
     }
 
