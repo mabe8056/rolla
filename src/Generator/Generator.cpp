@@ -6226,7 +6226,7 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
             bp.sub = bassSub;
             bp.match = s.bassMatch;
             if (s.riff)
-                planName = riff::kShapeNames[riff::compose (g.lane[Bass], s.dialect, mode, s.bars, composeSeed)];
+                planName = riff::kShapeNames[riff::compose (g.lane[Bass], s.dialect, mode, s.bars, composeSeed, s.riffShape)];
             else
             {
                 const int arc = rules::composeBass (g.lane[Bass], bp, composeSeed);

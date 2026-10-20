@@ -161,6 +161,8 @@ struct Settings
     // RIFF (Oct 20: "its not good bass riffs"): the bass is a designed riff (RiffWriter.h), not
     // the note-by-note rule composer; its finishing passes leave the riff alone.
     bool riff = false;
+    // RIFF shape override for listening rounds (-1: drawn per style; RiffWriter.h Shape).
+    int riffShape = -1;
 };
 
 enum BassMode : int

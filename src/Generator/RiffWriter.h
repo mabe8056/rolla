@@ -36,40 +36,44 @@ enum Shape : int
     CallResponse,
     Rolling,
     Held,
+    GhostClimb,
     kShapes
 };
 
-inline constexpr const char* kShapeNames[kShapes] = { "riff_1bar", "riff_call_response", "riff_rolling", "riff_held" };
+inline constexpr const char* kShapeNames[kShapes] = { "riff_1bar", "riff_call_response", "riff_rolling", "riff_held", "riff_ghost_climb" };
 
 // Shape weights per style (ROLLER, DEEP, BOUNCY, JACKIN): his favourites are 1-bar riffs and call /
 // response first, rolling 16ths for the roller sound, held lines for organ / deep.
+// GhostClimb (Oct 20, "catchy and hypnotic grooves ... disco inspired"; lessons from the LIGHTLEAK
+// "Mambos" bass split he sent, learn only) takes half of every style's draws.
 inline constexpr float kShapeW[4][kShapes] = {
-    { 0.25f, 0.20f, 0.45f, 0.10f },
-    { 0.35f, 0.30f, 0.15f, 0.20f },
-    { 0.40f, 0.30f, 0.20f, 0.10f },
-    { 0.35f, 0.35f, 0.10f, 0.20f },
+    { 0.12f, 0.10f, 0.22f, 0.06f, 0.50f },
+    { 0.18f, 0.15f, 0.07f, 0.10f, 0.50f },
+    { 0.20f, 0.15f, 0.10f, 0.05f, 0.50f },
+    { 0.18f, 0.17f, 0.05f, 0.10f, 0.50f },
 };
 // Attacks per bar by shape. Round 4 (Oct 20, Melak): "alot of your basslines are crowded ... empty
 // spaces work well if the drums work rhythmically": fewer attacks than the loops' median (6), with
 // a real rest in every bar (rolling stays busier for ROLLER).
-inline constexpr int kAttacksLo[kShapes] = { 3, 3, 5, 2 };
-inline constexpr int kAttacksHi[kShapes] = { 4, 4, 6, 3 };
+inline constexpr int kAttacksLo[kShapes] = { 3, 3, 5, 2, 4 };
+inline constexpr int kAttacksHi[kShapes] = { 4, 4, 6, 3, 5 };
 // The longest silence inside a bar (16ths, to the next attack or the next bar's beat 1).
-inline constexpr int kMinRest[kShapes] = { 3, 3, 2, 3 };
+inline constexpr int kMinRest[kShapes] = { 3, 3, 2, 3, 1 };
 // Onset weight per 16th: the 229 Artist Series loops pooled, the e's (1, 5, 9, 13) x1.5 toward his
 // favourite tracks (28% of their onsets on the e against 13% in the loops).
 inline constexpr float kStepW[16] = { 0.73f, 0.26f, 0.32f, 0.34f, 0.36f, 0.30f, 0.58f, 0.33f,
                                       0.33f, 0.38f, 0.48f, 0.31f, 0.42f, 0.32f, 0.63f, 0.15f };
 // Gate (length against the gap to the next onset) by shape; held lines tie.
-inline constexpr float kGate[kShapes] = { 0.60f, 0.62f, 0.70f, 0.90f };
+inline constexpr float kGate[kShapes] = { 0.60f, 0.62f, 0.70f, 0.90f, 0.85f };
 // Organ-style octave bounce (Get Busy, House Party, Josh Baker's organ; 33 of 229 loops).
-inline constexpr float kOrganP[kShapes] = { 0.30f, 0.30f, 0.15f, 0.50f };
+inline constexpr float kOrganP[kShapes] = { 0.30f, 0.30f, 0.15f, 0.50f, 0.0f };
 
 struct Cell
 {
     bool on[16] {};
     int semi[16] {};
     int vel[16] {};
+    bool ghost[16] {}; // GhostClimb's quiet upper-octave notes (staccato)
     int n = 0;
 };
 
@@ -351,13 +355,221 @@ inline void layOut (Lane& lane, const Cell* bars, int nb, float gate, Rng& r) no
     }
 }
 
+// ------------------------------------------------------------------ GhostClimb
+// What the Mambos split taught (structure only; the riff itself is in the private anti-copy index,
+// never here): a one-bar figure repeated through the drop; ~5 short deep MAIN notes that climb
+// through the minor pentatonic / blues scale from the root on beat 1 (one chromatic blue note at
+// most) and never return to the root inside the bar; quiet GHOST notes an octave above the previous
+// main note in the gaps (the disco 16th motion without crowding the low end); no note on the 16th
+// right before beat 2 or beat 1 (the kick lands in space); the strongest notes between the kicks;
+// ghosts accented every 4th bar; a fill note at the phrase end.
+inline constexpr float kGcMainW[16] = { 0.f, 0.f, 0.25f, 0.f, 0.55f, 0.20f, 0.25f, 0.65f, 0.15f, 0.20f, 0.70f, 0.25f, 0.50f, 0.20f, 0.25f, 0.f };
+
+// The main notes' path, in semitones from the root, for `n` notes (the first is the root).
+inline int gcPath (int n, int mode, Rng& r, int* out) noexcept
+{
+    // Path families (weights): climb and settle .40, octave climb .25, dip below then climb .20,
+    // fifth bounce .15. All on the minor pentatonic (in every minor mode); the b5 blue note only as a
+    // chromatic step between the 4th and 5th.
+    const float fw[4] = { 0.40f, 0.25f, 0.20f, 0.15f };
+    const int fam = std::max (0, pickW (fw, 4, r.next()));
+    static constexpr int kPenta[6] = { 0, 3, 5, 7, 10, 12 };
+    int m = 0;
+    out[m++] = 0;
+    if (fam == 0)
+    {
+        // up the pentatonic one or two steps at a time, then settle one step down
+        int i = 0;
+        while (m < n - 1)
+        {
+            i = std::min (5, i + (r.next() < 0.75 ? 1 : 2));
+            out[m++] = kPenta[i];
+        }
+        if (m < n)
+            out[m++] = kPenta[std::max (1, i - 1)];
+    }
+    else if (fam == 1)
+    {
+        static constexpr int kUp[5] = { 7, 10, 12, 10, 7 };
+        for (int k = 0; m < n; ++k)
+            out[m++] = kUp[std::min (4, k)];
+    }
+    else if (fam == 2)
+    {
+        out[m++] = -2;
+        static constexpr int kUp[4] = { 0, 3, 5, 3 };
+        for (int k = 0; m < n; ++k)
+            out[m++] = kUp[std::min (3, k)];
+    }
+    else
+    {
+        static constexpr int kUp[4] = { 3, 7, 5, 3 };
+        for (int k = 0; m < n; ++k)
+            out[m++] = kUp[std::min (3, k)];
+    }
+    // The blue note: a 5 -> 7 step may pass through the b5 (p .5).
+    for (int k = 1; k + 1 < m && r.next() < 0.5; ++k)
+        if (out[k - 1] == 5 && out[k] == 7)
+        {
+            out[k] = 6;
+            break;
+        }
+    // Every note but the blue one stays in the mode (the b7 below, the b3 ... are in every minor mode).
+    for (int k = 0; k < m; ++k)
+        if (out[k] != 6 && ! phrase::inMode (out[k], mode))
+            out[k] = out[k] > 0 ? out[k] - 1 : out[k] + 1;
+    return m;
+}
+
+inline Cell ghostClimbCell (int mode, Rng& r) noexcept
+{
+    Cell c;
+    for (int tries = 0; tries < 16; ++tries)
+    {
+        c = Cell {};
+        c.on[0] = true;
+        const int want = 4 + (r.next() < 0.5 ? 1 : 0);
+        int n = 1;
+        float w[16];
+        for (int k = 0; k < 16; ++k)
+            w[k] = kGcMainW[k];
+        while (n < want)
+        {
+            float ww[16];
+            for (int k = 0; k < 16; ++k)
+            {
+                // mains at least two 16ths apart, so a ghost fits between them
+                bool near = false;
+                for (int j = std::max (0, k - 1); j <= std::min (15, k + 1); ++j)
+                    near = near || c.on[j];
+                // a gap of three 16ths or more leaves room for a ghost (Mambos: 4, 3, 3, 2, 4)
+                bool close = false;
+                for (int j = std::max (0, k - 2); j <= std::min (15, k + 2); ++j)
+                    close = close || c.on[j];
+                ww[k] = near ? 0.f : (close ? 0.35f * w[k] : w[k]);
+            }
+            const int k = pickW (ww, 16, r.next());
+            if (k < 0)
+                break;
+            c.on[k] = true;
+            ++n;
+        }
+        int slots[16];
+        int ns = 0;
+        for (int k = 0; k < 16; ++k)
+            if (c.on[k])
+                slots[ns++] = k;
+        int path[16];
+        gcPath (ns, mode, r, path);
+        // Not the Mambos cell (root, b3, 4, b5, 4 on 0, 4, 7, 10, 12): the anti-copy index is the
+        // backstop, this keeps the writer from even proposing it.
+        static constexpr int kRefSlots[5] = { 0, 4, 7, 10, 12 };
+        static constexpr int kRefPath[5] = { 0, 3, 5, 6, 5 };
+        bool same = ns == 5;
+        for (int i = 0; i < ns && same; ++i)
+            same = slots[i] == kRefSlots[i] && path[i] == kRefPath[i];
+        if (same)
+            continue;
+        for (int i = 0; i < ns; ++i)
+        {
+            const int k = slots[i];
+            c.semi[k] = path[i];
+            c.vel[k] = k == 0 ? 110 : ((k & 1) == 1 || (k & 3) == 2 ? 104 : 98);
+        }
+        // Ghosts: the octave of the previous main, two 16ths after it, if that slot is free, not a
+        // main's neighbour and not the 16th before beat 2 or beat 1 (p .75 each).
+        for (int i = 0; i < ns; ++i)
+        {
+            const int g = slots[i] + 2;
+            if (g > 15 || g == 3 || g == 15 || c.on[g])
+                continue;
+            if (r.next() < 0.85)
+            {
+                c.on[g] = true;
+                c.ghost[g] = true;
+                c.semi[g] = path[i] + 12;
+                c.vel[g] = 52 + (int) (r.next() * 8.0);
+            }
+        }
+        c.n = 0;
+        for (bool b : c.on)
+            c.n += b ? 1 : 0;
+        return c;
+    }
+    return c;
+}
+
+// Lengths: a main note holds up to two 16ths (to the next note x gate), a ghost is a staccato 16th.
+inline void layOutGhost (Lane& lane, const Cell* bars, int nb) noexcept
+{
+    lane.count = 0;
+    for (int b = 0; b < nb; ++b)
+        for (int k = 0; k < 16 && lane.count < kMaxNotes; ++k)
+        {
+            if (! bars[b].on[k])
+                continue;
+            int next = 16;
+            for (int j = k + 1; j < 16; ++j)
+                if (bars[b].on[j])
+                {
+                    next = j;
+                    break;
+                }
+            const float gap = (float) (next - k);
+            Note n;
+            n.start = (float) (b * 16 + k);
+            n.chord[0] = (std::int8_t) bars[b].semi[k];
+            n.nChord = 1;
+            n.vel = (std::uint8_t) std::clamp (bars[b].vel[k], 1, 127);
+            n.length = bars[b].ghost[k] ? std::min (0.6f, gap) : std::min ({ 2.f, gap * 0.85f, gap });
+            n.length = std::max (0.25f, std::floor (n.length * 4.f + 0.5f) / 4.f);
+            lane.notes[lane.count++] = n;
+        }
+}
+
 // Designs and writes the riff for `bars` bars (8 or fewer). Returns the shape drawn.
-inline int compose (Lane& lane, int dialect, int mode, int bars, std::uint32_t seed) noexcept
+inline int compose (Lane& lane, int dialect, int mode, int bars, std::uint32_t seed, int forceShape = -1) noexcept
 {
     Rng r (seed ^ 0x52494646u);
     const int st = std::clamp (dialect, 0, 3);
     const int nb = std::clamp (bars, 1, kMaxBars);
-    const int shape = std::max (0, pickW (kShapeW[st], kShapes, r.next()));
+    const int drawn = std::max (0, pickW (kShapeW[st], kShapes, r.next()));
+    const int shape = forceShape >= 0 && forceShape < kShapes ? forceShape : drawn;
+    if (shape == GhostClimb)
+    {
+        const Cell x = ghostClimbCell (mode, r);
+        Cell out[kMaxBars];
+        for (int b = 0; b < nb; ++b)
+        {
+            out[b] = x;
+            // every 4th bar the ghosts speak up
+            if ((b & 3) == 3)
+                for (int k = 0; k < 16; ++k)
+                    if (out[b].ghost[k])
+                        out[b].vel[k] = 84 + (int) (r.next() * 8.0);
+        }
+        // phrase-end fill: an upper-octave note in the first free mid-bar 16th of the last bar
+        if (nb >= 4)
+        {
+            Cell& f = out[nb - 1];
+            int lastMain = 0;
+            for (int k = 0; k < 16; ++k)
+            {
+                if (f.on[k] && ! f.ghost[k] && k <= 8)
+                    lastMain = f.semi[k];
+                if (k >= 8 && k <= 11 && ! f.on[k] && (k + 1 > 15 || ! f.on[k + 1]) && (k == 0 || ! f.on[k - 1]))
+                {
+                    f.on[k] = true;
+                    f.ghost[k] = true;
+                    f.semi[k] = lastMain + 12;
+                    f.vel[k] = 96;
+                    break;
+                }
+            }
+        }
+        layOutGhost (lane, out, nb);
+        return shape;
+    }
     const int lo = kAttacksLo[shape], hi = kAttacksHi[shape];
     auto attacks = [&] () { return lo + (int) (r.next() * (double) (hi - lo + 1)); };
     const int maxRun = shape == Rolling ? 4 : 3;
