@@ -166,8 +166,8 @@ struct Settings
     bool riff = false;
     // RIFF shape override for listening rounds (-1: drawn per style; RiffWriter.h Shape).
     int riffShape = -1;
-    // CHORDS (Oct 20, UpperPart.h): the part over the bass riff. 0 as before, 1 HOOK (a single-voice
-    // 2-bar hook on the tonic set), 2 STAB (DEEP's chords on a fixed 2-bar call / answer stab cell).
+    // CHORDS (Oct 21, UpperPart.h): the part over the bass riff, written from the riff. 0 as before,
+    // 1 LOCK (chords on the bass's own attacks, the bass the root), 2 ANSWER (single notes in its gaps).
     int chords = 0;
 };
 

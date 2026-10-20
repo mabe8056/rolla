@@ -6741,27 +6741,16 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
             trimSamePitchOverlaps (g.lane[part]);
         }
     }
-    // CHORDS (UpperPart.h): the part over the riff. 1 HOOK: a single-voice 2-bar hook on the tonic set;
-    // 2 STAB: DEEP's chords (rules::jazzRevoice) on a fixed 2-bar call / answer stab cell. Either way
-    // the upper part does not re-root on the bass notes (round 8, rejected, did).
+    // CHORDS (UpperPart.h): the part over the riff, written from the riff's own notes. 1 LOCK: chords
+    // on the bass's attacks, the bass the root; 2 ANSWER: single notes in the bass's gaps, each taken
+    // from the bass note before it.
     if (s.chords > 0 && regen (Stab))
     {
         const std::uint32_t cs = postHash (g.lane[Stab].seed ? g.lane[Stab].seed : 1u, 0x55505052u);
         if (s.chords == 1)
-            upper::writeHook (g.lane[Stab], g.lane[Bass], mode, s.bars, s.key, cs);
+            upper::writeLock (g.lane[Stab], g.lane[Bass], mode, s.bars, s.key, cs);
         else
-        {
-            const Lane before = g.lane[Stab];
-            upper::stabCell (g.lane[Stab], g.lane[Bass], s.bars, cs);
-            const std::uint32_t js = postHash (cs, 0x4A415A5Au);
-            if (rules::jazzRevoice (g.lane[Stab], g.lane[Bass], mode, s.bars, false, js))
-            {
-                fixUpperClashes (g, Stab);
-                leaveBassNoteToBass (g.lane[Stab], g.lane[Bass], s.bars);
-            }
-            else
-                g.lane[Stab] = before;
-        }
+            upper::writeAnswer (g.lane[Stab], g.lane[Bass], mode, s.bars, s.key, cs);
         loopStab = g.lane[Stab];
         for (int part : { (int) Stab, (int) Pluck, (int) Hits, (int) Vox })
         {

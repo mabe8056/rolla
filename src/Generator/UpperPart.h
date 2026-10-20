@@ -7,433 +7,649 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 
-// UPPER PART over the bass riff (CHORDS knob, Oct 20). Round 8 put rootless chords on every bass note
-// and Melak rejected it: "these are bad. dont sound like music" (the sound and the notes, "both...").
-// Right after, he sent the synth / piano stem splits of five drops he loves (Dreams, House Party,
-// Mambos, Get Busy, Tonight). Transcribed and independently verified, learn only; the detail lives
-// in private anti-copy refs outside the repo. Pooled over the five:
-//   - no chord stabs in any drop; 4/5 put a one-note-at-a-time hook or line over the riff, 2/5 a
-//     quiet held tonic;
-//   - the upper part never re-roots on the bass: it holds the tonic set (tonic 5/5, b7 5/5, 5th
-//     4-5/5, b3 1/5, so the bass keeps the minor third) and the bass moving under it makes the changes;
-//   - a 2- or 4-bar cell repeated exactly; the answer bar changes only its end (closed on the
-//     tonic, open on the b7 or 5); one tension note (2, or b2 in Phrygian) resolves by step to the tonic;
-//   - short hooks stay off the kick (on-kick share .06-.31), start with a bass note 33-47% of the
-//     time, and put at least one note per phrase into a bass rest; core register E4-E5, octave
-//     leaps on short notes, an octave doubling only on a few late offbeats.
-// HOOK (CHORDS 1) writes that hook. STAB (CHORDS 2) gives the stab the rhythm of the DEEP chords he
-// called music (a fixed 2-bar call / answer cell, ~2.5 hits a bar, every hit 2 16ths, 80%+ off the
-// beat, the loudest hit the push into the next bar); DEEP's own chord writer voices it
-// (rules::jazzRevoice). Every roll draws its own cell: nothing is taken from any one track.
+// UPPER PART over the bass riff (CHORDS knob). Two rejected rounds: round 8 (rootless chords on every
+// bass note, played 15-28 cents off and octave-folded note by note) "dont sound like music"; round 9
+// (a tonic hook and DEEP stabs with their own drawn rhythm, written without reading the bass) "the
+// synths or stabs are supposed to add to the bassline. either groove, melodic vibe, or both ... these
+// don't feel like they're melodically matched" (Oct 21).
+//
+// So the part is now written FROM the riff: every onset and every pitch is read off the bass note
+// under it. Measured (learn only, pooled; nothing of any one source is stored) on 20 bass + upper
+// MIDI pairs of one construction-kit pack in his library and the verified stem splits of five drops
+// he loves, against round 9 (2.3x-3.7x less coupled to the bass than the pack):
+//   LOCK (CHORDS 1, "both"): chords on the bass's own attacks, 3-5 a bar, the bass the chord's root;
+//     a chord changes only where the bass changes pitch (pack 3.7x chance); the top voice a unison /
+//     4th / 5th over the bass about half the time (1.65x a key-matched null), a 3rd / 6th about a
+//     quarter, a 2nd rarely; it holds or moves 1-2 semitones against the bass, never in parallel; the
+//     top 22-33 semitones over the bass; hits 1-3 16ths, cut where the bass changes.
+//   ANSWER (CHORDS 2, "groove"): single notes in the bass's gaps (60%+ in rests, 30% or fewer with a
+//     bass attack), 3-5 a bar, entering a 16th or two after a bass note, on an empty downbeat or on
+//     the 16th before the bar; each pitch taken from the last bass note (octave 30-45%, 5th / 4th
+//     15-25%, a 3rd / 6th 15%+, a 2nd / b7 15% or less); the first note after the bass moves sits on
+//     the new bass note; 10-24 semitones over the bass, about 2 16ths, cut before the next bass attack.
+// Both repeat exactly where the bass repeats (a bar the bass plays the same way gets the same notes).
+// The notes carry NoteLine: one voice stays one voice, and the engine folds the lane as one block.
 
 namespace rolla
 {
 namespace upper
 {
-inline constexpr int kCell = 32; // a 2-bar cell in 16ths
-
 inline int pcOf (int v) noexcept
 {
     const int p = v % 12;
     return p < 0 ? p + 12 : p;
 }
 
-// The bass on the 16th grid: attacks, what sounds, and its pitch class (-1 for none).
-struct BassGrid
+inline constexpr int kGhostVel = 60; // riff ghosts are written at 48-56
+
+// One bass note as the upper part reads it.
+struct BassNote
 {
-    bool attack[kMaxSteps] {};
-    int pc[kMaxSteps];
+    float start = 0.f;
+    float len = 1.f;
+    int v = 0;    // semitones over the key root (the bass lane's written value)
+    int vel = 100;
+    bool ghost = false;
+};
+
+struct Bass
+{
+    BassNote n[kMaxNotes];
+    int count = 0;
     int steps = 0;
 };
 
-inline BassGrid gridOf (const Lane& bass, int bars) noexcept
+inline Bass bassOf (const Lane& lane, int bars) noexcept
 {
-    BassGrid b;
+    Bass b;
     b.steps = std::clamp (bars, 1, kMaxBars) * 16;
-    std::fill (b.pc, b.pc + kMaxSteps, -1);
-    for (int i = 0; i < bass.count; ++i)
+    for (int i = 0; i < lane.count && b.count < kMaxNotes; ++i)
     {
-        const Note& n = bass.notes[i];
-        if (n.vel <= 2)
+        const Note& x = lane.notes[i];
+        if (x.vel <= 2)
             continue;
-        const int s = (int) std::floor (n.start + 0.01f);
-        const int e = (int) std::ceil (n.start + n.length - 0.01f);
-        if (s >= 0 && s < b.steps)
-            b.attack[s] = true;
-        for (int t = std::max (0, s); t < std::min (e, b.steps); ++t)
-            b.pc[t] = pcOf (n.chord[0]);
+        BassNote& o = b.n[b.count++];
+        o.start = x.start;
+        o.len = x.length;
+        o.v = x.chord[0];
+        o.vel = x.vel;
+        o.ghost = x.vel < kGhostVel;
     }
+    std::sort (b.n, b.n + b.count, [] (const BassNote& p, const BassNote& q) { return p.start < q.start; });
     return b;
 }
 
-// The bass pitch classes sounding over [s, e) 16ths.
-inline unsigned bassOver (const BassGrid& b, float s, float e) noexcept
+// The main bass note sounding (or last struck) at t: the context bass. Before the first one, the
+// loop's last main note (it rings into bar 1 when the loop comes round). -1 for a bass of ghosts.
+inline int ctxAt (const Bass& b, float t) noexcept
 {
-    unsigned m = 0u;
-    for (int t = std::max (0, (int) std::floor (s)); t < std::min (b.steps, (int) std::ceil (e)); ++t)
-        if (b.pc[t] >= 0)
-            m |= 1u << (unsigned) b.pc[t];
-    return m;
-}
-
-inline bool clashes (int pitch, unsigned bassPcs) noexcept
-{
-    const int pc = pcOf (pitch);
-    return (bassPcs & ((1u << (unsigned) pcOf (pc + 1)) | (1u << (unsigned) pcOf (pc - 1)))) != 0;
-}
-
-struct Hit
-{
-    int slot = 0;     // 0..31 in the cell
-    float len = 2.f;  // 16ths
-    int pitch = 0;    // semitones over the key root at the stab base
-    int dbl = 0;      // 0, or the doubling's offset (-12: an octave under)
-    int vel = 100;
-};
-
-struct Cell
-{
-    Hit h[16];
-    int n = 0;
-};
-
-// One bar's onsets. Family A: 8ths in the first half, then a chain of dotted 8ths (3 16ths apart)
-// off the beat; every note gated to 2 16ths. Family B: gaps of 2 and 3 16ths around the bar from an
-// offbeat start (at most one onset on a kick), short plucked notes.
-inline int barRhythm (Rng& r, int family, int* slot, float* len) noexcept
-{
-    int n = 0;
-    if (family == 0)
-    {
-        const int s0 = r.next() < 0.5 ? 0 : 2;
-        const int chain = r.next() < 0.55 ? 7 : 6;
-        for (int s = s0; s < chain - 1; s += 2)
-            slot[n++] = s;
-        for (int s = chain; s < 16; s += 3)
-            slot[n++] = s;
-        if (n > 5 && r.next() < 0.3)
-            --n; // the chain's last step rests
-    }
-    else
-    {
-        for (int t = 0; t < 64; ++t)
+    int k = -1, last = -1;
+    for (int i = 0; i < b.count; ++i)
+        if (! b.n[i].ghost)
         {
-            int gaps[8];
-            int ng = 0;
-            int threes = r.next() < 0.7 ? 4 : 2;
-            int twos = threes == 4 ? 2 : 5;
-            while (threes + twos > 0)
-            {
-                const bool three = threes > 0 && (twos == 0 || r.next() < (double) threes / (double) (threes + twos));
-                gaps[ng++] = three ? 3 : 2;
-                (three ? threes : twos)--;
-            }
-            const int off = 1 + (int) (r.next() * 3.0);
-            int pos = off;
-            int onKick = 0;
-            n = 0;
-            for (int k = 0; k < ng; ++k)
-            {
-                slot[n++] = pos % 16;
-                onKick += (pos % 4) == 0 ? 1 : 0;
-                pos += gaps[k];
-            }
-            std::sort (slot, slot + n);
-            if (onKick <= 1)
-                break;
-        }
-    }
-    for (int i = 0; i < n; ++i)
-    {
-        const int gap = (i + 1 < n ? slot[i + 1] : 16 + slot[0]) - slot[i];
-        const float want = family == 0 ? 2.f : (r.next() < 0.5 ? 1.f : 1.5f);
-        len[i] = std::max (0.5f, std::min (want, (float) gap - 0.25f));
-    }
-    return n;
-}
-
-// Pitches over the home tonic (0): the tonic, the 5th over it (and under it, rarely), the b7 under
-// it, the octave, and one tension note (the 2nd, or the b2 in Phrygian) that always resolves to the
-// tonic next.
-inline void barPitches (Rng& r, int contour, int mode, const int* slot, int n, int* p) noexcept
-{
-    const int ten = mode == phrase::Phrygian ? 1 : 2;
-    if (contour == 0)
-    {
-        // leaps (tonic and 5th across octaves), with a quick root-5th-octave flick on adjacent 16ths
-        static constexpr int kLeap[4] = { 0, 7, 12, -5 };
-        static constexpr float kW[4] = { 0.5f, 0.25f, 0.15f, 0.1f };
-        for (int i = 0; i < n; ++i)
-        {
-            float x = (float) r.next();
-            int k = 0;
-            while (k < 3 && x > kW[k])
-                x -= kW[k++];
-            p[i] = kLeap[k];
-        }
-        for (int i = 0; i + 2 < n; ++i)
-            if (slot[i + 1] == slot[i] + 1 && slot[i + 2] == slot[i] + 2)
-            {
-                p[i] = 0;
-                p[i + 1] = 7;
-                p[i + 2] = 12;
-                break;
-            }
-    }
-    else if (contour == 1)
-    {
-        // opens on an upper tone, falls to the tension note, resolves to the tonic and repeats it
-        const int open = r.next() < 0.5 ? 7 : 10;
-        for (int i = 0; i < n; ++i)
-            p[i] = 0;
-        p[0] = open;
-        if (n > 2)
-            p[1] = ten;
-        else if (n > 1)
-            p[1] = 0;
-        if (n > 4 && r.next() < 0.5)
-            p[n - 2] = open == 7 ? 7 : -2; // a second touch away before the end
-    }
-    else
-    {
-        // anchored on the tonic, stepping to the b7 under it or the 5th over it and back
-        for (int i = 0; i < n; ++i)
-            p[i] = 0;
-        for (int i = 1; i < n; i += 2)
-            p[i] = r.next() < 0.6 ? -2 : 7;
-    }
-    // a tension note always resolves to the tonic next
-    for (int i = 0; i + 1 < n; ++i)
-        if (p[i] == ten || p[i] == ten + 12)
-            p[i + 1] = 0;
-}
-
-struct HookScore
-{
-    float onKick = 0.f;
-    float withBass = 0.f;
-    float sounding = 0.f;
-    int restHits = 0;
-    float tonic = 0.f;
-};
-
-inline HookScore scoreCell (const Cell& c, const BassGrid& b) noexcept
-{
-    HookScore s;
-    int tonic = 0;
-    for (int i = 0; i < c.n; ++i)
-    {
-        const Hit& h = c.h[i];
-        s.onKick += (h.slot % 4) == 0 ? 1.f : 0.f;
-        s.withBass += b.attack[h.slot % b.steps] ? 1.f : 0.f;
-        s.restHits += b.pc[h.slot % b.steps] < 0 ? 1 : 0;
-        s.sounding += h.len;
-        tonic += pcOf (h.pitch) == 0 ? 1 : 0;
-    }
-    const float n = (float) std::max (1, c.n);
-    s.onKick /= n;
-    s.withBass /= n;
-    s.sounding /= (float) kCell;
-    s.tonic = (float) tonic / n;
-    return s;
-}
-
-// HOOK: a single-voice 2-bar cell over the tonic, repeated; bar 8 closes the phrase.
-inline void writeHook (Lane& lane, const Lane& bass, int mode, int bars, int key, std::uint32_t seed) noexcept
-{
-    const int nb = std::clamp (bars, 1, kMaxBars);
-    const BassGrid bg = gridOf (bass, nb);
-    // the home tonic sounds at MIDI 61-72 (the stab base is MIDI 60 + key), so the 5th over it and
-    // the b7 under it keep the line in the references' core, about E4-E5
-    const int k = pcOf (key);
-    const int home = 60 + k < 61 ? 12 : 0;
-    Rng r (seed ^ 0x484F4F4Bu);
-    Cell best;
-    float bestPen = 1.0e9f;
-    for (int attempt = 0; attempt < 48; ++attempt)
-    {
-        const int family = r.next() < 0.5 ? 0 : 1;
-        const int contour = (int) (r.next() * 3.0);
-        int slot[16];
-        float len[16];
-        const int n1 = barRhythm (r, family, slot, len);
-        int p1[16];
-        barPitches (r, contour, mode, slot, n1, p1);
-        Cell c;
-        // bar 1 (call) closes on the tonic; bar 2 (answer) repeats it and ends open (b7 or 5 under),
-        // or keeps only the off-kick skeleton of the call
-        const bool skeleton = family == 1 && r.next() < 0.3;
-        const int openEnd = r.next() < 0.6 ? -2 : 7;
-        for (int bar = 0; bar < 2; ++bar)
-            for (int i = 0; i < n1; ++i)
-            {
-                if (bar == 1 && skeleton && slot[i] < 8 && (slot[i] % 4) == 0)
-                    continue;
-                Hit h;
-                h.slot = bar * 16 + slot[i];
-                h.len = len[i];
-                h.pitch = home + p1[i];
-                if (i == n1 - 1)
-                    h.pitch = home + (bar == 0 ? 0 : openEnd);
-                c.h[c.n++] = h;
-            }
-        // nothing a semitone from the bass under it: such a note becomes the tonic (or the 5th)
-        for (int i = 0; i < c.n; ++i)
-        {
-            Hit& h = c.h[i];
-            for (int bar = 0; bar < nb; bar += 2)
-            {
-                const unsigned under = bassOver (bg, (float) (bar * 16 + h.slot), (float) (bar * 16 + h.slot) + h.len);
-                if (clashes (h.pitch, under))
-                    h.pitch = clashes (home, under) ? home + 7 : home;
-            }
-        }
-        const HookScore s = scoreCell (c, bg);
-        float pen = 0.f;
-        pen += std::max (0.f, s.onKick - 0.30f) * 10.f;
-        pen += std::max (0.f, 0.25f - s.withBass) * 6.f + std::max (0.f, s.withBass - 0.55f) * 6.f;
-        pen += std::max (0.f, 0.35f - s.sounding) * 8.f;
-        pen += s.restHits < 1 ? 3.f : 0.f;
-        pen += std::max (0.f, 0.40f - s.tonic) * 6.f;
-        pen += 0.01f * (float) attempt; // the first passing draw wins
-        if (pen < bestPen)
-        {
-            bestPen = pen;
-            best = c;
-        }
-        if (pen < 0.5f)
-            break;
-    }
-    // velocities: on a kick softer; the last hit of the answer (the push into bar 1) the loudest;
-    // an octave doubling under a few late offbeats (at most 30% of hits)
-    int doubled = 0;
-    int last = -1;
-    for (int i = 0; i < best.n; ++i)
-        if (best.h[i].slot >= 16)
             last = i;
-    for (int i = 0; i < best.n; ++i)
-    {
-        Hit& h = best.h[i];
-        const int s = h.slot % 16;
-        h.vel = (s % 4) == 0 ? 84 : ((s & 1) ? 96 : 104);
-        if (i == last)
-            h.vel = 118;
-        if (s >= 8 && (s & 1) && h.pitch >= home + 5 && doubled * 10 < best.n * 3 && r.next() < 0.35)
-        {
-            h.dbl = -12;
-            ++doubled;
+            if (b.n[i].start <= t + 0.26f)
+                k = i;
         }
+    return k >= 0 ? k : last;
+}
+
+inline bool sounding (const Bass& b, int step) noexcept
+{
+    const float t = (float) step + 0.01f;
+    for (int i = 0; i < b.count; ++i)
+        if (b.n[i].start <= t && t < b.n[i].start + b.n[i].len)
+            return true;
+    return false;
+}
+
+inline bool attackAt (const Bass& b, int step) noexcept
+{
+    for (int i = 0; i < b.count; ++i)
+        if (! b.n[i].ghost && std::fabs (b.n[i].start - (float) step) < 0.3f)
+            return true;
+    return false;
+}
+
+// Where the next main bass note with a different pitch class than `v` starts after t (or `end`).
+inline float nextChange (const Bass& b, float t, int v, float end) noexcept
+{
+    for (int i = 0; i < b.count; ++i)
+        if (! b.n[i].ghost && b.n[i].start > t + 0.26f && pcOf (b.n[i].v) != pcOf (v))
+            return std::min (b.n[i].start, end);
+    return end;
+}
+
+inline float nextAttack (const Bass& b, float t, float end) noexcept
+{
+    for (int i = 0; i < b.count; ++i)
+        if (b.n[i].start > t + 0.26f)
+            return std::min (b.n[i].start, end);
+    return end;
+}
+
+// A bar's bass as a signature: the same signature gets the same upper notes, so the part repeats
+// exactly where the riff does (bar 8 follows the riff's own bar-8 change).
+inline std::uint64_t barSig (const Bass& b, int bar) noexcept
+{
+    std::uint64_t h = 1469598103934665603ull;
+    // the note ringing into the bar is part of it: notes before the bar's first attack read it
+    const int into = ctxAt (b, (float) (bar * 16) - 0.3f);
+    h = (h ^ (std::uint64_t) (into >= 0 ? b.n[into].v + 200 : 0)) * 1099511628211ull;
+    for (int i = 0; i < b.count; ++i)
+    {
+        const BassNote& x = b.n[i];
+        if (x.start < (float) (bar * 16) - 0.01f || x.start >= (float) (bar * 16 + 16) - 0.01f)
+            continue;
+        const int q = (int) std::lround ((x.start - (float) (bar * 16)) * 4.f);
+        const std::uint64_t w = (std::uint64_t) (q * 131 + (x.v + 64) * 7 + (x.ghost ? 1 : 0) + (int) std::lround (x.len * 4.f) * 9973);
+        h = (h ^ w) * 1099511628211ull;
     }
-    lane.count = 0;
-    for (int bar = 0; bar < nb; bar += 2)
-        for (int i = 0; i < best.n && lane.count < kMaxNotes; ++i)
-        {
-            const Hit& h = best.h[i];
-            const int at = bar * 16 + h.slot;
-            if (at >= nb * 16)
-                continue;
-            Note n;
-            n.start = (float) at;
-            n.length = h.len;
-            n.vel = (std::uint8_t) std::clamp (h.vel, 1, 127);
-            n.flags = NoteLine;
-            n.nChord = (std::uint8_t) (h.dbl != 0 ? 2 : 1);
-            n.chord[0] = (std::int8_t) (h.dbl != 0 ? h.pitch + h.dbl : h.pitch);
-            n.chord[1] = (std::int8_t) (h.dbl != 0 ? h.pitch : 0);
-            lane.notes[lane.count++] = n;
-        }
-    // bar 8 closes the phrase: its last note goes home to the tonic (or rests)
-    if (nb >= 8 && lane.count > 0)
+    return h;
+}
+
+// The stab plays from MIDI 60 + key; the riff's root sounds at MIDI 29-43 (BASSMATCH): this is how
+// far over the bass's written value a stab value sounds, in semitones.
+inline int stabOverBass (int key) noexcept
+{
+    const int k = pcOf (key);
+    const int rootSounds = 24 + k + (24 + k < 29 ? 12 : 0);
+    return (60 + k) - rootSounds;
+}
+
+inline bool chordableRoot (int pc, int mode) noexcept
+{
+    int deg = -1;
+    for (int d = 0; d < 7 && deg < 0; ++d)
+        if (phrase::degreeToSemis (d, mode) == pc)
+            deg = d;
+    if (deg < 0)
+        return false;
+    return phrase::degreeToSemis (deg + 4, mode) - phrase::degreeToSemis (deg, mode) == 7; // a perfect 5th
+}
+
+// ------------------------------------------------------------------ LOCK
+// The chord on bass pitch class `root` (semitones over the key): tones over the root, the root left to
+// the bass. Minor: m7 / m9 / m11. Major: 6/9 or add9 (a maj7 sits a semitone under the bass root and
+// the upper lanes give way to the bass there); a major triad with a minor 7th in the mode: 9sus or add9.
+struct Chord
+{
+    int root = 0;
+    int n = 0;
+    int iv[4] {};
+};
+
+inline Chord chordOn (int root, int mode, Rng& r) noexcept
+{
+    int deg = 0;
+    for (int d = 0; d < 7; ++d)
+        if (phrase::degreeToSemis (d, mode) == root)
+            deg = d;
+    auto above = [&] (int k) { return phrase::degreeToSemis (deg + k, mode) - phrase::degreeToSemis (deg, mode); };
+    const int third = above (2), sixth = above (5), seventh = above (6), ninth = above (8);
+    Chord c;
+    c.root = root;
+    auto set = [&] (std::initializer_list<int> t) { c.n = 0; for (int x : t) c.iv[c.n++] = x; };
+    const double x = r.next();
+    if (third == 3)
     {
-        Note& z = lane.notes[lane.count - 1];
-        if (z.start >= (float) ((nb - 1) * 16))
+        if (ninth == 14 && x < 0.45)
+            set ({ 3, 7, 10, 14 }); // m9
+        else if (ninth == 14 && x < 0.70)
+            set ({ 3, 10, 14, 17 }); // m11
+        else
+            set ({ 3, 7, 10 }); // m7
+    }
+    else if (seventh == 10)
+    {
+        if (x < 0.5)
+            set ({ 5, 7, 10, 14 }); // 9sus
+        else
+            set ({ 4, 7, 14 }); // add9
+    }
+    else if (sixth == 9 && x < 0.5)
+        set ({ 4, 9, 14 }); // 6/9
+    else
+        set ({ 4, 7, 14 }); // add9
+    return c;
+}
+
+struct Voicing
+{
+    int n = 0;
+    int p[4] {}; // ascending, stab values
+};
+
+// Close and drop-2 voicings with the top in [lo, hi]: no two tones a minor 2nd / 9th apart, the whole
+// chord inside a 14-semitone hand.
+inline int voicingsOf (const Chord& c, int lo, int hi, Voicing* out, int cap) noexcept
+{
+    int nv = 0;
+    for (int ti = 0; ti < c.n; ++ti)
+        for (int top = hi; top >= lo; --top)
         {
-            if (r.next() < 0.5)
-                --lane.count;
-            else
+            if (pcOf (top) != pcOf (c.root + c.iv[ti]))
+                continue;
+            for (int drop = 0; drop < 2 && nv < cap; ++drop)
             {
-                z.nChord = 1;
-                z.chord[0] = (std::int8_t) home;
+                int p[4];
+                int m = 0;
+                p[m++] = top;
+                for (int k = 0; k < c.n; ++k)
+                {
+                    if (k == ti)
+                        continue;
+                    int x = top - pcOf (top - (c.root + c.iv[k]));
+                    if (x == top)
+                        x -= 12;
+                    p[m++] = x;
+                }
+                std::sort (p, p + m);
+                if (drop == 1)
+                {
+                    if (m < 4)
+                        continue;
+                    p[m - 2] -= 12;
+                    std::sort (p, p + m);
+                }
+                bool ok = p[m - 1] - p[0] <= 14;
+                for (int i = 0; i < m && ok; ++i)
+                    for (int j = i + 1; j < m && ok; ++j)
+                        ok = (p[j] - p[i]) != 1 && (p[j] - p[i]) != 13;
+                if (! ok)
+                    continue;
+                Voicing& v = out[nv++];
+                v.n = m;
+                for (int i = 0; i < m; ++i)
+                    v.p[i] = p[i];
             }
+        }
+    return nv;
+}
+
+// The top voice over the bass, by interval class: a unison / 4th / 5th first, then a 3rd / 6th, a b7,
+// a 2nd last; never a b9 / tritone / maj7.
+inline float topWeight (int topOverBass) noexcept
+{
+    switch (pcOf (topOverBass))
+    {
+        case 0: case 5: case 7: return 1.f;
+        case 3: case 4: case 8: case 9: return 0.8f;
+        case 10: return 0.45f;
+        case 2: return 0.2f;
+        default: return 0.f;
+    }
+}
+
+inline void writeLock (Lane& lane, const Lane& bassLane, int mode, int bars, int key, std::uint32_t seed) noexcept
+{
+    const int nb = std::clamp (bars, 1, kMaxBars);
+    const Bass b = bassOf (bassLane, nb);
+    const int over = stabOverBass (key);
+    Rng r (seed ^ 0x4C4F434Bu);
+    lane.count = 0;
+    if (b.count == 0)
+        return;
+    // the chord roots the riff gives (in order of first attack), one chord and one voicing each
+    int roots[8];
+    int nRoots = 0;
+    for (int i = 0; i < b.count && nRoots < 8; ++i)
+    {
+        const int pc = pcOf (b.n[i].v);
+        if (b.n[i].ghost || ! chordableRoot (pc, mode))
+            continue;
+        bool seen = false;
+        for (int k = 0; k < nRoots; ++k)
+            seen = seen || roots[k] == pc;
+        if (! seen)
+            roots[nRoots++] = pc;
+    }
+    if (nRoots == 0)
+        return;
+    nRoots = std::min (nRoots, 4);
+    auto idxOf = [&] (int pc) { for (int k = 0; k < nRoots; ++k) if (roots[k] == pc) return k; return -1; };
+    // the bass value each root is first played at (its register decides the voicing's)
+    int rootV[4];
+    for (int k = 0; k < nRoots; ++k)
+    {
+        rootV[k] = 0;
+        for (int i = 0; i < b.count; ++i)
+            if (! b.n[i].ghost && pcOf (b.n[i].v) == roots[k])
+            {
+                rootV[k] = b.n[i].v;
+                break;
+            }
+    }
+    Chord chord[4];
+    constexpr int kCap = 32;
+    Voicing voic[4][kCap];
+    int nv[4] {};
+    for (int k = 0; k < nRoots; ++k)
+    {
+        chord[k] = chordOn (roots[k], mode, r);
+        chord[k].root = rootV[k]; // tones sit over the bass note as played
+        // the top 22-33 semitones over the bass: stab value = bass value + (22..33) - over
+        nv[k] = voicingsOf (chord[k], rootV[k] + 22 - over, rootV[k] + 33 - over, voic[k], kCap);
+        if (nv[k] == 0)
+            return;
+    }
+    // the root changes in time order, cyclic (with which way the bass moves)
+    int chA[64], chB[64], dir[64];
+    int nch = 0;
+    int prevIdx = -1, prevV = 0, firstIdx = -1, firstV = 0;
+    for (int i = 0; i < b.count && nch < 63; ++i)
+    {
+        if (b.n[i].ghost)
+            continue;
+        const int k = idxOf (pcOf (b.n[i].v));
+        if (k < 0)
+            continue;
+        if (firstIdx < 0)
+        {
+            firstIdx = k;
+            firstV = b.n[i].v;
+        }
+        if (prevIdx >= 0 && k != prevIdx)
+        {
+            chA[nch] = prevIdx;
+            chB[nch] = k;
+            dir[nch] = b.n[i].v > prevV ? 1 : -1;
+            ++nch;
+        }
+        prevIdx = k;
+        prevV = b.n[i].v;
+    }
+    if (prevIdx >= 0 && firstIdx >= 0 && prevIdx != firstIdx)
+    {
+        chA[nch] = prevIdx;
+        chB[nch] = firstIdx;
+        dir[nch] = firstV > prevV ? 1 : -1;
+        ++nch;
+    }
+    // every voicing combination: the top's interval over the bass, small motion, the top holding or
+    // stepping 1-2 semitones against the bass (never with it); the cheapest few, one drawn
+    constexpr int kKeep = 5;
+    float bestCost[kKeep];
+    int bestPick[kKeep][4];
+    int kept = 0;
+    int pick[4] {};
+    for (;;)
+    {
+        float cost = 0.f;
+        for (int k = 0; k < nRoots; ++k)
+        {
+            const Voicing& v = voic[k][pick[k]];
+            const float w = topWeight (v.p[v.n - 1] - rootV[k]);
+            cost += w <= 0.f ? 100.f : 3.f * (1.f - w);
+        }
+        for (int c = 0; c < nch; ++c)
+        {
+            const Voicing& a = voic[chA[c]][pick[chA[c]]];
+            const Voicing& z = voic[chB[c]][pick[chB[c]]];
+            float move = 0.f;
+            for (int i = 0; i < z.n; ++i)
+            {
+                int best = 99;
+                for (int j = 0; j < a.n; ++j)
+                    best = std::min (best, std::abs (z.p[i] - a.p[j]));
+                move += (float) best;
+            }
+            const int d = z.p[z.n - 1] - a.p[a.n - 1];
+            const float topCost = d == 0 ? 0.f : (std::abs (d) <= 2 ? (d * dir[c] > 0 ? 3.f : 0.5f) : 6.f + (float) std::abs (d));
+            cost += (0.25f * move + topCost) / (float) std::max (1, nch);
+        }
+        if (kept < kKeep || cost < bestCost[kept - 1])
+        {
+            int at = std::min (kept, kKeep - 1);
+            while (at > 0 && bestCost[at - 1] > cost)
+            {
+                bestCost[at] = bestCost[at - 1];
+                std::copy (bestPick[at - 1], bestPick[at - 1] + 4, bestPick[at]);
+                --at;
+            }
+            bestCost[at] = cost;
+            std::copy (pick, pick + 4, bestPick[at]);
+            kept = std::min (kKeep, kept + 1);
+        }
+        int k = 0;
+        while (k < nRoots && ++pick[k] >= nv[k])
+            pick[k++] = 0;
+        if (k == nRoots)
+            break;
+    }
+    int chosen = 0;
+    {
+        float pw[kKeep], total = 0.f;
+        for (int i = 0; i < kept; ++i)
+            total += (pw[i] = std::exp (-2.f * (bestCost[i] - bestCost[0])));
+        float y = (float) r.next() * total;
+        for (; chosen < kept - 1; ++chosen)
+            if ((y -= pw[chosen]) <= 0.f)
+                break;
+    }
+    const int* use = bestPick[chosen];
+    const float hitLen = r.next() < 0.5 ? 1.5f : 2.f;
+    const int perBar = 3 + (int) (r.next() * 3.0); // 3-5 hits a bar
+    // bar by bar; a bar the bass plays the same way gets the same hits
+    std::uint64_t sigs[kMaxBars];
+    int firstBarOf[kMaxBars];
+    for (int bar = 0; bar < nb; ++bar)
+    {
+        sigs[bar] = barSig (b, bar);
+        firstBarOf[bar] = bar;
+        for (int e = 0; e < bar; ++e)
+            if (sigs[e] == sigs[bar])
+            {
+                firstBarOf[bar] = e;
+                break;
+            }
+    }
+    for (int bar = 0; bar < nb; ++bar)
+    {
+        const int src = firstBarOf[bar];
+        const float shift = (float) ((bar - src) * 16);
+        // the source bar's attacks on chordable roots, scored: syncopated, short, accented first
+        struct Cand { int i; float score; };
+        Cand cand[16];
+        int nc = 0;
+        for (int i = 0; i < b.count && nc < 16; ++i)
+        {
+            const BassNote& x = b.n[i];
+            if (x.ghost || x.start < (float) (src * 16) - 0.01f || x.start >= (float) (src * 16 + 16) - 0.01f)
+                continue;
+            if (idxOf (pcOf (x.v)) < 0)
+                continue;
+            const int slot = (int) std::lround (x.start) - src * 16;
+            float s = 0.f;
+            s += (slot % 4) != 0 ? 2.f : 0.f;
+            s += x.len <= 2.01f ? 1.f : 0.f;
+            s += x.vel >= 110 ? 1.5f : 0.f;
+            s += nc == 0 ? 1.f : 0.f; // the bar's first attack states its chord
+            // a fixed per-roll tiebreak, so equal bars stay equal
+            s += 0.01f * (float) ((std::uint32_t) (seed >> (slot & 15)) & 7u);
+            cand[nc++] = { i, s };
+        }
+        std::sort (cand, cand + nc, [] (const Cand& p, const Cand& q) { return p.score > q.score; });
+        const int take = std::min (nc, perBar);
+        std::sort (cand, cand + take, [] (const Cand& p, const Cand& q) { return p.i < q.i; });
+        for (int h = 0; h < take && lane.count < kMaxNotes; ++h)
+        {
+            const BassNote& x = b.n[cand[h].i];
+            const int k = idxOf (pcOf (x.v));
+            const Voicing& v = voic[k][use[k]];
+            const float at = x.start + shift;
+            if (at >= (float) (nb * 16))
+                continue;
+            const float change = nextChange (b, x.start, x.v, (float) (src * 16 + 16)) + shift;
+            Note n;
+            n.start = at;
+            n.length = std::max (0.5f, std::min (hitLen, change - at - 0.25f));
+            const int slot = (int) std::lround (x.start) - src * 16;
+            n.vel = (std::uint8_t) (x.vel >= 110 ? 118 : ((slot % 4) != 0 ? 104 : 92));
+            n.flags = NoteLine;
+            n.nChord = (std::uint8_t) v.n;
+            for (int c = 0; c < 4; ++c)
+                n.chord[c] = (std::int8_t) (c < v.n ? v.p[c] : 0);
+            lane.notes[lane.count++] = n;
         }
     }
 }
 
-// STAB: the stab's rhythm as one fixed 2-bar call / answer cell: 2-3 hits in the call, 2-3 in the
-// answer ending on the push into the next bar (the 16th or 8th before it, the loudest hit), every hit
-// 2 16ths, off the beat, at most half of them with a bass attack. Pitches are a placeholder for the
-// chord writer (rules::jazzRevoice) to voice.
-inline void stabCell (Lane& lane, const Lane& bass, int bars, std::uint32_t seed) noexcept
+// ------------------------------------------------------------------ ANSWER
+inline void writeAnswer (Lane& lane, const Lane& bassLane, int mode, int bars, int key, std::uint32_t seed) noexcept
 {
     const int nb = std::clamp (bars, 1, kMaxBars);
-    const BassGrid bg = gridOf (bass, nb);
-    Rng r (seed ^ 0x53544142u);
-    static constexpr int kSlots[11] = { 2, 3, 5, 6, 7, 9, 10, 11, 13, 14, 15 };
-    static constexpr float kW[11] = { 0.5f, 0.35f, 0.15f, 0.5f, 0.35f, 0.15f, 0.5f, 0.35f, 0.15f, 0.5f, 0.35f };
-    int bestSlots[8];
-    int bestN = 0;
-    float bestPen = 1.0e9f;
-    for (int attempt = 0; attempt < 48; ++attempt)
-    {
-        int s[8];
-        int n = 0;
-        const int total = r.next() < 0.6 ? 5 : 6;
-        const int push = r.next() < 0.65 ? 30 : 31; // bar 2, the & of 4 or its a
-        const int inCall = total == 5 ? (r.next() < 0.5 ? 2 : 3) : 3;
-        for (int bar = 0; bar < 2; ++bar)
-        {
-            const int want = bar == 0 ? inCall : total - inCall - 1;
-            int placed = 0;
-            for (int t = 0; t < 64 && placed < want; ++t)
-            {
-                float x = (float) r.next() * 3.85f;
-                int j = 0;
-                while (j < 10 && x > kW[j])
-                    x -= kW[j++];
-                const int at = bar * 16 + kSlots[j];
-                bool ok = at < push - 2;
-                for (int i = 0; i < n && ok; ++i)
-                    ok = std::abs (s[i] - at) >= 3;
-                if (ok)
-                {
-                    s[n++] = at;
-                    ++placed;
-                }
-            }
-        }
-        s[n++] = push;
-        std::sort (s, s + n);
-        int withBass = 0;
-        for (int i = 0; i < n; ++i)
-            withBass += bg.attack[s[i] % bg.steps] ? 1 : 0;
-        const float pen = std::max (0.f, (float) withBass / (float) n - 0.5f) * 10.f + (float) std::abs (n - total) + 0.01f * (float) attempt;
-        if (pen < bestPen)
-        {
-            bestPen = pen;
-            bestN = n;
-            std::copy (s, s + n, bestSlots);
-        }
-        if (pen < 0.5f)
-            break;
-    }
+    const Bass b = bassOf (bassLane, nb);
+    const int over = stabOverBass (key);
+    Rng r (seed ^ 0x414E5357u);
     lane.count = 0;
-    for (int bar = 0; bar < nb; bar += 2)
-        for (int i = 0; i < bestN && lane.count < kMaxNotes; ++i)
+    if (b.count == 0)
+        return;
+    const int perBar = 3 + (int) (r.next() * 3.0); // 3-5 notes a bar
+    // per-roll pitch habits: how often the octave, the 5th / 4th, a 3rd / 6th, a 2nd / b7
+    const float wOct = 0.34f + 0.1f * (float) r.next();
+    const float wFifth = 0.20f;
+    const float wThird = 0.30f;
+    const float wStep = 0.10f;
+    std::uint64_t sigs[kMaxBars];
+    int firstBarOf[kMaxBars];
+    for (int bar = 0; bar < nb; ++bar)
+    {
+        sigs[bar] = barSig (b, bar);
+        firstBarOf[bar] = bar;
+        for (int e = 0; e < bar; ++e)
+            if (sigs[e] == sigs[bar])
+            {
+                firstBarOf[bar] = e;
+                break;
+            }
+    }
+    // written per distinct bar, then copied: each distinct bar draws from its own seed
+    struct Out
+    {
+        float t = 0.f;
+        float len = 1.f;
+        int p = 0;
+        int vel = 100;
+    };
+    Out barOut[kMaxBars][8];
+    int barN[kMaxBars] {};
+    int prevPitch = -100;
+    for (int bar = 0; bar < nb; ++bar)
+    {
+        if (firstBarOf[bar] != bar)
+            continue;
+        Rng br ((std::uint32_t) (seed ^ (std::uint32_t) (sigs[bar] & 0xffffffffu) ^ (std::uint32_t) (sigs[bar] >> 32)));
+        // candidate 16ths: no bass sounding there; scored: a 16th or two after a bass note,
+        // an empty downbeat, the pickup into the next bar
+        struct Cand { int step; float score; };
+        Cand cand[16];
+        int nc = 0;
+        for (int s = 0; s < 16; ++s)
         {
-            const int at = bar * 16 + bestSlots[i];
-            if (at >= nb * 16)
+            const int step = bar * 16 + s;
+            if (sounding (b, step) || attackAt (b, step))
                 continue;
+            float sc = 0.5f;
+            if (step >= 1 && (sounding (b, step - 1) || attackAt (b, step - 1)))
+                sc += 2.f;
+            else if (step >= 2 && (sounding (b, step - 2) || attackAt (b, step - 2)))
+                sc += 1.f;
+            if ((s % 4) == 0)
+                sc += 1.f;
+            if (s == 15)
+                sc += 1.5f;
+            sc += 0.3f * (float) br.next();
+            cand[nc++] = { step, sc };
+        }
+        std::sort (cand, cand + nc, [] (const Cand& p, const Cand& q) { return p.score > q.score; });
+        int chosen[8];
+        int n = 0;
+        for (int i = 0; i < nc && n < perBar; ++i)
+        {
+            bool ok = true;
+            for (int j = 0; j < n && ok; ++j)
+                ok = std::abs (chosen[j] - cand[i].step) >= 2;
+            if (ok)
+                chosen[n++] = cand[i].step;
+        }
+        std::sort (chosen, chosen + n);
+        int lastBassV = -1000;
+        for (int i = 0; i < n; ++i)
+        {
+            const float t = (float) chosen[i];
+            const int ci = ctxAt (b, t);
+            const int bv = ci >= 0 ? b.n[ci].v : 0;
+            // stab value that sounds `iv` over this bass note
+            auto at = [&] (int iv) { return bv + iv - over; };
+            const bool fresh = bv != lastBassV; // the bass moved since the last answer: sit on it
+            lastBassV = bv;
+            // diatonic candidates 10-24 semitones over the bass
+            struct Opt { int iv; float w; };
+            Opt opt[16];
+            int no = 0;
+            for (int iv = 10; iv <= 24; ++iv)
+            {
+                const int p = at (iv);
+                if (! phrase::inMode (p, mode))
+                    continue;
+                const int c = iv % 12;
+                float w = 0.f;
+                if (c == 0)
+                    w = fresh ? 0.6f : wOct;
+                else if (c == 5 || c == 7)
+                    w = fresh ? 0.4f : wFifth * 0.5f;
+                else if (c == 3 || c == 4 || c == 8 || c == 9)
+                    w = fresh ? 0.f : wThird * 0.5f;
+                else if (c == 2 || c == 10)
+                    w = fresh ? 0.f : wStep * 0.5f;
+                if (w <= 0.f)
+                    continue;
+                if (prevPitch > -100)
+                    w *= std::abs (p - prevPitch) <= 5 ? 1.f : 0.4f; // small steps between answers
+                opt[no++] = { iv, w };
+            }
+            int p = at (12);
+            if (no > 0)
+            {
+                float tot = 0.f;
+                for (int k = 0; k < no; ++k)
+                    tot += opt[k].w;
+                float x = (float) br.next() * tot;
+                int k = 0;
+                for (; k < no - 1; ++k)
+                    if ((x -= opt[k].w) <= 0.f)
+                        break;
+                p = at (opt[k].iv);
+            }
+            prevPitch = p;
+            const float until = nextAttack (b, t, (float) (bar * 16 + 16)) - t - 0.25f;
+            Out& o = barOut[bar][barN[bar]++];
+            o.t = t - (float) (bar * 16);
+            o.len = std::max (0.5f, std::min (2.f, until));
+            o.p = p;
+            const int s = chosen[i] - bar * 16;
+            o.vel = s == 15 ? 112 : ((s % 4) == 0 ? 96 : 102);
+        }
+    }
+    for (int bar = 0; bar < nb; ++bar)
+    {
+        const int src = firstBarOf[bar];
+        for (int i = 0; i < barN[src] && lane.count < kMaxNotes; ++i)
+        {
+            const Out& o = barOut[src][i];
             Note n;
-            n.start = (float) at;
-            n.length = std::min (2.f, (float) (nb * 16 - at));
-            n.vel = (std::uint8_t) (i == bestN - 1 ? 120 : ((bestSlots[i] & 1) ? 96 : 104));
-            n.nChord = 3;
-            n.chord[0] = 3;
-            n.chord[1] = 7;
-            n.chord[2] = 10;
+            n.start = (float) (bar * 16) + o.t;
+            n.length = o.len;
+            n.vel = (std::uint8_t) o.vel;
+            n.flags = NoteLine;
+            n.nChord = 1;
+            n.chord[0] = (std::int8_t) std::clamp (o.p, -60, 60);
             lane.notes[lane.count++] = n;
         }
+    }
 }
 } // namespace upper
 } // namespace rolla

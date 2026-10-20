@@ -1139,8 +1139,26 @@ void Engine::process (const Groove& groove,
                     const Extras& ex = part == Stab ? sp.ex : (part == Pluck ? pp.ex : padP.ex);
                     const ChordAsk ask = chordAskOf (iv, std::min (count, 4));
                     // Sample-true: the chord folds as one block around its centre (Sampler::take).
+                    // A written line or progression over the riff (NoteLine, CHORDS) folds as one
+                    // block for the whole lane, around the lane's centre: folding note by note (or
+                    // chord by chord) moved notes past the 7-semitone cap an octave and broke the
+                    // line's shape and the voice leading (Oct 21).
                     int anchor = -1;
-                    if (params.sampleTrue && count > 1)
+                    if (params.sampleTrue && (n.flags & NoteLine) != 0)
+                    {
+                        int sum = 0, tones = 0;
+                        const auto& lane = groove.lane[part];
+                        for (int li = 0; li < lane.count; ++li)
+                        {
+                            const auto& m = lane.notes[li];
+                            if (m.vel <= 2 || (m.flags & NoteLine) == 0)
+                                continue;
+                            for (int c = 0; c < std::clamp ((int) m.nChord, 1, 4); ++c, ++tones)
+                                sum += m.chord[c];
+                        }
+                        anchor = std::clamp (base + (int) std::lround ((double) sum / (double) std::max (1, tones)), 0, 127);
+                    }
+                    else if (params.sampleTrue && count > 1)
                     {
                         int sum = 0;
                         for (int c = 0; c < count && c < 4; ++c)

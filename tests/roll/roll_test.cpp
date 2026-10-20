@@ -9,6 +9,7 @@
 #include "Generator/RuleComposer.h"
 #include "Generator/Scale.h"
 #include "Generator/Presets.h"
+#include "Generator/UpperPart.h"
 
 #include <BinaryData.h>
 #include <juce_events/juce_events.h>
@@ -3654,14 +3655,16 @@ void testChordLoopAccents()
 
 
 
-// CHORDS (UpperPart.h, Oct 20): over the riff, the HOOK is one voice (an octave doubling at most) on
-// the tonic set (tonic, 5th, b7, one 2nd / b2; never the b3), never a semitone from the bass under it,
-// one 2-bar cell repeated (bar 8 may close), mostly off the kick; the STAB is a fixed 2-bar cell of
-// 2-16th hits off the beat. Every roll ships.
+// CHORDS (UpperPart.h, Oct 21): the part over the riff is written from the riff. LOCK: every chord
+// starts on a bass attack, its tones colours of that bass note (never a b9 / tritone / maj7 over it,
+// never a semitone from a bass note under it), the top 22-33 semitones over the bass. ANSWER: one voice,
+// 60%+ in the bass's rests and 30% or fewer with a bass attack, never a b9 / tritone over the bass note
+// before it, 10-24 semitones over it. Both repeat where the bass repeats; every roll ships.
 void testUpperPart()
 {
-    int hookNotes = 0, hookOffSet = 0, hookClash = 0, hookOnKick = 0, hookCellDiff = 0, hookVoices = 0;
-    int stabHits = 0, stabOnBeat = 0, stabLen = 0, stabCellDiff = 0, refused = 0;
+    int lockHits = 0, lockOffAttack = 0, lockBadTone = 0, lockClash = 0, lockReg = 0;
+    int ansNotes = 0, ansInRest = 0, ansOnAttack = 0, ansBad = 0, ansReg = 0, ansStacks = 0;
+    int repeatDiffs = 0, refused = 0;
     for (int kind = 1; kind <= 2; ++kind)
         for (int roll = 0; roll < 20; ++roll)
         {
@@ -3683,66 +3686,103 @@ void testUpperPart()
             }
             const auto& bass = g.lane[rolla::Bass];
             const auto& st = g.lane[rolla::Stab];
-            // onsets of bars 1-2 against bars 3-4 and 5-6 (the cell repeats exactly)
-            auto cellOf = [&] (int bar0) {
-                std::vector<std::pair<int, int>> c;
-                for (int i = 0; i < st.count; ++i)
+            const int over = rolla::upper::stabOverBass (s.key);
+            // the main bass note at t (before the first: the loop's last, ringing round into bar 1)
+            auto ctxBass = [&] (float t) {
+                int v = -1000, wrap = 0;
+                float best = -1.f, lastStart = -1.f;
+                for (int j = 0; j < bass.count; ++j)
                 {
-                    const auto& n = st.notes[i];
-                    const int at = (int) std::lround (n.start * 4.f);
-                    if (n.vel > 2 && n.start >= bar0 * 16.f - 1.0e-3f && n.start < bar0 * 16.f + 32.f - 1.0e-3f)
-                        c.push_back ({ at - bar0 * 64, kind == 1 ? (int) n.chord[std::max (0, (int) n.nChord - 1)] : 0 });
+                    const auto& b = bass.notes[j];
+                    if (b.vel < 60)
+                        continue;
+                    if (b.start > lastStart)
+                    {
+                        lastStart = b.start;
+                        wrap = b.chord[0];
+                    }
+                    if (b.start <= t + 0.26f && b.start > best)
+                    {
+                        best = b.start;
+                        v = b.chord[0];
+                    }
                 }
-                return c;
+                return v == -1000 ? wrap : v;
             };
-            const auto c0 = cellOf (0);
-            if (cellOf (2) != c0 || cellOf (4) != c0)
-                (kind == 1 ? hookCellDiff : stabCellDiff)++;
+            auto barKey = [&] (const rolla::Lane& l, int bar, bool withPitch) {
+                std::vector<std::pair<int, int>> k;
+                for (int i = 0; i < l.count; ++i)
+                    if (l.notes[i].vel > 2 && l.notes[i].start >= bar * 16.f - 1.0e-3f && l.notes[i].start < bar * 16.f + 16.f - 1.0e-3f)
+                        k.push_back ({ (int) std::lround ((l.notes[i].start - bar * 16.f) * 4.f) * 1000 + (int) std::lround (l.notes[i].length * 4.f),
+                                       withPitch ? (int) l.notes[i].chord[0] : 0 });
+                std::sort (k.begin(), k.end());
+                return k;
+            };
+            for (int bar = 1; bar < 8; ++bar)
+                for (int e = 0; e < bar; ++e)
+                    if (barKey (bass, e, true) == barKey (bass, bar, true) && ctxBass (e * 16.f - 0.3f) == ctxBass (bar * 16.f - 0.3f))
+                    {
+                        repeatDiffs += barKey (st, e, true) != barKey (st, bar, true) ? 1 : 0;
+                        break;
+                    }
             for (int i = 0; i < st.count; ++i)
             {
                 const auto& n = st.notes[i];
                 if (n.vel <= 2)
                     continue;
-                const int slot = ((int) std::lround (n.start)) % 16;
+                const int bv = ctxBass (n.start);
+                bool onAttack = false, inRest = true;
+                unsigned under = 0u;
+                for (int j = 0; j < bass.count; ++j)
+                {
+                    const auto& b = bass.notes[j];
+                    if (b.vel <= 2)
+                        continue;
+                    onAttack = onAttack || (b.vel >= 60 && std::fabs (b.start - n.start) < 0.3f);
+                    inRest = inRest && ! (b.start <= n.start + 0.01f && n.start + 0.01f < b.start + b.length);
+                    if (b.start < n.start + n.length - 1.0e-3f && n.start < b.start + b.length - 1.0e-3f)
+                        under |= 1u << pcOfNote (b.chord[0]);
+                }
+                int top = n.chord[0];
+                for (int c = 0; c < std::max (1, (int) n.nChord) && c < 4; ++c)
+                    top = std::max (top, (int) n.chord[c]);
                 if (kind == 1)
                 {
-                    ++hookNotes;
-                    hookVoices += n.nChord > 2 ? 1 : 0;
-                    hookOnKick += (slot % 4) == 0 ? 1 : 0;
-                    unsigned under = 0u;
-                    for (int j = 0; j < bass.count; ++j)
-                    {
-                        const auto& b = bass.notes[j];
-                        if (b.vel > 2 && b.start < n.start + n.length - 1.0e-3f && n.start < b.start + b.length - 1.0e-3f)
-                            under |= 1u << pcOfNote (b.chord[0]);
-                    }
+                    ++lockHits;
+                    lockOffAttack += onAttack ? 0 : 1;
                     for (int c = 0; c < std::max (1, (int) n.nChord) && c < 4; ++c)
                     {
+                        const int iv = pcOfNote (n.chord[c] - bv);
+                        lockBadTone += (iv == 1 || iv == 6 || iv == 11) ? 1 : 0;
                         const int pc = pcOfNote (n.chord[c]);
-                        hookOffSet += (pc == 0 || pc == 7 || pc == 10 || pc == 2 || pc == 1) ? 0 : 1;
-                        hookClash += (under & ((1u << ((pc + 1) % 12)) | (1u << ((pc + 11) % 12)))) != 0 ? 1 : 0;
+                        lockClash += (under & ((1u << ((pc + 1) % 12)) | (1u << ((pc + 11) % 12)))) != 0 ? 1 : 0;
                     }
+                    const int reg = top + over - bv;
+                    lockReg += (reg < 22 || reg > 33) ? 1 : 0;
                 }
                 else
                 {
-                    ++stabHits;
-                    stabOnBeat += (slot % 4) == 0 ? 1 : 0;
-                    stabLen += (n.length > 2.01f || (n.length < 1.99f && n.start + n.length < 127.9f)) ? 1 : 0;
+                    ++ansNotes;
+                    ansStacks += n.nChord > 1 ? 1 : 0;
+                    ansInRest += inRest ? 1 : 0;
+                    ansOnAttack += onAttack ? 1 : 0;
+                    const int iv = pcOfNote (n.chord[0] - bv);
+                    ansBad += (iv == 1 || iv == 6) ? 1 : 0;
+                    const int reg = n.chord[0] + over - bv;
+                    ansReg += (reg < 10 || reg > 24) ? 1 : 0;
                 }
             }
         }
-    std::cout << "Upper part: hook notes " << hookNotes << " off-set " << hookOffSet << " clashes " << hookClash
-              << " on-kick " << hookOnKick << " cell diffs " << hookCellDiff << " stacks " << hookVoices
-              << "; stab hits " << stabHits << " on-beat " << stabOnBeat << " off-length " << stabLen
-              << " cell diffs " << stabCellDiff << "; refused " << refused << "\n";
-    expect (hookNotes > 200, "CHORDS 1: the hook plays over the riff");
-    expect (hookOffSet == 0, "CHORDS 1: the hook stays on the tonic set (no b3)");
-    expect (hookClash == 0, "CHORDS 1: no hook note a semitone from the bass under it");
-    expect (hookOnKick * 10 <= hookNotes * 3, "CHORDS 1: the hook stays mostly off the kick");
-    expect (hookCellDiff == 0 && stabCellDiff == 0, "CHORDS: one 2-bar cell repeated through bar 6");
-    expect (hookVoices == 0, "CHORDS 1: one voice, an octave doubling at most");
-    expect (stabHits > 100 && stabOnBeat * 5 <= stabHits, "CHORDS 2: the stab cell is 80%+ off the beat");
-    expect (stabLen == 0, "CHORDS 2: every stab hit is 2 16ths");
+    std::cout << "Upper part: lock hits " << lockHits << " off a bass attack " << lockOffAttack << " bad tones " << lockBadTone
+              << " clashes " << lockClash << " out of register " << lockReg << "; answer notes " << ansNotes << " in rests "
+              << ansInRest << " on attacks " << ansOnAttack << " bad " << ansBad << " out of register " << ansReg << " stacks "
+              << ansStacks << "; repeat diffs " << repeatDiffs << "; refused " << refused << "\n";
+    expect (lockHits > 200 && lockOffAttack == 0, "CHORDS 1: every chord starts on a bass attack");
+    expect (lockBadTone == 0 && lockClash == 0, "CHORDS 1: chord tones are colours of the bass note, no clash");
+    expect (lockReg == 0, "CHORDS 1: the top sits 22-33 semitones over the bass");
+    expect (ansNotes > 200 && ansInRest * 10 >= ansNotes * 6 && ansOnAttack * 10 <= ansNotes * 3, "CHORDS 2: answers sit in the bass's gaps");
+    expect (ansBad == 0 && ansReg == 0 && ansStacks == 0, "CHORDS 2: one voice, from the bass note, 10-24 over it");
+    expect (repeatDiffs == 0, "CHORDS: the part repeats where the bass repeats");
     expect (refused == 0, "CHORDS: every roll ships");
 }
 
