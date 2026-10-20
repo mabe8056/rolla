@@ -4838,11 +4838,68 @@ inline bool hasPc (const Lane& lane, int pc) noexcept
     return false;
 }
 
-inline void movePc (Lane& lane, int from, int to) noexcept
+// A partial reroll keeps the user's stab / pad as they are, so the riff gives way to them (the
+// regenerated upper lanes give way to the bass later, fixUpperClashes). With a kept stab or pad
+// a knob move never puts a riff note a semitone from a kept tone: a degree move skips that note,
+// a fill skips that slot. A motif note is checked in every bar the restate copies it into, so
+// the repeats stay identical. mask == 0 (every full roll) checks nothing.
+struct Kept
 {
+    const Groove* g = nullptr;
+    std::uint32_t mask = 0; // kept Stab / Pad bits
+    int bars = 0;
+
+    bool any() const noexcept { return mask != 0; }
+
+    bool clashes (const Note& n, int pitch) const noexcept
+    {
+        if (mask == 0 || g == nullptr)
+            return false;
+        const int b = phrase_lock::barOf (n.start);
+        for (int t = 0; t < bars; ++t)
+        {
+            if (t != b && (b >= 2 || phrase_lock::sourceBar (t, bars) != b))
+                continue;
+            Note c = n;
+            c.start += (float) ((t - b) * kStepsPerBar);
+            std::uint32_t pcs = 0;
+            for (int part : { (int) Stab, (int) Pad })
+            {
+                if (((mask >> part) & 1u) == 0)
+                    continue;
+                const Lane& l = g->lane[part];
+                for (int k = 0; k < l.count; ++k)
+                    if (l.notes[k].vel > 2 && overlaps (c, l.notes[k]))
+                        for (int ch = 0; ch < clampi ((int) l.notes[k].nChord, 1, 4); ++ch)
+                            pcs |= 1u << pcOf (l.notes[k].chord[ch]);
+            }
+            if ((clashMask (pcs) & (1u << pcOf (pitch))) != 0)
+                return true;
+        }
+        return false;
+    }
+};
+
+// Every note of degree `from` moves to `to`. With a kept stab / pad only the motif bars and the
+// turn move, each where it clashes with no kept tone; the caller restates. Returns the moves.
+inline int movePc (Lane& lane, int from, int to, const Kept& kept) noexcept
+{
+    int moved = 0;
     for (int i = 0; i < lane.count; ++i)
-        if (pcOf (lane.notes[i].chord[0]) == from)
-            lane.notes[i].chord[0] = (std::int8_t) (lane.notes[i].chord[0] + (to - from));
+    {
+        if (pcOf (lane.notes[i].chord[0]) != from)
+            continue;
+        const int target = lane.notes[i].chord[0] + (to - from);
+        if (kept.any())
+        {
+            const int b = phrase_lock::barOf (lane.notes[i].start);
+            if (phrase_lock::sourceBar (b, kept.bars) != b || kept.clashes (lane.notes[i], target))
+                continue;
+        }
+        lane.notes[i].chord[0] = (std::int8_t) target;
+        ++moved;
+    }
+    return moved;
 }
 } // namespace knob_motif
 
@@ -4851,18 +4908,27 @@ inline void movePc (Lane& lane, int from, int to) noexcept
 // a semitone toward the end's colour, the same move on every note of that degree, so the riff
 // keeps its shape and the change comes back every repeat. Only moves inside the roll's mode;
 // b2 is never added (the b2 caps stay).
-//   DARK 1: 2 -> b3, 6 -> b7 (dorian). With neither: 4 -> b3; then the answer bar's and the
-//           turn's 5ths -> b6 (the call keeps its 5th); then one weak-slot root -> the b7 under it.
+//   DARK 1: 2 -> b3, 6 -> b7 (dorian). With neither, and only when the riff has no dark degree
+//           yet: 4 -> b3; then the answer bar's and the turn's 5ths -> b6 (the call keeps its
+//           5th); then one weak-slot root -> the b7 under it. A riff that already has a b3 / b6 /
+//           b7 is dark already: folding its 4th into the b3 would only take away its leap (the
+//           hook's signature interval, catchiness research), so it stays.
 //   DARK 0: b3 -> 2, b6 -> 5, b7 -> 6 (dorian), b2 -> 1, until the dark share (b2 b3 b5 b6 b7 of
 //           the non-root pitches, the darkPull measure) is 0.2 or less. With none: b3 -> 4
 //           (phrygian). A riff with no dark degree stays as it is.
-// Runs on the restated riff; anything that touches only the motif bars restates again.
-void darkMotif (Lane& lane, int mode, float dark, int bars) noexcept
+// Runs on the restated riff; anything that touches only the motif bars restates again. With a
+// kept stab / pad (a partial reroll) a note that would clash with a kept tone does not move.
+void darkMotif (Lane& lane, int mode, float dark, int bars, const knob_motif::Kept& kept) noexcept
 {
     using namespace knob_motif;
     if ((dark > 0.2f && dark < 0.8f) || lane.count <= 0)
         return;
     const bool toDark = dark >= 0.8f;
+    auto restate = [&]
+    {
+        restateMotif (lane, bars);
+        keepMonophonic (lane, false);
+    };
     struct Move { int from, to; };
     static constexpr Move kDark[] = { { 2, 3 }, { 9, 10 } };
     static constexpr Move kBright[] = { { 3, 2 }, { 8, 7 }, { 10, 9 }, { 1, 0 } };
@@ -4876,16 +4942,22 @@ void darkMotif (Lane& lane, int mode, float dark, int bars) noexcept
         const Move m = moves[k];
         if (! hasPc (lane, m.from) || ! phrase::inMode (m.to, mode))
             continue;
-        movePc (lane, m.from, m.to);
-        ++done;
+        done += movePc (lane, m.from, m.to, kept) > 0 ? 1 : 0;
     }
     if (done > 0)
+    {
+        if (kept.any())
+            restate();
+        return;
+    }
+    if (toDark && darkShare (lane) > 0.f)
         return;
     // No colour degree: the next one in (4 -> b3 dark, b3 -> 4 bright when the 2 is not in mode).
     const Move next = toDark ? Move { 5, 3 } : Move { 3, 5 };
-    if (hasPc (lane, next.from) && phrase::inMode (next.to, mode))
+    if (hasPc (lane, next.from) && phrase::inMode (next.to, mode) && movePc (lane, next.from, next.to, kept) > 0)
     {
-        movePc (lane, next.from, next.to);
+        if (kept.any())
+            restate();
         return;
     }
     const int turn = bars >= 4 ? bars - 1 : -1;
@@ -4896,7 +4968,8 @@ void darkMotif (Lane& lane, int mode, float dark, int bars) noexcept
         for (int i = 0; i < lane.count; ++i)
         {
             const int b = phrase_lock::barOf (lane.notes[i].start);
-            if ((b == 1 || b == turn) && pcOf (lane.notes[i].chord[0]) == 7)
+            if ((b == 1 || b == turn) && pcOf (lane.notes[i].chord[0]) == 7
+                && ! kept.clashes (lane.notes[i], lane.notes[i].chord[0] + 1))
             {
                 lane.notes[i].chord[0] = (std::int8_t) (lane.notes[i].chord[0] + 1);
                 moved = true;
@@ -4904,8 +4977,7 @@ void darkMotif (Lane& lane, int mode, float dark, int bars) noexcept
         }
         if (moved)
         {
-            restateMotif (lane, bars);
-            keepMonophonic (lane, false);
+            restate();
             return;
         }
     }
@@ -4936,9 +5008,11 @@ void darkMotif (Lane& lane, int mode, float dark, int bars) noexcept
             const int root = lane.notes[i].chord[0];
             const int prev = lane.notes[i - 1].chord[0];
             const int below = root - 12 + to, above = root + to;
-            lane.notes[i].chord[0] = (std::int8_t) (std::abs (below - prev) <= std::abs (above - prev) ? below : above);
-            restateMotif (lane, bars);
-            keepMonophonic (lane, false);
+            const int pitch = std::abs (below - prev) <= std::abs (above - prev) ? below : above;
+            if (kept.clashes (lane.notes[i], pitch))
+                continue;
+            lane.notes[i].chord[0] = (std::int8_t) pitch;
+            restate();
             return;
         }
     }
@@ -4953,9 +5027,9 @@ void darkMotif (Lane& lane, int mode, float dark, int bars) noexcept
 // stabs answer in the bass gaps); BOUNCY fills go under the stab's onsets first (its stabs ride
 // the bass attacks). Thinning drops e/a notes first, never a bar's first note, keeps one anchor
 // (beat or "and") and one off-kick note per bar, and keeps BOUNCY bounce at 4 a bar (its A&R
-// density floor, 3.9).
+// density floor, 3.9). With a kept stab / pad a fill never sits a semitone from a kept tone.
 void busyMotif (Lane& lane, const Lane& stab, int dialect, int bars, float busy, bool bounce,
-                std::uint32_t seed) noexcept
+                std::uint32_t seed, const knob_motif::Kept& kept) noexcept
 {
     using namespace knob_motif;
     const float f = busyFactor (busy) / busyFactor (0.40f);
@@ -5062,6 +5136,16 @@ void busyMotif (Lane& lane, const Lane& stab, int dialect, int bars, float busy,
                 continue;
             if (pc == 3 && sl == 14)
                 continue;
+            if (kept.any())
+            {
+                Note probe;
+                probe.start = (float) (b * kStepsPerBar + sl);
+                const float nextAt = next >= 0 ? lane.notes[next].start : (float) (nb * kStepsPerBar);
+                probe.length = std::max (0.5f, std::min (dialect == Pop ? 1.1f : dialect == Long ? 2.f : 1.5f,
+                                                         nextAt - probe.start));
+                if (kept.clashes (probe, pitch))
+                    continue;
+            }
             float score = jitter (b, sl);
             if (dialect == Pop && stabOn[b][sl])
                 score += 3.f;
@@ -5648,8 +5732,14 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
         // Knob reach on the riff that repeats: DARK moves a degree, BUSY scales the attacks of
         // the motif and the turn, then the motif is restated (both are no-ops at the shipped
         // DARK 0.55 / BUSY 0.40).
-        darkMotif (g.lane[Bass], mode, s.dark, s.bars);
-        busyMotif (g.lane[Bass], g.lane[Stab], s.dialect, s.bars, s.busy, popMode == BassModeBounce, bassSeed);
+        knob_motif::Kept keptUpper;
+        keptUpper.g = &g;
+        keptUpper.bars = s.bars;
+        for (int p : { (int) Stab, (int) Pad })
+            if (((partMask >> p) & 1u) == 0)
+                keptUpper.mask |= 1u << p;
+        darkMotif (g.lane[Bass], mode, s.dark, s.bars, keptUpper);
+        busyMotif (g.lane[Bass], g.lane[Stab], s.dialect, s.bars, s.busy, popMode == BassModeBounce, bassSeed, keptUpper);
         shapeSounding (g.lane[Bass], s.bars, heldLo, heldHi);
         fixUpperClashes (g, Pad);
     }
