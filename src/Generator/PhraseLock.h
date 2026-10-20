@@ -12,7 +12,8 @@
 // sixteenths), so no figure ever came back and nothing stuck.
 //
 // restateMotif keeps bars 1-2 as the motif, restates them in bars 3-7 and keeps the
-// generator's own last bar (the turn); drums also keep their bar 4. Everything is the
+// generator's own last bar (the turn); drums also keep their bar 4, the bass the back half
+// of its bar 4 (restateBass: the answer), and JACKIN's bass keeps its own loop. Everything is the
 // roll's own material: nothing is stored or taken from a reference, and the originality
 // check runs on the locked result.
 
@@ -32,6 +33,34 @@ inline int sourceBar (int b, int bars, bool keepBar4 = false) noexcept
 inline int barOf (float start) noexcept
 {
     return (int) std::floor ((start + 1.0e-3f) / (float) kStepsPerBar);
+}
+
+// 16th of `start` inside bar `bar` (barOf's rounding).
+inline int slotIn (float start, int bar) noexcept
+{
+    return (int) std::floor (start + 1.0e-3f) - bar * kStepsPerBar;
+}
+
+// The bass's light answer (catchiness report #3). Bar 4 restates bar 2 up to its 8th 16th and
+// keeps the generator's own back half (16ths 9-16): the reference bass answers bar 2 there in ~87%
+// of phrases (the model's bar4_answer: the last 4-8 sixteenths change, the front stays
+// recognisable), and restating bar 2 whole put the riff above the model's repeat band. The answer
+// half is source material, like the motif and the turn: every restatement keeps it as it is, so
+// bar 4 is the same answer however often the riff is restated (knob passes, the hook pass).
+inline constexpr int kAnswerFrom = 8;
+
+inline bool answerHalf (int b, int slot, int bars) noexcept
+{
+    return bars >= 8 && b % 4 == 3 && b != bars - 1 && slot >= kAnswerFrom;
+}
+
+// Source bar of the bass at 16th `slot` of bar b: sourceBar, except the answer half (its own).
+// ownLoop: JACKIN, whose bass loops on its own (loopJackinBass) and is never restated.
+inline int bassSourceBar (int b, int slot, int bars, bool ownLoop = false) noexcept
+{
+    if (ownLoop || bars < 4 || answerHalf (b, slot, bars))
+        return b;
+    return sourceBar (b, bars);
 }
 } // namespace phrase_lock
 
@@ -58,6 +87,135 @@ inline void restateMotif (Lane& lane, int bars) noexcept
             lane.notes[lane.count++] = n;
         }
     }
+}
+
+// The bass restatement, A B A B' A B A B'': restateMotif with bar 4's answer half kept
+// (phrase_lock::bassSourceBar). cutAtKept: a note copied into the bar before a kept bar ends at
+// the barline (restateMotif's rule); false copies held notes as they ring (the hook pass, whose
+// motif bar 1 is not cut at bar 2). The caller runs keepMonophonic.
+inline void restateBass (Lane& lane, int bars, bool cutAtKept = true) noexcept
+{
+    if (bars < 4 || lane.count <= 0)
+        return;
+    const Lane src = lane;
+    lane.count = 0;
+    for (int b = 0; b < bars; ++b)
+    {
+        const bool nextKept = b + 1 < bars && phrase_lock::bassSourceBar (b + 1, 0, bars) == b + 1;
+        const float barEnd = (float) ((b + 1) * kStepsPerBar);
+        for (int i = 0; i < src.count && lane.count < kMaxNotes; ++i)
+        {
+            const int from = phrase_lock::barOf (src.notes[i].start);
+            if (phrase_lock::bassSourceBar (b, phrase_lock::slotIn (src.notes[i].start, from), bars) != from)
+                continue;
+            Note n = src.notes[i];
+            n.start += (float) ((b - from) * kStepsPerBar);
+            if (cutAtKept && nextKept && n.start + n.length > barEnd)
+                n.length = std::max (0.25f, barEnd - n.start);
+            lane.notes[lane.count++] = n;
+        }
+    }
+    std::stable_sort (lane.notes, lane.notes + lane.count, [] (const Note& a, const Note& b) { return a.start < b.start; });
+}
+
+// JACKIN's bass loops on its own (loopJackinBass: A B A B4 A B A B8 from one bar pair, then its
+// finishing passes vary single bars) and is never restated. An edit made to its motif (bars 1-2)
+// is replayed instead: every later bar of the same parity before the turn takes the same edit
+// wherever it plays the same note there (same 16th, same pitch), so the loop carries the edit and
+// keeps its own per-bar differences. `before` is the lane before the edit; edits are pitch changes,
+// removals, additions (the added note as written) and moves of up to two 16ths (a removed note
+// paired with an added one of its pitch). Lengths follow keepMonophonic and the held-bass fit.
+inline void replayMotifEdit (Lane& lane, const Lane& before, int bars) noexcept
+{
+    const int nb = std::min (bars, kMaxBars);
+    if (nb < 4)
+        return;
+    int bAt[2][kStepsPerBar], aAt[2][kStepsPerBar];
+    for (int m = 0; m < 2; ++m)
+        for (int k = 0; k < kStepsPerBar; ++k)
+            bAt[m][k] = aAt[m][k] = -1;
+    for (int i = 0; i < before.count; ++i)
+    {
+        const int b = phrase_lock::barOf (before.notes[i].start);
+        const int k = b >= 0 && b < 2 ? phrase_lock::slotIn (before.notes[i].start, b) : -1;
+        if (k >= 0 && k < kStepsPerBar && bAt[b][k] < 0)
+            bAt[b][k] = i;
+    }
+    for (int i = 0; i < lane.count; ++i)
+    {
+        const int b = phrase_lock::barOf (lane.notes[i].start);
+        const int k = b >= 0 && b < 2 ? phrase_lock::slotIn (lane.notes[i].start, b) : -1;
+        if (k >= 0 && k < kStepsPerBar && aAt[b][k] < 0)
+            aAt[b][k] = i;
+    }
+    const Lane src = lane;
+    // Moves: a removed note and an added one of the same pitch up to two 16ths away.
+    int moveTo[2][kStepsPerBar];
+    bool addTaken[2][kStepsPerBar] {};
+    for (int m = 0; m < 2; ++m)
+        for (int k = 0; k < kStepsPerBar; ++k)
+        {
+            moveTo[m][k] = -1;
+            if (bAt[m][k] < 0 || aAt[m][k] >= 0)
+                continue;
+            for (int d : { 1, -1, 2, -2 })
+            {
+                const int t = k + d;
+                if (t < 0 || t >= kStepsPerBar || addTaken[m][t] || bAt[m][t] >= 0 || aAt[m][t] < 0
+                    || src.notes[aAt[m][t]].chord[0] != before.notes[bAt[m][k]].chord[0])
+                    continue;
+                moveTo[m][k] = t;
+                addTaken[m][t] = true;
+                break;
+            }
+        }
+    auto targetAt = [&] (int bar, int k) {
+        for (int i = 0; i < lane.count; ++i)
+            if (phrase_lock::barOf (lane.notes[i].start) == bar && phrase_lock::slotIn (lane.notes[i].start, bar) == k)
+                return i;
+        return -1;
+    };
+    auto removeAt = [&] (int i) {
+        for (int j = i; j + 1 < lane.count; ++j)
+            lane.notes[j] = lane.notes[j + 1];
+        --lane.count;
+    };
+    for (int t = 2; t < nb - 1; ++t)
+    {
+        const int m = t % 2;
+        const float shift = (float) ((t - m) * kStepsPerBar);
+        for (int k = 0; k < kStepsPerBar; ++k)
+        {
+            const int bi = bAt[m][k], ai = aAt[m][k];
+            if (bi < 0)
+                continue;
+            const int ti = targetAt (t, k);
+            if (ti < 0 || lane.notes[ti].chord[0] != before.notes[bi].chord[0])
+                continue;
+            if (ai >= 0)
+            {
+                if (src.notes[ai].chord[0] != before.notes[bi].chord[0])
+                    lane.notes[ti].chord[0] = src.notes[ai].chord[0];
+            }
+            else if (moveTo[m][k] >= 0)
+            {
+                if (targetAt (t, moveTo[m][k]) < 0)
+                    lane.notes[ti].start += (float) (moveTo[m][k] - k);
+            }
+            else
+                removeAt (ti);
+        }
+        for (int k = 0; k < kStepsPerBar && lane.count < kMaxNotes; ++k)
+        {
+            const int ai = aAt[m][k];
+            if (ai < 0 || bAt[m][k] >= 0 || addTaken[m][k] || targetAt (t, k) >= 0)
+                continue;
+            Note n = src.notes[ai];
+            n.start += shift;
+            lane.notes[lane.count++] = n;
+        }
+    }
+    std::stable_sort (lane.notes, lane.notes + lane.count, [] (const Note& a, const Note& b) { return a.start < b.start; });
 }
 
 // The bass is one voice: after a restatement a held note may run into the next bar's first
@@ -116,8 +274,10 @@ inline void shapeSounding (Lane& lane, int bars, float lo, float hi) noexcept
 // displacements (8, 9, 14, 15 semitones). Each note takes the octave of its own pitch class
 // closest to the previous note, inside the lane's own range: same note names, same rhythm,
 // steps instead of displaced leaps. A move of exactly an octave (same pitch class) is a chosen
-// signature and stays. Run on the motif bars and the turn before restateMotif.
-inline void voiceLead (Lane& lane, int bars) noexcept
+// signature and stays. Runs on the bass's source notes (the motif bars, bar 4's answer half and
+// the turn; every bar for a bass that loops on its own, ownLoop): before restateBass, and again
+// after it, so the answer half and the turn lead from the restated notes before them.
+inline void voiceLead (Lane& lane, int bars, bool ownLoop = false) noexcept
 {
     if (lane.count < 2)
         return;
@@ -130,7 +290,7 @@ inline void voiceLead (Lane& lane, int bars) noexcept
     for (int i = 1; i < lane.count; ++i)
     {
         const int b = phrase_lock::barOf (lane.notes[i].start);
-        if (! (b < 2 || b == bars - 1))
+        if (phrase_lock::bassSourceBar (b, phrase_lock::slotIn (lane.notes[i].start, b), bars, ownLoop) != b)
             continue;
         const int prev = lane.notes[i - 1].chord[0];
         const int cur = lane.notes[i].chord[0];

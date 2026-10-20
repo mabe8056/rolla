@@ -2783,6 +2783,9 @@ void dedupeNoteOns (Lane& lane)
         lane.notes[i] = out[i];
 }
 
+// Loop repeat of a bass line at `lag` 16ths (defined with the guards below).
+float bassRepeat (const Lane& lane, int bars, int lag);
+
 namespace
 {
 
@@ -4806,6 +4809,40 @@ void capPulseOctaves (Lane& lane, float maxShare)
     }
 }
 
+// capPulseOctaves for the restated riff, on bar 4's answer half only: the motif's octave moves
+// come back in every repeat (a chosen signature), so when the line is over the style's octave
+// share an octave move the answer adds becomes the note before it again (same pitch class).
+void capAnswerOctaves (Lane& lane, int bars, float maxShare)
+{
+    sortByStart (lane);
+    const int moves = lane.count - 1;
+    if (moves <= 0)
+        return;
+    const float tick = 1.f / 120.f;
+    auto isOct = [&] (int i)
+    {
+        const int d = adiff (lane.notes[i].chord[0], lane.notes[i - 1].chord[0]);
+        return d == 12 || d == 24;
+    };
+    int oct = 0;
+    for (int i = 1; i < lane.count; ++i)
+        if (isOct (i))
+            ++oct;
+    for (int i = 1; i < lane.count && (float) oct > maxShare * (float) moves + 1.0e-4f; ++i)
+    {
+        const int b = phrase_lock::barOf (lane.notes[i].start);
+        if (! isOct (i) || ! phrase_lock::answerHalf (b, phrase_lock::slotIn (lane.notes[i].start, b), bars))
+            continue;
+        const bool nextWas = i + 1 < lane.count && isOct (i + 1);
+        lane.notes[i].chord[0] = lane.notes[i - 1].chord[0];
+        const bool nextNow = i + 1 < lane.count && isOct (i + 1);
+        oct += -1 - (nextWas ? 1 : 0) + (nextNow ? 1 : 0);
+        Note& p = lane.notes[i - 1];
+        if (p.start + p.length > lane.notes[i].start - tick)
+            p.length = std::max (tick, lane.notes[i].start - p.start - tick);
+    }
+}
+
 // BOUNCE mean note length stays inside lo-hi sixteenths (Composer: 0.8-1.6).
 // Too long: the longest notes shorten (never under 0.9, never under 0.30 of
 // the loop sounding). Too short: notes grow toward the next onset (at most
@@ -4912,17 +4949,39 @@ struct Kept
     const Groove* g = nullptr;
     std::uint32_t mask = 0; // kept Stab / Pad bits
     int bars = 0;
+    bool ownLoop = false;   // JACKIN: the bass is never restated; motif edits are replayed (replayMotifEdit)
 
     bool any() const noexcept { return mask != 0; }
+
+    // Is a note at 16th `sl` of bar b heard again in bar t (restated, or replayed for ownLoop)?
+    bool heardIn (int b, int sl, int t) const noexcept
+    {
+        if (t == b)
+            return true;
+        if (b >= 2)
+            return false;
+        if (ownLoop)
+            return t % 2 == b % 2 && t < bars - 1;
+        return phrase_lock::bassSourceBar (t, sl, bars) == b;
+    }
+
+    // The bass's own source notes: the motif, bar 4's answer half and the turn (every note for
+    // ownLoop). Only these are edited; restateBass / replayMotifEdit carry the edit to the copies.
+    bool isSource (const Note& n) const noexcept
+    {
+        const int b = phrase_lock::barOf (n.start);
+        return phrase_lock::bassSourceBar (b, phrase_lock::slotIn (n.start, b), bars, ownLoop) == b;
+    }
 
     bool clashes (const Note& n, int pitch) const noexcept
     {
         if (mask == 0 || g == nullptr)
             return false;
         const int b = phrase_lock::barOf (n.start);
+        const int sl = phrase_lock::slotIn (n.start, b);
         for (int t = 0; t < bars; ++t)
         {
-            if (t != b && (b >= 2 || phrase_lock::sourceBar (t, bars) != b))
+            if (! heardIn (b, sl, t))
                 continue;
             Note c = n;
             c.start += (float) ((t - b) * kStepsPerBar);
@@ -4944,8 +5003,9 @@ struct Kept
     }
 };
 
-// Every note of degree `from` moves to `to`. With a kept stab / pad only the motif bars and the
-// turn move, each where it clashes with no kept tone; the caller restates. Returns the moves.
+// Every note of degree `from` moves to `to`. With a kept stab / pad only the bass's source notes
+// move (the motif bars, bar 4's answer half and the turn; every note of a JACKIN bass), each where
+// it clashes with no kept tone; the caller restates. Returns the moves.
 inline int movePc (Lane& lane, int from, int to, const Kept& kept) noexcept
 {
     int moved = 0;
@@ -4954,12 +5014,8 @@ inline int movePc (Lane& lane, int from, int to, const Kept& kept) noexcept
         if (pcOf (lane.notes[i].chord[0]) != from)
             continue;
         const int target = lane.notes[i].chord[0] + (to - from);
-        if (kept.any())
-        {
-            const int b = phrase_lock::barOf (lane.notes[i].start);
-            if (phrase_lock::sourceBar (b, kept.bars) != b || kept.clashes (lane.notes[i], target))
-                continue;
-        }
+        if (kept.any() && (! kept.isSource (lane.notes[i]) || kept.clashes (lane.notes[i], target)))
+            continue;
         lane.notes[i].chord[0] = (std::int8_t) target;
         ++moved;
     }
@@ -4988,9 +5044,14 @@ void darkMotif (Lane& lane, int mode, float dark, int bars, const knob_motif::Ke
     if ((dark > 0.2f && dark < 0.8f) || lane.count <= 0)
         return;
     const bool toDark = dark >= 0.8f;
+    const Lane before = lane;
+    // The motif edit goes to every bar that restates it (JACKIN: replayed on its own loop).
     auto restate = [&]
     {
-        restateMotif (lane, bars);
+        if (kept.ownLoop)
+            replayMotifEdit (lane, before, bars);
+        else
+            restateBass (lane, bars);
         keepMonophonic (lane, false);
     };
     struct Move { int from, to; };
@@ -5010,7 +5071,8 @@ void darkMotif (Lane& lane, int mode, float dark, int bars, const knob_motif::Ke
     }
     if (done > 0)
     {
-        if (kept.any())
+        // A JACKIN degree move already reached every bar (nothing is restated over it).
+        if (kept.any() && ! kept.ownLoop)
             restate();
         return;
     }
@@ -5020,7 +5082,7 @@ void darkMotif (Lane& lane, int mode, float dark, int bars, const knob_motif::Ke
     const Move next = toDark ? Move { 5, 3 } : Move { 3, 5 };
     if (hasPc (lane, next.from) && phrase::inMode (next.to, mode) && movePc (lane, next.from, next.to, kept) > 0)
     {
-        if (kept.any())
+        if (kept.any() && ! kept.ownLoop)
             restate();
         return;
     }
@@ -5032,7 +5094,9 @@ void darkMotif (Lane& lane, int mode, float dark, int bars, const knob_motif::Ke
         for (int i = 0; i < lane.count; ++i)
         {
             const int b = phrase_lock::barOf (lane.notes[i].start);
-            if ((b == 1 || b == turn) && pcOf (lane.notes[i].chord[0]) == 7
+            // The answer side: bar 2, bar 4's answer half, the turn (a JACKIN bass: every even bar).
+            const bool answerSide = b == 1 || b == turn || (b % 2 == 1 && kept.isSource (lane.notes[i]));
+            if (answerSide && pcOf (lane.notes[i].chord[0]) == 7
                 && ! kept.clashes (lane.notes[i], lane.notes[i].chord[0] + 1))
             {
                 lane.notes[i].chord[0] = (std::int8_t) (lane.notes[i].chord[0] + 1);
@@ -5101,6 +5165,7 @@ void busyMotif (Lane& lane, const Lane& stab, int dialect, int bars, float busy,
     if (std::fabs (f - 1.f) < 0.02f || lane.count <= 0 || nb < 2)
         return;
     sortByStart (lane);
+    const Lane before = lane;
     const int turn = nb >= 4 ? nb - 1 : -1;
     bool on[kMaxBars][kStepsPerBar] {};
     bool stabOn[kMaxBars][kStepsPerBar] {};
@@ -5351,8 +5416,309 @@ void busyMotif (Lane& lane, const Lane& stab, int dialect, int bars, float busy,
     }
     if (changed == 0)
         return;
-    restateMotif (lane, bars);
+    // Bar 4's answer half keeps its own notes; JACKIN's own loop takes the edit by replay.
+    if (kept.ownLoop)
+        replayMotifEdit (lane, before, bars);
+    else
+        restateBass (lane, bars);
     keepMonophonic (lane, false);
+}
+
+// The kick cap on the riff that repeats (catchiness report #3, caps on the cell). capBassOnKicks
+// runs on the composed line, before the restate, and the restate then plays the motif's kick hits
+// in every repeat (BOUNCY pulse rose to ~30% of its attacks on the kick). When the restated line is
+// over maxShare, one source note on a kick step (the motif, bar 4's answer half or the turn) moves
+// off it as capBassOnKicks moves a note (a 16th later first, then earlier, then two either way),
+// inside its bar, to a 16th that is free in every bar it is heard in (never another kick step,
+// never past a neighbour, never into the turn's rest, never a semitone from a kept stab / pad
+// tone), and the riff is restated: the same rhythm in every repeat, no pitch changes. The note
+// moved is the one whose copies bring the line under the cap with the least change.
+void capRiffOnKicks (Lane& lane, int bars, float maxShare, std::uint32_t seed, const knob_motif::Kept& kept) noexcept
+{
+    const int nb = std::min (bars, kMaxBars);
+    if (nb < 4 || lane.count <= 1 || kept.ownLoop)
+        return;
+    const float tailCut = bassTailCut (bars);
+    for (int guard = 0; guard < 24; ++guard)
+    {
+        sortByStart (lane);
+        const int n = std::min (lane.count, kMaxNotes);
+        bool used[kMaxSteps] {};
+        int onKick = 0;
+        for (int i = 0; i < n; ++i)
+        {
+            const int st = (int) std::lround (lane.notes[i].start);
+            if (st >= 0 && st < nb * kStepsPerBar)
+                used[st] = true;
+            if (st >= 0 && kickSlot (st % kStepsPerBar))
+                ++onKick;
+        }
+        const int over = onKick - (int) std::floor (maxShare * (float) n + 1.0e-4f);
+        if (over <= 0)
+            return;
+        int bestI = -1, bestQ = 0, bestKey = 1 << 30;
+        std::uint32_t bestPrio = 0;
+        for (int i = 0; i < n; ++i)
+        {
+            const Note& note = lane.notes[i];
+            const int b = phrase_lock::barOf (note.start);
+            const int sl = phrase_lock::slotIn (note.start, b);
+            if (b < 0 || b >= nb || sl < 0 || sl >= kStepsPerBar || ! kickSlot (sl) || ! kept.isSource (note))
+                continue;
+            int copies[kMaxBars];
+            int nc = 0;
+            for (int t = 0; t < nb; ++t)
+                if (kept.heardIn (b, sl, t))
+                    copies[nc++] = t;
+            for (int dir : { 1, -1, 2, -2 })
+            {
+                const int q = sl + dir;
+                if (q < 0 || q >= kStepsPerBar || kickSlot (q))
+                    continue;
+                bool ok = true;
+                for (int c = 0; c < nc && ok; ++c)
+                {
+                    const int at = copies[c] * kStepsPerBar + q;
+                    const int mid = copies[c] * kStepsPerBar + sl + dir / 2;
+                    ok = ! used[at] && (float) at < tailCut && (dir / 2 == 0 || ! used[mid]);
+                }
+                Note probe = note;
+                probe.start += (float) dir;
+                if (! ok || kept.clashes (probe, note.chord[0]))
+                    continue;
+                // Enough copies to clear the cap with the fewest; else the most. A bar's downbeat
+                // moves last.
+                const int key = (nc >= over ? nc : 100 - nc) + (sl == 0 ? 200 : 0);
+                const std::uint32_t prio = postHash (seed ^ 0x0FF1Cu, (std::uint32_t) (b * kStepsPerBar + sl));
+                if (key < bestKey || (key == bestKey && prio < bestPrio))
+                {
+                    bestKey = key;
+                    bestPrio = prio;
+                    bestI = i;
+                    bestQ = q;
+                }
+                break;
+            }
+        }
+        if (bestI < 0)
+            return;
+        Note& note = lane.notes[bestI];
+        const float shift = (float) (bestQ - phrase_lock::slotIn (note.start, phrase_lock::barOf (note.start)));
+        note.start += shift;
+        note.length = std::max (0.5f, note.length - std::max (0.f, shift));
+        restateBass (lane, bars);
+        keepMonophonic (lane, false);
+    }
+}
+
+// ---- The bass inside the reference repeat band (catchiness report #3) ----
+// The genre model's repeat_bands, pooled over the reference bass MIDI: p10 and p90 of the share of
+// 16ths that are equal 2 bars apart (m2) and 4 bars apart (m4), bassRepeat's token, per style
+// (ROLLER, DEEP, BOUNCY, JACKIN). Statistics only: no reference line is stored.
+namespace bass_band
+{
+constexpr float kM2Lo[4] = { 0.599f, 0.596f, 0.513f, 0.682f };
+constexpr float kM2Hi[4] = { 0.791f, 0.819f, 0.871f, 0.844f };
+constexpr float kM4Lo[4] = { 0.616f, 0.650f, 0.655f, 0.737f };
+constexpr float kM4Hi[4] = { 0.891f, 0.814f, 0.894f, 0.855f };
+// The model's bar-4 answer changes the last 4-8 sixteenths (3+ slots differ, density +-1-3).
+constexpr int kMaxEdits = 4;
+} // namespace bass_band
+
+// Band guard on the riff that ships. A bass whose 2- or 4-bar repeat is over the model's p90 (the
+// composer drew no bar-4 answer, or the finishing passes evened it out) is given one: bar 4's
+// answer half (16ths 9-16, phrase_lock::answerHalf) changes, one edit at a time, while an edit
+// brings the repeats closer to their p90, at most kMaxEdits. An edit is
+//   - a pitch answer: a note of the answer half takes a degree drawn from the style's first-order
+//     degree table after the note before it (pooled statistics, in the mode), never the b2, never
+//     the pitch class bar 2 plays there, never a new octave move (an octave move already there is
+//     a chosen signature and stays), in the octave nearest the note before it. Tried first, as the
+//     lightest answer;
+//   - only when no pitch answer helps (never on a BOUNCY pulse grid): a note added on a free 16th
+//     off the kick (the same degree draw), or (not BOUNCY) a note dropped.
+// An edit never takes a repeat under its p10, the 1-bar repeat over the style's cap (JACKIN's
+// contrast), the tonic off the top, or a note a semitone from a kept stab / pad tone. Only bar 4
+// changes, so the rest of the riff stays as restated. Everything is the roll's own material plus
+// pooled degree draws: nothing is stored. Returns the edits made.
+int answerAboveBand (Lane& lane, int dialect, int mode, int bars, int bouncy, std::uint32_t seed,
+                     const knob_motif::Kept& kept) noexcept
+{
+    using namespace bass_band;
+    const int nb = std::min (bars, kMaxBars);
+    if (nb < 8 || lane.count < 2)
+        return 0;
+    const int st = std::clamp (dialect, 0, 3);
+    const int ans = 3;
+    sortByStart (lane);
+    const float r1At0 = bassRepeat (lane, nb, 16), r2At0 = bassRepeat (lane, nb, 32), r4At0 = bassRepeat (lane, nb, 64);
+    const float m1Cap = std::max (rules::tables::kRepeatM1Max[st], r1At0);
+    const float m2Floor = std::min (std::max (kM2Lo[st], rules::tables::kRepeatM2Min[st]), r2At0);
+    const float m4Floor = std::min (kM4Lo[st], r4At0);
+    auto excess = [&] (const Lane& l, bool& ok) {
+        const float r1 = bassRepeat (l, nb, 16), r2 = bassRepeat (l, nb, 32), r4 = bassRepeat (l, nb, 64);
+        ok = r1 <= m1Cap + 1.0e-4f && r2 >= m2Floor - 1.0e-4f && r4 >= m4Floor - 1.0e-4f;
+        return std::max (0.f, r2 - kM2Hi[st]) + std::max (0.f, r4 - kM4Hi[st]);
+    };
+    bool ok0 = true;
+    float ex = excess (lane, ok0);
+    if (ex <= 1.0e-4f)
+        return 0;
+    const bool tonic0 = rules::tonicGuardOk (lane, dialect);
+    int lo = 127, hi = 0;
+    for (int i = 0; i < lane.count; ++i)
+    {
+        lo = std::min (lo, (int) lane.notes[i].chord[0]);
+        hi = std::max (hi, (int) lane.notes[i].chord[0]);
+    }
+    const float barAt = (float) (ans * kStepsPerBar);
+    // The attack at 16th sl of bar b (-1 none).
+    auto at = [] (const Lane& l, int b, int sl) {
+        for (int i = 0; i < l.count; ++i)
+            if (phrase_lock::barOf (l.notes[i].start) == b && phrase_lock::slotIn (l.notes[i].start, b) == sl)
+                return i;
+        return -1;
+    };
+    auto octaveMove = [] (int a, int b) { return std::abs (a - b) == 12 || std::abs (a - b) == 24; };
+    // A pooled degree for a note at 16th sl of bar 4 (prev / next: the lane's neighbours, -1 none).
+    auto pitchFor = [&] (const Lane& l, int sl, int prev, int next, int avoidA, int avoidB, std::uint32_t h, int& out) {
+        const int prevPitch = prev >= 0 ? (int) l.notes[prev].chord[0] : (next >= 0 ? (int) l.notes[next].chord[0] : 0);
+        for (int k = 0; k < 8; ++k)
+        {
+            const int pc = rules::sampleDegreeSemis (dialect, mode, pcOf (prevPitch), postHash (h, (std::uint32_t) k));
+            // The b2 caps; the b3 tied over the barline from 16th 15 is a banned figure.
+            if (pc == 1 || pc == avoidA || pc == avoidB || (pc == 3 && sl == 14))
+                continue;
+            int pitch = -1000;
+            for (int cand = pc - 48; cand <= pc + 48; cand += 12)
+                if (cand >= lo && cand <= hi && std::abs (cand - prevPitch) < std::abs (pitch - prevPitch))
+                    pitch = cand;
+            if (pitch < lo)
+                continue;
+            if ((prev >= 0 && octaveMove (pitch, l.notes[prev].chord[0])) || (next >= 0 && octaveMove (pitch, l.notes[next].chord[0])))
+                continue;
+            Note probe;
+            probe.start = barAt + (float) sl;
+            probe.length = next >= 0 ? std::max (0.25f, l.notes[next].start - probe.start) : 1.f;
+            if (kept.clashes (probe, pitch))
+                continue;
+            out = pitch;
+            return true;
+        }
+        return false;
+    };
+    const float fillLen = dialect == Pop ? 1.1f : dialect == Long ? 2.f : 1.5f;
+    int edits = 0;
+    for (int step = 0; step < kMaxEdits; ++step)
+    {
+        Lane best;
+        float bestEx = ex - 1.0e-4f;
+        bool found = false;
+        for (int tier = 0; tier < 2 && ! found; ++tier)
+        {
+            if (tier == 1 && bouncy == 2)
+                break;
+            // Later 16ths first: the answer sits in the last 4-8 sixteenths (ties keep the later).
+            for (int sl = kStepsPerBar - 1; sl >= phrase_lock::kAnswerFrom; --sl)
+            {
+                const std::uint32_t h = postHash (seed ^ 0xA45Bu, (std::uint32_t) (step * kStepsPerBar + sl));
+                const int i = at (lane, ans, sl);
+                const int two = at (lane, 1, sl);
+                const int twoPc = two >= 0 ? pcOf (lane.notes[two].chord[0]) : -1;
+                Lane trial = lane;
+                bool made = false;
+                if (tier == 0 && i >= 0)
+                {
+                    const int prev = i - 1, next = i + 1 < lane.count ? i + 1 : -1;
+                    const int cur = lane.notes[i].chord[0];
+                    if ((prev >= 0 && octaveMove (cur, lane.notes[prev].chord[0])) || (next >= 0 && octaveMove (cur, lane.notes[next].chord[0])))
+                        continue;
+                    int pitch = 0;
+                    if (! pitchFor (lane, sl, prev, next, pcOf (cur), twoPc, h, pitch))
+                        continue;
+                    trial.notes[i].chord[0] = (std::int8_t) pitch;
+                    made = true;
+                }
+                else if (tier == 1 && i < 0 && sl % 4 != 0 && lane.count < kMaxNotes)
+                {
+                    // Added: a free 16th off the kick, no run of more than four 16ths.
+                    int run = 1;
+                    for (int k = sl - 1; k >= 0 && at (lane, ans, k) >= 0; --k)
+                        ++run;
+                    for (int k = sl + 1; k < kStepsPerBar && at (lane, ans, k) >= 0; ++k)
+                        ++run;
+                    int inBar = 0;
+                    for (int k = 0; k < kStepsPerBar; ++k)
+                        inBar += at (lane, ans, k) >= 0 ? 1 : 0;
+                    if (run > 4 || inBar >= 10)
+                        continue;
+                    const float t = barAt + (float) sl;
+                    int prev = -1, next = -1;
+                    for (int k = 0; k < lane.count; ++k)
+                    {
+                        if (lane.notes[k].start < t - 1.0e-3f)
+                            prev = k;
+                        else if (next < 0)
+                            next = k;
+                    }
+                    int pitch = 0;
+                    if (! pitchFor (lane, sl, prev, next, twoPc, -1, h, pitch))
+                        continue;
+                    Note n = lane.notes[prev >= 0 ? prev : next];
+                    n.chord[0] = (std::int8_t) pitch;
+                    n.nChord = 1;
+                    n.start = t;
+                    n.length = std::max (0.5f, std::min (fillLen, (next >= 0 ? lane.notes[next].start : (float) (nb * kStepsPerBar)) - t));
+                    n.flags = NoteGhost;
+                    if (prev >= 0 && trial.notes[prev].start + trial.notes[prev].length > t)
+                        trial.notes[prev].length = std::max (0.25f, t - trial.notes[prev].start);
+                    trial.notes[trial.count++] = n;
+                    sortByStart (trial);
+                    made = true;
+                }
+                else if (tier == 1 && i >= 0 && dialect != Pop)
+                {
+                    // Dropped: never the bar's first note; the bar keeps two attacks and two pitch classes.
+                    int first = -1, inBar = 0, pcs = 0;
+                    for (int k = 0; k < lane.count; ++k)
+                        if (phrase_lock::barOf (lane.notes[k].start) == ans)
+                        {
+                            if (first < 0)
+                                first = k;
+                            if (k != i)
+                            {
+                                ++inBar;
+                                pcs |= 1 << pcOf (lane.notes[k].chord[0]);
+                            }
+                        }
+                    if (i == first || inBar < 2 || (pcs & (pcs - 1)) == 0)
+                        continue;
+                    for (int k = i; k + 1 < trial.count; ++k)
+                        trial.notes[k] = trial.notes[k + 1];
+                    --trial.count;
+                    made = true;
+                }
+                if (! made)
+                    continue;
+                bool ok = true;
+                const float e = excess (trial, ok);
+                if (! ok || (tonic0 && ! rules::tonicGuardOk (trial, dialect)) || e >= bestEx)
+                    continue;
+                bestEx = e;
+                best = trial;
+                found = true;
+            }
+        }
+        if (! found)
+            break;
+        lane = best;
+        ex = bestEx;
+        ++edits;
+        if (ex <= 1.0e-4f)
+            break;
+    }
+    if (edits > 0)
+        keepMonophonic (lane, false);
+    return edits;
 }
 
 // 0 not BOUNCY, 1 bounce, 2 pulse. `modeSeed` is the caller's drums seed (the
@@ -5790,22 +6156,37 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
     // Pad keeps its swells. Kept lanes stay as the user locked them.
     // The bass is composed A B A B' A B A B'' by the rule composer (no back-half redraws), but its
     // finishing passes edit bars one by one: restate it after them so the riff really comes back.
+    // Bar 4 keeps its own back half (the answer, restateBass). JACKIN's bass loops on its own
+    // (loopJackinBass, guarded by jackinRepeatOk) and is not restated: it sat inside the model's
+    // repeat band before the restate and far above it after (catchiness report #3).
+    const int bouncyOf = popMode == BassModePulse ? 2 : (popMode == BassModeBounce ? 1 : 0);
     if (((partMask >> Bass) & 1u) != 0)
     {
-        voiceLead (g.lane[Bass], s.bars);
-        restateMotif (g.lane[Bass], s.bars);
-        keepMonophonic (g.lane[Bass], false);
-        // Knob reach on the riff that repeats: DARK moves a degree, BUSY scales the attacks of
-        // the motif and the turn, then the motif is restated (both are no-ops at the shipped
-        // DARK 0.55 / BUSY 0.40).
+        const bool ownLoop = s.dialect == Jackin;
+        // A kept stab / pad (a partial reroll): the riff's edits give way to its tones.
         knob_motif::Kept keptUpper;
         keptUpper.g = &g;
         keptUpper.bars = s.bars;
+        keptUpper.ownLoop = ownLoop;
         for (int p : { (int) Stab, (int) Pad })
             if (((partMask >> p) & 1u) == 0)
                 keptUpper.mask |= 1u << p;
+        voiceLead (g.lane[Bass], s.bars, ownLoop);
+        if (! ownLoop)
+        {
+            restateBass (g.lane[Bass], s.bars);
+            keepMonophonic (g.lane[Bass], false);
+            voiceLead (g.lane[Bass], s.bars);
+            // The kick cap (BOUNCY bounce 15%, every other line 28%) on the line that repeats.
+            capRiffOnKicks (g.lane[Bass], s.bars, bouncyOf == 1 ? 0.15f : 0.28f, bassSeed, keptUpper);
+        }
+        // Knob reach on the riff that repeats: DARK moves a degree, BUSY scales the attacks of
+        // the motif and the turn, then the motif is restated (both are no-ops at the shipped
+        // DARK 0.55 / BUSY 0.40).
         darkMotif (g.lane[Bass], mode, s.dark, s.bars, keptUpper);
         busyMotif (g.lane[Bass], g.lane[Stab], s.dialect, s.bars, s.busy, popMode == BassModeBounce, bassSeed, keptUpper);
+        // A riff that repeats tighter than nine in ten reference basslines gets its bar-4 answer.
+        answerAboveBand (g.lane[Bass], s.dialect, mode, s.bars, bouncyOf, bassSeed, keptUpper);
         shapeSounding (g.lane[Bass], s.bars, heldLo, heldHi);
         fixUpperClashes (g, Pad);
     }
@@ -5827,10 +6208,18 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
         const HookPlan plan = planHook (g, s.dialect, postHash (seeds[Bass] ? seeds[Bass] : 1u, 0x484F4F4Bu), partMask,
                                         s.stab >= 0.5f);
         applyHookPlan (g, plan, s.bars, partMask, s.hitsInStab);
-        // The hook cell pass can move a bass hook's onsets by a 16th: the held-bass band is fitted
-        // again (one rule for every note, so the restated bars stay identical).
+        // The hook cell pass can move a bass hook's onsets by a 16th: the repeat band is checked
+        // again and the held-bass band is fitted again (one rule for every note, so the restated
+        // bars stay identical).
         if (plan.hook == Bass)
+        {
+            knob_motif::Kept full;
+            full.g = &g;
+            full.bars = s.bars;
+            full.ownLoop = s.dialect == Jackin;
+            answerAboveBand (g.lane[Bass], s.dialect, mode, s.bars, bouncyOf, bassSeed, full);
             shapeSounding (g.lane[Bass], s.bars, heldLo, heldHi);
+        }
         for (int part : { (int) Stab, (int) Pad, (int) Pluck, (int) Hits, (int) Vox })
         {
             fixUpperClashes (g, part);
@@ -5838,6 +6227,11 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
             trimSamePitchOverlaps (g.lane[part]);
         }
     }
+    // The style's octave share (A&R lane F7: pulse at most 8%, OCTAVE_PUMP over 26%) on the riff
+    // that ships: bar 4's answer half gives up an octave move first (same pitch class, so no clash
+    // with the upper lanes changes).
+    if (regen (Bass) && s.dialect != Jackin)
+        capAnswerOctaves (g.lane[Bass], s.bars, bouncyOf == 2 ? 0.08f : 0.26f);
     // DEEP's jazz voicings leave the bass note to the bass that ships (RuleComposer deepJazzStab).
     if (s.dialect == Long && regen (Stab))
         leaveBassNoteToBass (g.lane[Stab], g.lane[Bass], s.bars);

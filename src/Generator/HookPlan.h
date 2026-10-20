@@ -1067,27 +1067,6 @@ inline bool shapeHookCell (Groove& g, int part, Lane& cell, int cellBars, int ba
     }
     return false;
 }
-
-// restateMotif for the bass hook after the cell pass: held notes are copied as they ring (the
-// motif's own bar 1 is not cut at bar 2) and keepMonophonic ends each where the next one starts.
-inline void restateHeld (Lane& lane, int bars) noexcept
-{
-    if (bars < 4 || lane.count <= 0)
-        return;
-    const Lane src = lane;
-    lane.count = 0;
-    for (int b = 0; b < bars; ++b)
-    {
-        const int from = phrase_lock::sourceBar (b, bars);
-        for (int i = 0; i < src.count && lane.count < kMaxNotes; ++i)
-            if (phrase_lock::barOf (src.notes[i].start) == from)
-            {
-                Note n = src.notes[i];
-                n.start += (float) ((b - from) * kStepsPerBar);
-                lane.notes[lane.count++] = n;
-            }
-    }
-}
 } // namespace hook_cell
 
 // Applies the plan to the regenerated lanes (kept lanes are never touched).
@@ -1162,11 +1141,17 @@ inline void applyHookPlan (Groove& g, const HookPlan& plan, int bars, std::uint3
     if ((plan.hook == Bass || plan.hook == Stab || plan.hook == Pluck) && regen (plan.hook))
     {
         Lane& h = g.lane[plan.hook];
+        const Lane before = h;
         if (hook_cell::shapeHookCell (g, plan.hook, h, 2, bars, nullptr))
         {
             if (plan.hook == Bass)
             {
-                hook_cell::restateHeld (h, bars);
+                // Held notes are copied as they ring (the motif's own bar 1 is not cut at bar 2),
+                // bar 4 keeps its answer half; JACKIN's own loop takes the cell's edits by replay.
+                if (g.dialect == Jackin)
+                    replayMotifEdit (h, before, bars);
+                else
+                    restateBass (h, bars, false);
                 keepMonophonic (h, false);
             }
             else

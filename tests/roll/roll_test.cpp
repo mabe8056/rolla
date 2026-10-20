@@ -513,8 +513,10 @@ void testEarReview()
     // Floor 8 -> 6 (Oct 19, hook cell rules, HookPlan.h): a bass hook's 2-bar cell leaps (octaves
     // included) on at most a quarter of its moves, per the research; the octave stays its preferred
     // leap, but a bass-hook bounce riff keeps one or two octave pumps a cell (this batch: 13.1% -> 8.0%).
-    expect (bounceN > 0 && bounceOct / bounceN >= 6.0 && bounceOct / bounceN <= 26.0,
-            "BOUNCY bounce octaves land in 6-26%");
+    // Floor 6 -> 8 again (catchiness report #3): bar 4 keeps its own answer half, which brings back
+    // its octave moves. 15 is not back: the hook cell rules still cap a bass hook's leaps.
+    expect (bounceN > 0 && bounceOct / bounceN >= 8.0 && bounceOct / bounceN <= 26.0,
+            "BOUNCY bounce octaves land in 8-26% (" + std::to_string (bounceN > 0 ? bounceOct / bounceN : 0.0) + "%)");
     expect (pulseOctMax <= 8.5, "BOUNCY pulse octaves stay at or under 8.5%");
     expect (pulseN >= 3, "BOUNCY has a pulse mode");
     expect (jackinRhythms.size() >= 18, "JACKIN 8-bar rhythms are almost all distinct");
@@ -934,10 +936,13 @@ void testScorerV23()
         if (style == rolla::Jackin)
             std::cout << " call-answer " << callOk << "/20";
         std::cout << "\n";
-        // Was 8-18 of 20 (bar 4 must answer bar 2). Oct 19 hook pass: the bass restates bars 1-2 through
-        // bar 7 and turns at bar 8; the reference bass varies bar 4 in 0% of phrases (bar 8 60%, bar 5 40%).
-        // Kept as a ceiling only: a bar-4 answer may appear, it is no longer required.
-        expect (answers <= 18, std::string (names[style]) + " bar 4 answers bar 2 at most 18/20");
+        // Was 8-18 of 20 (bar 4 must answer bar 2); the Oct 19 hook pass restated bar 2 into bar 4 and kept
+        // only the ceiling. Catchiness report #3: bar 4 keeps its own back half again (restateBass), as the
+        // reference bass MIDI does in ~87% of phrases, so the floor is back. The ceiling of 18 is not:
+        // the band guard (answerAboveBand) answers every riff whose 2- or 4-bar repeat is over the model's
+        // p90, and with bars 1-3 and 5-7 restated exactly a riff with no answer is over the ROLLER / DEEP
+        // p90 in ~9 of 10 rolls, so these batches answer in 19-20 of 20.
+        expect (answers >= 8, std::string (names[style]) + " bar 4 answers bar 2 (at least 8/20)");
         expect (pairs <= 2, std::string (names[style]) + " near-identical rhythm pairs <= 2");
         if (style == rolla::Jackin)
             expect (gapPct >= 12.0 && gapPct <= 45.0, "JACKIN stabs land in bass gaps");
@@ -1046,9 +1051,10 @@ void testAr423Bass()
             // Maestro 655: BOUNCY on the kick inside the A&R lanes, per mode. The
             // pulse rolls carry the kick (20-28%, the soft limit 28%); the bounce
             // lane wants 85% off the kick, so bounce rolls stay at 15% or under.
-            // Ceiling 0.28 -> 0.32 (Oct 19 hook pass: the restated pulse riff keeps its kick hits in every repeat).
-            expect (pulseOnsets == 0 || (pulseKick >= 0.20 * pulseOnsets - 1.0e-6 && pulseKick <= 0.32 * pulseOnsets + 1.0e-6),
-                    "BOUNCY pulse bass on-kick share in 20-32% (" + std::to_string (pulseOnsets > 0 ? 100.0 * pulseKick / pulseOnsets : 0.0) + "%)");
+            // Ceiling 0.28 -> 0.32 in the Oct 19 hook pass (the restated pulse riff kept its kick hits in
+            // every repeat); back to 0.28 with bar 4's own answer half (catchiness report #3).
+            expect (pulseOnsets == 0 || (pulseKick >= 0.20 * pulseOnsets - 1.0e-6 && pulseKick <= 0.28 * pulseOnsets + 1.0e-6),
+                    "BOUNCY pulse bass on-kick share in 20-28% (" + std::to_string (pulseOnsets > 0 ? 100.0 * pulseKick / pulseOnsets : 0.0) + "%)");
             expect (bounceMaxKick <= 0.15 + 1.0e-6,
                     "BOUNCY bounce rolls keep the bass on the kick at 15% or under (max " + std::to_string (100.0 * bounceMaxKick) + "%)");
         }
@@ -1165,9 +1171,9 @@ void testBouncyModes()
                 continue;
             }
             ++bounceN;
-            // 0.27 floor (was 0.29): the restated 2-bar motif (Oct 19 hook pass) keeps bars 5-7 as bars 1-2,
-            // so a sparse motif can sit a point under the old statistic. Catchiness wins (Melak, Oct 19).
-            expect (snd >= 0.27 - 1.0e-6 && snd <= 0.50 + 1.0e-6, tag + " bounce sounding " + std::to_string (snd) + " in 0.27-0.50");
+            // Floor 0.29 -> 0.27 in the Oct 19 hook pass (a sparse restated motif sat a point under it); back
+            // to 0.29 with bar 4's own answer half (catchiness report #3).
+            expect (snd >= 0.29 - 1.0e-6 && snd <= 0.50 + 1.0e-6, tag + " bounce sounding " + std::to_string (snd) + " in 0.29-0.50");
             // Composer spec for #70: bounce mean note length 0.8-1.6 sixteenths.
             const double meanLen = bass.count > 0 ? held / (double) bass.count : 0.0;
             expect (meanLen >= 0.8 - 1.0e-6 && meanLen <= 1.6 + 1.0e-6,
@@ -1192,9 +1198,9 @@ void testBouncyModes()
               << "/40 octave-move median " << octMed << "%; DEEP sounding median " << deepMed << "\n";
     // Genre model v1.2: pulse is a 30-40% batch quota through the seed index.
     expect (share >= 30.0 && share <= 40.0, "BOUNCY pulse share lands in 30-40%");
-    // Floor 10 -> 8 (Oct 19, hook cell rules, HookPlan.h): a bass hook's cell leaps (octaves included)
-    // on at most a quarter of its moves, per the catchiness research (this batch: median 10.8% -> 9.5%).
-    expect (octMed >= 8.0 && octMed <= 30.0, "BOUNCY bounce octave moves land in 8-30%");
+    // Floor 10 -> 8 in the Oct 19 hook cell rules (HookPlan.h); back to 10 with bar 4's own answer
+    // half (catchiness report #3).
+    expect (octMed >= 10.0 && octMed <= 30.0, "BOUNCY bounce octave moves land in 10-30%");
     expect (deepMed >= 0.78, "DEEP held bass median sounding >= 0.78");
 }
 
@@ -2289,6 +2295,68 @@ std::set<std::pair<int, int>> stabBarTokens (const rolla::Lane& stab, int bar)
     return out;
 }
 
+// Catchiness report #3: the shipped bass inside the model's repeat band. Per 16th the attack's pitch
+// class (rests and sustains one token), pairs of two rests skipped (the A&R F6 measure); m2 / m4 are
+// the shares equal 2 / 4 bars apart. The restate with bar 2 copied into bar 4 put 17-19 of 20 ROLLER,
+// DEEP and JACKIN rolls over the model's m2 p90; bar 4's own answer half, JACKIN's own loop and the
+// band guard (answerAboveBand) bring them under it. A guard edit never goes under a p10 or over the
+// 1-bar cap, so a roll can stay over (DEEP m4 when the turn's front half is bar 2's): at most 2 of 20.
+double bandRepeat (const rolla::Lane& lane, int lag)
+{
+    int tok[128];
+    for (int& t : tok)
+        t = -1;
+    for (int i = 0; i < lane.count; ++i)
+    {
+        const int a = (int) std::lround (lane.notes[i].start);
+        if (a >= 0 && a < 128)
+            tok[a] = pcOfNote (lane.notes[i].chord[0]);
+    }
+    int pairs = 0, same = 0;
+    for (int i = 0; i + lag < 128; ++i)
+    {
+        if (tok[i] < 0 && tok[i + lag] < 0)
+            continue;
+        ++pairs;
+        same += tok[i] == tok[i + lag] ? 1 : 0;
+    }
+    return pairs > 0 ? (double) same / pairs : 0.0;
+}
+
+void testBassRepeatBand()
+{
+    const char* names[] = { "ROLLER", "DEEP", "BOUNCY", "JACKIN" };
+    // genre_writing_model repeat_bands p90 (m2, m4), pooled over the reference bass MIDI.
+    const double m2Hi[] = { 0.791, 0.819, 0.871, 0.844 };
+    const double m4Hi[] = { 0.891, 0.814, 0.894, 0.855 };
+    for (int style = 0; style < 4; ++style)
+    {
+        int over2 = 0, over4 = 0;
+        std::vector<double> v2, v4;
+        for (int roll = 0; roll < 20; ++roll)
+        {
+            rolla::Settings s;
+            s.dialect = style;
+            s.bars = 8;
+            std::uint32_t seeds[rolla::NumParts] {};
+            for (int p = 0; p < rolla::NumParts; ++p)
+                seeds[p] = 2026101990u + (std::uint32_t) roll * 0x9E3779B9u + (std::uint32_t) p * 17u
+                         + (std::uint32_t) style * 101u;
+            rolla::Groove g {};
+            rolla::generate (g, s, seeds, 0x7fu);
+            const double r2 = bandRepeat (g.lane[rolla::Bass], 32), r4 = bandRepeat (g.lane[rolla::Bass], 64);
+            v2.push_back (r2);
+            v4.push_back (r4);
+            over2 += r2 > m2Hi[style] + 1.0e-6 ? 1 : 0;
+            over4 += r4 > m4Hi[style] + 1.0e-6 ? 1 : 0;
+        }
+        std::cout << names[style] << " bass repeat m2 median " << medianOf (v2) << " (p90 " << m2Hi[style] << ", over "
+                  << over2 << "/20) m4 median " << medianOf (v4) << " (p90 " << m4Hi[style] << ", over " << over4 << "/20)\n";
+        expect (over2 <= 2, std::string (names[style]) + " bass 2-bar repeat over the model p90 in at most 2 of 20");
+        expect (over4 <= 2, std::string (names[style]) + " bass 4-bar repeat over the model p90 in at most 2 of 20");
+    }
+}
+
 // A&R 490 #3: JACKIN "loop doesn't repeat" on 14 of 20 rolls, plus 4
 // LANE_FIT_LOW. Batch 2026101852, the 20 JACKIN rolls, scored as the gate
 // does: no LOOP_NO_REPEAT and the F6 2-bar repeat >= 0.60 on every roll,
@@ -3275,7 +3343,7 @@ void testKeyScaleState()
 // hold both an anchor in each bar and an e / a event), so these are shares, not every roll.
 void testHookCellRules()
 {
-    int bars = 0, anchor = 0, offKick = 0, cells = 0, eaOk = 0, pitched = 0, pcsOk = 0, sigOk = 0, restated = 0;
+    int bars = 0, anchor = 0, offKick = 0, cells = 0, eaOk = 0, pitched = 0, pcsOk = 0, sigOk = 0, restated = 0, restateCells = 0;
     for (int style = 0; style < 4; ++style)
         for (int roll = 0; roll < 20; ++roll)
         {
@@ -3343,11 +3411,17 @@ void testHookCellRules()
                 pcsOk += (npc >= 2 && npc <= 4) ? 1 : 0;
                 sigOk += (big >= 1 && big <= std::max (1, (n - 1) / 4)) ? 1 : 0;
             }
+            // Oct 19, catchiness report #3: a bass hook keeps bar 4's back half (16ths 9-16) as its
+            // answer, and a JACKIN bass loops on its own (loopJackinBass) without the restate. The
+            // answer half is not a copy of bar 2, and a JACKIN bass hook is not counted here.
+            if (h == rolla::Bass && style == rolla::Jackin)
+                continue;
+            auto answerHalf = [&] (int at) { return h == rolla::Bass && at / 16 == 3 && at % 16 >= 8; };
             bool same = true;
             for (const auto& [at, t] : top)
             {
                 const int b = at / 16;
-                if (b < 2 || b > 6)
+                if (b < 2 || b > 6 || answerHalf (at))
                     continue;
                 const auto it = top.find (at - (b - b % 2) * 16);
                 same = same && it != top.end() && it->second == t;
@@ -3355,18 +3429,19 @@ void testHookCellRules()
             for (const auto& [at, t] : top)
                 if (at / 16 < 2)
                     for (int b = at / 16 + 2; b <= 6; b += 2)
-                        same = same && top.count (at + (b - at / 16) * 16) == 1;
+                        same = same && (answerHalf (at + (b - at / 16) * 16) || top.count (at + (b - at / 16) * 16) == 1);
             restated += same ? 1 : 0;
+            ++restateCells;
         }
     std::cout << "Hook cells: anchor " << anchor << "/" << bars << " off-kick " << offKick << "/" << bars << " e/a band "
               << eaOk << "/" << cells << " pitch classes " << pcsOk << "/" << pitched << " signature " << sigOk << "/"
-              << pitched << " restated " << restated << "/" << cells << "\n";
+              << pitched << " restated " << restated << "/" << restateCells << "\n";
     expect (anchor * 100 >= bars * 95, "hook cell bars have an anchor (>= 95%)");
     expect (offKick * 100 >= bars * 95, "hook cell bars have an event off the kick (>= 95%)");
     expect (eaOk * 100 >= cells * 75, "hook cells keep the e / a share in band (>= 75%)");
     expect (pcsOk * 100 >= pitched * 85, "pitched hook cells play 2-4 pitch classes (>= 85%)");
     expect (sigOk * 100 >= pitched * 75, "pitched hook cells carry a signature interval (>= 75%)");
-    expect (restated * 100 >= cells * 90, "hook cells are restated through bar 7 (>= 90%)");
+    expect (restated * 100 >= restateCells * 90, "hook cells are restated through bar 7 (>= 90%)");
 }
 
 } // namespace
@@ -3418,6 +3493,7 @@ int main()
     testOfflineIndexOverlap();
     // Last too: it rolls fresh batches.
     testHookCellRules();
+    testBassRepeatBand();
 
     if (fails == 0)
         std::cout << "roll tests passed\n";
