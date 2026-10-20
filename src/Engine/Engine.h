@@ -87,6 +87,10 @@ struct EngineParams
     // MIX_SPEC strip, sum trim, duck, FX sends, mono-below, chops and preset trims
     // (kept for rolla-mix-render and the strip tests).
     bool sampleTrue = true;
+    // BASSMATCH (Sampler/BassMatch.h): 0 as before; 1+ plays the bass line in the octave that keeps
+    // the sample nearest its own pitch, trusts a confident probe over a key-like name, and lets the
+    // written lengths through by sample class.
+    int bassMatch = 0;
 };
 
 struct Transport

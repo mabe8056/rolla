@@ -819,6 +819,17 @@ void Sampler::readVoice (Voice& v, float& l, float& r) noexcept
         v.on = false;
     if (! v.loop && v.pos >= n - 1.0)
         v.on = false;
+    // BASSMATCH: a file that ends loud fades over its last 10 ms (FL's sampler edge), never a cut.
+    if (v.eofFade && ! v.loop && ! v.stopping && v.ratio > 0.0)
+    {
+        const int left = (int) ((n - 1.0 - v.pos) / v.ratio);
+        if (left <= (int) (0.010 * sr))
+        {
+            v.releaseN = std::max (8, left);
+            v.releaseLeft = v.releaseN;
+            v.stopping = true;
+        }
+    }
     // Treatment decay trim: past the lane's decay band the tail fades out on the
     // same raised-cosine release a stopping voice uses. trimLeft 0 never fires.
     if (v.trimLeft > 0 && --v.trimLeft == 0 && ! v.stopping)
@@ -1440,6 +1451,27 @@ Sampler::Take Sampler::startNote (int part, int midiNote, int velocity, float en
     if (params.sampleTrue && anchorNote >= 0 && anchorNote != midiNote
         && tonalRetunes (pitch, audio->namedRoot, shiftRuleFor (part)))
         semis = tonalShift (pitch, audio->namedRoot, (double) anchorNote, shiftRuleFor (part)) + (double) (toward - anchorNote);
+    // BASSMATCH: the line's one octave around the sample's own pitch (BassMatch.h), and the written
+    // length by how long the sample rings at that speed: plucks ring to their end, short files a
+    // half 16th past the note, held files stop with it.
+    bool eofFade = false;
+    if (part == Bass && params.sampleTrue && params.bassMatch >= 1)
+    {
+        eofFade = true;
+        const double root = bassmatch::resolveRoot (pitch, audio->namedRoot, audio->namedMinor);
+        if (root < 0.0)
+            semis = 0.0;
+        else
+        {
+            const int k = bassmatch::octaveFor (bassLine, bassLineBase, root);
+            semis = bassmatch::noteShift (midiNote, k, root);
+            const auto cls = bassmatch::decayOf (bassmatch::playedRingMs (audio->ringMs, bassmatch::anchorShift (bassLine, bassLineBase, k, root)));
+            if (cls == bassmatch::Decay::Pluck)
+                end16 = 1.0e9f;
+            else if (cls == bassmatch::Decay::Short && end16 < 1.0e8f)
+                end16 += 0.5f;
+        }
+    }
     fresh.ratio = std::clamp (std::pow (2.0, semis / 12.0) * (audio->rate / sr), 0.05, 16.0);
     fresh.end16 = end16;
     fresh.fade = 0.f;

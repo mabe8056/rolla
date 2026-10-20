@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../Sampler/BassMatch.h"
 #include "SampleLibrary.h"
 #include <atomic>
 #include <cstring>
@@ -136,6 +137,13 @@ public:
     // anchorNote >= 0 (a chord's centre, sample-true): every tone of the chord takes the
     // octave fold of the anchor, so the voicing sounds as written instead of each tone
     // folding on its own into a cluster.
+    // BASSMATCH: the bass line being played (one octave choice per line), set by the Engine each block.
+    void setBassLine (const bassmatch::Line& line, int base) noexcept
+    {
+        bassLine = line;
+        bassLineBase = base;
+    }
+
     Take take (int part, int midiNote, int velocity, float end16,
                const PresetBank& bank, const EngineParams& params,
                ChordAsk ask = {}, int anchorNote = -1) noexcept;
@@ -226,6 +234,8 @@ private:
         float gain = 0.2f;
         float pan = 0.f;
         float end16 = 1.0e9f;
+        // BASSMATCH: the file's last 10 ms fade out instead of stopping on a loud sample.
+        bool eofFade = false;
         float cut = 8000.f;
         float res = 0.05f;
         float envOct = 0.f;
@@ -268,6 +278,8 @@ private:
         char file[256] {};
     };
     static constexpr int kHeld = 16;
+    bassmatch::Line bassLine {};
+    int bassLineBase = 26;
     Held held[kHeld];
     int heldCount = 0;
     // Set by start() when the note was dropped only because a file is still loading.

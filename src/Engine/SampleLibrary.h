@@ -522,7 +522,29 @@ struct SampleAudio
     float attackMs = 1.0e4f;
     float bodyDb = -100.f;
     float ringMs = 0.f;
+    // Share of the first second's energy under 120 Hz (subShareOf): ~1 is a pure sine sub.
+    float subShare = -1.f;
 };
+
+// Energy under 120 Hz against all of it over the first second (2-pole low-pass), for BASSMATCH's
+// pick: a pure sine sub has no audible notes on small speakers.
+inline float subShareOf (const float* l, const float* r, int frames, double rate) noexcept
+{
+    if (l == nullptr || frames <= 0 || rate <= 0.0)
+        return -1.f;
+    const int n = std::min (frames, (int) rate);
+    const double a = std::exp (-2.0 * 3.14159265358979 * 120.0 / rate);
+    double y1 = 0.0, y2 = 0.0, lo = 0.0, all = 0.0;
+    for (int i = 0; i < n; ++i)
+    {
+        const double x = r != nullptr ? 0.5 * ((double) l[i] + (double) r[i]) : (double) l[i];
+        y1 = (1.0 - a) * x + a * y1;
+        y2 = (1.0 - a) * y1 + a * y2;
+        lo += y2 * y2;
+        all += x * x;
+    }
+    return all > 1.0e-20 ? (float) std::min (1.0, lo / all) : -1.f;
+}
 
 // Envelope of a loaded buffer (SampleAudio::attackMs / bodyDb / ringMs). Never writes the audio.
 inline void measureEnvelope (const float* l, const float* r, int frames, double rate, float& attackMs, float& bodyDb,

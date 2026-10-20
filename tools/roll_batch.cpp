@@ -1,3 +1,4 @@
+#include "Sampler/BassMatch.h"
 #include "PatternStats.h"
 #include "Engine/Engine.h"
 #include "Generator/Generator.h"
@@ -126,6 +127,7 @@ struct Knobs
     float levelDb[rolla::NumParts] {};
     int intensity = 75;
     int harmony = 0;           // --knob HARMONY=0|1|2|3 (Settings::harmony)
+    int bassMatch = 0;         // --knob BASSMATCH=0|1|2 (Settings::bassMatch, EngineParams::bassMatch)
     bool stems = false;
     bool midiOnly = false;     // --midi-only: write the MIDI and roll.json, no WAV render
     bool styleFolders = false; // --folder-names styles
@@ -182,6 +184,8 @@ bool parseKnob (const std::string& text, Knobs& knobs)
         for (int i = 0; i < rolla::NumParts; ++i) knobs.levelDb[i] = value;
     else if (name == "HARMONY")
         knobs.harmony = std::clamp ((int) std::lround (value), 0, 3);
+    else if (name == "BASSMATCH")
+        knobs.bassMatch = std::clamp ((int) std::lround (value), 0, 2);
     else if (name == "INTENSITY")
         knobs.intensity = std::clamp ((int) std::lround (value), 0, 100);
     else
@@ -214,6 +218,7 @@ rolla::Settings rollSettings (int dialect, const Knobs& knobs)
     s.bars = 8;
     s.fill = false;
     s.harmony = knobs.harmony;
+    s.bassMatch = knobs.bassMatch;
     return s;
 }
 
@@ -323,6 +328,7 @@ Rendered renderWav (const rolla::PresetBank& bank, const rolla::Groove& groove, 
     params.bpm = (float) bpm;
     params.mix = mix != nullptr && mix->loaded ? mix : nullptr;
     params.tpGuard = true;
+    params.bassMatch = knobs.bassMatch;
 
     juce::AudioBuffer<float> audio (2, total);
     audio.clear();
@@ -528,6 +534,55 @@ int walkPick (rolla::SampleLibrary& library, const rolla::SampleIndex& index, co
     return at;
 }
 
+// BASSMATCH 1+ bass pick (the design's selector term, Oct 20 bass forensics): the file has to suit
+// the line it will play. Lower is better. Mean |shift| over 3 st and shifts down past 5 st cost; so
+// does ringing much shorter than the line's notes, a recorded chord whose name disagrees with its
+// pitch, riser / FX names and a pure sine sub; his own picks (favourites file) get a bonus.
+float bassTerm (const rolla::SampleAudio& a, const std::string& path, const rolla::bassmatch::Line& line, int base,
+                const std::vector<std::string>& favourites) noexcept
+{
+    namespace bm = rolla::bassmatch;
+    const double root = bm::resolveRoot (a.pitch, a.namedRoot, a.namedMinor);
+    float t = 0.f;
+    if (root >= 0.0 && line.notes > 0)
+    {
+        const int k = bm::octaveFor (line, base, root);
+        double sum = 0.0;
+        int down = 0;
+        for (int b = 0; b < bm::kBins; ++b)
+            for (int c = 0; c < line.count[b]; ++c)
+            {
+                const double s = bm::noteShift (base + b + bm::kLo, k, root);
+                sum += std::fabs (s);
+                down += s < -5.0 ? 1 : 0;
+            }
+        const double mean = sum / (double) line.notes;
+        t += 0.5f * (float) std::clamp ((mean - 3.0) / 3.0, 0.0, 1.5);
+        t += 0.75f * (float) down / (float) line.notes;
+        const float lenMs = line.medLen16 * 60000.f / 130.f / 4.f;
+        const float d = bm::playedRingMs (a.ringMs, bm::anchorShift (line, base, k, root));
+        if (lenMs > 0.f)
+            t += 0.6f * std::clamp ((0.8f * lenMs - d) / (0.8f * lenMs), 0.f, 1.f);
+    }
+    else
+        t += 1.5f; // unpitched: plays as recorded whatever the line
+    if (a.pitch.isChord && a.namedRoot >= 0 && ! a.namedMinor
+        && rolla::pitchprobe::pcDistance ((double) a.namedRoot, (double) a.pitch.rootPitch) > 1.0)
+        t += 1.f;
+    std::string low = path;
+    for (auto& ch : low)
+        ch = (char) std::tolower ((unsigned char) ch);
+    for (const char* tok : { "lift", "rise", "riser", "sweep", "fx" })
+        if (low.find (tok) != std::string::npos)
+            t += 2.f;
+    if (a.subShare > 0.97f)
+        t += 0.4f;
+    for (const auto& f : favourites)
+        if (! f.empty() && path.find (f) != std::string::npos)
+            t -= 0.7f;
+    return t;
+}
+
 void writeSidecar (const juce::File& wav, int style, const Knobs& knobs, bool hitsMute, float swing,
                    const rolla::PresetBank& bank, const int preset[rolla::NumParts],
                    const int samplePick[rolla::NumParts], const std::string fileOf[rolla::NumParts],
@@ -688,6 +743,57 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
                     if (at >= 0)
                         samplePick[rolla::Stab] = at;
                     std::cerr << "H3_STAB " << why << "\n";
+                }
+                // BASSMATCH 1+: the bass file is drawn among the best-suited 8% of the pool for the
+                // line it will play (bassTerm), the seed picking inside that shortlist.
+                if (knobs.bassMatch >= 1)
+                {
+                    const auto& spec = rolla::specAt (bank, rolla::Bass, preset[rolla::Bass]);
+                    const rolla::PoolFilter filter = rolla::poolFilterWithFiles (*index, spec, rolla::Bass, spec.filter.voice, style);
+                    const int n = rolla::sampleIndexCount (*index, rolla::Bass, filter);
+                    const auto line = rolla::bassmatch::lineOf (arranged.lane[rolla::Bass]);
+                    const int oct = std::clamp (bank.bass[rolla::presetSlot (bank, rolla::Bass, preset[rolla::Bass])].octave, 0, 3);
+                    const int base = 12 * (oct + 1) + ((settings.key % 12) + 12) % 12;
+                    static const std::vector<std::string> favourites = []
+                    {
+                        std::vector<std::string> out;
+                        if (const char* f = std::getenv ("ROLLA_BASS_FAVOURITES"))
+                        {
+                            std::ifstream in (f);
+                            for (std::string l; std::getline (in, l);)
+                                if (! l.empty())
+                                    out.push_back (l);
+                        }
+                        return out;
+                    }();
+                    std::vector<std::pair<float, int>> scored;
+                    for (int at = 0; at < n; ++at)
+                    {
+                        const auto* entry = rolla::sampleIndexAt (*index, rolla::Bass, filter, at);
+                        if (entry == nullptr)
+                            continue;
+                        rolla::waitForSampleFiles (*library, { std::string (entry->path) }, 60000, "bassmatch");
+                        if (const auto* a = library->tryGet (entry->path))
+                            scored.push_back ({ bassTerm (*a, entry->path, line, base, favourites), at });
+                    }
+                    if (! scored.empty())
+                    {
+                        std::stable_sort (scored.begin(), scored.end());
+                        const int keep = std::max (3, (int) std::ceil (0.08 * (double) scored.size()));
+                        const int m = std::min (keep, (int) scored.size());
+                        const auto& pick = scored[(size_t) ((unsigned) samplePick[rolla::Bass] % (unsigned) m)];
+                        samplePick[rolla::Bass] = pick.second;
+                        const auto* entry = rolla::sampleIndexAt (*index, rolla::Bass, filter, pick.second);
+                        const rolla::SampleAudio* pa = entry ? library->tryGet (entry->path) : nullptr;
+                        if (pa != nullptr)
+                            std::cerr << "BASSMATCH root " << rolla::bassmatch::resolveRoot (pa->pitch, pa->namedRoot, pa->namedMinor)
+                                      << " probe " << pa->pitch.rootPitch << " conf " << pa->pitch.conf << " chord " << (int) pa->pitch.isChord
+                                      << " named " << pa->namedRoot << " key " << (int) pa->namedMinor << " ring " << pa->ringMs
+                                      << " sub " << pa->subShare << " k " << rolla::bassmatch::octaveFor (line, base, rolla::bassmatch::resolveRoot (pa->pitch, pa->namedRoot, pa->namedMinor))
+                                      << " base " << base << "\n";
+                        std::cerr << "BASSMATCH pick " << (entry ? entry->path : "?") << " term " << pick.first << " (best "
+                                  << scored.front().first << ", shortlist " << m << " of " << scored.size() << ")\n";
+                    }
                 }
                 for (int p = 0; p < rolla::Drums; ++p)
                     fileOf[p] = pickedFile (index.get(), rolla::specAt (bank, p, preset[p]), p, -1, samplePick[p], style);

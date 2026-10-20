@@ -1035,6 +1035,8 @@ void Engine::process (const Groove& groove,
                 return en > st;
             };
 
+            if (play.bassMatch >= 1)
+                sampler.setBassLine (bassmatch::lineOf (groove.lane[Bass]), bassBase);
             for (int ni = 0; ni < groove.lane[Bass].count; ++ni)
             {
                 const auto& n = groove.lane[Bass].notes[ni];
@@ -1049,7 +1051,8 @@ void Engine::process (const Groove& groove,
                 // (Sampler::take releases it), the way a bass one-shot is played. Cut at the MIDI note
                 // end, a median note heard 31% of the sample (Oct 20, Melak: "you're not fully using my
                 // bass sounds").
-                const auto taken = sampler.take (Bass, semi, n.vel, play.sampleTrue ? 1.0e9f : en, bank, play);
+                // BASSMATCH 1+: the written end goes through; the Sampler sets it by sample class.
+                const auto taken = sampler.take (Bass, semi, n.vel, play.sampleTrue && play.bassMatch < 1 ? 1.0e9f : en, bank, play);
                 if (taken.kind == 1)
                 {
                     if (E.bass.midiOn)

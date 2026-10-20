@@ -152,6 +152,8 @@ struct Settings
     // Pack-learned harmony (PackHarmony.h): 0 off, 1 the stab plays the roll's chord progression,
     // 2 the bass and pluck move with it too, 3 DEEP's chord writer for every style (rules::jazzRevoice).
     int harmony = 0;
+    // BASSMATCH (Oct 20 bass redesign): 0 as before, 1 sound fixes (engine), 2 also the pack-learned bass notes.
+    int bassMatch = 0;
 };
 
 enum BassMode : int

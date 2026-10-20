@@ -646,6 +646,8 @@ void SampleLibrary::loadOne (const std::string& relative)
     audio->flatness = spectralFlatness (audio->left.data(), audio->frames);
     measureEnvelope (audio->left.data(), audio->right.size() == audio->left.size() ? audio->right.data() : nullptr,
                      std::min (audio->frames, (int) audio->left.size()), audio->rate, audio->attackMs, audio->bodyDb, audio->ringMs);
+    audio->subShare = subShareOf (audio->left.data(), audio->right.size() == audio->left.size() ? audio->right.data() : nullptr,
+                                  std::min (audio->frames, (int) audio->left.size()), audio->rate);
     audio->loudStart = loudestRegionStart (audio->left.data(), audio->frames, audio->rate);
     audio->voicedCount = voicedOnsets (audio->left.data(), audio->right.empty() ? nullptr : audio->right.data(),
                                        audio->frames, audio->rate, audio->slices, audio->sliceCount, audio->loudStart,
