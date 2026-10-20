@@ -554,11 +554,14 @@ inline void layOutGhost (Lane& lane, const Cell* bars, int nb) noexcept
 //                   slides down (1 -> maj7 -> b7, or 1 -> b7 -> b6 / 5) and climbs home
 // The 2nd, b6 and one chromatic note appear here only as passing / leading notes (3 of 7 splits).
 enum GrooveContour : int { Climb = 0, RiseDropBelow, HookRepeat, PedalCall, CallRootAnswer, NeighbourLoop, OctaveDisco, kContours };
+// Round 7 (Oct 20): Melak called 4, 7, 8, 9, 10 "great riff" and 3, 5 "good"; five of those seven
+// were PedalCall (a rhythmic root call, a two-note answer stepping down: 4 -> b3, 5 -> 4), one
+// RiseDropBelow; the "eh" / "too chaotic" ones carried the most ghosts. PedalCall leads now.
 inline constexpr float kContourW[4][kContours] = {
-    { 0.16f, 0.18f, 0.14f, 0.10f, 0.14f, 0.14f, 0.14f }, // ROLLER
-    { 0.12f, 0.14f, 0.14f, 0.15f, 0.17f, 0.14f, 0.14f }, // DEEP
-    { 0.12f, 0.14f, 0.18f, 0.10f, 0.14f, 0.14f, 0.18f }, // BOUNCY
-    { 0.16f, 0.12f, 0.16f, 0.08f, 0.14f, 0.14f, 0.20f }, // JACKIN
+    { 0.08f, 0.16f, 0.10f, 0.30f, 0.12f, 0.12f, 0.12f }, // ROLLER
+    { 0.06f, 0.16f, 0.08f, 0.40f, 0.12f, 0.10f, 0.08f }, // DEEP
+    { 0.08f, 0.14f, 0.12f, 0.30f, 0.12f, 0.10f, 0.14f }, // BOUNCY
+    { 0.08f, 0.14f, 0.12f, 0.28f, 0.12f, 0.10f, 0.16f }, // JACKIN
 };
 
 struct GrooveHit
@@ -815,8 +818,15 @@ inline Cell grooveBar (int contour, const int* set, int nSet, bool b5, Rng& r, b
                 pitch[i] = 0;
         else
         {
-            const int a = has (7) ? 7 : (has (5) ? 5 : ups[0]);
-            const int b = has (3) ? 3 : (has (10) ? -2 : ups[0]);
+            // the answer steps down: 5 -> 4 or 4 -> b3 (his round-7 favourites), else the old pair
+            int a = has (7) ? 7 : (has (5) ? 5 : ups[0]);
+            int b = has (3) ? 3 : (has (10) ? -2 : ups[0]);
+            if (r.next() < 0.85)
+            {
+                const bool fiveFour = r.next() < 0.45;
+                a = fiveFour ? 7 : 5;
+                b = fiveFour ? 5 : 3;
+            }
             const int split = std::max (1, n / 2);
             for (int i = 0; i < n; ++i)
                 pitch[i] = i < split ? a : b;
@@ -930,7 +940,7 @@ inline int compose (Lane& lane, int dialect, int mode, int bars, std::uint32_t s
         const int nSet = grooveSet (r, mode, set);
         const int contour = std::max (0, pickW (kContourW[st], kContours, r.next()));
         const bool b5 = r.next() < 0.25;
-        const bool ghosts = r.next() < 0.5;
+        const bool ghosts = r.next() < 0.15; // ghosts made riffs busy ("eh", "too chaotic")
         // period: PedalCall is 4 bars; the others 1 bar (.67) or 2 (bar 2 changes its first onset)
         const int period = contour == PedalCall ? 4 : (contour == CallRootAnswer ? 2 : (r.next() < 0.67 ? 1 : 2));
         Cell cells[4];
