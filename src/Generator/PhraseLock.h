@@ -110,6 +110,40 @@ inline void shapeSounding (Lane& lane, int bars, float lo, float hi) noexcept
             lane.notes[i].length = len[i];
 }
 
+// Bass voice leading (catchiness research #7): references move the bass by 5+ semitones on
+// 23-34% of moves and repeat the note on ~52%; ROLLA leapt on 77-84%, mostly octave
+// displacements (8, 9, 14, 15 semitones). Each note takes the octave of its own pitch class
+// closest to the previous note, inside the lane's own range: same note names, same rhythm,
+// steps instead of displaced leaps. A move of exactly an octave (same pitch class) is a chosen
+// signature and stays. Run on the motif bars and the turn before restateMotif.
+inline void voiceLead (Lane& lane, int bars) noexcept
+{
+    if (lane.count < 2)
+        return;
+    int lo = 127, hi = 0;
+    for (int i = 0; i < lane.count; ++i)
+    {
+        lo = std::min (lo, (int) lane.notes[i].chord[0]);
+        hi = std::max (hi, (int) lane.notes[i].chord[0]);
+    }
+    for (int i = 1; i < lane.count; ++i)
+    {
+        const int b = phrase_lock::barOf (lane.notes[i].start);
+        if (! (b < 2 || b == bars - 1))
+            continue;
+        const int prev = lane.notes[i - 1].chord[0];
+        const int cur = lane.notes[i].chord[0];
+        const int d = cur - prev;
+        if (d == 0 || d == 12 || d == -12 || std::abs (d) <= 6)
+            continue;
+        int best = cur;
+        for (int cand = cur - 24; cand <= cur + 24; cand += 12)
+            if (cand >= lo && cand <= hi && std::abs (cand - prev) < std::abs (best - prev))
+                best = cand;
+        lane.notes[i].chord[0] = (std::int8_t) best;
+    }
+}
+
 inline void restateMotif (DrumLane& drums, int bars) noexcept
 {
     if (bars < 4)

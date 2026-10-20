@@ -5371,6 +5371,7 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
     // finishing passes edit bars one by one: restate it after them so the riff really comes back.
     if (((partMask >> Bass) & 1u) != 0)
     {
+        voiceLead (g.lane[Bass], s.bars);
         restateMotif (g.lane[Bass], s.bars);
         keepMonophonic (g.lane[Bass], false);
         // The style's held-bass band (A&R 423): ROLLER / JACKIN >= 0.72, DEEP 0.72-0.88,
