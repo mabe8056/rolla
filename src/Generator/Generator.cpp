@@ -2016,8 +2016,16 @@ void writePluck (Lane& lane, const Settings& s, Rng& rng, int mode)
         // hook cell's pitch-class range), so the whole cell is heard in every bar and lands
         // somewhere new against the bar line each time (3: 4 notes, 5: 3, 7: 2).
         static constexpr int kPeriods[3] = { 3, 5, 7 };
-        const int step = kPeriods[(int) (rng.next() * 3.0) % 3];
-        const int phase = 1 + (int) (rng.next() * (double) step);
+        int step = kPeriods[(int) (rng.next() * 3.0) % 3];
+        const double phaseDraw = rng.next();
+        // The whole line has to fit in the lane beside the figure (kMaxNotes): now that it is no
+        // longer restated from bars 1-2, a line cut short drops out for the last bars. A dense
+        // figure (BOUNCY's 8 a bar) leaves no room for a 3-sixteenth line, so it takes the next
+        // longer period; a roll where the drawn line fits is unchanged.
+        auto lineNotes = [&] (int p) { return (s.bars * 16 - (1 + (int) (phaseDraw * (double) p)) + p - 1) / p; };
+        while (step < 7 && lane.count + lineNotes (step) > kMaxNotes)
+            step = step == 3 ? 5 : 7;
+        const int phase = 1 + (int) (phaseDraw * (double) step);
         const int cellLen = clampi ((kStepsPerBar - 1) / step, 2, 4);
         int cellDeg[4] {};
         for (int k = 0; k < cellLen; ++k)
