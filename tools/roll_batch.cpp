@@ -585,6 +585,17 @@ float bassTerm (const rolla::SampleAudio& a, const std::string& path, const roll
             t += 2.f;
     if (a.subShare > 0.97f)
         t += 0.4f;
+    // Round 4 (Oct 20): #5 VER_DirtyWarp (probe conf .38, chord-like) and #8 VER_BasicWarp (probe 0.9 st
+    // off its C name: a pitch glide) were "wtf". A riff bass is one confident, steady pitch.
+    if (! a.pitch.pitched() || a.pitch.conf < 0.80f || a.pitch.isChord)
+        t += 5.f;
+    else if (a.namedRoot >= 0 && ! a.namedMinor)
+    {
+        const double named = (double) a.namedRoot + 12.0 * std::round (((double) a.pitch.rootPitch - (double) a.namedRoot) / 12.0);
+        const double off = std::fabs ((double) a.pitch.rootPitch - named);
+        if (off > 0.3 && off < 1.0)
+            t += 5.f;
+    }
     for (const auto& f : favourites)
         if (! f.empty() && path.find (f) != std::string::npos)
             t -= 0.7f;
