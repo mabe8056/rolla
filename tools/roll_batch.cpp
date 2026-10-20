@@ -778,8 +778,14 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
                     }
                     if (! scored.empty())
                     {
+                        // Every file without a real mismatch for this line (term <= 0.6: no big shift
+                        // down, no ring far shorter than the notes, no chord / riser / pure sine), at
+                        // least the best 8%: a shortlist of the best few collapsed onto one family.
                         std::stable_sort (scored.begin(), scored.end());
-                        const int keep = std::max (3, (int) std::ceil (0.08 * (double) scored.size()));
+                        int ok = 0;
+                        while (ok < (int) scored.size() && scored[(size_t) ok].first <= 0.6f)
+                            ++ok;
+                        const int keep = std::max (ok, std::max (3, (int) std::ceil (0.08 * (double) scored.size())));
                         const int m = std::min (keep, (int) scored.size());
                         const auto& pick = scored[(size_t) ((unsigned) samplePick[rolla::Bass] % (unsigned) m)];
                         samplePick[rolla::Bass] = pick.second;
