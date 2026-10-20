@@ -879,6 +879,7 @@ const char* usageText()
            "            [--knob DARK=0.55] [--knob BUSY=0.40] [--knob BOUNCE=0.45] [--knob STAB=0.55]\n"
            "            [--knob TONE=0.5] [--knob PUNCH=0.5] [--knob LEVEL=0] [--knob INTENSITY=75]\n"
            "            [--knob BASS.TONE=0.5] [--knob BASS.PUNCH=0.5] [--knob BASS.LEVEL=0]\n"
+           "            [--knob HARMONY=0|1|2|3] [--knob BASSMATCH=0|1|2]   (pack-learned harmony / bass, default 0)\n"
            "            [--orig-index FILE|none]   hashed reference index (default: $ROLLA_ORIG_INDEX, else\n"
            "                                       <ROLLA settings folder>/Originality/orig_index.json if present)\n"
            "rolla-rolls --build-orig-index DIR [--orig-out FILE]\n"

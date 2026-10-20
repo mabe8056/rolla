@@ -549,4 +549,50 @@ inline constexpr float kSnareGhostBar = 0.5f;
 // one of them; a chop's next-door 16ths are left free so every chop is heard as its own cut.
 inline constexpr float kVoxChopsWeight[3] = { 0.45f, 0.40f, 0.15f };
 
+// BASSMATCH level 2 (Oct 20 bass redesign; Settings::bassMatch >= 2 only, levels 0 and 1 never read
+// these). Pooled pack stats, Oct 20: 125 keyed bass loops of Melak's sample-pack MIDI, 4281 notes,
+// pitch classes relative to each loop's tonic, pooled over every loop and every style. Statistics
+// only (one-note counts, note-to-note degree counts, slot counts): no sequence, cell or loop of
+// any one source is stored. Rows normalised, rounded to 3 decimals; the composer still caps every
+// transition cell (kCellCeiling) and applies the entropy floor (kFloorRowBass) at run time.
+inline constexpr float kPackBassUnigram[12] = { 0.396f, 0.050f, 0.037f, 0.071f, 0.013f, 0.096f, 0.020f, 0.108f, 0.081f, 0.022f, 0.088f, 0.019f };
+// The degree a bar's last note plays (the bar-4 answer and the bar-8 turn end on it).
+inline constexpr float kPackBassEndBar[12] = { 0.260f, 0.046f, 0.064f, 0.074f, 0.015f, 0.087f, 0.025f, 0.155f, 0.074f, 0.013f, 0.166f, 0.022f };
+// Row = current degree, column = the next note's degree (consecutive notes of a loop).
+inline constexpr float kPackBassTrans[12][12] = {
+    { 0.631f, 0.046f, 0.033f, 0.047f, 0.010f, 0.044f, 0.008f, 0.050f, 0.043f, 0.005f, 0.063f, 0.020f },
+    { 0.418f, 0.312f, 0.019f, 0.067f, 0.000f, 0.038f, 0.000f, 0.038f, 0.038f, 0.000f, 0.067f, 0.000f },
+    { 0.260f, 0.032f, 0.188f, 0.149f, 0.000f, 0.130f, 0.013f, 0.162f, 0.000f, 0.026f, 0.039f, 0.000f },
+    { 0.223f, 0.034f, 0.062f, 0.288f, 0.003f, 0.092f, 0.031f, 0.113f, 0.079f, 0.031f, 0.045f, 0.000f },
+    { 0.135f, 0.000f, 0.000f, 0.077f, 0.269f, 0.038f, 0.000f, 0.288f, 0.077f, 0.000f, 0.115f, 0.000f },
+    { 0.185f, 0.020f, 0.008f, 0.083f, 0.005f, 0.421f, 0.023f, 0.138f, 0.080f, 0.005f, 0.033f, 0.000f },
+    { 0.198f, 0.081f, 0.000f, 0.012f, 0.000f, 0.035f, 0.326f, 0.035f, 0.070f, 0.070f, 0.035f, 0.140f },
+    { 0.249f, 0.034f, 0.057f, 0.061f, 0.036f, 0.079f, 0.002f, 0.355f, 0.059f, 0.023f, 0.041f, 0.005f },
+    { 0.094f, 0.018f, 0.018f, 0.003f, 0.000f, 0.135f, 0.009f, 0.171f, 0.388f, 0.012f, 0.135f, 0.018f },
+    { 0.167f, 0.000f, 0.000f, 0.089f, 0.000f, 0.022f, 0.044f, 0.022f, 0.156f, 0.378f, 0.067f, 0.056f },
+    { 0.329f, 0.042f, 0.011f, 0.065f, 0.006f, 0.037f, 0.020f, 0.037f, 0.073f, 0.017f, 0.348f, 0.017f },
+    { 0.114f, 0.000f, 0.203f, 0.025f, 0.000f, 0.038f, 0.089f, 0.025f, 0.000f, 0.076f, 0.215f, 0.215f },
+};
+// Degree weight by metric strength of the slot: 0 beat, 1 8th offbeat, 2 e / a.
+inline constexpr float kPackBassChoice[3][12] = {
+    { 0.384f, 0.063f, 0.030f, 0.064f, 0.012f, 0.117f, 0.015f, 0.119f, 0.079f, 0.021f, 0.080f, 0.014f },
+    { 0.385f, 0.039f, 0.049f, 0.068f, 0.015f, 0.078f, 0.027f, 0.107f, 0.096f, 0.015f, 0.103f, 0.019f },
+    { 0.418f, 0.048f, 0.031f, 0.081f, 0.011f, 0.094f, 0.019f, 0.099f, 0.066f, 0.029f, 0.079f, 0.024f },
+};
+// Share of bass attacks per 16th of the bar. The onset grid is half the style's own kBassOnset and
+// half this prior (scaled to the style grid's mean); the onset entropy floor mixes toward it.
+inline constexpr float kPackBassSlot[16] = { 0.123f, 0.025f, 0.065f, 0.066f, 0.057f, 0.035f, 0.104f, 0.050f, 0.075f, 0.042f, 0.077f, 0.055f, 0.064f, 0.034f, 0.102f, 0.029f };
+inline constexpr float kPackSlotMix = 0.5f;
+// Beat-1 anchor: P(a bar's onset draw places 16th 1 first), and the degree it plays (root, 4th,
+// b6, 5th, b3, b7; masked to the roll's mode).
+inline constexpr float kMatchBeat1[kStyles] = { 0.70f, 0.55f, 0.65f, 0.70f };
+inline constexpr float kMatchSlot0[12] = { 0.50f, 0.0f, 0.0f, 0.06f, 0.0f, 0.12f, 0.0f, 0.07f, 0.09f, 0.0f, 0.06f, 0.0f };
+// Share of bass attacks on kick steps the finished line aims for, and the per-bar cap of the onset draw.
+inline constexpr float kMatchKickTarget[kStyles] = { 0.30f, 0.22f, 0.28f, 0.32f };
+inline constexpr float kMatchKickCapBar = 0.50f;
+// Exact repeats are allowed: the bar-4 answer is drawn less often, and JACKIN's 1-bar repeat cap
+// (kRepeatM1Max) opens up.
+inline constexpr float kMatchBar4AnswerScale = 0.6f;
+inline constexpr float kMatchRepeatM1Max[kStyles] = { 0.735f, 0.667f, 0.751f, 0.50f };
+
 } // namespace rolla::rules::tables
