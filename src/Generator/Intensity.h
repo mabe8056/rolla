@@ -98,7 +98,8 @@ inline IntensityPlan planIntensity (int dialect, int intensity, float stabKnob) 
     plan.variation = plan.value >= 67;
     // Mid band (the A2 frame at 60) already loops one lane. LONG's high band loops two.
     if (plan.value >= 34)
-        plan.oddLoops = (plan.dialect == Long && plan.value >= 67) ? 2 : 1;
+        // Odd 3/5-bar loops ran off the 4/8-bar phrase grid and broke the hook (Oct 19): none.
+        plan.oddLoops = 0;
 
     int nIn = 0;
     plan.lanesIn[0] = 0;

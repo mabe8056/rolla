@@ -1146,7 +1146,9 @@ void testBouncyModes()
                 continue;
             }
             ++bounceN;
-            expect (snd >= 0.29 - 1.0e-6 && snd <= 0.50 + 1.0e-6, tag + " bounce sounding " + std::to_string (snd) + " in 0.29-0.50");
+            // 0.27 floor (was 0.29): the restated 2-bar motif (Oct 19 hook pass) keeps bars 5-7 as bars 1-2,
+            // so a sparse motif can sit a point under the old statistic. Catchiness wins (Melak, Oct 19).
+            expect (snd >= 0.27 - 1.0e-6 && snd <= 0.50 + 1.0e-6, tag + " bounce sounding " + std::to_string (snd) + " in 0.27-0.50");
             // Composer spec for #70: bounce mean note length 0.8-1.6 sixteenths.
             const double meanLen = bass.count > 0 ? held / (double) bass.count : 0.0;
             expect (meanLen >= 0.8 - 1.0e-6 && meanLen <= 1.6 + 1.0e-6,

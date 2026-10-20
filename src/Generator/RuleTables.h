@@ -491,9 +491,11 @@ inline constexpr float kAnswerSilentBoost[kStyles] = { 1.0f, 1.0f, 1.0f, 1.8f };
 // JACKIN onset weight in the front / back half of the bar (its hook leans into beats 3-4).
 inline constexpr float kJackinBackLean[2] = { 0.50f, 1.50f };
 // P(bar 5 or 6 restates with a back-half mutation).
-inline constexpr float kBackHalfVariation[kStyles] = { 0.35f, 0.65f, 0.60f, 0.40f };
+// Bars 5-7 restate the 2-bar motif exactly: a hook is said again, not redrawn (Oct 19,
+// Melak: the songs were not catchy). Bar 4 and bar 8 still vary (kBar4AnswerProb, turnBar).
+inline constexpr float kBackHalfVariation[kStyles] = { 0.f, 0.f, 0.f, 0.f };
 // Smallest density change (notes) that redraws a restated bar's back half (bars 5-7).
-inline constexpr int kRestateDeltaMin[kStyles] = { 2, 1, 1, 1 };
+inline constexpr int kRestateDeltaMin[kStyles] = { 99, 99, 99, 99 }; // density moves no longer redraw bars 5-7
 // P(the call's first onset is the root): an anchor for the tonic guard.
 inline constexpr float kFirstRoot[kStyles] = { 0.65f, 0.70f, 0.80f, 0.55f };
 // DARK tilt: bright boosts the 5th, dark the b3 and the 2nd / b2.

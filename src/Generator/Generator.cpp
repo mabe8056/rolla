@@ -3,6 +3,7 @@
 #include "Originality.h"
 #include "RuleComposer.h"
 #include "RuleTables.h"
+#include "PhraseLock.h"
 
 #include <algorithm>
 #include <bitset>
@@ -5364,6 +5365,21 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
             trimSamePitchOverlaps (g.lane[part]);
         }
     }
+    // Hook structure: one 2-bar idea per lane, said again, varied at bars 4 and 8 (PhraseLock.h).
+    // Pad keeps its swells. Kept lanes stay as the user locked them.
+    // The bass is composed A B A B' A B A B'' by the rule composer itself (no back-half redraws,
+    // RuleTables.h kBackHalfVariation), so its own finishing passes keep its style bands.
+    for (int part : { (int) Stab, (int) Pluck, (int) Hits, (int) Vox })
+        if (((partMask >> part) & 1u) != 0)
+        {
+            restateMotif (g.lane[part], s.bars);
+            // The bass under a restated bar can differ by a finishing pass: give way to it again.
+            fixUpperClashes (g, part);
+            dedupeNoteOns (g.lane[part]);
+            trimSamePitchOverlaps (g.lane[part]);
+        }
+    if (((partMask >> Drums) & 1u) != 0)
+        restateMotif (g.drums, s.bars);
         // A locked scale is the last pitch step, after the roll-mode pass, so the
     // user's scale always wins and Auto rolls are untouched byte for byte. Only
     // regenerated lanes move: a kept lane stays as the user locked it.
