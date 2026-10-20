@@ -733,11 +733,13 @@ void RollaProcessor::publishDerived()
         if (i < Drums && slots.mode (i) != 0)
             sample |= 1u << i;
     }
-    const auto plan = planIntensity ((int) raw (apvts, "dialect"),
-                                     (int) raw (apvts, "intensity"),
-                                     raw (apvts, "stab"));
+    // DROP: the arrangement never thins the peak (as the approved renders).
+    const auto plan = planIntensity (Long, 100, 0.55f);
     Groove dst;
     applyIntensity (src, dst, plan, keep, sample);
+    for (int i = 0; i < Drums; ++i)
+        if (isParkedLane (i))
+            dst.lane[i].count = 0;
     publish (dst);
 }
 
@@ -964,12 +966,21 @@ void RollaProcessor::triggerShuffle (int part)
 Settings RollaProcessor::currentSettings() const
 {
     Settings s;
-    s.dark = raw (apvts, "dark");
-    s.busy = raw (apvts, "busy");
-    s.bounce = raw (apvts, "bounce");
-    s.stab = raw (apvts, "stab");
+    // Oct 21 (Melak: "strip every knob but keep stuff like mute solo lock"): ROLL plays what he
+    // approved by ear, fixed. DEEP; every roll the 8-bar peak drop (DROP); the bass a designed Groove
+    // riff (RIFF, RiffWriter.h) with the BASSMATCH bass fixes; the old macro knobs at the values the
+    // approved rounds used. The upper lanes are parked (kParkedLanes).
+    s.dark = 0.55f;
+    s.busy = 0.40f;
+    s.bounce = 0.45f;
+    s.stab = 0.55f;
     s.styleIntensity = raw (apvts, "styleIntensity");
-    s.dialect = (int) raw (apvts, "dialect");
+    s.dialect = Long;
+    s.drop = true;
+    s.riff = true;
+    s.riffShape = 5;
+    s.bassMatch = 1;
+    s.chords = 0;
     s.key = (int) raw (apvts, "key");
     s.scale = (int) raw (apvts, "scale");
     s.bars = barsFromIndex ((int) raw (apvts, "length"));
@@ -998,8 +1009,8 @@ void RollaProcessor::regenerate (int onlyPart)
         const auto id = juce::String (partId (i));
         const bool keep = raw (apvts, (id + "Keep").toRawUTF8()) >= 0.5f;
         const bool mute = raw (apvts, (id + "Mute").toRawUTF8()) >= 0.5f;
-        // ROLL skips kept and muted lanes. A lane's own shuffle (onlyPart) does not.
-        const bool hit = onlyPart >= 0 ? (i == onlyPart) : (! keep && ! mute);
+        // ROLL skips kept and muted lanes. A lane's own shuffle (onlyPart) does not. Parked lanes never roll.
+        const bool hit = ! isParkedLane (i) && (onlyPart >= 0 ? (i == onlyPart) : (! keep && ! mute));
         if (hit)
         {
             seeds[i] = freshSeed();
@@ -1329,14 +1340,17 @@ EngineParams RollaProcessor::readParams (std::shared_ptr<const PresetBank>& hold
     EngineParams params;
     params.presets = hold.get();
     params.mix = mixProgram.loaded ? &mixProgram : nullptr;
-    params.duck = raw (apvts, "duck") >= 0.5f;
+    // The approved DEEP drop: the bass pumps on every kick (DUCK) and plays with the BASSMATCH fixes;
+    // swing is DEEP's own.
+    params.duck = true;
+    params.bassMatch = 1;
     params.drumsToMain = raw (apvts, "drumsToMain") >= 0.5f;
-    params.swing = raw (apvts, "swing");
+    params.swing = hold != nullptr && hold->dialect[Long].swing > 0.f ? hold->dialect[Long].swing : 0.54f;
     params.outputDb = raw (apvts, "output");
     params.drumsAccent = raw (apvts, "drumsAccent");
     params.bars = barsFromIndex ((int) raw (apvts, "length"));
     params.key = (int) raw (apvts, "key");
-    params.dialect = (int) raw (apvts, "dialect");
+    params.dialect = Long;
     params.scale = (int) raw (apvts, "scale");
     params.library = &library;
     params.userSlots = slots.published();
@@ -1344,10 +1358,10 @@ EngineParams RollaProcessor::readParams (std::shared_ptr<const PresetBank>& hold
     for (int i = 0; i < NumParts; ++i)
     {
         const auto id = juce::String (partId (i));
-        params.tone[i] = raw (apvts, (id + "Tone").toRawUTF8());
-        params.punch[i] = raw (apvts, (id + "Punch").toRawUTF8());
+        params.tone[i] = 0.5f;
+        params.punch[i] = 0.5f;
         params.levelDb[i] = raw (apvts, (id + "Level").toRawUTF8());
-        params.mute[i] = raw (apvts, (id + "Mute").toRawUTF8()) >= 0.5f;
+        params.mute[i] = raw (apvts, (id + "Mute").toRawUTF8()) >= 0.5f || isParkedLane (i);
         params.preset[i] = (int) raw (apvts, (id + "Preset").toRawUTF8());
         params.samplePick[i] = samplePick[i].load (std::memory_order_relaxed);
         params.retuneMute[i] = retuneMuted[i].load (std::memory_order_relaxed);

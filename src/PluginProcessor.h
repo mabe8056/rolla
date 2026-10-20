@@ -12,6 +12,13 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <atomic>
+
+// Upper lanes parked (Oct 21, Melak: "just stick with basslines and drums for now"): they do not
+// roll, play or show; the plugin is drums + bass.
+inline bool isParkedLane (int part) noexcept
+{
+    return part == rolla::Stab || part == rolla::Hits || part == rolla::Pluck || part == rolla::Pad || part == rolla::Vox;
+}
 #include <functional>
 #include <memory>
 #include <mutex>

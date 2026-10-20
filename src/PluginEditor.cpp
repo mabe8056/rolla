@@ -931,7 +931,9 @@ struct LaneRow : Component, FileDragAndDropTarget
     IconButton keep { IconButton::lock, "Keep" };
     LaneDrag drag;
     PatternStrip strip;
+    LevelSlider fader; // Oct 21: a volume fader per lane (the lane's Level)
     std::unique_ptr<AudioProcessorValueTreeState::ButtonAttachment> muteA, soloA, keepA;
+    std::unique_ptr<AudioProcessorValueTreeState::SliderAttachment> faderA;
 
     LaneRow()
     {
@@ -943,6 +945,8 @@ struct LaneRow : Component, FileDragAndDropTarget
         addAndMakeVisible (solo);
         addAndMakeVisible (shuffle);
         addAndMakeVisible (keep);
+        addAndMakeVisible (fader);
+        fader.setMouseCursor (MouseCursor::NormalCursor);
         mute.setMouseCursor (MouseCursor::NormalCursor);
         solo.setMouseCursor (MouseCursor::NormalCursor);
         shuffle.setMouseCursor (MouseCursor::NormalCursor);
@@ -973,6 +977,9 @@ struct LaneRow : Component, FileDragAndDropTarget
         muteA = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (processor.apvts, id + "Mute", mute);
         soloA = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (processor.apvts, id + "Solo", solo);
         keepA = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (processor.apvts, id + "Keep", keep);
+        faderA = std::make_unique<AudioProcessorValueTreeState::SliderAttachment> (processor.apvts, id + "Level", fader);
+        fader.setDoubleClickReturnValue (true, 0.0);
+        bindHelp (fader, "Volume of this lane, in dB. Double-click for 0 dB.");
         bindHelp (mute, "Mute this lane. Roll leaves it alone, the same as Keep.");
         bindHelp (solo, "Solo this lane. Only soloed lanes play; Roll still re-rolls the rest. Alt-click to solo it alone.");
         // The attachment has already written the toggle; Alt then makes this the only solo.
@@ -1046,7 +1053,9 @@ struct LaneRow : Component, FileDragAndDropTarget
     {
         const float rowH = (float) getHeight();
         Path clip;
-        clip.addRoundedRectangle (0.f, -rowH * (float) part, (float) getWidth(), rowH * (float) NumParts, Theme::radiusPanel);
+        // Drums then Bass are the only rows shown (Oct 21): the card's rounded corners clip those two.
+        const int shownAt = part == Drums ? 0 : 1;
+        clip.addRoundedRectangle (0.f, -rowH * (float) shownAt, (float) getWidth(), rowH * 2.f, Theme::radiusPanel);
         g.reduceClipRegion (clip);
 
         auto b = getLocalBounds().toFloat();
@@ -1062,7 +1071,7 @@ struct LaneRow : Component, FileDragAndDropTarget
             g.fillRect (b);
         }
 
-        if (part < Drums)
+        if (part == Drums)
         {
             g.setColour (col (kLine));
             g.fillRect (0.f, b.getBottom() - 1.f, b.getWidth(), 1.f);
@@ -1159,8 +1168,9 @@ struct LaneRow : Component, FileDragAndDropTarget
         const int sy = jmax (0, roundToInt ((rh - (float) sh) * 0.5f));
         const int icon = Theme::heightIcon;
         const int pitch = icon + Theme::space8;
-        strip.setBounds (112, sy, 352 - pitch, sh);
+        strip.setBounds (112, sy, 232 - pitch, sh);
         const int yIcon = jmax (0, roundToInt ((rh - (float) icon) * 0.5f));
+        fader.setBounds (344 - pitch + Theme::space8, yIcon, 120, icon);
         drag.setBounds (476 - pitch, yIcon, icon, icon);
         mute.setBounds (520 - pitch, yIcon, icon, icon);
         solo.setBounds (520, yIcon, icon, icon);
@@ -2401,8 +2411,11 @@ struct RollaEditor::Content : Component
         setOpaque (true);
 
         addAndMakeVisible (logo);
-        addAndMakeVisible (dialects);
-        addAndMakeVisible (intensity);
+        // Oct 21 (Melak: "strip every knob but keep stuff like mute solo lock, add volume fader per
+        // section"): the style bar, intensity, the macro and sound knobs, swing and duck are off the
+        // screen; ROLL plays the approved DEEP drop (RollaProcessor::currentSettings).
+        addChildComponent (dialects);
+        addChildComponent (intensity);
         addAndMakeVisible (keyDrop);
         addAndMakeVisible (scaleDrop);
         intensityA = std::make_unique<AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "intensity", intensity);
@@ -2422,7 +2435,10 @@ struct RollaEditor::Content : Component
             rows[i].onSelect = [this] (int part) { select (part); };
             rows[i].onNudge = [this] (int dir) { nudgeRow (dir); };
             rows[i].strip.groove = &groove;
-            addAndMakeVisible (rows[i]);
+            if (isParkedLane (i))
+                addChildComponent (rows[i]);
+            else
+                addAndMakeVisible (rows[i]);
         }
 
         tone.caption = "TONE";
@@ -2476,15 +2492,15 @@ struct RollaEditor::Content : Component
         for (auto* k : { &dark, &busy, &bounce, &stab })
         {
             k->macro = true;
-            addAndMakeVisible (k);
+            addChildComponent (k);
         }
         darkA = std::make_unique<AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "dark", dark.slider);
         busyA = std::make_unique<AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "busy", busy.slider);
         bounceA = std::make_unique<AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "bounce", bounce.slider);
         stabA = std::make_unique<AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "stab", stab.slider);
 
-        addAndMakeVisible (swing);
-        addAndMakeVisible (duck);
+        addChildComponent (swing);
+        addChildComponent (duck);
         swingA = std::make_unique<AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "swing", swing);
         duckA = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, "duck", duck);
 
@@ -2549,7 +2565,7 @@ struct RollaEditor::Content : Component
     bool allKept() const
     {
         for (int i = 0; i < NumParts; ++i)
-            if (paramRaw (proc.apvts, String (partId (i)) + "Keep") < 0.5f)
+            if (! isParkedLane (i) && paramRaw (proc.apvts, String (partId (i)) + "Keep") < 0.5f)
                 return false;
         return true;
     }
@@ -2708,6 +2724,9 @@ struct RollaEditor::Content : Component
 
     void select (int part)
     {
+        // no sound panel: its knobs are stripped (Oct 21)
+        rows[part].grabKeyboardFocus();
+        return;
         if (soundIsOpen() && part == selected && ! switchRun)
         {
             setOpen (false, true);
@@ -2928,13 +2947,18 @@ struct RollaEditor::Content : Component
     void layoutLeft()
     {
         constexpr float kTop = 64.f;
-        const float H = 80.f - 40.f * panelAmt;
-        for (int i = 0; i < NumParts; ++i)
+        const float H = 112.f; // two lanes fill the 224 px card (Oct 21)
+        int shown = 0;
+        for (int i : { (int) Drums, (int) Bass })
         {
-            const int y0 = roundToInt (kTop + H * (float) i);
-            const int y1 = roundToInt (kTop + H * (float) (i + 1));
+            const int y0 = roundToInt (kTop + H * (float) shown);
+            const int y1 = roundToInt (kTop + H * (float) (shown + 1));
             rows[i].setBounds (16, y0, 640, jmax (1, y1 - y0));
+            ++shown;
         }
+        for (int i = 0; i < NumParts; ++i)
+            if (isParkedLane (i))
+                rows[i].setBounds (16, 0, 640, 0);
         const int panelY = roundToInt (kTop + 7.f * H + 8.f * panelAmt);
         const int panelH = jmax (0, 624 - panelY);
         sound.setBounds (16, panelY, 640, panelH);
@@ -3178,7 +3202,7 @@ struct RollaEditor::Content : Component
             const bool k = paramRaw (proc.apvts, String (partId (i)) + "Keep") >= 0.5f;
             const bool m = paramRaw (proc.apvts, String (partId (i)) + "Mute") >= 0.5f;
             const bool sampled = i < Drums && proc.userSlotMode (i) != 0;
-            const bool inLane = intensityLaneIn (plan, i, k, sampled);
+            const bool inLane = ! isParkedLane (i) && intensityLaneIn (plan, i, k, sampled);
             if (k)
                 keptNames.add (laneShortName (i));
             if (m)
@@ -3255,22 +3279,8 @@ struct RollaEditor::Content : Component
             g.setColour (col (kLine));
             g.drawRoundedRectangle (r.reduced (0.5f), Theme::radiusPanel, 1.f);
         };
-        const float laneBottom = rows[NumParts - 1].getBottom() > 64
-                                    ? (float) rows[NumParts - 1].getBottom()
-                                    : 624.f;
+        const float laneBottom = (float) jmax (rows[Drums].getBottom(), rows[Bass].getBottom());
         card ({ 16.f, 64.f, 640.f, laneBottom - 64.f });
-        card ({ 672.f, 200.f, 336.f, 272.f });
-        card ({ 672.f, 480.f, 336.f, 48.f });
-
-        g.setColour (col (kInk2));
-        drawLabel (g, "SWING", Theme::Role::caption, Rectangle<int> (688, 492, 52, 24), Justification::centredLeft);
-        g.setColour (col (kInk));
-        drawLabel (g, String (roundToInt (paramRaw (proc.apvts, "swing") * 100.f)) + "%", Theme::Role::value,
-                   Rectangle<int> (828, 492, 48, 24), Justification::centredLeft);
-        g.setColour (col (kLine));
-        g.fillRect (888, 492, 1, 24);
-        g.setColour (col (kInk2));
-        drawLabel (g, "DUCK", Theme::Role::caption, Rectangle<int> (904, 492, 48, 24), Justification::centredLeft);
     }
 
     void resized() override
@@ -3314,8 +3324,8 @@ struct RollaEditor::Content : Component
         stab.setBounds (856, 340, 136, 128);
         swing.setBounds (744, 492, 80, 24);
         duck.setBounds (956, 492, 40, Theme::heightSmall);
-        drag.setBounds (672, 536, 336, 88);
-        status.setBounds (Theme::space16, 624, 992, Theme::space16);
+        drag.setBounds (672, 200, 336, 88);
+        status.setBounds (Theme::space16, 296, 992, Theme::space16);
     }
 
     void paintSound (Graphics& g)
@@ -3391,16 +3401,16 @@ struct RollaEditor::SizeConstrainer : juce::ComponentBoundsConstrainer
 namespace
 {
 constexpr int kEditorBaseW = 1024;
-constexpr int kEditorBaseH = 640;
+constexpr int kEditorBaseH = 320; // drums + bass only (Oct 21); was 640
 
 juce::Point<int> fittedEditorSize (int width, int height)
 {
     width = juce::jlimit (768, 2048, width);
-    height = juce::jlimit (480, 1280, height);
+    height = juce::jlimit (240, 640, height);
     const double aspect = (double) kEditorBaseW / (double) kEditorBaseH;
-    const int h = juce::jlimit (480, 1280, juce::roundToInt ((double) width / aspect));
+    const int h = juce::jlimit (240, 640, juce::roundToInt ((double) width / aspect));
     const int w = juce::jlimit (768, 2048, juce::roundToInt ((double) h * aspect));
-    return { w, juce::jlimit (480, 1280, juce::roundToInt ((double) w / aspect)) };
+    return { w, juce::jlimit (240, 640, juce::roundToInt ((double) w / aspect)) };
 }
 } // namespace
 
@@ -3413,7 +3423,7 @@ RollaEditor::RollaEditor (RollaProcessor& p)
     editorSettings = settings::open();
     constrainer = std::make_unique<SizeConstrainer>();
     constrainer->setFixedAspectRatio ((double) kEditorBaseW / (double) kEditorBaseH);
-    constrainer->setSizeLimits (768, 480, 2048, 1280);
+    constrainer->setSizeLimits (768, 240, 2048, 640);
     setConstrainer (constrainer.get());
     setResizable (true, true);
     content = std::make_unique<Content> (proc, static_cast<Look&> (*look), *this);
@@ -3476,14 +3486,14 @@ juce::Point<int> RollaEditor::initialSize() const
 {
     const int savedW = proc.getEditorWidth();
     const int savedH = proc.getEditorHeight();
-    if (savedW >= 768 && savedH >= 480)
+    if (savedW >= 768 && savedH >= 240)
         return fittedEditorSize (savedW, savedH);
 
     if (editorSettings != nullptr)
     {
         const int w = editorSettings->getIntValue ("editorWidth", 0);
         const int h = editorSettings->getIntValue ("editorHeight", 0);
-        if (w >= 768 && h >= 480)
+        if (w >= 768 && h >= 240)
             return fittedEditorSize (w, h);
     }
 
@@ -3492,7 +3502,7 @@ juce::Point<int> RollaEditor::initialSize() const
     if (const auto* display = displays.getPrimaryDisplay())
         userHeight = display->userBounds.getHeight();
     if (userHeight > 0 && userHeight < 1100)
-        return { 768, 480 };
+        return { 768, 240 };
     return { kEditorBaseW, kEditorBaseH };
 }
 
@@ -3500,7 +3510,7 @@ void RollaEditor::rememberSize()
 {
     const int w = getWidth();
     const int h = getHeight();
-    if (w < 768 || h < 480)
+    if (w < 768 || h < 240)
         return;
     proc.setEditorSize (w, h);
     if (editorSettings == nullptr)
@@ -3610,7 +3620,7 @@ void RollaEditor::timerCallback()
         content->restorePanel();
         const int w = proc.getEditorWidth();
         const int h = proc.getEditorHeight();
-        if (w >= 768 && h >= 480 && (w != getWidth() || h != getHeight()))
+        if (w >= 768 && h >= 240 && (w != getWidth() || h != getHeight()))
         {
             const auto size = fittedEditorSize (w, h);
             setSize (size.x, size.y);
