@@ -126,6 +126,7 @@ struct Knobs
     float levelDb[rolla::NumParts] {};
     int intensity = 75;
     int harmony = 0;           // --knob HARMONY=0|1|2|3 (Settings::harmony)
+    int bassMatch = 0;         // --knob BASSMATCH=0|1|2 (Settings::bassMatch)
     bool stems = false;
     bool midiOnly = false;     // --midi-only: write the MIDI and roll.json, no WAV render
     bool styleFolders = false; // --folder-names styles
@@ -182,6 +183,8 @@ bool parseKnob (const std::string& text, Knobs& knobs)
         for (int i = 0; i < rolla::NumParts; ++i) knobs.levelDb[i] = value;
     else if (name == "HARMONY")
         knobs.harmony = std::clamp ((int) std::lround (value), 0, 3);
+    else if (name == "BASSMATCH")
+        knobs.bassMatch = std::clamp ((int) std::lround (value), 0, 2);
     else if (name == "INTENSITY")
         knobs.intensity = std::clamp ((int) std::lround (value), 0, 100);
     else
@@ -214,6 +217,7 @@ rolla::Settings rollSettings (int dialect, const Knobs& knobs)
     s.bars = 8;
     s.fill = false;
     s.harmony = knobs.harmony;
+    s.bassMatch = knobs.bassMatch;
     return s;
 }
 
@@ -767,6 +771,7 @@ const char* usageText()
            "            [--knob DARK=0.55] [--knob BUSY=0.40] [--knob BOUNCE=0.45] [--knob STAB=0.55]\n"
            "            [--knob TONE=0.5] [--knob PUNCH=0.5] [--knob LEVEL=0] [--knob INTENSITY=75]\n"
            "            [--knob BASS.TONE=0.5] [--knob BASS.PUNCH=0.5] [--knob BASS.LEVEL=0]\n"
+           "            [--knob HARMONY=0|1|2|3] [--knob BASSMATCH=0|1|2]   (pack-learned harmony / bass, default 0)\n"
            "            [--orig-index FILE|none]   hashed reference index (default: $ROLLA_ORIG_INDEX, else\n"
            "                                       <ROLLA settings folder>/Originality/orig_index.json if present)\n"
            "rolla-rolls --build-orig-index DIR [--orig-out FILE]\n"

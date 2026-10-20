@@ -194,17 +194,46 @@ struct BassTables
 {
     float grid[3][kBar];
     float trans[12][12];
+    // The degree-by-strength rows and the bar-end degree tables the composer draws from: the
+    // style's model tables, or (BASSMATCH 2) the pooled pack tables.
+    const float (*choice)[12] = nullptr;
+    const float* endBar4 = nullptr;
+    const float* endBar8 = nullptr;
+    // The onset draw's per-bar kick cap, and P(16th 1 is placed first) (0: no beat-1 anchor).
+    float kickCapBar = kBassKickHardCap;
+    float beat1 = 0.f;
+    int match = 0;
 };
 
-void prepareBass (int st, BassTables& t) noexcept
+void prepareBass (int st, BassTables& t, int match = 0) noexcept
 {
+    // BASSMATCH 2 (Oct 20 bass redesign): the pooled pack tables. Below 2 every table is the
+    // style's own, exactly as before.
+    const bool pack = match >= 2;
+    t.match = match;
+    t.choice = pack ? kPackBassChoice : kBassChoice[st];
+    t.endBar4 = pack ? kPackBassEndBar : kBassEndBar4[st];
+    t.endBar8 = pack ? kPackBassEndBar : kBassEndBar8[st];
+    t.kickCapBar = pack ? kMatchKickCapBar : kBassKickHardCap;
+    t.beat1 = pack ? kMatchBeat1[st] : 0.f;
+    float priorMean = 0.f;
+    for (float x : kPackBassSlot)
+        priorMean += x / (float) kBar;
     for (int g = 0; g < 3; ++g)
     {
         float kick = 0.f;
         float off = 0.f;
+        // Level 2: half the style's grid, half the pack slot prior scaled to the style grid's mean.
+        float styleMean = 0.f;
+        if (pack)
+            for (int s = 0; s < kBar; ++s)
+                styleMean += kBassOnset[st][g][s] / (float) kBar;
+        const float priorScale = priorMean > 0.f ? styleMean / priorMean : 0.f;
         for (int s = 0; s < kBar; ++s)
         {
             t.grid[g][s] = kBassOnset[st][g][s];
+            if (pack)
+                t.grid[g][s] = (1.f - kPackSlotMix) * t.grid[g][s] + kPackSlotMix * kPackBassSlot[s] * priorScale;
             (kickStep (s) ? kick : off) += t.grid[g][s];
         }
         // Kick steps weighted so the expected on-kick share is the style median.
@@ -220,13 +249,18 @@ void prepareBass (int st, BassTables& t) noexcept
         float flat[kBar];
         for (float& x : flat)
             x = mean;
+        // Level 2: the entropy floor mixes toward the pack slot prior (at the grid's mean), not flat.
+        if (pack && priorMean > 0.f)
+            for (int s = 0; s < kBar; ++s)
+                flat[s] = kPackBassSlot[s] * (mean / priorMean);
         enforceFloor (t.grid[g], flat, kBar, kFloorOnsetBass);
     }
     for (int r = 0; r < 12; ++r)
     {
         for (int c = 0; c < 12; ++c)
-            t.trans[r][c] = kBassTrans[st][r][c];
-        prepareRow (t.trans[r], kBassUnigram[st], kFloorRowBass);
+            t.trans[r][c] = pack ? kPackBassTrans[r][c] : kBassTrans[st][r][c];
+        // The cell ceiling and the entropy floor hold for the pack rows too (prior: the pack unigram).
+        prepareRow (t.trans[r], pack ? kPackBassUnigram : kBassUnigram[st], kFloorRowBass);
     }
 }
 
@@ -265,17 +299,22 @@ int countOn (const bool* on, int from = 0, int to = kBar) noexcept
 
 // Adds onsets to `on` (weights w, slots < limit) until it holds `count` or
 // nothing is legal. No run of more than kMaxAdjacentRun attacks, and the kick
-// steps stay under the 35% cap bar by bar.
-void drawOnsets (const float* w, int count, int limit, Rng& r, bool* on)
+// steps stay under the kickCap share (35%; BASSMATCH 2: 50%) bar by bar.
+// beat1 > 0 (BASSMATCH 2): 16th 1 is placed first with that probability.
+void drawOnsets (const float* w, int count, int limit, Rng& r, bool* on, float kickCap = kBassKickHardCap,
+                 float beat1 = 0.f)
 {
     count = std::clamp (count, 1, 10);
+    if (beat1 > 0.f && ! on[0] && limit > 0 && w[0] > 0.f && countOn (on) < count
+        && 1.f <= kickCap * (float) count && r.next() < (double) beat1)
+        on[0] = true;
     for (int guard = 0; guard < 16 && countOn (on) < count; ++guard)
     {
         int kicks = 0;
         for (int s = 0; s < kBar; s += 4)
             if (on[s])
                 ++kicks;
-        const bool kickOk = (float) (kicks + 1) <= kBassKickHardCap * (float) count;
+        const bool kickOk = (float) (kicks + 1) <= kickCap * (float) count;
         bool legal[kBar];
         for (int s = 0; s < kBar; ++s)
             legal[s] = ! on[s] && s < limit && w[s] > 0.f && ! makesRun (on, s) && (! kickStep (s) || kickOk);
@@ -313,12 +352,13 @@ int drawCount (int st, int bar, float scale, Rng& r) noexcept
 // masked to the mode, with the DARK tilt. Returns a pitch class.
 int nextPc (int st, int mode, float dark, const BassTables& t, int prevPc, int slot, bool allowRoot, Rng& r) noexcept
 {
+    (void) st; // the style's rows are in t (t.choice)
     float w[12];
     bool legal[12];
     const int k = strengthOf (slot);
     for (int pc = 0; pc < 12; ++pc)
     {
-        float x = t.trans[prevPc][pc] * (kBassChoice[st][k][pc] + 1.0e-3f);
+        float x = t.trans[prevPc][pc] * (t.choice[k][pc] + 1.0e-3f);
         if (dark <= 0.2f)
         {
             if (pc == 7)
@@ -339,6 +379,17 @@ int nextPc (int st, int mode, float dark, const BassTables& t, int prevPc, int s
         legal[pc] = phrase::inMode (pc, mode) && (pc != 0 || allowRoot);
     }
     const int pick = pickWeighted (w, legal, 12, r);
+    return pick < 0 ? (allowRoot ? 0 : 7) : pick;
+}
+
+// BASSMATCH 2: the degree on 16th 1 of a bar, from the beat-1 weights (root, 4th, b6, 5th, b3,
+// b7), masked to the mode.
+int beat1Pc (int mode, bool allowRoot, Rng& r) noexcept
+{
+    bool legal[12];
+    for (int pc = 0; pc < 12; ++pc)
+        legal[pc] = kMatchSlot0[pc] > 0.f && phrase::inMode (pc, mode) && (pc != 0 || allowRoot);
+    const int pick = pickWeighted (kMatchSlot0, legal, 12, r);
     return pick < 0 ? (allowRoot ? 0 : 7) : pick;
 }
 
@@ -400,7 +451,9 @@ void pitchBar (int st, int mode, float dark, const BassTables& t, Bar& b, int fr
         bool allowRoot = ! (lastOpen && s == last);
         if (s == 3 && b.on[1] && pcOf (b.semi[1]) == 0)
             allowRoot = false;
-        if (first && callStart && allowRoot && r.next() < (double) kFirstRoot[st])
+        if (t.match >= 2 && s == 0)
+            b.semi[s] = placeOctave (st, beat1Pc (mode, allowRoot, r), prev, r);
+        else if (first && callStart && allowRoot && r.next() < (double) kFirstRoot[st])
             b.semi[s] = 0;
         else
             b.semi[s] = placeOctave (st, nextPc (st, mode, dark, t, pcOf (prev), s, allowRoot, r), prev, r);
@@ -442,7 +495,7 @@ void redrawBack (int st, int mode, float dark, const BassTables& t, const float*
             prevFront = b.semi[s];
     for (int s = 8; s < kBar; ++s)
         b.on[s] = false;
-    drawOnsets (w, front + std::clamp (backCount, 1, 6), limit, r, b.on);
+    drawOnsets (w, front + std::clamp (backCount, 1, 6), limit, r, b.on, t.kickCapBar);
     pitchBar (st, mode, dark, t, b, 8, prevFront, false, false, r);
 }
 
@@ -509,7 +562,7 @@ void turnBar (int st, int mode, float dark, const BassTables& t, const Bar* bars
                 for (int s = 0; s < kBar; ++s)
                     before[s] = b.on[s];
                 const int want = countOn (b.on) + 1 + (int) (r.nextU() % 2u);
-                drawOnsets (w, want, kTurnRestFrom, r, b.on);
+                drawOnsets (w, want, kTurnRestFrom, r, b.on, t.kickCapBar);
                 for (int s = 8; s < kTurnRestFrom; ++s)
                     if (b.on[s] && ! before[s])
                     {
@@ -562,7 +615,7 @@ void turnBar (int st, int mode, float dark, const BassTables& t, const Bar* bars
                 b.semi[last] += 12;
         }
         else if (move != PalPickup)
-            endOn (kBassEndBar8[st], mode, r, b);
+            endOn (t.endBar8, mode, r, b);
     }
     if (countOn (b.on) == 0)
     {
@@ -608,7 +661,7 @@ void repairThinBars (int st, int mode, float dark, const BassTables& t, Bar* bar
             bool before[kBar];
             for (int s = 0; s < kBar; ++s)
                 before[s] = bar.on[s];
-            drawOnsets (w, 2, limit, r, bar.on);
+            drawOnsets (w, 2, limit, r, bar.on, t.kickCapBar);
             int added = -1;
             for (int s = 0; s < kBar; ++s)
                 if (bar.on[s] && ! before[s])
@@ -870,7 +923,7 @@ int composeOnce (Lane& lane, const BassParams& p, const BassTables& t, Rng& r, b
 
     // Bar 1: the call.
     Bar& call = bars[0];
-    drawOnsets (lean, drawCount (st, 0, scale, r), kBar, r, call.on);
+    drawOnsets (lean, drawCount (st, 0, scale, r), kBar, r, call.on, t.kickCapBar, t.beat1);
     pitchBar (st, p.mode, p.dark, t, call, 0, 0, true, false, r);
 
     // Bar 2: the answer.
@@ -900,7 +953,7 @@ int composeOnce (Lane& lane, const BassParams& p, const BassTables& t, Rng& r, b
                 w[s] = t.grid[0][s] * (call.on[s] ? kAnswerCallSlotWeight[st] : 1.f);
         }
         const int want = std::max (drawCount (st, 1, scale, r), countOn (ans.on, 0, 8) + 1);
-        drawOnsets (w, want, kBar, r, ans.on);
+        drawOnsets (w, want, kBar, r, ans.on, t.kickCapBar, t.beat1);
         const bool open = r.next() < 0.5;
         pitchBar (st, p.mode, p.dark, t, ans, from, lastSemi (call, 0), from == 0, open, r);
     }
@@ -922,15 +975,15 @@ int composeOnce (Lane& lane, const BassParams& p, const BassTables& t, Rng& r, b
                 continue;
             redrawBack (st, p.mode, p.dark, t, t.grid[0], std::max (1, countOn (bars[b].on, 8, kBar) + delta), kBar, r, bars[b]);
         }
-        // Bar 4 answers bar 2 in its back half.
-        if (r.next() < (double) kBar4AnswerProb[st])
+        // Bar 4 answers bar 2 in its back half (BASSMATCH 2: less often, exact repeats are allowed).
+        if (r.next() < (double) (t.match >= 2 ? kBar4AnswerProb[st] * kMatchBar4AnswerScale : kBar4AnswerProb[st]))
         {
             for (int tries = 0; tries < 4; ++tries)
             {
                 Bar a = bars[3];
                 const int delta = std::clamp (pickAll (kBassDeltaBar4[st], 9, r) - 4, -3, 3);
                 redrawBack (st, p.mode, p.dark, t, t.grid[1], std::max (1, countOn (bars[1].on, 8, kBar) + delta), kBar, r, a);
-                endOn (kBassEndBar4[st], p.mode, r, a);
+                endOn (t.endBar4, p.mode, r, a);
                 if (changedSlots (a, bars[1]) >= kAnswerMinChanged || tries == 3)
                 {
                     bars[3] = a;
@@ -1633,7 +1686,7 @@ int composeBass (Lane& lane, const BassParams& p, std::uint32_t seed)
     Rng r (mix32 (seed ? seed : 1u, 0xB455u + (std::uint32_t) st));
     const int nb = p.bars >= 8 ? 8 : (p.bars >= 4 ? 4 : 2);
     BassTables t;
-    prepareBass (st, t);
+    prepareBass (st, t, p.match);
     int arc = 0;
     for (int k = 0; k < kComposeRetries; ++k)
     {

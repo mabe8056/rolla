@@ -72,6 +72,10 @@ struct BassParams
     int mode = phrase::Aeolian;
     float dark = 0.55f;
     int sub = SubNone;
+    // BASSMATCH (Settings::bassMatch): 2 draws the degrees from the pooled pack tables (RuleTables
+    // kPackBass*), mixes the pack slot prior into the onset grid and anchors beat 1. 0 and 1 compose
+    // exactly as before.
+    int match = 0;
 };
 
 // Composes a bass line over p.bars (2, 4 or 8) into `lane` (cleared first; the

@@ -55,6 +55,38 @@ int drawPc (int prevPc, unsigned avoid, std::uint32_t hash)
 
 constexpr int kLoop = 8 * 16;
 
+// BASSMATCH level 2 (Oct 20 bass redesign; Settings::bassMatch >= 2 only): the finished bass's kick
+// share, lengths and repeats move toward the pooled pack loops (the composer's tables: RuleTables
+// kPackBass* / kMatch*). Levels 0 and 1 never read these.
+namespace bass_match
+{
+constexpr int kNotes = 2; // the level that turns on everything below
+// Caps on the share of bass attacks on kick steps (capBassOnKicks, capRiffOnKicks): every line,
+// and BOUNCY bounce.
+constexpr float kKickCap = 0.45f;
+constexpr float kKickCapBounce = 0.35f;
+// softPenalty's kick band (every line; BOUNCY bounce).
+constexpr float kKickBandLo = 0.20f, kKickBandHi = 0.42f;
+constexpr float kKickBandBounceLo = 0.12f, kKickBandBounceHi = 0.35f;
+// guardGapRatio: each note sounds this share of the gap to the next onset (DEEP longer).
+constexpr float kGapLo = 0.60f, kGapHi = 0.72f;
+constexpr float kGapDeepLo = 0.68f, kGapDeepHi = 0.80f;
+// Held-bass sounding bands (shapeSounding and softPenalty): ROLLER / JACKIN, DEEP, BOUNCY bounce
+// (kept from level 0), BOUNCY pulse.
+constexpr float kHeldLo = 0.50f, kHeldHi = 0.70f;
+constexpr float kHeldDeepLo = 0.62f, kHeldDeepHi = 0.80f;
+constexpr float kHeldBounceLo = 0.29f, kHeldBounceHi = 0.50f;
+constexpr float kHeldPulseLo = 0.55f, kHeldPulseHi = 0.75f;
+// P (percent) a density-fill note repeats the previous pitch class; P a pulse note may play its
+// neighbour's pitch class.
+constexpr unsigned kFillRepeatPct = 35u;
+constexpr unsigned kPulseRepeatPct = 30u;
+// answerAboveBand never forces an answer: its 2- and 4-bar repeat ceilings sit over 1.
+constexpr float kBandHi = 1.01f;
+} // namespace bass_match
+
+std::uint32_t postHash (std::uint32_t a, std::uint32_t b) noexcept;
+
 int clampi (int v, int lo, int hi) noexcept
 {
     return std::max (lo, std::min (hi, v));
@@ -736,7 +768,8 @@ bool pickPulseSlots (int* out, std::uint32_t h, bool turn, int want)
 // in the 1.8-3.2 band. The grid comes from the seed, not a shape book, so a
 // batch does not reprint one onset set. Neighbours never share a pitch class
 // (so no octave moves, and holdBassNotes can tie every note into the next).
-void makePulse (Lane& lane, int bars, std::uint32_t seed)
+// BASSMATCH 2: a note may play its neighbour's pitch class (P 0.30, seeded), as the pack loops do.
+void makePulse (Lane& lane, int bars, std::uint32_t seed, int match = 0)
 {
     constexpr int kBody = 6;
     constexpr int kTurn = 5;
@@ -785,10 +818,12 @@ void makePulse (Lane& lane, int bars, std::uint32_t seed)
         for (int k = 0; k < count && w < kMaxNotes; ++k)
         {
             Note nte;
+            const bool repeatOk = match >= bass_match::kNotes
+                                  && postHash (h ^ 0x9A1E5u, (std::uint32_t) (bar * 8 + k)) % 100u < bass_match::kPulseRepeatPct;
             if (n > 0)
             {
                 nte = lane.notes[src[k % n]];
-                for (int j = 1; j < n && havePrev && pcOf (nte.chord[0]) == pcOf (prevPitch); ++j)
+                for (int j = 1; j < n && ! repeatOk && havePrev && pcOf (nte.chord[0]) == pcOf (prevPitch); ++j)
                     nte = lane.notes[src[(k + j) % n]];
             }
             nte.start = (float) (bar * 16 + slots[k]);
@@ -798,7 +833,7 @@ void makePulse (Lane& lane, int bars, std::uint32_t seed)
                 nte.chord[0] = (std::int8_t) pcOf (nte.chord[0]);
             // A bar of one pitch class answers itself with a colour, not an
             // octave: pulse keeps octave moves at or under 8% (Composer).
-            if (havePrev && pcOf (nte.chord[0]) == pcOf (prevPitch))
+            if (! repeatOk && havePrev && pcOf (nte.chord[0]) == pcOf (prevPitch))
             {
                 const int prevPc = pcOf (prevPitch);
                 const int c = drawPc (prevPc, 1u << prevPc, h + (std::uint32_t) (bar * 8 + k));
@@ -1003,7 +1038,9 @@ int soundingPcAt (const Lane& lane, int slot) noexcept
     return found;
 }
 
-void contrastCallAnswer (Lane& lane, int bars)
+// rewritePitch false (JACKIN at BASSMATCH 2): no pitch changes, so adjacent bars may repeat a
+// pitch; a held note still covers a shared rest when that makes the bars differ.
+void contrastCallAnswer (Lane& lane, int bars, bool rewritePitch = true)
 {
     if (bars < 2 || lane.count <= 0)
         return;
@@ -1033,6 +1070,8 @@ void contrastCallAnswer (Lane& lane, int bars)
                 }
                 if (cover >= 0 && (int) std::lround (lane.notes[cover].start) / 16 != b + 1)
                     cover = -1;
+                if (cover >= 0 && ! rewritePitch)
+                    continue;
                 if (cover >= 0)
                 {
                     const int cur = pcOf (lane.notes[cover].chord[0]);
@@ -1061,6 +1100,8 @@ void contrastCallAnswer (Lane& lane, int bars)
                         best = i;
                     }
                 }
+                if (best >= 0 && ! rewritePitch && pcOf (lane.notes[best].chord[0]) == p0)
+                    best = -1;
                 if (best >= 0)
                 {
                     const float need = (float) (abs1 + 1) - lane.notes[best].start;
@@ -1615,7 +1656,7 @@ void finishPhrase (Lane& lane, const Settings& s, std::uint32_t seed, bool pulse
         softenFifths (lane, seed);
         if (pulse)
         {
-            makePulse (lane, bars, seed);
+            makePulse (lane, bars, seed, s.bassMatch);
         }
     }
     // Bounce carries the style's octave moves (pulse stays near zero and is 30-40%
@@ -2554,7 +2595,28 @@ static float darkPull (const Lane& bass, float dark) noexcept
     return dark >= 0.8f ? 2.f * std::max (0.f, 0.6f - share) : 2.f * share;
 }
 
-float softPenalty (const Groove& g, float freedom, const char* plan, bool offPlan, bool offContour) noexcept
+// BASSMATCH 2: the held-bass sounding band of the style (BOUNCY: by its bass mode).
+void matchHeldBand (int dialect, int popMode, float& lo, float& hi) noexcept
+{
+    using namespace bass_match;
+    lo = kHeldLo;
+    hi = kHeldHi;
+    if (dialect == Long)
+    {
+        lo = kHeldDeepLo;
+        hi = kHeldDeepHi;
+    }
+    else if (dialect == Pop)
+    {
+        const bool pulse = popMode == BassModePulse;
+        lo = pulse ? kHeldPulseLo : kHeldBounceLo;
+        hi = pulse ? kHeldPulseHi : kHeldBounceHi;
+    }
+}
+
+// match / popMode: BASSMATCH 2 scores the kick share and the sounding share on its own bands.
+float softPenalty (const Groove& g, float freedom, const char* plan, bool offPlan, bool offContour, int match = 0,
+                   int popMode = BassModeNone) noexcept
 {
     const int bars = std::max (1, g.bars);
     const int nslots = bars * 16;
@@ -2610,6 +2672,14 @@ float softPenalty (const Groove& g, float freedom, const char* plan, bool offPla
         sndLo = 0.75f; sndHi = 0.85f; kickSoft = 0.35f;
         stabLo = 5.5f; stabHi = 6.5f;
     }
+    float kickLo = 0.f;
+    if (match >= bass_match::kNotes)
+    {
+        const bool bounce = g.dialect == Pop && popMode != BassModePulse;
+        kickLo = bounce ? bass_match::kKickBandBounceLo : bass_match::kKickBandLo;
+        kickSoft = bounce ? bass_match::kKickBandBounceHi : bass_match::kKickBandHi;
+        matchHeldBand (g.dialect, popMode, sndLo, sndHi);
+    }
     const float npb = (float) n / (float) bars;
     std::sort (lens, lens + n);
     const float lenMed = n ? lens[n / 2] : 0.f;
@@ -2655,7 +2725,7 @@ float softPenalty (const Groove& g, float freedom, const char* plan, bool offPla
     p += bandPenalty (rootShare, rootLo, rootHi, 0.08f, 0.7f, 0.3f, f);
     p += bandPenalty (top2, topLo, topHi, 0.08f, 1.f, 0.3f, f);
     p += bandPenalty (sounding, sndLo, sndHi, 0.10f, 1.f, 0.3f, f);
-    p += bandPenalty (kick, 0.f, kickSoft, 0.05f, 2.f, 0.6f, f);
+    p += bandPenalty (kick, kickLo, kickSoft, 0.05f, 2.f, 0.6f, f);
     p += bandPenalty (stabPb, stabLo, stabHi, 1.f, 0.8f, 0.3f, f);
     p += bandPenalty (stabOn, 0.f, 0.80f, 0.10f, 0.4f, 0.1f, f);
     if (mx - mn < 2)
@@ -3782,7 +3852,9 @@ int bassFillRoom (const bool* used, int bar, int nslots, float tailCut, int dial
 // b7, root), never the neighbours' own pitch class, so the held line keeps
 // moving and no breath is forced. Never a b2, never the 2&4 root figure.
 // harmonizeRoll still conforms the mode and the stab clashes afterwards.
-int bassFillPitch (const Lane& lane, int abs, int dialect, std::uint32_t seed)
+// BASSMATCH 2: outside BOUNCY a new note repeats the previous pitch (P 0.35, from the same seeded
+// hash) as the pack loops do, when that pitch is legal there (no b2, no 2&4 root figure).
+int bassFillPitch (const Lane& lane, int abs, int dialect, std::uint32_t seed, int match = 0)
 {
     int prev = -1;
     int next = -1;
@@ -3838,6 +3910,9 @@ int bassFillPitch (const Lane& lane, int abs, int dialect, std::uint32_t seed)
         addPc (pc);
     const int pPc = pcOf (prevSemi);
     const int nPc = pcOf (nextSemi);
+    if (match >= bass_match::kNotes && prev >= 0 && pPc != 1 && ! (pPc == 0 && rootBlocked)
+        && postHash (h, 0x5E9Eu) % 100u < bass_match::kFillRepeatPct)
+        return prevSemi;
     auto ok = [&] (int pc) { return pc != 1 && pc != pPc && pc != nPc && ! (pc == 0 && rootBlocked); };
     const int rot = fromBar > 0 ? (int) (h % (std::uint32_t) fromBar) : 0;
     for (int t = 0; t < fromBar; ++t)
@@ -3857,7 +3932,7 @@ int bassFillPitch (const Lane& lane, int abs, int dialect, std::uint32_t seed)
 // (after the DEEP dark contour idea): a sparse line builds into bars 5-7, a
 // line already busier than the target thins there. Bar 8 keeps its turn.
 // Runs before placeBassOnKicks and the holds, so both see the new attacks.
-void fillBassDensity (Lane& lane, int dialect, int bars, std::uint32_t seed)
+void fillBassDensity (Lane& lane, int dialect, int bars, std::uint32_t seed, int match = 0)
 {
     const float base = bassDensityTarget (dialect);
     const int nb = std::min (bars, kMaxBars);
@@ -3934,7 +4009,7 @@ void fillBassDensity (Lane& lane, int dialect, int bars, std::uint32_t seed)
             Note n;
             n.start = (float) abs;
             n.nChord = 1;
-            n.chord[0] = (std::int8_t) bassFillPitch (lane, abs, dialect, seed);
+            n.chord[0] = (std::int8_t) bassFillPitch (lane, abs, dialect, seed, match);
             float next = (float) nslots;
             int prev = -1;
             for (int i = 0; i < lane.count; ++i)
@@ -5694,8 +5769,10 @@ constexpr int kMaxEdits = 4;
 // contrast), the tonic off the top, or a note a semitone from a kept stab / pad tone. Only bar 4
 // changes, so the rest of the riff stays as restated. Everything is the roll's own material plus
 // pooled degree draws: nothing is stored. Returns the edits made.
+// BASSMATCH 2 (match >= 2): exact repeats are allowed, so no answer is forced (the 2- and 4-bar
+// ceilings sit over 1) and JACKIN's 1-bar cap is the level-2 one (kMatchRepeatM1Max).
 int answerAboveBand (Lane& lane, int dialect, int mode, int bars, int bouncy, std::uint32_t seed,
-                     const knob_motif::Kept& kept) noexcept
+                     const knob_motif::Kept& kept, int match = 0) noexcept
 {
     using namespace bass_band;
     const int nb = std::min (bars, kMaxBars);
@@ -5705,13 +5782,16 @@ int answerAboveBand (Lane& lane, int dialect, int mode, int bars, int bouncy, st
     const int ans = 3;
     sortByStart (lane);
     const float r1At0 = bassRepeat (lane, nb, 16), r2At0 = bassRepeat (lane, nb, 32), r4At0 = bassRepeat (lane, nb, 64);
-    const float m1Cap = std::max (rules::tables::kRepeatM1Max[st], r1At0);
+    const bool match2 = match >= bass_match::kNotes;
+    const float m2Hi = match2 ? bass_match::kBandHi : kM2Hi[st];
+    const float m4Hi = match2 ? bass_match::kBandHi : kM4Hi[st];
+    const float m1Cap = std::max (match2 ? rules::tables::kMatchRepeatM1Max[st] : rules::tables::kRepeatM1Max[st], r1At0);
     const float m2Floor = std::min (std::max (kM2Lo[st], rules::tables::kRepeatM2Min[st]), r2At0);
     const float m4Floor = std::min (kM4Lo[st], r4At0);
     auto excess = [&] (const Lane& l, bool& ok) {
         const float r1 = bassRepeat (l, nb, 16), r2 = bassRepeat (l, nb, 32), r4 = bassRepeat (l, nb, 64);
         ok = r1 <= m1Cap + 1.0e-4f && r2 >= m2Floor - 1.0e-4f && r4 >= m4Floor - 1.0e-4f;
-        return std::max (0.f, r2 - kM2Hi[st]) + std::max (0.f, r4 - kM4Hi[st]);
+        return std::max (0.f, r2 - m2Hi) + std::max (0.f, r4 - m4Hi);
     };
     bool ok0 = true;
     float ex = excess (lane, ok0);
@@ -5983,6 +6063,11 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
     const int bassSub = s.dialect == Pop ? (popMode == BassModePulse ? rules::SubPulse : rules::SubBounce)
                       : s.dialect == Long ? (deepIsDark (s.dark, bassSeed) ? rules::SubDeepDark : rules::SubDeepSparse)
                                           : rules::SubNone;
+    // BASSMATCH 2 (Oct 20 bass redesign): pack-learned bass notes. Below 2 every bass pass runs as before.
+    const bool match2 = s.bassMatch >= bass_match::kNotes;
+    // The kick caps on the finished line (capBassOnKicks, capRiffOnKicks): every line, BOUNCY bounce.
+    const float kickCapLine = match2 ? bass_match::kKickCap : 0.28f;
+    const float kickCapBounce = match2 ? bass_match::kKickCapBounce : 0.15f;
     Rng freedomRng (bassSeed ^ 0xC0FFEEu);
     const float freedom = effectiveFreedom (s, freedomRng);
     Rng pickRng (bassSeed ^ 0xA11CEu);
@@ -6028,6 +6113,7 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
             bp.mode = mode;
             bp.dark = s.dark;
             bp.sub = bassSub;
+            bp.match = s.bassMatch;
             const int arc = rules::composeBass (g.lane[Bass], bp, composeSeed);
             planName = rules::tables::kArcNames[clampi (arc, 0, rules::tables::kArcShapes - 1)];
             g.lane[Bass].seed = bassSeed;
@@ -6088,7 +6174,7 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
         ++draws;
         std::snprintf (g.brokenRules, sizeof g.brokenRules, "%s|%s|%s|%s", planName, contour, cells, breaks);
         last.g = g;
-        last.penalty = softPenalty (g, freedom, planName, offPlan, offContour)
+        last.penalty = softPenalty (g, freedom, planName, offPlan, offContour, s.bassMatch, popMode)
                      + (regen (Bass) ? darkPull (g.lane[Bass], s.dark) : 0.f);
         std::snprintf (last.tag, sizeof last.tag, "%s", g.brokenRules);
         haveLast = true;
@@ -6174,6 +6260,7 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
                 bp.mode = mode;
                 bp.dark = s.dark;
                 bp.sub = bassSub;
+                bp.match = s.bassMatch;
                 rules::composeBass (g.lane[Bass], bp, phraseSeed);
                 g.lane[Bass].seed = bassSeed;
             }
@@ -6203,9 +6290,10 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
         }
         else if (s.dialect == Jackin)
         {
-            contrastCallAnswer (g.lane[Bass], s.bars);
+            // BASSMATCH 2: JACKIN's adjacent bars may repeat a pitch (no pitch rewrite).
+            contrastCallAnswer (g.lane[Bass], s.bars, ! match2);
             enforceMonophonic (g.lane[Bass]);
-            contrastCallAnswer (g.lane[Bass], s.bars);
+            contrastCallAnswer (g.lane[Bass], s.bars, ! match2);
             // The loop repeats on the bar grid: A B A B4 A B A B8 from one bar pair.
             loopJackinBass (g.lane[Bass], s.bars, bassSeed);
         }
@@ -6219,14 +6307,17 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
     if (regen (Bass))
     {
         if (popMode != BassModePulse)
-            fillBassDensity (g.lane[Bass], s.dialect, s.bars, bassSeed);
+            fillBassDensity (g.lane[Bass], s.dialect, s.bars, bassSeed, s.bassMatch);
         // Maestro 655: at most 28% of bass attacks on the kick in every style
         // (the A&R soft limit). BOUNCY sits at 20-28% over the batch: the A&R
         // bounce lane wants 85% off the kick, so bounce keeps the kick for the
         // pulse rolls (28%) and bounce stays at 15% or under.
-        const float kickTarget = popMode == BassModePulse ? 0.28f : (popMode == BassModeBounce ? 0.14f : -1.f);
+        // BASSMATCH 2: the pack loops' kick share per style (RuleTables kMatchKickTarget), under the
+        // raised caps (45%, BOUNCY bounce 35%).
+        const float kickTarget = match2 ? rules::tables::kMatchKickTarget[clampi (s.dialect, 0, rules::tables::kStyles - 1)]
+                               : popMode == BassModePulse ? 0.28f : (popMode == BassModeBounce ? 0.14f : -1.f);
         placeBassOnKicks (g.lane[Bass], s.dialect, s.bars, bassSeed, kickTarget);
-        capBassOnKicks (g.lane[Bass], s.bars, popMode == BassModeBounce ? 0.15f : 0.28f, bassSeed);
+        capBassOnKicks (g.lane[Bass], s.bars, popMode == BassModeBounce ? kickCapBounce : kickCapLine, bassSeed);
         if (popMode == BassModeBounce)
             fitBounceSounding (g.lane[Bass], s.bars, 0.33f, 0.46f, bassSeed);
         else
@@ -6265,7 +6356,7 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
             spreadBounceDensity (g.lane[Bass], s.bars, 0.7f, bassSeed);
             // The restated cell carries bars 1-2's kick share and sounding to every
             // bar: both are checked again on the line that ships.
-            capBassOnKicks (g.lane[Bass], s.bars, 0.15f, bassSeed);
+            capBassOnKicks (g.lane[Bass], s.bars, kickCapBounce, bassSeed);
             fitBounceSounding (g.lane[Bass], s.bars, 0.33f, 0.46f, bassSeed);
             capBassSounding (g.lane[Bass], s.bars, 0.49f, 0.9f);
             // A&R / model v1.2: bounce mean note length 0.9-1.4 sixteenths (its own
@@ -6282,8 +6373,11 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
         {
             // Composer: pulse octave moves at most 8%.
             capPulseOctaves (g.lane[Bass], 0.08f);
-            // Pulse sounds about 0.93 of each gap.
-            guardGapRatio (g.lane[Bass], s.bars, 0.90f, 0.95f);
+            // Pulse sounds about 0.93 of each gap (BASSMATCH 2: 0.60-0.72, its band is 0.55-0.75).
+            if (match2)
+                guardGapRatio (g.lane[Bass], s.bars, bass_match::kGapLo, bass_match::kGapHi);
+            else
+                guardGapRatio (g.lane[Bass], s.bars, 0.90f, 0.95f);
             capLongBassNotes (g.lane[Bass], 0.07f);
         }
         else
@@ -6301,13 +6395,16 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
             }
             // A&R lane F7: octave moves stay at or under 24% (OCTAVE_PUMP over 26).
             capPulseOctaves (g.lane[Bass], 0.24f);
-            // Model v1.2: 0.79-0.83 of the gap to the next note.
-            guardGapRatio (g.lane[Bass], s.bars, 0.79f, 0.83f);
+            // Model v1.2: 0.79-0.83 of the gap to the next note (BASSMATCH 2: the pack loops'
+            // 0.60-0.72, DEEP 0.68-0.80).
+            const float gapLo = ! match2 ? 0.79f : (s.dialect == Long ? bass_match::kGapDeepLo : bass_match::kGapLo);
+            const float gapHi = ! match2 ? 0.83f : (s.dialect == Long ? bass_match::kGapDeepHi : bass_match::kGapHi);
+            guardGapRatio (g.lane[Bass], s.bars, gapLo, gapHi);
             // A&R var_backhalf, read on the final lengths; the lengths are fitted again.
             if (backHalfShare (g.lane[Bass], s.bars) < 0.52f)
             {
                 fixBackHalfVariation (g.lane[Bass], s.bars, s.dialect, 0.52f);
-                guardGapRatio (g.lane[Bass], s.bars, 0.79f, 0.83f);
+                guardGapRatio (g.lane[Bass], s.bars, gapLo, gapHi);
             }
             // Maestro 655: the scorer's length bands win; DEEP keeps its held notes.
             if (s.dialect != Long)
@@ -6316,8 +6413,9 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
         // The length guard changes how long each pitch sounds: the b2 cap (and
         // the mode snap) are checked again on the final lengths.
         conformBass (g.lane[Bass], mode, b2Cap (s.dialect, mode));
-        // JACKIN's held line (A&R 423) on the final pitches; b2 notes never grow.
-        if (s.dialect == Jackin)
+        // JACKIN's held line (A&R 423) on the final pitches; b2 notes never grow. BASSMATCH 2 keeps
+        // the pack loops' shorter notes (its band is 0.50-0.70).
+        if (s.dialect == Jackin && ! match2)
             fillBassSounding (g.lane[Bass], s.bars, 0.74f);
         // The final bass lengths can ring under upper notes they used to stop
         // before: every upper lane gives way to the bass that ships again.
@@ -6342,6 +6440,9 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
         heldLo = pulse ? 0.85f : 0.29f;
         heldHi = pulse ? 0.975f : 0.50f;
     }
+    // BASSMATCH 2: ROLLER / JACKIN 0.50-0.70, DEEP 0.62-0.80, BOUNCY bounce 0.29-0.50, pulse 0.55-0.75.
+    if (match2)
+        matchHeldBand (s.dialect, g.bassMode, heldLo, heldHi);
     // Hook structure: one 2-bar idea per lane, said again, varied at bars 4 and 8 (PhraseLock.h).
     // Pad keeps its swells. Kept lanes stay as the user locked them.
     // The bass is composed A B A B' A B A B'' by the rule composer (no back-half redraws), but its
@@ -6368,7 +6469,7 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
             keepMonophonic (g.lane[Bass], false);
             voiceLead (g.lane[Bass], s.bars);
             // The kick cap (BOUNCY bounce 15%, every other line 28%) on the line that repeats.
-            capRiffOnKicks (g.lane[Bass], s.bars, bouncyOf == 1 ? 0.15f : 0.28f, bassSeed, keptUpper);
+            capRiffOnKicks (g.lane[Bass], s.bars, bouncyOf == 1 ? kickCapBounce : kickCapLine, bassSeed, keptUpper);
         }
         // Knob reach on the riff that repeats: DARK moves a degree, BUSY scales the attacks of
         // the motif and the turn, then the motif is restated (both are no-ops at the shipped
@@ -6376,7 +6477,7 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
         darkMotif (g.lane[Bass], mode, s.dark, s.bars, keptUpper);
         busyMotif (g.lane[Bass], g.lane[Stab], s.dialect, s.bars, s.busy, popMode == BassModeBounce, bassSeed, keptUpper);
         // A riff that repeats tighter than nine in ten reference basslines gets its bar-4 answer.
-        answerAboveBand (g.lane[Bass], s.dialect, mode, s.bars, bouncyOf, bassSeed, keptUpper);
+        answerAboveBand (g.lane[Bass], s.dialect, mode, s.bars, bouncyOf, bassSeed, keptUpper, s.bassMatch);
         shapeSounding (g.lane[Bass], s.bars, heldLo, heldHi);
         fixUpperClashes (g, Pad);
     }
@@ -6427,7 +6528,7 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
             full.g = &g;
             full.bars = s.bars;
             full.ownLoop = s.dialect == Jackin;
-            answerAboveBand (g.lane[Bass], s.dialect, mode, s.bars, bouncyOf, bassSeed, full);
+            answerAboveBand (g.lane[Bass], s.dialect, mode, s.bars, bouncyOf, bassSeed, full, s.bassMatch);
             shapeSounding (g.lane[Bass], s.bars, heldLo, heldHi);
         }
         for (int part : { (int) Stab, (int) Pad, (int) Pluck, (int) Hits, (int) Vox })
@@ -6535,7 +6636,7 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
     // is the final bass step; the upper lanes then give way to that bass.
     if (regen (Bass) && popMode == BassModeBounce)
     {
-        capBassOnKicks (g.lane[Bass], s.bars, 0.15f, bassSeed);
+        capBassOnKicks (g.lane[Bass], s.bars, kickCapBounce, bassSeed);
         giveWayToBass (g, ~partMask);
     }
     // Accents that repeat (catchiness research #6): the rolled stab, pluck and hits each take a
@@ -6626,14 +6727,16 @@ float bassRepeat (const Lane& lane, int bars, int lag)
 
 // Model v1.2 loop identity: JACKIN repeats on the 2-bar grid (>= kRepeatM2Min)
 // and not on the 1-bar grid (<= kRepeatM1Max). A line outside it is recomposed.
-bool jackinRepeatOk (const Lane& lane, int bars)
+// match >= 2 (BASSMATCH 2): the 1-bar cap is kMatchRepeatM1Max (0.50): exact repeats are allowed.
+bool jackinRepeatOk (const Lane& lane, int bars, int match = 0)
 {
     if (bars < 4)
         return true;
     const int st = std::clamp ((int) Jackin, 0, rules::tables::kStyles - 1);
     const float r1 = bassRepeat (lane, bars, 16);
     const float r2 = bassRepeat (lane, bars, 32);
-    return r1 <= rules::tables::kRepeatM1Max[st] + 1.0e-4f && (r2 < 0.f || r2 >= rules::tables::kRepeatM2Min[st] - 1.0e-4f);
+    const float m1Max = match >= bass_match::kNotes ? rules::tables::kMatchRepeatM1Max[st] : rules::tables::kRepeatM1Max[st];
+    return r1 <= m1Max + 1.0e-4f && (r2 < 0.f || r2 >= rules::tables::kRepeatM2Min[st] - 1.0e-4f);
 }
 
 static bool composeOriginal (Groove& g, const Groove& input, const Settings& settings,
@@ -6657,7 +6760,7 @@ static bool composeOriginal (Groove& g, const Groove& input, const Settings& set
         // produce it).
         // The JACKIN repeat caps hold on every attempt, the last one included:
         // a bass over them is never shipped (the round fails, as for a copy).
-        if ((pitched & (1u << Bass)) != 0 && g.dialect == Jackin && ! jackinRepeatOk (g.lane[Bass], g.bars))
+        if ((pitched & (1u << Bass)) != 0 && g.dialect == Jackin && ! jackinRepeatOk (g.lane[Bass], g.bars, settings.bassMatch))
         {
             ++bump[Bass];
             ++tally.guard;
