@@ -500,8 +500,10 @@ void testEarReview()
                   << (bounceN > 0 ? bounceOct / bounceN : 0.0) << "%, pulse max " << pulseOctMax
                   << "%)  pulse-length rolls " << pulseN << "/20\n";
     // Per mode, as the A&R lane F7 reads a roll: bounce 15-26%, pulse 0-8.5%.
-    expect (bounceN > 0 && bounceOct / bounceN >= 15.0 && bounceOct / bounceN <= 26.0,
-            "BOUNCY bounce octaves land in 15-26%");
+    // Floor 15 -> 8 (Oct 19): the catchiness research found BOUNCY's bass leaps far more than the
+    // references (5+ st moves 74% vs 34%); the restated riff makes its octave moves at fixed spots.
+    expect (bounceN > 0 && bounceOct / bounceN >= 8.0 && bounceOct / bounceN <= 26.0,
+            "BOUNCY bounce octaves land in 8-26%");
     expect (pulseOctMax <= 8.5, "BOUNCY pulse octaves stay at or under 8.5%");
     expect (pulseN >= 3, "BOUNCY has a pulse mode");
     expect (jackinRhythms.size() >= 18, "JACKIN 8-bar rhythms are almost all distinct");
@@ -921,7 +923,10 @@ void testScorerV23()
         if (style == rolla::Jackin)
             std::cout << " call-answer " << callOk << "/20";
         std::cout << "\n";
-        expect (answers >= 8 && answers <= 18, std::string (names[style]) + " bar 4 answers bar 2");
+        // Was 8-18 of 20 (bar 4 must answer bar 2). Oct 19 hook pass: the bass restates bars 1-2 through
+        // bar 7 and turns at bar 8; the reference bass varies bar 4 in 0% of phrases (bar 8 60%, bar 5 40%).
+        // Kept as a ceiling only: a bar-4 answer may appear, it is no longer required.
+        expect (answers <= 18, std::string (names[style]) + " bar 4 answers bar 2 at most 18/20");
         expect (pairs <= 2, std::string (names[style]) + " near-identical rhythm pairs <= 2");
         if (style == rolla::Jackin)
             expect (gapPct >= 12.0 && gapPct <= 45.0, "JACKIN stabs land in bass gaps");
@@ -1030,8 +1035,9 @@ void testAr423Bass()
             // Maestro 655: BOUNCY on the kick inside the A&R lanes, per mode. The
             // pulse rolls carry the kick (20-28%, the soft limit 28%); the bounce
             // lane wants 85% off the kick, so bounce rolls stay at 15% or under.
-            expect (pulseOnsets == 0 || (pulseKick >= 0.20 * pulseOnsets - 1.0e-6 && pulseKick <= 0.28 * pulseOnsets + 1.0e-6),
-                    "BOUNCY pulse bass on-kick share in 20-28% (" + std::to_string (pulseOnsets > 0 ? 100.0 * pulseKick / pulseOnsets : 0.0) + "%)");
+            // Ceiling 0.28 -> 0.32 (Oct 19 hook pass: the restated pulse riff keeps its kick hits in every repeat).
+            expect (pulseOnsets == 0 || (pulseKick >= 0.20 * pulseOnsets - 1.0e-6 && pulseKick <= 0.32 * pulseOnsets + 1.0e-6),
+                    "BOUNCY pulse bass on-kick share in 20-32% (" + std::to_string (pulseOnsets > 0 ? 100.0 * pulseKick / pulseOnsets : 0.0) + "%)");
             expect (bounceMaxKick <= 0.15 + 1.0e-6,
                     "BOUNCY bounce rolls keep the bass on the kick at 15% or under (max " + std::to_string (100.0 * bounceMaxKick) + "%)");
         }
@@ -1669,7 +1675,9 @@ void testArGateBass()
         if (style == rolla::Long)
         {
             const double gapPct = stabHits > 0 ? 100.0 * stabGaps / stabHits : 0.0;
-            expect (backMoves * 10 >= rolls * 8, "DEEP back half moves its density against the front half (>= 80% of rolls)");
+            // Removed Oct 19 (Melak: break rules that block catchy results): it required bars 5-7 to differ
+            // from bars 1-3, i.e. it forbade the riff from coming back. References repeat the bass 0.91 at
+            // 4 bars; the hook pass restates it. backMoves is still printed above for the record.
             expect (gapPct >= 20.0 && gapPct < 50.0, "DEEP stabs in bass gaps " + std::to_string (gapPct) + "% in 20-50%");
             expect (gapRolls * 4 >= rolls * 3, "DEEP stabs answer in the bass gaps in >= 75% of rolls");
         }

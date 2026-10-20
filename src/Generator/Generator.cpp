@@ -5367,8 +5367,29 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
     }
     // Hook structure: one 2-bar idea per lane, said again, varied at bars 4 and 8 (PhraseLock.h).
     // Pad keeps its swells. Kept lanes stay as the user locked them.
-    // The bass is composed A B A B' A B A B'' by the rule composer itself (no back-half redraws,
-    // RuleTables.h kBackHalfVariation), so its own finishing passes keep its style bands.
+    // The bass is composed A B A B' A B A B'' by the rule composer (no back-half redraws), but its
+    // finishing passes edit bars one by one: restate it after them so the riff really comes back.
+    if (((partMask >> Bass) & 1u) != 0)
+    {
+        restateMotif (g.lane[Bass], s.bars);
+        keepMonophonic (g.lane[Bass], false);
+        // The style's held-bass band (A&R 423): ROLLER / JACKIN >= 0.72, DEEP 0.72-0.88,
+        // BOUNCY pulse 0.85-0.975, bounce 0.29-0.50.
+        float lo = 0.72f, hi = 1.f;
+        if (s.dialect == Long)
+        {
+            lo = 0.79f; // DEEP's held-bass median sits at or over 0.78
+            hi = 0.88f;
+        }
+        if (s.dialect == Pop)
+        {
+            const bool pulse = g.bassMode == BassModePulse;
+            lo = pulse ? 0.85f : 0.29f;
+            hi = pulse ? 0.975f : 0.50f;
+        }
+        shapeSounding (g.lane[Bass], s.bars, lo, hi);
+        fixUpperClashes (g, Pad);
+    }
     for (int part : { (int) Stab, (int) Pluck, (int) Hits, (int) Vox })
         if (((partMask >> part) & 1u) != 0)
         {
