@@ -2224,6 +2224,66 @@ void writeVox (Lane& lane, const Settings& s, Rng& rng)
     }
 }
 
+// DROP hats: exactly one hat on every offbeat 8th of every bar, all open or all closed per roll at a
+// steady velocity (base +-4), then 0-3 closed 16ths a bar by BUSY at the in-between weights pooled
+// from his Artist Series loops (no 16th right after an open hat: the closed hat would choke it).
+inline constexpr float kDropOpenOffbeat[4] = { 0.70f, 0.85f, 0.85f, 0.85f };
+inline constexpr float kDropExtraHatW[16] = { 0.f, .62f, 0.f, .15f, 0.f, .39f, 0.f, .42f, 0.f, .63f, 0.f, .20f, 0.f, .42f, 0.f, .29f };
+
+void layDropHats (DrumLane& drums, const Settings& s, int st) noexcept
+{
+    Rng r (drums.seed * 0x2C1B3C6Du + 0x44524F50u);
+    const bool open = r.next() < (double) kDropOpenOffbeat[std::clamp (st, 0, 3)];
+    const int base = open ? 84 + (int) (r.next() * 11.0) : 80 + (int) (r.next() * 11.0);
+    const int steps = s.bars * 16;
+    for (int t = 0; t < steps; ++t)
+    {
+        drums.vel[HatC][t] = 0;
+        drums.vel[HatO][t] = 0;
+    }
+    for (int bar = 0; bar < s.bars; ++bar)
+    {
+        for (int slot = 2; slot < 16; slot += 4)
+            drums.vel[open ? HatO : HatC][bar * 16 + slot] = (std::uint8_t) std::clamp (base - 4 + (int) (r.next() * 9.0), 1, 127);
+        if (s.busy > 0.7f)
+            continue; // the BUSY fill below lays the extra 16ths
+        int extra = 0;
+        if (s.busy < 0.3f)
+            extra = r.next() < 0.5 ? 1 : 0;
+        else
+        {
+            const double x = r.next();
+            extra = x < 0.25 ? 1 : (x < 0.75 ? 2 : 3);
+        }
+        float w[16];
+        for (int k = 0; k < 16; ++k)
+            w[k] = (open && (k & 3) == 3) ? 0.f : kDropExtraHatW[k];
+        for (int e = 0; e < extra; ++e)
+        {
+            float sum = 0.f;
+            for (float x : w)
+                sum += x;
+            if (sum <= 0.f)
+                break;
+            float x = (float) r.next() * sum;
+            int pick = 15;
+            for (int k = 0; k < 16; ++k)
+            {
+                if (w[k] <= 0.f)
+                    continue;
+                x -= w[k];
+                if (x <= 0.f)
+                {
+                    pick = k;
+                    break;
+                }
+            }
+            drums.vel[HatC][bar * 16 + pick] = (std::uint8_t) (48 + (int) (r.next() * 17.0));
+            w[pick] = 0.f;
+        }
+    }
+}
+
 void writeDrums (DrumLane& drums, std::uint32_t seed, const Settings& s, Rng& rng)
 {
     drums.seed = seed ? seed : 1u;
@@ -2289,6 +2349,12 @@ void writeDrums (DrumLane& drums, std::uint32_t seed, const Settings& s, Rng& rn
         if (rng.next() < (double) rt::kSnareGhostBar)
             place (Snare, 1.f, 1.f);
     }
+    // DROP: the offbeat hat floor of a peak drop (his Artist Series loops and FL drops: a hat on
+    // every offbeat 8th, open on every offbeat when open hats are used, 1-3 extra 16ths a bar).
+    // The loop above still ran, so perc, rim, tom and snare keep their draws; only the hats are
+    // laid again here, on a stream of their own.
+    if (s.drop)
+        layDropHats (drums, s, st);
     // Ride belongs in the pattern, for four bars at a time. BUSY opens that
     // spell and adds hats; a quiet BUSY keeps a single ride and thins the hats.
     // The overlay does not draw from the drum seed, so min and max cannot tie.
@@ -2309,6 +2375,28 @@ void writeDrums (DrumLane& drums, std::uint32_t seed, const Settings& s, Rng& rn
             ++placed;
         }
     }
+    // DROP: the ride's four-bar spell plays twice, so the kit never steps down at bar 5 (every
+    // default roll lost ~20% of its drum hits there).
+    if (s.drop && rideBars == 4 && s.bars == 8)
+        for (int t = 0; t < 64; ++t)
+            drums.vel[Ride][64 + t] = drums.vel[Ride][t];
+    // DROP: a ride bar is steady, on all four offbeat 8ths (it skipped 1-2 of them at random).
+    if (s.drop && rideBars > 1)
+        for (int bar = 0; bar < s.bars; ++bar)
+        {
+            int sum = 0, n = 0;
+            for (int slot = 2; slot < 16; slot += 4)
+                if (drums.vel[Ride][bar * 16 + slot] != 0)
+                {
+                    sum += drums.vel[Ride][bar * 16 + slot];
+                    ++n;
+                }
+            if (n == 0)
+                continue;
+            for (int slot = 2; slot < 16; slot += 4)
+                if (drums.vel[Ride][bar * 16 + slot] == 0)
+                    drums.vel[Ride][bar * 16 + slot] = (std::uint8_t) (sum / n);
+        }
     if (s.busy < 0.3f)
     {
         // One ride hit, on an offbeat 8th drawn for this roll.
@@ -2317,7 +2405,7 @@ void writeDrums (DrumLane& drums, std::uint32_t seed, const Settings& s, Rng& rn
             drums.vel[Ride][t] = 0;
         drums.vel[Ride][lone] = 80;
         int seen = 0;
-        for (int t = 0; t < steps; ++t)
+        for (int t = 0; t < steps && ! s.drop; ++t)
         {
             if (drums.vel[HatC][t] == 0 && drums.vel[HatO][t] == 0)
                 continue;
@@ -2333,6 +2421,9 @@ void writeDrums (DrumLane& drums, std::uint32_t seed, const Settings& s, Rng& rn
         for (int t = 0; t < steps; ++t)
         {
             if ((t & 1) == 0 || drums.vel[HatC][t] != 0 || drums.vel[HatO][t] != 0 || kickSlot (t % 16))
+                continue;
+            // DROP: on the e's only, so a closed hat never chokes an open offbeat hat.
+            if (s.drop && (t % 4) != 1)
                 continue;
             drums.vel[HatC][t] = 40;
         }
@@ -5977,6 +6068,25 @@ int bouncyModeOf (const Settings& s, std::uint32_t modeSeed) noexcept
 inline constexpr float kBar8DrumMoveProb = 0.58f;
 inline constexpr double kBar8KickDipShare = 23.0 / 45.0;
 
+// DROP's bar 8: his drops only ever dip the kick at a phrase end (beat 4, or beats 3 and 4), in about
+// a third of them, never the whole kit. Same stream as bar8DrumMove; every drop rate is under 0.58,
+// so a drop dip lands only where the old roll had a bar-8 move.
+inline constexpr float kDropKickDipProb[4] = { 0.35f, 0.15f, 0.35f, 0.20f };
+
+int bar8DropDip (DrumLane& drums, int bars, bool fill, int dialect) noexcept
+{
+    if (bars < 4 || fill)
+        return 0;
+    Rng r (postHash (drums.seed ? drums.seed : 1u, 0x42415238u));
+    if (r.next() >= (double) kDropKickDipProb[std::clamp (dialect, 0, 3)])
+        return 0;
+    const int origin = (bars - 1) * kStepsPerBar;
+    drums.vel[Kick][origin + 12] = 0;
+    if (r.next() < 0.5)
+        drums.vel[Kick][origin + 8] = 0;
+    return 1;
+}
+
 int bar8DrumMove (DrumLane& drums, int bars, bool fill) noexcept
 {
     if (bars < 4 || fill)
@@ -6503,7 +6613,10 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
         // leaves the muted HITS lane out of its part mask. The ride and the perc keep their own
         // phrasing (the ride's four-bar spell, the STYLE perc loop).
         replayBar2AtTurn (g.drums, s.bars, s.fill ? kStepsPerBar - 4 : kStepsPerBar, ~((1u << Ride) | (1u << Perc)));
-        bar8DrumMove (g.drums, s.bars, s.fill);
+        if (s.drop)
+            bar8DropDip (g.drums, s.bars, s.fill, s.dialect);
+        else
+            bar8DrumMove (g.drums, s.bars, s.fill);
     }
     // The roll's chord loop is the stab's two chords, also when the plan below leaves the stab out
     // (a pad under a vox hook still plays them): ChordLoop.h.

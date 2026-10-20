@@ -128,6 +128,7 @@ struct Knobs
     int intensity = 75;
     int harmony = 0;           // --knob HARMONY=0|1|2|3 (Settings::harmony)
     int bassMatch = 0;         // --knob BASSMATCH=0|1|2 (Settings::bassMatch, EngineParams::bassMatch)
+    bool drop = false;         // --knob DROP=0|1 (Settings::drop: the roll is the 8-bar peak drop)
     bool stems = false;
     bool midiOnly = false;     // --midi-only: write the MIDI and roll.json, no WAV render
     bool styleFolders = false; // --folder-names styles
@@ -184,6 +185,8 @@ bool parseKnob (const std::string& text, Knobs& knobs)
         for (int i = 0; i < rolla::NumParts; ++i) knobs.levelDb[i] = value;
     else if (name == "HARMONY")
         knobs.harmony = std::clamp ((int) std::lround (value), 0, 3);
+    else if (name == "DROP")
+        knobs.drop = value >= 0.5f;
     else if (name == "BASSMATCH")
         knobs.bassMatch = std::clamp ((int) std::lround (value), 0, 2);
     else if (name == "INTENSITY")
@@ -219,6 +222,7 @@ rolla::Settings rollSettings (int dialect, const Knobs& knobs)
     s.fill = false;
     s.harmony = knobs.harmony;
     s.bassMatch = knobs.bassMatch;
+    s.drop = knobs.drop;
     return s;
 }
 
@@ -718,7 +722,8 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
             writeRollJson (dir, style, name.str(), seeds, redraws);
             seen.push_back (groove);
             rolla::Groove arranged;
-            const auto plan = rolla::planIntensity (style, knobs.intensity, settings.stab);
+            // DROP: the arrangement slider never thins the peak.
+            const auto plan = rolla::planIntensity (style, knobs.drop ? 100 : knobs.intensity, settings.stab);
             rolla::applyIntensity (groove, arranged, plan, 0, 0);
             int preset[rolla::NumParts] {};
             int samplePick[rolla::NumParts] {};

@@ -154,6 +154,10 @@ struct Settings
     int harmony = 0;
     // BASSMATCH (Oct 20 bass redesign): 0 as before, 1 sound fixes (engine), 2 also the pack-learned bass notes.
     int bassMatch = 0;
+    // DROP (Melak, Oct 20: "make sure youre generating the right part of a song ... the peak drop"):
+    // the roll is the 8-bar peak of a drop. Drums: kick on every beat (bar 8 may only dip the kick),
+    // a hat on every offbeat 8th plus a few 16ths, the ride for all 8 bars when it plays.
+    bool drop = false;
 };
 
 enum BassMode : int
