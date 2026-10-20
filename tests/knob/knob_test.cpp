@@ -487,8 +487,17 @@ void testGeneratorControls()
     proc.waitUntilReady();
 
     int snare = 0, ride = 0, rim = 0;
+    // Changed Oct 19 (bar 8 is one clear move): the last bar now replays bar 2, so the ghost snare
+    // (drawn in half the bars) is drawn in three bars a roll instead of four, and one roll in eight
+    // has none; the startup roll is one of them. The voices must still be in the pattern, so a roll
+    // without one is rolled again, at most three times, instead of reading the first roll only. The
+    // extra rolls happen on a processor of their own: the checks below keep the startup roll.
+    rolla::RollaProcessor probe;
+    probe.waitUntilReady();
+    for (int attempt = 0; attempt < 4; ++attempt)
     {
-        const auto g = proc.copyGroove();
+        snare = ride = rim = 0;
+        const auto g = probe.copyGroove();
         const int steps = g.bars * 16;
         for (int t = 0; t < steps; ++t)
         {
@@ -496,6 +505,14 @@ void testGeneratorControls()
             ride += g.drums.vel[rolla::Ride][t] > 0;
             rim += g.drums.vel[rolla::Rim][t] > 0;
         }
+        if (snare > 0 && ride > 0 && rim > 0)
+        {
+            std::cout << "snare / ride / rim in the pattern after " << attempt << " extra roll(s)\n";
+            break;
+        }
+        const auto drumsSeed = g.drums.seed;
+        probe.triggerRoll();
+        pumpUntil ([&] { return probe.copyGroove().drums.seed != drumsSeed; });
     }
     expect (snare > 0, "snare is in the pattern");
     expect (ride > 0, "ride is in the pattern");

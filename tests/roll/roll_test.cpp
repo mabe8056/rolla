@@ -1587,11 +1587,12 @@ void testBar8Pickup()
             }
             if (inWindow >= 1 && inWindow <= 3)
                 ++countOk;
-            (void) firstPitch;
             if (inWindow > 0)
             {
-                // The pickup resolves to the key root (bass pitches are relative to it).
-                const int iv = ((0 - lastPitch) % 12 + 12) % 12;
+                // Restored (Oct 19, bar-8 pickup drawn fresh, S5): the pickup leads into bar 1's
+                // first bass note again, as this test first said. f6c8eef had loosened it to the
+                // key root because the old fixed-shape pickup aimed at the root, not at bar 1.
+                const int iv = ((firstPitch - lastPitch) % 12 + 12) % 12;
                 if (iv == 1 || iv == 2 || iv == 10 || iv == 11 || iv == 5 || iv == 7)
                     ++approachOk;
             }

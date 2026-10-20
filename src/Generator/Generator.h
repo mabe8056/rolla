@@ -73,9 +73,11 @@ std::uint32_t originalityRecomposeSeed (std::uint32_t seed, int part, int round)
 // note-on per (onset, pitch) and no overlapping same-pitch notes.
 int rollMode (const Settings& settings, std::uint32_t bassSeed) noexcept;
 
-// True for the ~30% of bass seeds whose roll ends with a bar-8 pickup:
-// 1-3 bass notes on 16ths 13-16 of the last bar leading back to the bar-1
-// root. generate() skips it only when no shape fits (kick step or a clash).
+// True for the ~25% of bass seeds whose roll ends with a bar-8 pickup:
+// 1-3 bass notes on 16ths 14-16 of the last bar leading by step or by a fifth
+// into bar 1's first note, drawn fresh per roll (slots from the pooled bar-8
+// grid, notes from the bass chain). generate() skips it only when nothing
+// fits (kick step, b2, or a clash with the stab / pad).
 bool rollWantsPickup (std::uint32_t bassSeed) noexcept;
 
 // OC-style bass skeleton similarity in [0, 1]. A pair at or above 0.55 is the

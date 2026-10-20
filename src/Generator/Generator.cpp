@@ -3323,15 +3323,24 @@ void capStabHits (Lane& lane, const Settings& s)
     }
 }
 
-// Bar-8 pickup: 1-3 bass notes on 16ths 13-16 of the last bar that approach
-// the bar-1 root by step or by a fifth, in the roll's mode. Never on a kick
-// step, never a b2, never a semitone from a sounding stab/pad tone. Replaces
-// whatever the bass had from the first pickup 16th on. BOUNCY keeps a rest of
-// four 16ths in front of it so its bar-8 turn survives.
+// Bar-8 pickup (copy-safety S5: drawn fresh per roll, never picked from a list of figures).
+// 1-3 bass notes on 16ths 14-16 of the last bar (0-based 13-15) leading into bar 1's first note:
+//  - where: how many (1-3), then which 16ths, drawn from the style's pooled bar-8 onset grid
+//    (kBassOnset group 2) on 13-15, floored at a quarter of its top weight, never on a kick; so no
+//    fixed note sits on a fixed 16th;
+//  - the approach: the last note sits a step (1-2 semitones) or a fifth (7, or its inversion 5)
+//    from bar 1's first note; its pitch class is drawn by the pooled bass chain's odds of that
+//    move (unigram x transition into the target, floored at a quarter of the top weight);
+//  - the notes before it walk the chain backwards (the odds of each moving into the note after
+//    it, same floor), each in the octave nearest the note it leads to.
+// Every note in the roll's mode, never a b2, never a semitone from a sounding stab / pad tone,
+// inside the lane's register. Replaces whatever the bass had from the first pickup 16th on.
+// BOUNCY keeps a rest of four 16ths in front of it so its bar-8 turn survives.
 bool addBar8Pickup (Groove& g, int mode, int dialect, std::uint32_t bassSeed)
 {
     if (! rollWantsPickup (bassSeed))
         return false;
+    namespace rt = rules::tables;
     Lane& lane = g.lane[Bass];
     const int bars = clampi (g.bars, 1, kMaxBars);
     const int origin = (bars - 1) * kStepsPerBar;
@@ -3340,96 +3349,149 @@ bool addBar8Pickup (Groove& g, int mode, int dialect, std::uint32_t bassSeed)
     if (lane.count <= 0 || lane.count + 3 > kMaxNotes)
         return false;
     sortByStart (lane);
-    const int target = retarget (lane.notes[0].chord[0], 0);
+    const int st = clampi (dialect, 0, rt::kStyles - 1);
+    const int target = lane.notes[0].chord[0];
     const int baseVel = clampi ((int) lane.notes[0].vel, 60, 120);
     const std::uint8_t timbre = lane.notes[0].timbre;
-    auto deg = [&] (int d) { return phrase::degreeToSemis (d, mode); };
-    const int below5 = deg (4) - 12;
-    const int below6 = deg (5) - 12;
-    const int below7 = deg (6) - 12;
-    const int above2 = deg (1);
-    const int above3 = deg (2);
-    const int above4 = deg (3);
-    struct Shape
+    int lo = 127, hi = -128;
+    for (int i = 0; i < lane.count; ++i)
     {
-        int n;
-        int off[3];
-    };
-    // Offsets over the target; the last note resolves by step or by a fifth.
-    const Shape shapes[7] = {
-        { 1, { below7, 0, 0 } },
-        { 1, { below5, 0, 0 } },
-        { 1, { above2, 0, 0 } },
-        { 2, { below5, below7, 0 } },
-        { 2, { above3, above2, 0 } },
-        { 3, { below5, below6, below7 } },
-        { 3, { above4, above3, above2 } },
-    };
-    struct Slots
-    {
-        int n;
-        int s[3];
-    };
-    // Slot 12 is beat 4, a kick step, so the pickup lives on 13-15.
-    static const Slots slotSets[6] = {
-        { 1, { 13, 0, 0 } },
-        { 1, { 14, 0, 0 } },
-        { 1, { 15, 0, 0 } },
-        { 2, { 13, 15, 0 } },
-        { 2, { 14, 15, 0 } },
-        { 3, { 13, 14, 15 } },
-    };
+        lo = std::min (lo, (int) lane.notes[i].chord[0]);
+        hi = std::max (hi, (int) lane.notes[i].chord[0]);
+    }
+    lo -= 2;
+    hi += 2;
     auto kickAt = [&] (int slot)
     {
         const int abs = origin + slot;
         return kickSlot (slot) || (abs >= 0 && abs < kMaxSteps && g.drums.vel[Kick][abs] > 0);
     };
-    auto build = [&] (const Shape& sh, const Slots& sl, Note* out) -> bool
+    // A note at `semi` from 16th `slot` to `end`: in mode, no b2, in the register, no semitone
+    // against a stab / pad tone over it.
+    auto fits = [&] (int semi, int slot, float end)
     {
-        if (sh.n != sl.n)
+        if (semi < lo || semi > hi || pcOf (semi) == 1 || ! phrase::inMode (semi, mode))
             return false;
-        for (int j = 0; j < sh.n; ++j)
+        Note n;
+        n.start = (float) (origin + slot);
+        n.length = end - n.start;
+        n.chord[0] = (std::int8_t) semi;
+        return (clashMask (upperPcsOver (g, n)) & (1u << pcOf (semi))) == 0;
+    };
+    Rng r ((bassSeed ? bassSeed : 1u) ^ 0x7E1C4u);
+    // One weighted draw over w[0..n) (zero = ruled out); -1 when nothing is left.
+    auto draw = [&] (const float* w, int n)
+    {
+        float total = 0.f;
+        for (int k = 0; k < n; ++k)
+            total += w[k];
+        if (total <= 0.f)
+            return -1;
+        float x = (float) r.next() * total;
+        for (int k = 0; k < n; ++k)
         {
-            const int semi = target + sh.off[j];
-            if (pcOf (semi) == 1 || ! phrase::inMode (semi, mode) || kickAt (sl.s[j]))
-                return false;
-            Note n;
-            n.start = (float) (origin + sl.s[j]);
-            const float end = j + 1 < sl.n ? (float) (origin + sl.s[j + 1]) - tick : loopEnd;
-            n.length = end - n.start;
-            n.chord[0] = (std::int8_t) semi;
-            n.nChord = 1;
-            n.vel = (std::uint8_t) clampi (baseVel - 8 + 6 * j, 40, 127);
-            n.flags = 0;
-            n.timbre = timbre;
-            if ((clashMask (upperPcsOver (g, n)) & (1u << pcOf (semi))) != 0)
-                return false;
-            out[j] = n;
+            if (w[k] <= 0.f)
+                continue;
+            x -= w[k];
+            if (x <= 0.f)
+                return k;
         }
-        return true;
+        for (int k = n - 1; k >= 0; --k)
+            if (w[k] > 0.f)
+                return k;
+        return -1;
+    };
+    // Floors every live weight at a quarter of the top one: the pooled odds lean, but no approach
+    // or 16th is certain.
+    auto floorW = [] (float* w, int n)
+    {
+        float top = 0.f;
+        for (int k = 0; k < n; ++k)
+            top = std::max (top, w[k]);
+        for (int k = 0; k < n; ++k)
+            if (w[k] > 0.f)
+                w[k] = std::max (w[k], 0.25f * top);
+    };
+    // The pooled odds of the bass moving from pitch class `from` into `to` (bigram share).
+    auto chain = [&] (int from, int to)
+    {
+        return rt::kBassUnigram[st][pcOf (from)] * rt::kBassTrans[st][pcOf (from)][pcOf (to)];
     };
 
-    Rng r ((bassSeed ? bassSeed : 1u) ^ 0x7E1C4u);
-    const int want = 1 + (int) (r.nextU() % 3u);
-    const int shapeSpin = (int) (r.nextU() % 7u);
-    const int slotSpin = (int) (r.nextU() % 6u);
     Note picked[3];
     int nPicked = 0;
-    for (int k = 0; k < 3 && nPicked == 0; ++k)
+    for (int attempt = 0; attempt < 6 && nPicked == 0; ++attempt)
     {
-        const int n = (want - 1 + k) % 3 + 1;
-        for (int a = 0; a < 7 && nPicked == 0; ++a)
+        // How many notes, and on which 16ths.
+        const int want = 1 + (int) (r.nextU() % 3u);
+        float sw[3];
+        for (int k = 0; k < 3; ++k)
+            sw[k] = kickAt (13 + k) ? 0.f : std::max (1.0e-3f, rt::kBassOnset[st][2][13 + k]);
+        floorW (sw, 3);
+        bool use[3] {};
+        int n = 0;
+        for (; n < want; ++n)
         {
-            const Shape& sh = shapes[(shapeSpin + a) % 7];
-            if (sh.n != n)
-                continue;
-            for (int b = 0; b < 6 && nPicked == 0; ++b)
+            const int k = draw (sw, 3);
+            if (k < 0)
+                break;
+            use[k] = true;
+            sw[k] = 0.f;
+        }
+        if (n == 0)
+            return false;
+        int slots[3];
+        int ns = 0;
+        for (int k = 0; k < 3; ++k)
+            if (use[k])
+                slots[ns++] = 13 + k;
+        // The approach into bar 1 first, then the notes before it, back to front.
+        Note line[3];
+        int next = target;
+        int placed = 0;
+        for (int j = ns - 1; j >= 0; --j)
+        {
+            const float end = j + 1 < ns ? (float) (origin + slots[j + 1]) - tick : loopEnd;
+            float w[15] {};
+            int semi[15] {};
+            for (int d = -7; d <= 7; ++d)
             {
-                // BOUNCY tries the longest (earliest) slots first.
-                const Slots& sl = slotSets[(dialect == Pop ? b : slotSpin + b) % 6];
-                if (sl.n == n && build (sh, sl, picked))
-                    nPicked = n;
+                semi[d + 7] = next + d;
+                const int ad = std::abs (d);
+                if (j == ns - 1)
+                {
+                    // A step or a fifth (7, or its inversion 5) into bar 1's first note.
+                    if (ad != 1 && ad != 2 && ad != 5 && ad != 7)
+                        continue;
+                }
+                else if (ad > 6 || (ad == 6 && d < 0))
+                    continue; // the octave nearest the note it leads to
+                if (! fits (next + d, slots[j], end))
+                    continue;
+                // The fifth's pitch class comes in two octaves: each carries half its odds.
+                w[d + 7] = std::max (1.0e-4f, chain (next + d, next)) * (ad == 5 || ad == 7 ? 0.5f : 1.f);
             }
+            floorW (w, 15);
+            const int k = draw (w, 15);
+            if (k < 0)
+                break;
+            Note& nt = line[j];
+            nt = Note {};
+            nt.start = (float) (origin + slots[j]);
+            nt.length = end - nt.start;
+            nt.chord[0] = (std::int8_t) semi[k];
+            nt.nChord = 1;
+            nt.flags = 0;
+            nt.timbre = timbre;
+            next = semi[k];
+            ++placed;
+        }
+        // A note in front that finds no fit drops out; the ones into bar 1 stay.
+        for (int j = ns - placed; j < ns; ++j)
+        {
+            Note nt = line[j];
+            nt.vel = (std::uint8_t) clampi (baseVel - 8 + 6 * nPicked, 40, 127);
+            picked[nPicked++] = nt;
         }
     }
     if (nPicked == 0)
@@ -3441,8 +3503,8 @@ bool addBar8Pickup (Groove& g, int mode, int dialect, std::uint32_t bassSeed)
     for (int i = 0; i < lane.count; ++i)
     {
         Note n = lane.notes[i];
-        const int st = (int) std::lround (n.start);
-        if (st >= cut && n.start < loopEnd)
+        const int at = (int) std::lround (n.start);
+        if (at >= cut && n.start < loopEnd)
             continue;
         if (n.start + n.length > (float) cut - tick)
         {
@@ -5735,6 +5797,42 @@ int bouncyModeOf (const Settings& s, std::uint32_t modeSeed) noexcept
     return popIsPulse (s.bounce, modeSeed ? modeSeed : 1u) ? BassModePulse : BassModeBounce;
 }
 
+// Bar-8 drum move (catchiness research #2). The pooled bar-8 marker mix is kick dip 23, drum
+// dropout 22, bass fill 21, mid change 15, low-end gap 9, top cut 4, harmony change 3 (97 marks);
+// the subtractive marks (kick dip, dropout, low-end gap, top cut) are 58 of them. The bass and the
+// hook already carry the other kinds of turn, so the drums take one subtractive move in 58% of
+// rolls, drawn per roll from the drum seed on a stream of its own (no other draw moves), kick dip
+// and drum dropout split 23 : 22:
+//   kick dip: the kick on beat 4 of the last bar drops;
+//   drum dropout: the whole kit stops for the last 2-4 sixteenths (length drawn per roll).
+// The other rolls play bar 2 there unchanged. FILL is the user's own bar-8 move: with it on the
+// run plays and nothing else moves. Returns 0 none, 1 kick dip, 2 dropout.
+inline constexpr float kBar8DrumMoveProb = 0.58f;
+inline constexpr double kBar8KickDipShare = 23.0 / 45.0;
+
+int bar8DrumMove (DrumLane& drums, int bars, bool fill) noexcept
+{
+    if (bars < 4 || fill)
+        return 0;
+    Rng r (postHash (drums.seed ? drums.seed : 1u, 0x42415238u));
+    if (r.next() >= (double) kBar8DrumMoveProb)
+        return 0;
+    const int origin = (bars - 1) * kStepsPerBar;
+    if (r.next() < kBar8KickDipShare)
+    {
+        drums.vel[Kick][origin + 12] = 0;
+        return 1;
+    }
+    const int len = 2 + (int) (r.next() * 3.0);
+    for (int s = kStepsPerBar - len; s < kStepsPerBar; ++s)
+    {
+        for (int v = 0; v < NumDrumVoices; ++v)
+            drums.vel[v][origin + s] = 0;
+        drums.accent[origin + s] = 0;
+    }
+    return 2;
+}
+
 } // namespace
 
 // Genre model v1.2: P 0.25 per roll and at least 15% of any batch. The draw is
@@ -6205,7 +6303,15 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
             trimSamePitchOverlaps (g.lane[part]);
         }
     if (((partMask >> Drums) & 1u) != 0)
+    {
         restateMotif (g.drums, s.bars);
+        // Bar 8 is one clear move: the drums replay bar 2 at the turn (FILL keeps its beat), then
+        // take the roll's one subtractive move, if it draws one (bar8DrumMove). Whenever the drums
+        // are rolled, not only on a full roll: the move needs no hook plan, and the plugin's ROLL
+        // leaves the muted HITS lane out of its part mask.
+        replayBar2AtTurn (g.drums, s.bars, s.fill ? kStepsPerBar - 4 : kStepsPerBar);
+        bar8DrumMove (g.drums, s.bars, s.fill);
+    }
     // Intentional arrangement: drums + bass, one hook lane, at most one support part (HookPlan.h).
     // Only a full roll is re-planned; a partial reroll keeps the lanes the user is not rolling.
     if ((partMask & 0x7fu) == 0x7fu)

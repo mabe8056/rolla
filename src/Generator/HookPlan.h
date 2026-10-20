@@ -118,8 +118,9 @@ inline std::uint32_t chordPcs (const Note& n) noexcept
 // chords, in their order; a tone the clash rule dropped comes back when the bar holds the full
 // voicing (the caller runs the clash rule again). `avoid` (optional) marks loop steps the hook owns.
 // Bars without a stab stay empty; a bar whose bass has no free attack keeps its stab as it was.
+// `support` (the stab is not the hook): at the turn the stab keeps bar 2's hits where it can.
 // Every pitch and slot is the roll's own: nothing stored, nothing from a reference.
-inline void stabOnBass (Lane& stab, const Lane& bass, int bars, const bool* avoid) noexcept
+inline void stabOnBass (Lane& stab, const Lane& bass, int bars, const bool* avoid, bool support) noexcept
 {
     const int nb = std::clamp (bars, 1, kMaxBars);
     if (stab.count <= 0 || bass.count <= 0)
@@ -203,7 +204,20 @@ inline void stabOnBass (Lane& stab, const Lane& bass, int bars, const bool* avoi
         int chosen[3];
         int nChosen = 0;
         int ea = 0;
-        for (int pick = 0; pick < want; ++pick)
+        // The turn (bar 8 is one clear move): a support stab keeps bar 2's hits wherever the bass
+        // still attacks there, and follows the bass's turn only where the bass moved. A stab hook
+        // keeps its own turn.
+        if (support && b == nb - 1 && nb >= 4 && rewritten[1])
+            for (int i = 0; i < barCount[1] && nChosen < want; ++i)
+            {
+                const int q = slotOf (stab.notes[barFirst[1] + i].start) - kStepsPerBar;
+                if (q >= 0 && q < kStepsPerBar && cand[q])
+                {
+                    chosen[nChosen++] = q;
+                    ea += q & 1;
+                }
+            }
+        for (int pick = nChosen; pick < want; ++pick)
         {
             int best = -1;
             float bestScore = -1.0e9f;
@@ -223,7 +237,7 @@ inline void stabOnBass (Lane& stab, const Lane& bass, int bars, const bool* avoi
                 const bool isEa = (q & 1) != 0;
                 const bool isAnd = q % 4 == 2;
                 // The first hit is the bar's anchor: an "and" whenever the bass plays one.
-                if (pick == 0 && anyAnd && ! isAnd)
+                if (nChosen == 0 && anyAnd && ! isAnd)
                     continue;
                 float sc = isAnd ? 3.f : (isEa ? 2.f : 1.f);
                 if (isEa && nChosen > 0)
@@ -1086,6 +1100,15 @@ inline void applyHookPlan (Groove& g, const HookPlan& plan, int bars, std::uint3
         if (regen (p) && p != plan.hook && p != plan.support && ! (p == Hits && hitsLayer))
             g.lane[p].count = 0;
 
+    // Bar 8 is one clear move (catchiness research #2): only the hook and the bass keep their own
+    // turn; every other riff lane replays its bar 2 there, so bar 1 lands clean. IN STAB hits are a
+    // layer on the stab's hits and turn with it. The pad keeps its swells (it is never restated).
+    // Runs before the support is cut to its gaps and entry bar, so the last bar gets the same cut
+    // as every other copy of bar 2.
+    for (int p : { (int) Stab, (int) Pluck, (int) Hits, (int) Vox })
+        if (regen (p) && p != plan.hook && ! (p == Hits && plan.hook == Stab))
+            replayBar2AtTurn (g.lane[p], bars);
+
     // A vox hook speaks in every bar: the call bar's chops every bar through bar 7, at least two.
     if (plan.hook == Vox && regen (Vox) && g.lane[Vox].count > 0)
     {
@@ -1164,7 +1187,7 @@ inline void applyHookPlan (Groove& g, const HookPlan& plan, int bars, std::uint3
     // its slots are read as the hook's.
     const bool bouncy = g.dialect == Pop;
     if (bouncy && plan.hook == Stab && regen (Stab) && regen (Bass))
-        stabOnBass (g.lane[Stab], g.lane[Bass], bars, nullptr);
+        stabOnBass (g.lane[Stab], g.lane[Bass], bars, nullptr, false);
 
     // The hook is the loudest idea; support sits under it, only in its gaps, from its entry bar.
     bool hookAt[kMaxSteps] {};
@@ -1185,14 +1208,19 @@ inline void applyHookPlan (Groove& g, const HookPlan& plan, int bars, std::uint3
         Lane& sp = g.lane[plan.support];
         const Lane src = sp;
         sp.count = 0;
+        const int lastBar = bars - 1;
         for (int i = 0; i < src.count; ++i)
         {
             Note n = src.notes[i];
             const int s = slotOf (n.start);
             if (phrase_lock::barOf (n.start) < plan.supportFromBar)
                 continue;
-            // A pad is a bed under everything; other support parts answer in the hook's gaps.
-            if (plan.support != Pad && plan.hook != Bass && s >= 0 && s < kMaxSteps && hookAt[s])
+            // A pad is a bed under everything; other support parts answer in the hook's gaps. At
+            // the turn the support (bar 2 replayed) keeps out of the hook's bar-2 slots as well as
+            // its turn: it plays no more of bar 2 there than it does in every other bar.
+            const bool turn = bars >= 4 && s / kStepsPerBar == lastBar;
+            if (plan.support != Pad && plan.hook != Bass && s >= 0 && s < kMaxSteps
+                && (hookAt[s] || (turn && hookAt[s - (lastBar - 1) * kStepsPerBar])))
                 continue;
             n.vel = (std::uint8_t) std::max (40, (int) n.vel - 8);
             sp.notes[sp.count++] = n;
@@ -1200,7 +1228,7 @@ inline void applyHookPlan (Groove& g, const HookPlan& plan, int bars, std::uint3
         // A stab supporting a bass hook (any style), or any BOUNCY stab: onto the bass's attacks,
         // still clear of a vox hook's own slots. The caller runs the clash rule again after this.
         if (plan.support == Stab && regen (Bass) && (plan.hook == Bass || bouncy))
-            stabOnBass (sp, g.lane[Bass], bars, plan.hook == Bass ? nullptr : hookAt);
+            stabOnBass (sp, g.lane[Bass], bars, plan.hook == Bass ? nullptr : hookAt, true);
     }
     // IN STAB: the hits keep only the stab onsets that are still there.
     if (hitsLayer && regen (Hits))

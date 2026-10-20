@@ -23,6 +23,9 @@ namespace phrase_lock
 {
 // Source bar for bar b. Melodic lanes vary only at the last bar (the turn): references change
 // bar 8 in ~62% of phrases and bar 4 of the bass almost never. Drums also keep bar 4 (a light lift).
+// On a full roll only the hook and the bass keep that turn and every other lane replays bar 2 there
+// afterwards; rolled drums replay bar 2 there too, then take the roll's one drum move, if any
+// (replayBar2AtTurn).
 inline int sourceBar (int b, int bars, bool keepBar4 = false) noexcept
 {
     if (b < 2 || b == bars - 1 || (keepBar4 && b % 4 == 3))
@@ -218,6 +221,54 @@ inline void replayMotifEdit (Lane& lane, const Lane& before, int bars) noexcept
     std::stable_sort (lane.notes, lane.notes + lane.count, [] (const Note& a, const Note& b) { return a.start < b.start; });
 }
 
+// Bar 8 is one clear move (catchiness research #2): references change bar 8 in ~62% of phrases,
+// and with one move, not five. A lane that does not carry the turn replays its bar 2 in the last
+// bar (A B A B A B A B), so bar 1 lands clean. The bar before it restates bar 1: a note there that
+// restateMotif cut at the kept turn rings into the last bar again, as it rings from bar 1 into
+// bar 2. Nothing new is written: the lane's own bar 2 is said once more.
+inline void replayBar2AtTurn (Lane& lane, int bars) noexcept
+{
+    if (bars < 4 || lane.count <= 0)
+        return;
+    const int last = bars - 1;
+    const float turnStart = (float) (last * kStepsPerBar);
+    const float loopEnd = (float) (bars * kStepsPerBar);
+    const float before = (float) ((last - 1) * kStepsPerBar);
+    const Lane src = lane;
+    lane.count = 0;
+    for (int i = 0; i < src.count && lane.count < kMaxNotes; ++i)
+    {
+        Note n = src.notes[i];
+        const int b = phrase_lock::barOf (n.start);
+        if (b == last)
+            continue;
+        if (b == last - 1 && std::abs (n.start + n.length - turnStart) < 1.0e-3f)
+            for (int k = 0; k < src.count; ++k)
+            {
+                const Note& o = src.notes[k];
+                if (phrase_lock::barOf (o.start) == 0 && std::abs (o.start - (n.start - before)) < 1.0e-3f
+                    && o.nChord == n.nChord && o.chord[0] == n.chord[0] && o.chord[1] == n.chord[1]
+                    && o.chord[2] == n.chord[2] && o.chord[3] == n.chord[3]
+                    && o.start + o.length > (float) kStepsPerBar + 1.0e-3f)
+                {
+                    n.length = o.length;
+                    break;
+                }
+            }
+        lane.notes[lane.count++] = n;
+    }
+    for (int i = 0; i < src.count && lane.count < kMaxNotes; ++i)
+    {
+        if (phrase_lock::barOf (src.notes[i].start) != 1)
+            continue;
+        Note n = src.notes[i];
+        n.start += before; // bar 2 starts one bar in: (last - 1) bars on is the last bar
+        n.length = std::min (n.length, loopEnd - n.start);
+        lane.notes[lane.count++] = n;
+    }
+    std::stable_sort (lane.notes, lane.notes + lane.count, [] (const Note& a, const Note& b) { return a.start < b.start; });
+}
+
 // The bass is one voice: after a restatement a held note may run into the next bar's first
 // note. Trim it to end where the next note starts (DEEP keeps its held overlaps: legato ties).
 inline void keepMonophonic (Lane& lane, bool keepTies) noexcept
@@ -302,6 +353,22 @@ inline void voiceLead (Lane& lane, int bars, bool ownLoop = false) noexcept
             if (cand >= lo && cand <= hi && std::abs (cand - prev) < std::abs (best - prev))
                 best = cand;
         lane.notes[i].chord[0] = (std::int8_t) best;
+    }
+}
+
+// The drums at the turn: the last bar replays bar 2 below 16th `upTo` (FILL keeps its own last
+// beat, so the same roll with FILL on and off still differs only in that beat). The bar-8 drum
+// move (Generator.cpp, bar8DrumMove) is then the only change there. Bar 4 keeps its light lift.
+inline void replayBar2AtTurn (DrumLane& drums, int bars, int upTo) noexcept
+{
+    if (bars < 4)
+        return;
+    const int to = (bars - 1) * kStepsPerBar;
+    for (int s = 0; s < upTo && s < kStepsPerBar; ++s)
+    {
+        for (int v = 0; v < NumDrumVoices; ++v)
+            drums.vel[v][to + s] = drums.vel[v][kStepsPerBar + s];
+        drums.accent[to + s] = drums.accent[kStepsPerBar + s];
     }
 }
 
