@@ -4,6 +4,7 @@
 #include "RuleComposer.h"
 #include "RuleTables.h"
 #include "PhraseLock.h"
+#include "HookPlan.h"
 
 #include <algorithm>
 #include <bitset>
@@ -5402,6 +5403,20 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
         }
     if (((partMask >> Drums) & 1u) != 0)
         restateMotif (g.drums, s.bars);
+    // Intentional arrangement: drums + bass, one hook lane, at most one support part (HookPlan.h).
+    // Only a full roll is re-planned; a partial reroll keeps the lanes the user is not rolling.
+    if ((partMask & 0x7fu) == 0x7fu)
+    {
+        applyHookPlan (g, planHook (g, s.dialect, postHash (seeds[Bass] ? seeds[Bass] : 1u, 0x484F4F4Bu), partMask,
+                                    s.stab >= 0.5f),
+                       s.bars, partMask);
+        for (int part : { (int) Stab, (int) Pad, (int) Pluck, (int) Hits, (int) Vox })
+        {
+            fixUpperClashes (g, part);
+            dedupeNoteOns (g.lane[part]);
+            trimSamePitchOverlaps (g.lane[part]);
+        }
+    }
         // A locked scale is the last pitch step, after the roll-mode pass, so the
     // user's scale always wins and Auto rolls are untouched byte for byte. Only
     // regenerated lanes move: a kept lane stays as the user locked it.

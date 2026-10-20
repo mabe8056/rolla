@@ -1160,6 +1160,7 @@ void RollaProcessor::applyGenreBrain (std::uint32_t mask, const Settings& s, con
             continue;
         samplePick[part].store (chosen, std::memory_order_relaxed);
         genreState.last.pick[(size_t) lane] = chosen;
+        genreState.last.remember ((int) lane, chosen);
     }
     for (int li = 0; li < genre::kLanes; ++li)
     {
@@ -1169,6 +1170,7 @@ void RollaProcessor::applyGenreBrain (std::uint32_t mask, const Settings& s, con
             continue;
         drumPick[voice].store (chosen, std::memory_order_relaxed);
         genreState.last.pick[(size_t) li] = chosen;
+        genreState.last.remember (li, chosen);
         if (voice != Perc)
             continue;
         for (int tom : { TomMid, TomLow })

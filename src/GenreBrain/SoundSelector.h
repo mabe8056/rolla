@@ -59,8 +59,27 @@ struct SelectorRng
 struct Kit
 {
     std::array<int, kLanes> pick {};
+    // The files each lane played in the last kRecent kits, newest first (Melak, Oct 19: "a lot
+    // of the same sounds"). A lane skips them while its pool has other files.
+    static constexpr int kRecent = 12;
+    std::array<std::array<int, kRecent>, kLanes> recent {};
 
-    Kit() noexcept { pick.fill (-1); }
+    Kit() noexcept
+    {
+        pick.fill (-1);
+        for (auto& r : recent)
+            r.fill (-1);
+    }
+
+    void remember (int li, int idx) noexcept
+    {
+        if (li < 0 || li >= kLanes || idx < 0 || recent[(size_t) li][0] == idx)
+            return;
+        auto& r = recent[(size_t) li];
+        for (int k = kRecent - 1; k > 0; --k)
+            r[(size_t) k] = r[(size_t) (k - 1)];
+        r[0] = idx;
+    }
 
     int at (Lane lane) const noexcept
     {
@@ -94,6 +113,10 @@ struct SelectorOptions
     float bandWeight = 1.f;
     float pitchWeight = 2.f; // a pitched file with no confidence costs this much
     float tierWeight = 0.25f;
+    // VOX and HITS: a few files scored best in every style and won most rolls (one vocal phrase
+    // in 7 of 40). These lanes draw flatter, from a wider shortlist.
+    float spreadTemperatureScale = 3.f;
+    float spreadTopShare = 0.15f;
 };
 
 inline bool isDrumLane (Lane lane) noexcept
@@ -220,6 +243,18 @@ inline Kit drawKit (const std::array<std::vector<SampleFeatures>, kLanes>& pools
             continue;
         const int previous = last != nullptr ? last->pick[(size_t) li] : -1;
         const int skip = n > 1 && previous >= 0 && previous < n ? previous : -1;
+        // Recent kits too, while the pool can spare them (it keeps at least one other file).
+        auto recentlyUsed = [&] (int i)
+        {
+            if (last == nullptr || n <= Kit::kRecent + 1)
+                return false;
+            for (int r : last->recent[(size_t) li])
+                if (r == i)
+                    return true;
+            return false;
+        };
+        const bool spread = lane == Lane::Vox || lane == Lane::Hits;
+        const double laneTemp = spread ? temperature * (double) opt.spreadTemperatureScale : temperature;
 
         scores.assign ((size_t) n, 0.f);
         float best = std::numeric_limits<float>::max();
@@ -236,9 +271,9 @@ inline Kit drawKit (const std::array<std::vector<SampleFeatures>, kLanes>& pools
         for (int i = 0; i < n; ++i)
         {
             // Excluded files (missing from the index, silent) are not candidates.
-            if (i == skip || pool[(size_t) i].excluded)
+            if (i == skip || pool[(size_t) i].excluded || recentlyUsed (i))
                 continue;
-            double w = std::exp (-(double) (scores[(size_t) i] - best) / temperature);
+            double w = std::exp (-(double) (scores[(size_t) i] - best) / laneTemp);
             if (anchor != nullptr)
             {
                 const auto& f = pool[(size_t) i];
@@ -255,7 +290,7 @@ inline Kit drawKit (const std::array<std::vector<SampleFeatures>, kLanes>& pools
         // Heaviest first; the jitter is seeded, so the top k is still reproducible.
         std::stable_sort (cands.begin(), cands.end(),
                           [] (const selector::Candidate& a, const selector::Candidate& b) { return a.weight > b.weight; });
-        const int k = std::max (std::max (1, opt.topMin), (int) std::ceil (opt.topShare * (float) n));
+        const int k = std::max (std::max (1, opt.topMin), (int) std::ceil ((spread ? opt.spreadTopShare : opt.topShare) * (float) n));
         if ((int) cands.size() > k)
             cands.resize ((size_t) k);
 

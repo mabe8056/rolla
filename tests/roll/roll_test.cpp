@@ -230,7 +230,14 @@ void testIntensityChangesOutput()
         return proc.copyGroove().lane[rolla::Stab].count == 0;
     }), "intensity 0 with the stab knob down takes stab out");
     expect (seedOf (proc.copyGroove(), rolla::Stab) == seedOf (seeds, rolla::Stab), "an out lane keeps its seed");
-    expect (noteSig (proc.copyGroove(), rolla::Bass) != bass75, "low intensity changes the bar-8 arrangement");
+    // HookPlan restates the riff, so the bass alone may not move: the arrangement as a whole must.
+    {
+        const auto low = proc.copyGroove();
+        bool moved = false;
+        for (int p = 0; p < rolla::Drums; ++p)
+            moved = moved || noteSig (low, p) != noteSig (at75, p);
+        expect (moved, "low intensity changes the arrangement");
+    }
 
     setDenorm (proc, "stab", 0.8f);
     expect (pumpUntil ([&]
@@ -482,7 +489,7 @@ void testEarReview()
         expect (stackedStab == 0, std::string (names[style]) + " stabs do not stack");
         expect (rootTwoFour == 0, std::string (names[style]) + " avoids the banned 2&4 root figure");
         if (style == rolla::Long || style == rolla::Pop)
-            expect (pluck > 0, std::string (names[style]) + " plays pluck");
+            (void) pluck; // Oct 19 HookPlan: pluck is the hook or silent; it no longer has to play.
         else
             expect (pluck == 0, std::string (names[style]) + " gates pluck");
     }
@@ -1612,6 +1619,7 @@ void testArGateBass()
         int stabHits = 0;
         int stabGaps = 0;
         int gapRolls = 0;
+        int stabRolls = 0; // rolls that play stab at all (HookPlan may leave it out)
         for (int roll = 0; roll < rolls; ++roll)
         {
             rolla::Settings s;
@@ -1657,6 +1665,8 @@ void testArGateBass()
                 }
                 stabHits += rollHits;
                 stabGaps += rollGaps;
+                if (rollHits > 0)
+                    ++stabRolls;
                 if (rollHits > 0 && rollGaps * 100 >= rollHits * 15)
                     ++gapRolls;
             }
@@ -1681,7 +1691,7 @@ void testArGateBass()
             // from bars 1-3, i.e. it forbade the riff from coming back. References repeat the bass 0.91 at
             // 4 bars; the hook pass restates it. backMoves is still printed above for the record.
             expect (gapPct >= 20.0 && gapPct < 50.0, "DEEP stabs in bass gaps " + std::to_string (gapPct) + "% in 20-50%");
-            expect (gapRolls * 4 >= rolls * 3, "DEEP stabs answer in the bass gaps in >= 75% of rolls");
+            expect (gapRolls * 4 >= stabRolls * 3, "DEEP stabs answer in the bass gaps in >= 75% of rolls that play stab");
         }
     }
 }
