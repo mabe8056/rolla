@@ -6,6 +6,7 @@
 #include "Generator/MidiFile.h"
 #include "Generator/OriginalityJson.h"
 #include "Generator/Presets.h"
+#include "Generator/RiffWriter.h"
 #include "Mix/MixProgram.h"
 #include "../tests/common/ScratchProfile.h"
 
@@ -131,6 +132,7 @@ struct Knobs
     bool drop = false;         // --knob DROP=0|1 (Settings::drop: the roll is the 8-bar peak drop)
     bool riff = false;         // --knob RIFF=0|1 (Settings::riff: the bass is a designed riff)
     int riffShape = -1;        // --knob RIFFSHAPE=0..5 (force a RiffWriter shape; -1 drawn)
+    int chords = 0;            // --knob CHORDS=0..2 (stab chords on the bass riff's roots; BassChords.h)
     bool duck = false;         // --knob DUCK=0|1 (EngineParams::duck: the bass pumps on the kick)
     bool stems = false;
     bool midiOnly = false;     // --midi-only: write the MIDI and roll.json, no WAV render
@@ -192,6 +194,8 @@ bool parseKnob (const std::string& text, Knobs& knobs)
         knobs.duck = value >= 0.5f;
     else if (name == "RIFFSHAPE")
         knobs.riffShape = std::clamp ((int) std::lround (value), -1, 5);
+    else if (name == "CHORDS")
+        knobs.chords = std::clamp ((int) std::lround (value), 0, 2);
     else if (name == "RIFF")
         knobs.riff = value >= 0.5f;
     else if (name == "DROP")
@@ -234,6 +238,7 @@ rolla::Settings rollSettings (int dialect, const Knobs& knobs)
     s.drop = knobs.drop;
     s.riff = knobs.riff;
     s.riffShape = knobs.riffShape;
+    s.chords = knobs.chords;
     return s;
 }
 
@@ -761,7 +766,7 @@ int renderBatch (const std::string& samples, const std::string& styleName, int c
             std::string drumOf[rolla::NumDrumVoices];
             if (index != nullptr && library != nullptr)
             {
-                if (knobs.harmony == 3)
+                if (knobs.harmony == 3 || knobs.chords > 0)
                 {
                     std::string why;
                     const int at = walkPick (*library, *index, rolla::specAt (bank, rolla::Stab, preset[rolla::Stab]), rolla::Stab,
@@ -1040,6 +1045,43 @@ int main (int argc, char** argv)
             }
             knobs.styleFolders = v == "styles";
             batch = true;
+        }
+        else if (take ("--bass-midi"))
+        {
+            // a rated riff to build on: the bass lane read back from a ROLLA bass export (key D, written
+            // from MIDI 26 for the non-BOUNCY styles; swing taken off by snapping onsets to 16ths)
+            static rolla::Lane fixed;
+            juce::MidiFile mf;
+            const juce::File midiFile { juce::String (value) };
+            juce::FileInputStream in (midiFile);
+            if (! in.openedOk() || ! mf.readFrom (in) || mf.getTimeFormat() <= 0)
+            {
+                std::cerr << "cannot read --bass-midi " << value << "\n";
+                return 1;
+            }
+            const double perSixteenth = mf.getTimeFormat() / 4.0;
+            fixed.count = 0;
+            for (int t = 0; t < mf.getNumTracks(); ++t)
+            {
+                juce::MidiMessageSequence seq (*mf.getTrack (t));
+                seq.updateMatchedPairs();
+                for (int e = 0; e < seq.getNumEvents() && fixed.count < rolla::kMaxNotes; ++e)
+                {
+                    const auto* ev = seq.getEventPointer (e);
+                    if (! ev->message.isNoteOn() || ev->noteOffObject == nullptr)
+                        continue;
+                    rolla::Note n;
+                    const double on = ev->message.getTimeStamp() / perSixteenth;
+                    n.start = (float) (std::round (on * 4.0) / 4.0);
+                    n.length = (float) std::max (0.25, (ev->noteOffObject->message.getTimeStamp() - ev->message.getTimeStamp()) / perSixteenth);
+                    n.chord[0] = (std::int8_t) (ev->message.getNoteNumber() - 26);
+                    n.nChord = 1;
+                    n.vel = (std::uint8_t) ev->message.getVelocity();
+                    fixed.notes[fixed.count++] = n;
+                }
+            }
+            std::sort (fixed.notes, fixed.notes + fixed.count, [] (const rolla::Note& a, const rolla::Note& b) { return a.start < b.start; });
+            rolla::riff::testRiffLane() = &fixed;
         }
         else if (take ("--orig-index")) { origIndex = value; }
         else if (take ("--build-orig-index")) { buildFrom = value; }

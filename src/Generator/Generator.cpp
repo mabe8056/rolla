@@ -8,6 +8,7 @@
 #include "ChordLoop.h"
 #include "PackHarmony.h"
 #include "RiffWriter.h"
+#include "BassChords.h"
 
 #include <algorithm>
 #include <bitset>
@@ -6226,7 +6227,14 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
             bp.sub = bassSub;
             bp.match = s.bassMatch;
             if (s.riff)
+            {
                 planName = riff::kShapeNames[riff::compose (g.lane[Bass], s.dialect, mode, s.bars, composeSeed, s.riffShape)];
+                if (const Lane* fixed = riff::testRiffLane())
+                {
+                    g.lane[Bass].count = fixed->count;
+                    std::copy (fixed->notes, fixed->notes + fixed->count, g.lane[Bass].notes);
+                }
+            }
             else
             {
                 const int arc = rules::composeBass (g.lane[Bass], bp, composeSeed);
@@ -6732,9 +6740,28 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
             trimSamePitchOverlaps (g.lane[part]);
         }
     }
+    // CHORDS: the stab's chords take the bass riff's notes as roots (BassChords.h); its voicings are
+    // already rootless, so the bass-note thinning below stays off.
+    if (s.chords > 0 && regen (Stab))
+    {
+        const int st = clampi (s.dialect, 0, rules::tables::kStyles - 1);
+        const int lo = rules::tables::kStabRegLo[st];
+        const int hi = rules::tables::kStabRegHi[st] + 3;
+        const std::uint32_t cs = postHash (g.lane[Stab].seed ? g.lane[Stab].seed : 1u, 0x43484F52u);
+        const int grain = s.chords == 2 ? 16 : 8;
+        bass_chords::write (g.lane[Stab], g.lane[Bass], mode, s.bars, grain, cs, lo, hi);
+        bass_chords::write (loopStab, g.lane[Bass], mode, s.bars, grain, cs, lo, hi);
+        for (int part : { (int) Pluck, (int) Hits, (int) Vox })
+            fixUpperClashes (g, part);
+        for (int part : { (int) Stab, (int) Pluck, (int) Hits, (int) Vox })
+        {
+            dedupeNoteOns (g.lane[part]);
+            trimSamePitchOverlaps (g.lane[part]);
+        }
+    }
     // DEEP's jazz voicings leave the bass note to the bass that ships (RuleComposer deepJazzStab);
     // so do HARMONY 3's.
-    if ((s.dialect == Long || s.harmony == 3) && regen (Stab))
+    if ((s.dialect == Long || s.harmony == 3) && s.chords == 0 && regen (Stab))
         leaveBassNoteToBass (g.lane[Stab], g.lane[Bass], s.bars);
     // One chord loop (catchiness research #5): a rolled pad and rolled chord hits play the stab's
     // chord of their bar (a kept stab's too), in their own voicing; then they give way to the bass

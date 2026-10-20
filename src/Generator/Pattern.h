@@ -163,6 +163,9 @@ struct Settings
     bool riff = false;
     // RIFF shape override for listening rounds (-1: drawn per style; RiffWriter.h Shape).
     int riffShape = -1;
+    // CHORDS (Oct 20, round 4: "starting on the chord note ... we have a chord structure"): the stab
+    // takes the riff's bass notes as chord roots (BassChords.h). 0 off, 1 a chord per half bar, 2 per bar.
+    int chords = 0;
 };
 
 enum BassMode : int

@@ -9,6 +9,7 @@
 #include "Generator/RuleComposer.h"
 #include "Generator/Scale.h"
 #include "Generator/Presets.h"
+#include "Generator/BassChords.h"
 
 #include <BinaryData.h>
 #include <juce_events/juce_events.h>
@@ -3653,6 +3654,75 @@ void testChordLoopAccents()
 } // namespace
 
 
+
+// CHORDS (BassChords.h, Oct 20): over the riff, every stab tone is a rootless colour of the chord on
+// its region's structural bass note, never the root itself, and never a semitone from a bass note
+// sounding with it; every roll ships.
+void testBassChords()
+{
+    int hits = 0, offChord = 0, rootTones = 0, clashes = 0, refused = 0, changes = 0;
+    for (int grain = 1; grain <= 2; ++grain)
+        for (int roll = 0; roll < 20; ++roll)
+        {
+            rolla::Settings s;
+            s.dialect = rolla::Long;
+            s.bars = 8;
+            s.riff = true;
+            s.riffShape = 5;
+            s.drop = true;
+            s.chords = grain;
+            std::uint32_t seeds[rolla::NumParts] {};
+            for (int p = 0; p < rolla::NumParts; ++p)
+                seeds[p] = 2026102201u + (std::uint32_t) roll * 0x9E3779B9u + (std::uint32_t) p * 17u + 101u;
+            rolla::Groove g {};
+            if (! rolla::generate (g, s, seeds, 0x7fu))
+            {
+                ++refused;
+                continue;
+            }
+            const auto& bass = g.lane[rolla::Bass];
+            rolla::bass_chords::Region reg[rolla::bass_chords::kRegions];
+            const int nr = rolla::bass_chords::regionsOf (bass, s.bars, grain == 2 ? 16 : 8, g.mode, reg);
+            for (int i = 0; i + 1 < nr; ++i)
+                changes += reg[i].root != reg[i + 1].root ? 1 : 0;
+            const auto& stab = g.lane[rolla::Stab];
+            for (int i = 0; i < stab.count; ++i)
+            {
+                const auto& n = stab.notes[i];
+                if (n.vel <= 2)
+                    continue;
+                ++hits;
+                int ri = 0;
+                while (ri + 1 < nr && n.start >= reg[ri].end - 1.0e-3f)
+                    ++ri;
+                const int root = reg[ri].root;
+                unsigned under = 0u;
+                for (int j = 0; j < bass.count; ++j)
+                {
+                    const auto& b = bass.notes[j];
+                    if (b.vel > 2 && b.start < n.start + std::max (0.25f, n.length) - 1.0e-3f && n.start < b.start + b.length - 1.0e-3f)
+                        under |= 1u << pcOfNote (b.chord[0]);
+                }
+                for (int c = 0; c < std::max (1, (int) n.nChord) && c < 4; ++c)
+                {
+                    const int iv = ((pcOfNote (n.chord[c]) - root) % 12 + 12) % 12;
+                    rootTones += iv == 0 ? 1 : 0;
+                    offChord += (iv == 3 || iv == 4 || iv == 7 || iv == 9 || iv == 10 || iv == 2 || iv == 5) ? 0 : 1;
+                    const int pc = pcOfNote (n.chord[c]);
+                    clashes += (under & ((1u << ((pc + 1) % 12)) | (1u << ((pc + 11) % 12)))) != 0 ? 1 : 0;
+                }
+            }
+        }
+    std::cout << "Bass chords: " << hits << " stab hits, off-chord tones " << offChord << ", root tones " << rootTones
+              << ", bass clashes " << clashes << ", chord changes " << changes << ", refused " << refused << "\n";
+    expect (hits > 100, "CHORDS: the stab plays over the riff");
+    expect (offChord == 0, "CHORDS: every stab tone is a colour of its region's chord");
+    expect (rootTones == 0, "CHORDS: the voicings leave the root to the bass");
+    expect (clashes == 0, "CHORDS: no stab tone a semitone from the bass under it");
+    expect (changes > 0, "CHORDS: the chords move with the riff");
+    expect (refused == 0, "CHORDS: every roll ships");
+}
+
 int main()
 {
     // Never the real user profile: settings, caches and sample folders go to a scratch folder.
@@ -3702,6 +3772,7 @@ int main()
     testBassRepeatBand();
     testVoxHookShape();
     testChordLoopAccents();
+    testBassChords();
 
     if (fails == 0)
         std::cout << "roll tests passed\n";

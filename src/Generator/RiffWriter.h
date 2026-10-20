@@ -926,6 +926,14 @@ inline int grooveSet (Rng& r, int mode, int* set) noexcept
     return 3;
 }
 
+// rolla-rolls only (--bass-midi): a written bass lane played in place of the drawn riff, so a
+// listening round can build on riffs Melak already rated. The plugin never sets it.
+inline const Lane*& testRiffLane() noexcept
+{
+    static const Lane* lane = nullptr;
+    return lane;
+}
+
 // Designs and writes the riff for `bars` bars (8 or fewer). Returns the shape drawn.
 inline int compose (Lane& lane, int dialect, int mode, int bars, std::uint32_t seed, int forceShape = -1) noexcept
 {
