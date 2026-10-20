@@ -5631,7 +5631,9 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
     }
     for (int part = 0; part < Drums; ++part)
         dedupeNoteOns (g.lane[part]);
-    enforceMonophonic (g.lane[Bass]);
+    // A kept bass is the user's: never re-trimmed (it nudged touching notes by 1/120 of a 16th).
+    if (regen (Bass))
+        enforceMonophonic (g.lane[Bass]);
     harmonizeRoll (g, s, bassSeed, partMask);
     // The bar-8 pickup can move the last bar: re-check the bands. Both passes
     // only shorten or drop notes, so no clash or overlap comes back.
@@ -5783,7 +5785,8 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
             dedupeNoteOns (g.lane[part]);
             trimSamePitchOverlaps (g.lane[part]);
         }
-        enforceMonophonic (g.lane[Bass]);
+        if (regen (Bass))
+            enforceMonophonic (g.lane[Bass]);
     }
     // BOUNCY bounce: the A&R bounce lane wants 85% of the bass off the kick. The
     // last bass passes (pickup, turn, density) can land on kick steps, so the cap

@@ -314,10 +314,26 @@ void testSoundControls()
     proc.waitUntilReady();
     Head head;
     proc.setPlayHead (&head);
-    // Pluck is a DEEP lane. ROLLER stays empty; DEEP brings it in with the arrangement.
+    // Pluck is a DEEP lane. ROLLER stays empty. Since the Oct 19 HookPlan (Melak: "you don't have to
+    // include every sound in every roll") DEEP plays pluck only when it is the roll's hook, so the
+    // switch must reshape the roll, not necessarily bring pluck in.
     expect (proc.copyGroove().lane[rolla::Pluck].count == 0, "roller leaves pluck out");
+    const auto roller = proc.copyGroove();
     expect (reshapeTo (proc, "dialect", (float) rolla::Long), "deep for pluck");
-    expect (pumpUntil ([&] { return proc.copyGroove().lane[rolla::Pluck].count > 0; }), "deep brings pluck in");
+    expect (pumpUntil ([&]
+    {
+        const auto deep = proc.copyGroove();
+        for (int p = 0; p < rolla::Drums; ++p)
+        {
+            if (deep.lane[p].count != roller.lane[p].count)
+                return true;
+            for (int i = 0; i < deep.lane[p].count; ++i)
+                if (deep.lane[p].notes[i].start != roller.lane[p].notes[i].start
+                    || deep.lane[p].notes[i].chord[0] != roller.lane[p].notes[i].chord[0])
+                    return true;
+        }
+        return false;
+    }), "deep reshapes the roll");
     // DEEP's INTENSITY ladder (Intensity.h, since 8821a4f) brings HITS in last,
     // at 90: at the default 75 the lane is meant to be empty.
     expect ((int) rawOf (proc, "intensity") == 75, "default intensity is 75");

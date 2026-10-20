@@ -3371,6 +3371,7 @@ void testHookCellRules()
 
 } // namespace
 
+
 int main()
 {
     // Never the real user profile: settings, caches and sample folders go to a scratch folder.
