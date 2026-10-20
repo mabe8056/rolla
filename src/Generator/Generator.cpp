@@ -5484,7 +5484,12 @@ void capRiffOnKicks (Lane& lane, int bars, float maxShare, std::uint32_t seed, c
                 }
                 Note probe = note;
                 probe.start += (float) dir;
-                if (! ok || kept.clashes (probe, note.chord[0]))
+                // The note stays heard in the same bars: 16th 9 is the edge of bar 4's answer half,
+                // so a bar-4 answer note moved in front of it would be dropped by restateBass, and a
+                // bar-2 note moved in front of it would be copied into bar 4 unchecked.
+                for (int t = 0; t < nb && ok; ++t)
+                    ok = kept.heardIn (b, q, t) == kept.heardIn (b, sl, t);
+                if (! ok || ! kept.isSource (probe) || kept.clashes (probe, note.chord[0]))
                     continue;
                 // Enough copies to clear the cap with the fewest; else the most. A bar's downbeat
                 // moves last.
