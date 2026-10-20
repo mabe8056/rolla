@@ -33,6 +33,8 @@ int detectRootMidi (const float* mono, int frames, double rate, bool tail);
 
 // Last `_C#`, `_Dm`, `_Ds`, `_C2` token. Octave defaults to 3. -1 when none.
 int midiFromFilename (const char* path) noexcept;
+// True when the key token midiFromFilename found is minor (Cm, C_min, C#min, ...).
+bool minorFromFilename (const char* path) noexcept;
 
 // Load-time targets from MIX_SPEC §4 and the mix gate: prep.lufs_target and
 // prep.tp_cap / invariants.sum_tp (sum held at -6 dBTP). The file is not written.

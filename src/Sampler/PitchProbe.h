@@ -399,13 +399,17 @@ struct ShiftRule
 inline double tonalShift (const PitchInfo& m, int namedRoot, double midiNote, const ShiftRule& rule) noexcept
 {
     if (! rule.retune || ! m.pitched())
-        return 0.0;
+        return 0.0; // unpitched (noise, percussion): as recorded, whatever the label
+    const bool hasName = namedRoot >= 0;
     double root = -1.0;
-    const bool named = namedRoot >= 0 && pitchprobe::pcDistance ((double) namedRoot, (double) m.rootPitch) <= 1.0;
-    if (m.conf >= kPitchConfMin)
+    const bool named = hasName && pitchprobe::pcDistance ((double) namedRoot, (double) m.rootPitch) <= 1.0;
+    if (m.conf >= kPitchConfMin && (! hasName || named))
         root = m.rootPitch;
-    else if (named)
-        // A weak measurement the label agrees with: the label's pitch class, the measured octave.
+    else if (hasName)
+        // The label's pitch class, the measured octave. Sample packs label keys reliably, and a
+        // confident probe that disagrees with the label by more than a semitone has locked onto a
+        // partial (3rd harmonic: +7, octave: +12, 5th harmonic: +4): trusted, it moved whole
+        // stabs a fourth or a fifth off the chord asked for (Oct 20, Melak: "noise with a rhythm").
         root = (double) namedRoot + 12.0 * std::round (((double) m.rootPitch - (double) namedRoot) / 12.0);
     else
         return 0.0;

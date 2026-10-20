@@ -1045,7 +1045,11 @@ void Engine::process (const Groove& groove,
                     continue;
                 const int semi = bassBase + n.chord[0];
                 const float hz = std::clamp (midiHz (semi), 10.f, srF * 0.22f);
-                const auto taken = sampler.take (Bass, semi, n.vel, en, bank, play);
+                // Sample-true: a bass sample rings its own length until the next bass note takes over
+                // (Sampler::take releases it), the way a bass one-shot is played. Cut at the MIDI note
+                // end, a median note heard 31% of the sample (Oct 20, Melak: "you're not fully using my
+                // bass sounds").
+                const auto taken = sampler.take (Bass, semi, n.vel, play.sampleTrue ? 1.0e9f : en, bank, play);
                 if (taken.kind == 1)
                 {
                     if (E.bass.midiOn)

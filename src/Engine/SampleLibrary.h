@@ -507,6 +507,7 @@ struct SampleAudio
     PitchInfo pitch;
     // The note in the filename, -1 when none. Trusted only where the measurement agrees.
     int namedRoot = -1;
+    bool namedMinor = false; // the filename key is minor (Cm, C_min)
     // -1 until loadOne measures the in-memory buffer. The file on disk is not written.
     float flatness = -1.f;
     int loudStart = 0;

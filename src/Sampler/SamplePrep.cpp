@@ -543,6 +543,62 @@ int midiFromFilename (const char* path) noexcept
     return found;
 }
 
+bool minorFromFilename (const char* path) noexcept
+{
+    if (path == nullptr || path[0] == 0)
+        return false;
+    bool found = false;
+    for (int i = 0; path[i] != 0; ++i)
+    {
+        const bool boundary = i == 0 || path[i - 1] == '_' || path[i - 1] == '-' || path[i - 1] == ' ' || path[i - 1] == '/';
+        if (! boundary)
+            continue;
+        const int pc = pitchClass (path[i]);
+        if (pc < 0)
+            continue;
+        int semi = pc;
+        int j = i + 1;
+        if (path[j] == '#' || path[j] == 'b')
+        {
+            semi += path[j] == '#' ? 1 : -1;
+            ++j;
+        }
+        else if (path[j] == 's' || path[j] == 'S')
+        {
+            const char after = path[j + 1];
+            const bool sharp = after == 0 || after == '_' || after == '-' || after == '.' || after == ' '
+                            || after == 'm' || after == 'M' || (after >= '0' && after <= '9');
+            if (! sharp)
+                continue;
+            ++semi;
+            ++j;
+        }
+        bool minor = false;
+        if (path[j] == 'm' || path[j] == 'M')
+        {
+            minor = true;
+            ++j;
+            if ((path[j] == 'i' || path[j] == 'I') && (path[j + 1] == 'n' || path[j + 1] == 'N'))
+                j += 2;
+        }
+        int oct = 3;
+        if (path[j] >= '0' && path[j] <= '9')
+        {
+            oct = path[j] - '0';
+            ++j;
+            if (path[j] >= '0' && path[j] <= '9')
+                continue;
+        }
+        const char tail = path[j];
+        if (tail != 0 && tail != '_' && tail != '-' && tail != '.' && tail != ' ' && tail != '/')
+            continue;
+        int midi = (oct + 1) * 12 + semi;
+        if (midi >= 0 && midi <= 127)
+            found = minor;
+    }
+    return found;
+}
+
 float loudnessGainDb (const std::vector<float>& left, const std::vector<float>& right, double rate)
 {
     if (left.empty() || rate < 1000.0)

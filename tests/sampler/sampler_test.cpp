@@ -333,7 +333,10 @@ void testPitchProbe()
     expect (rolla::tonalShift (c4, -1, 66.0, vox) == 0.0, "shift: vox is never retuned");
     rolla::PitchInfo weak = c4;
     weak.conf = 0.3f;
-    expect (rolla::tonalShift (weak, 67, 62.0, lane) == 0.0, "shift: a weak measurement the label contradicts is not retuned");
+    // Oct 20: the filename key wins over a measurement that contradicts it (a confident probe on a
+    // partial moved stabs a fourth or fifth off the chord). Label G (67), measured octave of 60 -> G3
+    // (55); asked 62 -> +7.
+    expect (std::fabs (rolla::tonalShift (weak, 67, 62.0, lane) - 7.0) < 1.0e-9, "shift: the label wins over a measurement that contradicts it");
     expect (std::fabs (rolla::tonalShift (weak, 49, 62.0, lane) - 1.0) < 1.0e-9,
             "shift: a weak measurement the label agrees with uses the label's note (C#) in the measured octave");
     expect (rolla::tonalShift (rolla::PitchInfo {}, 60, 62.0, lane) == 0.0, "shift: unpitched files play as recorded");

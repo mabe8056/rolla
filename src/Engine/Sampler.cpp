@@ -1161,6 +1161,12 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
     for (auto& h : held)
         if (h.on && h.part == part && (h.midiNote == midiNote || part == Bass || part == Vox))
             dropHeld (h);
+    // Sample-true bass is one voice that rings: the note before releases on its preset release
+    // (20-80 ms, no click) as this one starts.
+    if (part == Bass && params.sampleTrue)
+        for (int i = kDrumVoices; i < kDrumVoices + kMelodicVoices; ++i)
+            if (voices[i].on && voices[i].part == Bass && voices[i].drumVoice < 0)
+                voices[i].env.release();
     pendingNote = false;
     pendingFile = nullptr;
     const Take result = startNote (part, midiNote, velocity, end16, bank, params, ask);
