@@ -133,9 +133,12 @@ public:
 
     // ask: the chord this note opens (empty for a single note). A chord file plays
     // from that chord's root, and moves to a root where its quality fits.
+    // anchorNote >= 0 (a chord's centre, sample-true): every tone of the chord takes the
+    // octave fold of the anchor, so the voicing sounds as written instead of each tone
+    // folding on its own into a cluster.
     Take take (int part, int midiNote, int velocity, float end16,
                const PresetBank& bank, const EngineParams& params,
-               ChordAsk ask = {}) noexcept;
+               ChordAsk ask = {}, int anchorNote = -1) noexcept;
 
     // Returns the gain the synthesized drum voice should keep (0 = sample replaced it).
     // gainScale: per-hit accent (DRUMS ACCENT on the downbeat, the voice's ACCENT).
@@ -259,6 +262,7 @@ private:
         int velocity = 0;
         float end16 = 0.f;
         ChordAsk ask {};
+        int anchor = -1;
         int wait = 0;
         int sweep = 0;
         char file[256] {};
@@ -272,8 +276,8 @@ private:
     // Set while retryHeld() starts a held note: the voice fades in.
     bool lateStart = false;
     Take startNote (int part, int midiNote, int velocity, float end16,
-                const PresetBank& bank, const EngineParams& params, ChordAsk ask) noexcept;
-    void holdNote (int part, int midiNote, int velocity, float end16, ChordAsk ask, const char* file) noexcept;
+                const PresetBank& bank, const EngineParams& params, ChordAsk ask, int anchorNote = -1) noexcept;
+    void holdNote (int part, int midiNote, int velocity, float end16, ChordAsk ask, const char* file, int anchorNote = -1) noexcept;
     void dropHeld (Held& h) noexcept;
 
     // Drum hits steal only drum voices, melodic notes only melodic voices.

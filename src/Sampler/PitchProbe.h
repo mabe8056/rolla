@@ -421,6 +421,13 @@ inline double tonalShift (const PitchInfo& m, int namedRoot, double midiNote, co
     return semis;
 }
 
+// True when tonalShift retunes this file (it has a root to retune from), so a chord's
+// tones can share one octave fold (Sampler::take, anchorNote).
+inline bool tonalRetunes (const PitchInfo& m, int namedRoot, const ShiftRule& rule) noexcept
+{
+    return rule.retune && m.pitched() && (m.conf >= kPitchConfMin || namedRoot >= 0);
+}
+
 // Where a chord file goes when its quality clashes with the chord asked for:
 // a minor file on a major chord plays from the third (Cmaj -> Em = Cmaj7 upper),
 // a major file on a minor chord from the minor third (Cm -> Eb = Cm7 upper).

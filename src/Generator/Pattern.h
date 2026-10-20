@@ -149,6 +149,9 @@ struct Settings
     // ScaleMode (Generator/Scale.h). 0 is Auto: the style's own minor, as before.
     // A locked scale quantizes every regenerated melodic lane after the draw.
     int scale = 0;
+    // Pack-learned harmony (PackHarmony.h): 0 off, 1 the stab plays the roll's chord progression,
+    // 2 the bass and pluck move with it too.
+    int harmony = 0;
 };
 
 enum BassMode : int

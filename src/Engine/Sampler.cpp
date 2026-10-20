@@ -1154,7 +1154,7 @@ bool Sampler::playUserSlot (int part, int drumVoice, int midiNote, int velocity,
 }
 
 Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
-                             const PresetBank& bank, const EngineParams& params, ChordAsk ask) noexcept
+                             const PresetBank& bank, const EngineParams& params, ChordAsk ask, int anchorNote) noexcept
 {
     // A new note on a lane replaces an older held copy of the same pitch; mono
     // lanes (BASS, VOX) replace every held note, so a late start never stacks.
@@ -1169,16 +1169,16 @@ Sampler::Take Sampler::take (int part, int midiNote, int velocity, float end16,
                 voices[i].env.release();
     pendingNote = false;
     pendingFile = nullptr;
-    const Take result = startNote (part, midiNote, velocity, end16, bank, params, ask);
+    const Take result = startNote (part, midiNote, velocity, end16, bank, params, ask, anchorNote);
     // Only notes with a known length are held; a live key without one could start after its release.
     if (pendingNote && velocity > 0 && end16 < 1.0e8f)
-        holdNote (part, midiNote, velocity, end16, ask, pendingFile);
+        holdNote (part, midiNote, velocity, end16, ask, pendingFile, anchorNote);
     pendingNote = false;
     pendingFile = nullptr;
     return result;
 }
 
-void Sampler::holdNote (int part, int midiNote, int velocity, float end16, ChordAsk ask, const char* file) noexcept
+void Sampler::holdNote (int part, int midiNote, int velocity, float end16, ChordAsk ask, const char* file, int anchorNote) noexcept
 {
     Held* slot = nullptr;
     for (auto& h : held)
@@ -1196,6 +1196,7 @@ void Sampler::holdNote (int part, int midiNote, int velocity, float end16, Chord
     slot->velocity = velocity;
     slot->end16 = end16;
     slot->ask = ask;
+    slot->anchor = anchorNote;
     slot->wait = 0;
     slot->sweep = 0;
     slot->file[0] = 0;
@@ -1251,7 +1252,7 @@ void Sampler::retryHeld (const PresetBank& bank, const EngineParams& params,
         pendingNote = false;
         pendingFile = nullptr;
         lateStart = true;
-        const Take started = startNote (h.part, h.midiNote, h.velocity, h.end16, bank, params, h.ask);
+        const Take started = startNote (h.part, h.midiNote, h.velocity, h.end16, bank, params, h.ask, h.anchor);
         lateStart = false;
         if (pendingNote)
         {
@@ -1279,7 +1280,7 @@ void Sampler::retryHeld (const PresetBank& bank, const EngineParams& params,
 }
 
 Sampler::Take Sampler::startNote (int part, int midiNote, int velocity, float end16,
-                                  const PresetBank& bank, const EngineParams& params, ChordAsk ask) noexcept
+                                  const PresetBank& bank, const EngineParams& params, ChordAsk ask, int anchorNote) noexcept
 {
     Take result;
     if (part < 0 || part >= Drums)
@@ -1434,7 +1435,11 @@ Sampler::Take Sampler::startNote (int part, int midiNote, int velocity, float en
     const auto& pitch = audio->pitch;
     const bool chordFile = pitch.isChord && pitch.conf >= kPitchConfMin && part != Bass && part != Vox;
     const int toward = midiNote + (chordFile ? ask.rootDelta + chordFileOffset (pitch.quality, ask.quality) : 0);
-    const double semis = tonalShift (pitch, audio->namedRoot, (double) toward, shiftRuleFor (part));
+    double semis = tonalShift (pitch, audio->namedRoot, (double) toward, shiftRuleFor (part));
+    // Sample-true chords keep their voicing: the tones share the anchor's octave fold.
+    if (params.sampleTrue && anchorNote >= 0 && anchorNote != midiNote
+        && tonalRetunes (pitch, audio->namedRoot, shiftRuleFor (part)))
+        semis = tonalShift (pitch, audio->namedRoot, (double) anchorNote, shiftRuleFor (part)) + (double) (toward - anchorNote);
     fresh.ratio = std::clamp (std::pow (2.0, semis / 12.0) * (audio->rate / sr), 0.05, 16.0);
     fresh.end16 = end16;
     fresh.fade = 0.f;

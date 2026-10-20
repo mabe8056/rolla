@@ -6,6 +6,7 @@
 #include "PhraseLock.h"
 #include "HookPlan.h"
 #include "ChordLoop.h"
+#include "PackHarmony.h"
 
 #include <algorithm>
 #include <bitset>
@@ -6405,7 +6406,7 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
     }
     // The roll's chord loop is the stab's two chords, also when the plan below leaves the stab out
     // (a pad under a vox hook still plays them): ChordLoop.h.
-    const Lane loopStab = g.lane[Stab];
+    Lane loopStab = g.lane[Stab];
     // Intentional arrangement: drums + bass, one hook lane, at most one support part (HookPlan.h).
     // Only a full roll is re-planned; a partial reroll keeps the lanes the user is not rolling.
     // A song-level roll re-plans the arrangement: bass, stab, pluck, pad and vox all regenerated. HITS
@@ -6441,6 +6442,32 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
     // with the upper lanes changes).
     if (regen (Bass) && s.dialect != Jackin)
         capAnswerOctaves (g.lane[Bass], s.bars, bouncyOf == 2 ? 0.08f : 0.26f);
+    // Pack-learned harmony (PackHarmony.h; Melak, Oct 20: learn from the pack MIDI, never import it).
+    // 1: the stab plays the roll's chord of each bar as a triad / 7th with a led top voice; 2: the
+    // bass and pluck riffs move with the chords too. A kept stab keeps its own chords, and the bass
+    // only follows a plan the stab is rolled with.
+    if (s.harmony > 0 && regen (Stab))
+    {
+        const pack_harmony::Plan hp = pack_harmony::draw (postHash (seeds[Bass] ? seeds[Bass] : 1u, 0x48524D4Eu), mode,
+                                                          s.bars, s.dialect == Long);
+        if (s.harmony >= 2 && regen (Bass))
+        {
+            pack_harmony::follow (g.lane[Bass], hp, mode, s.bars);
+            if (regen (Pluck))
+                pack_harmony::follow (g.lane[Pluck], hp, mode, s.bars);
+        }
+        const int st = clampi (s.dialect, 0, rules::tables::kStyles - 1);
+        const int lo = rules::tables::kStabRegLo[st];
+        const int hi = rules::tables::kStabRegHi[st];
+        pack_harmony::voiceStab (g.lane[Stab], hp, mode, g.lane[Bass], s.bars, lo, hi);
+        pack_harmony::voiceStab (loopStab, hp, mode, g.lane[Bass], s.bars, lo, hi);
+        for (int part : { (int) Stab, (int) Pluck, (int) Hits, (int) Vox })
+        {
+            fixUpperClashes (g, part);
+            dedupeNoteOns (g.lane[part]);
+            trimSamePitchOverlaps (g.lane[part]);
+        }
+    }
     // DEEP's jazz voicings leave the bass note to the bass that ships (RuleComposer deepJazzStab).
     if (s.dialect == Long && regen (Stab))
         leaveBassNoteToBass (g.lane[Stab], g.lane[Bass], s.bars);

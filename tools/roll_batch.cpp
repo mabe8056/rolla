@@ -125,6 +125,7 @@ struct Knobs
     float punch[rolla::NumParts] {};
     float levelDb[rolla::NumParts] {};
     int intensity = 75;
+    int harmony = 0;           // --knob HARMONY=0|1|2 (Settings::harmony)
     bool stems = false;
     bool midiOnly = false;     // --midi-only: write the MIDI and roll.json, no WAV render
     bool styleFolders = false; // --folder-names styles
@@ -179,6 +180,8 @@ bool parseKnob (const std::string& text, Knobs& knobs)
         for (int i = 0; i < rolla::NumParts; ++i) knobs.punch[i] = unit (value);
     else if (name == "LEVEL")
         for (int i = 0; i < rolla::NumParts; ++i) knobs.levelDb[i] = value;
+    else if (name == "HARMONY")
+        knobs.harmony = std::clamp ((int) std::lround (value), 0, 2);
     else if (name == "INTENSITY")
         knobs.intensity = std::clamp ((int) std::lround (value), 0, 100);
     else
@@ -210,6 +213,7 @@ rolla::Settings rollSettings (int dialect, const Knobs& knobs)
     s.key = 2;
     s.bars = 8;
     s.fill = false;
+    s.harmony = knobs.harmony;
     return s;
 }
 

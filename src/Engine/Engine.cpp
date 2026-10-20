@@ -1135,6 +1135,15 @@ void Engine::process (const Groove& groove,
                     }
                     const Extras& ex = part == Stab ? sp.ex : (part == Pluck ? pp.ex : padP.ex);
                     const ChordAsk ask = chordAskOf (iv, std::min (count, 4));
+                    // Sample-true: the chord folds as one block around its centre (Sampler::take).
+                    int anchor = -1;
+                    if (params.sampleTrue && count > 1)
+                    {
+                        int sum = 0;
+                        for (int c = 0; c < count && c < 4; ++c)
+                            sum += iv[c];
+                        anchor = std::clamp (base + (int) std::lround ((double) sum / (double) std::min (count, 4)), 0, 127);
+                    }
                     // A recorded chord sounds every tone from its root: the other
                     // notes go to MIDI only, never stacked through the sampler.
                     bool chordSounding = false;
@@ -1146,7 +1155,7 @@ void Engine::process (const Groove& groove,
                             emitHeld (part, note, n.vel, st, en);
                             continue;
                         }
-                        const auto taken = sampler.take (part, note, n.vel, en, bank, play, c == 0 ? ask : ChordAsk {});
+                        const auto taken = sampler.take (part, note, n.vel, en, bank, play, c == 0 ? ask : ChordAsk {}, anchor);
                         if (taken.kind == 1)
                         {
                             emitHeld (part, note, n.vel, st, en);
