@@ -6408,7 +6408,11 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
     const Lane loopStab = g.lane[Stab];
     // Intentional arrangement: drums + bass, one hook lane, at most one support part (HookPlan.h).
     // Only a full roll is re-planned; a partial reroll keeps the lanes the user is not rolling.
-    if ((partMask & 0x7fu) == 0x7fu)
+    // A song-level roll re-plans the arrangement: bass, stab, pluck, pad and vox all regenerated. HITS
+    // may be out of the mask (the plugin's ROLL leaves the muted HITS lane out: 0x7b), and then stays
+    // as it is. A single-lane shuffle never re-plans, or it could silence the lane just rolled.
+    constexpr std::uint32_t kSongRoll = (1u << Bass) | (1u << Stab) | (1u << Pluck) | (1u << Pad) | (1u << Vox);
+    if ((partMask & kSongRoll) == kSongRoll)
     {
         const HookPlan plan = planHook (g, s.dialect, postHash (seeds[Bass] ? seeds[Bass] : 1u, 0x484F4F4Bu), partMask,
                                         s.stab >= 0.5f);
