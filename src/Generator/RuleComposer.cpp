@@ -2,6 +2,7 @@
 #include "RuleTables.h"
 
 #include <algorithm>
+#include <bitset>
 #include <cmath>
 
 namespace rolla::phrase
@@ -1077,6 +1078,424 @@ void chooseVoicing (int st, int mode, unsigned bassMask, int prevBottom, int str
     bottomOut = bottom;
 }
 
+// ------------------------------------------------------------- DEEP colour
+// Catchiness research, DEEP: the chords are the hook. Jazz-house colours (minor 7, major 7,
+// minor 9), the top note of each voicing moving by a step (1-2 semitones) between the two
+// chords, the root left to the bass when the bass plays it, and no m2 / m9 against the bass
+// under any hit. Nothing is stored or taken from a reference: the chord roots come from the
+// model's chord-bottom chain (the unigram, transition and strength tables chooseVoicing
+// reads), the quality from stacking thirds on that step of the roll's own mode, and the
+// voicing is built here around the bass under the roll's own hits.
+
+enum JazzQuality : int
+{
+    JazzM7 = 0,
+    JazzM9,
+    JazzMaj7,
+    JazzQualities
+};
+// Preference among the colours a root allows: minor 9 is DEEP's signature minor colour.
+constexpr float kJazzQualityW[JazzQualities] = { 0.35f, 0.45f, 0.20f };
+// How a chord sits on the bass under one hit: the bass plays its root, another chord tone,
+// nothing, or a note outside the chord (a pedal under it). The class weight is the mean.
+constexpr float kJazzFitRoot = 1.f;
+constexpr float kJazzFitTone = 0.75f;
+constexpr float kJazzFitNone = 0.6f;
+constexpr float kJazzFitPedal = 0.35f;
+// Register preference for the top voice (semitones over the stab base): the band's upper middle.
+constexpr int kJazzTopCentre = 14;
+// Widest voicing (top to bottom, semitones): a drop voicing stays inside a 10th-ish hand.
+constexpr int kJazzMaxSpan = 16;
+// The top voice may reach a minor 3rd over the stab band (kStabRegHi): the key's iv minor 9
+// (its 9th over its b3) and bVI major 7 (its 7th over its root) only fit with the top there.
+constexpr int kJazzTopReach = 3;
+constexpr int kJazzMaxChords = 32;
+constexpr int kJazzMaxVoicings = 32;
+
+struct JazzChord
+{
+    int root = 0;
+    int quality = JazzM7;
+    int n = 0;
+    int iv[5] {};      // over the root, the stack in thirds: root, 3rd, 5th, 7th (, 9th)
+    unsigned pcs = 0u; // pitch classes of the whole chord
+};
+
+struct JazzHit
+{
+    int cls = 0;            // which of the two chords (hit-by-hit alternation)
+    int slot = 0;           // 16th in its bar
+    int bassPc = -1;        // bass pitch class sounding at the onset, -1 for none
+    unsigned bassMask = 0u; // every bass pitch class sounding during the hit
+};
+
+struct JazzVoicing
+{
+    int top = 0;
+    int topIdx = 1;  // which chord tone is on top
+    int pitch[5] {}; // per chord tone (index into JazzChord::iv), all under the top
+};
+
+// The diatonic seventh chord on pitch class `root`, stacked in thirds in the mode. True only
+// for the DEEP colours: minor 7, minor 9 (the mode's 9th a whole step over the root) and
+// major 7. Half-diminished and dominant stacks are not DEEP colours.
+bool jazzChordOn (int root, int mode, int quality, JazzChord& c) noexcept
+{
+    int deg = -1;
+    for (int d = 0; d < 7 && deg < 0; ++d)
+        if (phrase::degreeToSemis (d, mode) == root)
+            deg = d;
+    if (deg < 0)
+        return false;
+    auto above = [&] (int k) { return phrase::degreeToSemis (deg + k, mode) - root; };
+    const int third = above (2);
+    const int fifth = above (4);
+    const int seventh = above (6);
+    const int ninth = above (8);
+    const bool minor = third == 3 && fifth == 7 && seventh == 10;
+    const bool major = third == 4 && fifth == 7 && seventh == 11;
+    if (quality == JazzMaj7 ? ! major : (! minor || (quality == JazzM9 && ninth != 14)))
+        return false;
+    const int iv[5] = { 0, third, fifth, seventh, ninth };
+    c.root = root;
+    c.quality = quality;
+    c.n = quality == JazzM9 ? 5 : 4;
+    c.pcs = 0u;
+    for (int k = 0; k < c.n; ++k)
+    {
+        c.iv[k] = iv[k];
+        c.pcs |= 1u << (unsigned) pcOf (root + iv[k]);
+    }
+    return true;
+}
+
+// The chord tones written for one hit (bit k = c.iv[k]): the root goes to the bass when the
+// bass plays it, and a minor 9 keeps four tones (its 5th goes while the root sounds).
+unsigned jazzHitTones (const JazzChord& c, int bassPc) noexcept
+{
+    unsigned m = (1u << (unsigned) c.n) - 1u;
+    if (bassPc == c.root)
+        m &= ~1u;
+    if (c.n == 5 && (m & 1u) != 0)
+        m &= ~(1u << 2);
+    return m;
+}
+
+// ...less every tone a semitone from a bass note sounding during the hit (no m2 / m9 / M7
+// against the bass): the stab gives way to the bass, as fixUpperClashes does later.
+unsigned jazzSounding (const JazzChord& c, const JazzHit& h) noexcept
+{
+    unsigned m = jazzHitTones (c, h.bassPc);
+    for (int k = 0; k < c.n; ++k)
+    {
+        const int pc = pcOf (c.root + c.iv[k]);
+        if ((h.bassMask & ((1u << (unsigned) ((pc + 1) % 12)) | (1u << (unsigned) ((pc + 11) % 12)))) != 0)
+            m &= ~(1u << (unsigned) k);
+    }
+    return m;
+}
+
+// A chord can take a class when every hit keeps at least two tones after giving way to the
+// bass. Returns how much of the chord survives: the mean share of tones kept times the share
+// of hits that keep a 7th or 9th (the colour), squared; 0 when the chord cannot take the class.
+float jazzKeep (const JazzChord& c, int cls, const JazzHit* hits, int nh) noexcept
+{
+    const unsigned colour = (1u << 3) | (c.n == 5 ? (1u << 4) : 0u);
+    float sum = 0.f;
+    int coloured = 0;
+    int n = 0;
+    for (int h = 0; h < nh; ++h)
+    {
+        if (hits[h].cls != cls)
+            continue;
+        const unsigned on = jazzSounding (c, hits[h]);
+        const int kept = (int) std::bitset<5> (on).count();
+        if (kept < 2)
+            return 0.f;
+        sum += (float) kept / (float) std::bitset<5> (jazzHitTones (c, hits[h].bassPc)).count();
+        coloured += (on & colour) != 0 ? 1 : 0;
+        ++n;
+    }
+    const float f = n > 0 ? (sum / (float) n) * ((float) coloured / (float) n) : 1.f;
+    return f * f;
+}
+
+float jazzFit (const JazzChord& c, int cls, const JazzHit* hits, int nh) noexcept
+{
+    float sum = 0.f;
+    int n = 0;
+    for (int h = 0; h < nh; ++h)
+    {
+        if (hits[h].cls != cls)
+            continue;
+        const int b = hits[h].bassPc;
+        sum += b < 0 ? kJazzFitNone
+                     : (b == c.root ? kJazzFitRoot : ((c.pcs & (1u << (unsigned) b)) != 0 ? kJazzFitTone : kJazzFitPedal));
+        ++n;
+    }
+    return n > 0 ? sum / (float) n : 1.f;
+}
+
+// Voicings of `c` with the top inside [lo, hi]: every tone in close position under the top,
+// or up to two of them an octave lower (drop voicings, which open a 9th / 7th cluster into a
+// 7th / 9th), spanning at most kJazzMaxSpan. Close voicings come first. The top is a colour
+// tone (3rd, 7th, 9th; the 5th of a 7th chord), never the root, which the bass can take.
+int jazzVoicings (const JazzChord& c, int lo, int hi, JazzVoicing* out) noexcept
+{
+    int n = 0;
+    for (int drops = 0; drops <= 2; ++drops)
+        for (int t = 1; t < c.n; ++t)
+        {
+            if (c.n == 5 && t == 2)
+                continue;
+            const int topPc = pcOf (c.root + c.iv[t]);
+            for (int top = lo; top <= hi; ++top)
+            {
+                if (pcOf (top) != topPc)
+                    continue;
+                for (unsigned m = 0; m < (1u << (unsigned) c.n); ++m)
+                {
+                    if ((int) std::bitset<5> (m).count() != drops || (m & (1u << (unsigned) t)) != 0 || n >= kJazzMaxVoicings)
+                        continue;
+                    JazzVoicing v;
+                    v.top = top;
+                    v.topIdx = t;
+                    int low = top;
+                    for (int k = 0; k < c.n; ++k)
+                    {
+                        v.pitch[k] = top - pcOf (c.iv[t] - c.iv[k]) - ((m & (1u << (unsigned) k)) != 0 ? 12 : 0);
+                        low = std::min (low, v.pitch[k]);
+                    }
+                    bool dropLow = false;
+                    for (int k = 0; k < c.n; ++k)
+                        dropLow = dropLow || ((m & (1u << (unsigned) k)) != 0 && v.pitch[k] < lo);
+                    if (! dropLow && top - low <= kJazzMaxSpan)
+                        out[n++] = v;
+                }
+            }
+        }
+    return n;
+}
+
+// A voicing can take a class when, on every hit of the class, its top tone sounds and every
+// sounding tone sits at or over the register floor, with no two voices a minor 2nd or minor
+// 9th apart over the class (a minor 9 keeps its 9th a major 7th over the b3, a major 7 its
+// 7th a major 7th over the root).
+bool jazzVoicingFits (const JazzChord& c, const JazzVoicing& v, int cls, int lo, const JazzHit* hits, int nh) noexcept
+{
+    unsigned used = 0u;
+    for (int h = 0; h < nh; ++h)
+    {
+        if (hits[h].cls != cls)
+            continue;
+        const unsigned on = jazzSounding (c, hits[h]);
+        if ((on & (1u << (unsigned) v.topIdx)) == 0)
+            return false;
+        used |= on;
+    }
+    for (int j = 0; j < c.n; ++j)
+    {
+        if ((used & (1u << (unsigned) j)) == 0)
+            continue;
+        if (v.pitch[j] < lo)
+            return false;
+        for (int k = 0; k < c.n; ++k)
+            if ((used & (1u << (unsigned) k)) != 0 && (v.pitch[j] - v.pitch[k] == 1 || v.pitch[j] - v.pitch[k] == 13))
+                return false;
+    }
+    return true;
+}
+
+// How far the voices travel from one voicing to the next (each tone to its nearest).
+int jazzMotion (const JazzChord& a, const JazzVoicing& va, const JazzChord& b, const JazzVoicing& vb) noexcept
+{
+    int sum = 0;
+    for (int k = 0; k < b.n; ++k)
+    {
+        int best = 99;
+        for (int j = 0; j < a.n; ++j)
+            best = std::min (best, std::abs (vb.pitch[k] - va.pitch[j]));
+        sum += best;
+    }
+    return sum;
+}
+
+// How far a voicing reaches past an octave (0 for close position): stabs stay compact.
+int jazzSpan (const JazzChord& c, const JazzVoicing& v) noexcept
+{
+    int low = v.top;
+    for (int k = 0; k < c.n; ++k)
+        low = std::min (low, v.pitch[k]);
+    return std::max (0, v.top - low - 11);
+}
+
+bool jazzStep (const JazzVoicing& a, const JazzVoicing& b) noexcept
+{
+    const int d = std::abs (a.top - b.top);
+    return d == 1 || d == 2;
+}
+
+int jazzStrength (int cls, const JazzHit* hits, int nh) noexcept
+{
+    int vote[3] {};
+    for (int h = 0; h < nh; ++h)
+        if (hits[h].cls == cls)
+            ++vote[strengthOf (hits[h].slot)];
+    int s = 1;
+    for (int k = 0; k < 3; ++k)
+        if (vote[k] > vote[s])
+            s = k;
+    return s;
+}
+
+// DEEP's two stab chords as jazz-house colours. Writes each hit's tones (ascending) and
+// returns true, or false when no pair of colours fits the bass with a stepwise top voice
+// (the caller then falls back to the palette voicings).
+bool deepJazzStab (int mode, std::uint32_t seed, const JazzHit* hits, int nh, int (*tones)[4], int* nTones) noexcept
+{
+    const int st = styleOf (Long);
+    const int lo = kStabRegLo[st];
+    const int hi = kStabRegHi[st] + kJazzTopReach;
+    JazzChord cand[kJazzMaxChords];
+    int nc = 0;
+    for (int root = 0; root < 12; ++root)
+        for (int q = 0; q < JazzQualities && nc < kJazzMaxChords; ++q)
+            if (jazzChordOn (root, mode, q, cand[nc]))
+                ++nc;
+    if (nc == 0)
+        return false;
+    // Per class (0 = the first chord's hits, 1 = the second's): which chords keep their
+    // colour over the bass, how well they sit on it, and which voicings keep their top.
+    bool clear[2][kJazzMaxChords] {};
+    float weight[2][kJazzMaxChords] {};
+    JazzVoicing voic[kJazzMaxChords][kJazzMaxVoicings];
+    int nvoic[kJazzMaxChords] {};
+    bool topOk[2][kJazzMaxChords][kJazzMaxVoicings] {};
+    for (int k = 0; k < nc; ++k)
+    {
+        nvoic[k] = jazzVoicings (cand[k], lo, hi, voic[k]);
+        for (int cls = 0; cls < 2; ++cls)
+        {
+            const float keep = jazzKeep (cand[k], cls, hits, nh);
+            for (int v = 0; v < nvoic[k]; ++v)
+            {
+                topOk[cls][k][v] = keep > 0.f && jazzVoicingFits (cand[k], voic[k][v], cls, lo, hits, nh);
+                clear[cls][k] = clear[cls][k] || topOk[cls][k][v];
+            }
+            weight[cls][k] = kJazzQualityW[cand[k].quality] * jazzFit (cand[k], cls, hits, nh) * keep;
+        }
+    }
+    const int strength[2] = { jazzStrength (0, hits, nh), jazzStrength (1, hits, nh) };
+    float rowU[12];
+    for (int pc = 0; pc < 12; ++pc)
+        rowU[pc] = kStabUnigram[st][pc];
+    prepareRow (rowU, kStabUnigram[st], kFloorRowStab);
+    auto choiceW = [&] (int cls, int pc) { return kStabChoice[st][std::clamp (strength[cls], 0, 2)][pc] + 1.0e-3f; };
+    // A voicing pair: 0 unless both voicings fit their class and the top moves by a step;
+    // then the smoothest inner motion, compact, near the register's upper middle, and over
+    // the stab band only when the colour needs it.
+    auto pairWeight = [&] (int a, int i, int b, int j) -> float
+    {
+        if (! topOk[0][a][i] || ! topOk[1][b][j] || ! jazzStep (voic[a][i], voic[b][j]))
+            return 0.f;
+        const JazzVoicing& va = voic[a][i];
+        const JazzVoicing& vb = voic[b][j];
+        const float motion = (float) jazzMotion (cand[a], va, cand[b], vb);
+        const float reg = 1.f / (1.f + 0.2f * (float) (std::abs (va.top - kJazzTopCentre) + std::abs (vb.top - kJazzTopCentre)));
+        const float open = 1.f / (1.f + 0.15f * (float) (jazzSpan (cand[a], va) + jazzSpan (cand[b], vb)));
+        const float band = (va.top > kStabRegHi[st] ? 0.4f : 1.f) * (vb.top > kStabRegHi[st] ? 0.4f : 1.f);
+        return reg * open * band / (1.f + 0.25f * motion);
+    };
+
+    Rng r (mix32 (seed, 0xDEE9C010u));
+    bool tried[kJazzMaxChords] {};
+    for (int attempt = 0; attempt < 6; ++attempt)
+    {
+        float w[kJazzMaxChords];
+        bool legal[kJazzMaxChords];
+        for (int k = 0; k < nc; ++k)
+        {
+            legal[k] = clear[0][k] && ! tried[k];
+            w[k] = std::sqrt (rowU[cand[k].root] * choiceW (0, cand[k].root)) * weight[0][k];
+        }
+        const int a = pickWeighted (w, legal, nc, r);
+        if (a < 0)
+            return false;
+        tried[a] = true;
+        // The second chord follows the chord-bottom chain from the first, is a different
+        // chord (pitch-class Jaccard under 0.75, as the palette pair), and has a voicing
+        // whose top note is a step from one of the first chord's.
+        float rowT[12];
+        for (int pc = 0; pc < 12; ++pc)
+            rowT[pc] = kStabTrans[st][cand[a].root][pc];
+        prepareRow (rowT, kStabUnigram[st], kFloorRowStab);
+        bool any = false;
+        for (int k = 0; k < nc; ++k)
+        {
+            const unsigned both = cand[a].pcs & cand[k].pcs;
+            const unsigned either = cand[a].pcs | cand[k].pcs;
+            legal[k] = clear[1][k] && cand[k].root != cand[a].root
+                    && (float) std::bitset<12> (both).count() < 0.75f * (float) std::bitset<12> (either).count();
+            // The best voicing pair this chord allows weighs in, so a stepwise pair inside
+            // the band is preferred over one that needs the top over it.
+            float best = 0.f;
+            for (int i = 0; i < nvoic[a] && legal[k]; ++i)
+                for (int j = 0; j < nvoic[k]; ++j)
+                    best = std::max (best, pairWeight (a, i, k, j));
+            legal[k] = legal[k] && best > 0.f;
+            any = any || legal[k];
+            w[k] = std::sqrt (rowT[cand[k].root] * choiceW (1, cand[k].root)) * weight[1][k] * best;
+        }
+        if (! any)
+            continue;
+        const int b = pickWeighted (w, legal, nc, r);
+        if (b < 0)
+            continue;
+        float total = 0.f;
+        float pw[kJazzMaxVoicings * kJazzMaxVoicings] {};
+        for (int i = 0; i < nvoic[a]; ++i)
+            for (int j = 0; j < nvoic[b]; ++j)
+            {
+                pw[i * kJazzMaxVoicings + j] = pairWeight (a, i, b, j);
+                total += pw[i * kJazzMaxVoicings + j];
+            }
+        if (total <= 0.f)
+            continue;
+        // Weighted draw; rounding that leaves x just over zero keeps the last pair with weight.
+        float x = (float) r.next() * total;
+        int vi = -1;
+        int vj = -1;
+        bool drawn = false;
+        for (int i = 0; i < nvoic[a] && ! drawn; ++i)
+            for (int j = 0; j < nvoic[b] && ! drawn; ++j)
+            {
+                const float pwij = pw[i * kJazzMaxVoicings + j];
+                if (pwij <= 0.f)
+                    continue;
+                vi = i;
+                vj = j;
+                x -= pwij;
+                drawn = x <= 0.f;
+            }
+        const JazzChord* chord[2] = { &cand[a], &cand[b] };
+        const JazzVoicing* voicing[2] = { &voic[a][vi], &voic[b][vj] };
+        for (int h = 0; h < nh; ++h)
+        {
+            const JazzChord& c = *chord[hits[h].cls & 1];
+            const JazzVoicing& v = *voicing[hits[h].cls & 1];
+            const unsigned on = jazzSounding (c, hits[h]);
+            int m = 0;
+            for (int k = 0; k < c.n && m < 4; ++k)
+                if ((on & (1u << (unsigned) k)) != 0)
+                    tones[h][m++] = v.pitch[k];
+            std::sort (tones[h], tones[h] + m);
+            nTones[h] = m;
+        }
+        return true;
+    }
+    return false;
+}
+
 } // namespace
 
 int drawMode (int dialect, float dark, std::uint32_t bassSeed) noexcept
@@ -1367,7 +1786,48 @@ void composeStab (Lane& lane, const Lane& bass, const StabParams& p, std::uint32
     // clear the bass under every hit, not only its own bar parity.
     const bool byHit = st == styleOf (UkMin) || st == styleOf (Long);
     const unsigned allBass = bassMask[0] | bassMask[1];
-    for (int par = 0; par < 2; ++par)
+
+    // ROLLER and DEEP: the two chords alternate hit by hit in time order. Their
+    // few hits can all fall in bars of one parity, which left one chord on every
+    // hit. BOUNCY and JACKIN keep one chord per bar parity: their busier stab
+    // line alternating hit by hit reads as a figure.
+    int order[kMaxNotes];
+    for (int h = 0; h < nh; ++h)
+        order[h] = h;
+    std::sort (order, order + nh, [&] (int a, int b)
+    {
+        return hits[a].bar * kBar + hits[a].slot < hits[b].bar * kBar + hits[b].slot;
+    });
+    int turn[kMaxNotes] {};
+    for (int k = 0; k < nh; ++k)
+        turn[order[k]] = byHit ? (k & 1) : (hits[order[k]].bar & 1);
+
+    // DEEP: jazz-house colours with a stepwise top voice (deepJazzStab above); the
+    // palette pair below stays the fallback when no colour pair clears the bass.
+    bool jazz = false;
+    int jazzTones[kMaxBars * 4][4] {};
+    int jazzN[kMaxBars * 4] {};
+    if (st == styleOf (Long) && nh > 0)
+    {
+        JazzHit jh[kMaxBars * 4];
+        for (int h = 0; h < nh; ++h)
+        {
+            const float a = (float) (hits[h].bar * kBar + hits[h].slot);
+            const float b = a + hits[h].len;
+            jh[h].cls = turn[h];
+            jh[h].slot = hits[h].slot;
+            jh[h].bassPc = bassPcAt (hits[h].bar * kBar + hits[h].slot);
+            jh[h].bassMask = 0u;
+            for (int i = 0; i < bass.count; ++i)
+            {
+                const Note& bn = bass.notes[i];
+                if (bn.vel > 2 && bn.start < b - 1.0e-3f && a < bn.start + bn.length - 1.0e-3f)
+                    jh[h].bassMask |= 1u << (unsigned) pcOf (bn.chord[0]);
+            }
+        }
+        jazz = deepJazzStab (p.mode, seed, jh, nh, jazzTones, jazzN);
+    }
+    for (int par = 0; par < 2 && ! jazz; ++par)
     {
         int strength = 1;
         for (int k = 0; k < 3; ++k)
@@ -1407,29 +1867,16 @@ void composeStab (Lane& lane, const Lane& bass, const StabParams& p, std::uint32
         }
     }
 
-    // ROLLER and DEEP: the two chords alternate hit by hit in time order. Their
-    // few hits can all fall in bars of one parity, which left one chord on every
-    // hit. BOUNCY and JACKIN keep one chord per bar parity: their busier stab
-    // line alternating hit by hit reads as a figure.
-    int order[kMaxNotes];
-    for (int h = 0; h < nh; ++h)
-        order[h] = h;
-    std::sort (order, order + nh, [&] (int a, int b)
-    {
-        return hits[a].bar * kBar + hits[a].slot < hits[b].bar * kBar + hits[b].slot;
-    });
-    int turn[kMaxNotes] {};
-    for (int k = 0; k < nh; ++k)
-        turn[order[k]] = byHit ? (k & 1) : (hits[order[k]].bar & 1);
     for (int h = 0; h < nh && lane.count < kMaxNotes; ++h)
     {
         const int par = turn[h];
+        const int nt = jazz ? jazzN[h] : nv[par];
         Note n;
         n.start = (float) (hits[h].bar * kBar + hits[h].slot);
         n.length = hits[h].len;
-        n.nChord = (std::uint8_t) std::clamp (nv[par], 1, 4);
+        n.nChord = (std::uint8_t) std::clamp (nt, 1, 4);
         for (int t = 0; t < 4; ++t)
-            n.chord[t] = (std::int8_t) (t < nv[par] ? voi[par][t] : 0);
+            n.chord[t] = (std::int8_t) (t < nt ? (jazz ? jazzTones[h][t] : voi[par][t]) : 0);
         n.vel = (std::uint8_t) std::clamp (p.vel, 1, 127);
         lane.notes[lane.count++] = n;
     }

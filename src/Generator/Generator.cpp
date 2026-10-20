@@ -3182,6 +3182,53 @@ void trimSamePitchOverlaps (Lane& lane)
     }
 }
 
+// DEEP (catchiness research: the chords are the hook, and the voicing drops the root when
+// the bass has it): on the bass that ships, a four-tone stab leaves the bass's own note to
+// the bass. The tone on the pitch class the bass plays at the stab's onset is dropped,
+// unless it is the top voice (the stepwise top line stays). The composer already voices for
+// the bass it saw; later bass passes can move a note under a stab. Only removes tones, so
+// no clash, duplicate or overlap comes back.
+void leaveBassNoteToBass (Lane& stab, const Lane& bass) noexcept
+{
+    for (int k = 0; k < stab.count; ++k)
+    {
+        Note& n = stab.notes[k];
+        const int nc = clampi ((int) n.nChord, 1, 4);
+        if (n.vel <= 2 || nc < 4)
+            continue;
+        int bpc = -1;
+        for (int i = 0; i < bass.count; ++i)
+        {
+            const Note& b = bass.notes[i];
+            if (b.vel > 2 && b.start <= n.start + 1e-3f && b.start + b.length > n.start + 1e-3f)
+                bpc = pcOf (b.chord[0]);
+        }
+        if (bpc < 0)
+            continue;
+        int top = 0;
+        for (int c = 1; c < nc; ++c)
+            if (n.chord[c] > n.chord[top])
+                top = c;
+        std::int8_t keep[4] {};
+        int w = 0;
+        bool dropped = false;
+        for (int c = 0; c < nc; ++c)
+        {
+            if (! dropped && c != top && pcOf (n.chord[c]) == bpc)
+            {
+                dropped = true;
+                continue;
+            }
+            keep[w++] = n.chord[c];
+        }
+        if (! dropped)
+            continue;
+        n.nChord = (std::uint8_t) w;
+        for (int c = 0; c < 4; ++c)
+            n.chord[c] = c < w ? keep[c] : 0;
+    }
+}
+
 // At most stabHitCap (s, bar) chord onsets a bar. The beat-1 hit and the
 // closing answer of bars 4 and 8 stay; then louder, then more accented (8th
 // offbeat, then 8th), then earlier hits win.
@@ -5774,6 +5821,9 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
             trimSamePitchOverlaps (g.lane[part]);
         }
     }
+    // DEEP's jazz voicings leave the bass note to the bass that ships (RuleComposer deepJazzStab).
+    if (s.dialect == Long && regen (Stab))
+        leaveBassNoteToBass (g.lane[Stab], g.lane[Bass]);
         // A locked scale is the last pitch step, after the roll-mode pass, so the
     // user's scale always wins and Auto rolls are untouched byte for byte. Only
     // regenerated lanes move: a kept lane stays as the user locked it.

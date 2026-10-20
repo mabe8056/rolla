@@ -115,6 +115,9 @@ struct StabParams
 // weighted by the model's P(stab onset | bass state) with the gap weight and
 // the answer after a bass phrase end. Two voicings per roll (one per bar
 // parity), in the mode, with no m2 / m9 against the bass under their hits.
+// DEEP voices its two chords as jazz-house colours instead (minor 7, minor 9 or
+// major 7 stacked in thirds in the mode, the top voice a step apart, the root
+// left to the bass when the bass plays it); the palette pair is its fallback.
 void composeStab (Lane& lane, const Lane& bass, const StabParams& p, std::uint32_t seed);
 
 // One chord from the style's palette under the mode: up to 4 tones in `out`.
