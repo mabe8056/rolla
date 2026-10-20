@@ -1464,7 +1464,9 @@ Sampler::Take Sampler::startNote (int part, int midiNote, int velocity, float en
         else
         {
             const int k = bassmatch::octaveFor (bassLine, bassLineBase, root);
-            semis = bassmatch::noteShift (midiNote, k, root);
+            // Octave, window and decay class stay decided on `root`; the file's own tune rides on top
+            // (Oct 21: the bare filename note played AR_Bass_02_C ~40 and CD_Bass_15_C 6 cents flat).
+            semis = bassmatch::noteShift (midiNote, k, root) - pitch.bodyTune (root);
             const auto cls = bassmatch::decayOf (bassmatch::playedRingMs (audio->ringMs, bassmatch::anchorShift (bassLine, bassLineBase, k, root)));
             if (cls == bassmatch::Decay::Pluck)
                 end16 = 1.0e9f;
@@ -1823,7 +1825,14 @@ void Sampler::render (float* laneL, float* laneR, float prev16, float pos16, boo
         v.noteEdge = 1.f;
         if (playing && loopEnd16 > 1.f)
         {
-            const float stop = std::min (v.end16, loopEnd16);
+            // A STAB note's written end starts its release (the lane preset's: swell 300 ms). Only the
+            // loop end is the 10 ms edge: min (end16, loopEnd16) put every note on that edge at its
+            // written end, so the release set in startNote never sounded (Oct 21 envelope forensics).
+            // The other lanes keep the edge (BASS and DRUMS are approved as they sound).
+            const bool releases = v.part == Stab && v.end16 < loopEnd16;
+            if (releases && pos16 >= v.end16)
+                v.env.release();
+            const float stop = releases ? loopEnd16 : std::min (v.end16, loopEnd16);
             const float step = pos16 - prev16;
             if (step > 0.f)
             {

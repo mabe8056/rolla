@@ -43,8 +43,19 @@ struct PitchInfo
     // Bit i set: pitch class (root + i) sounds. Bit 0 is the root.
     std::uint16_t chordPcs = 0;
     ChordQuality quality = ChordQuality::None;
+    // Single notes: the tune the note plays, harmonics 1-4 over its first 220 ms (pitchprobe::bodyPitch).
+    // -1 when not measured (chords, a PitchInfo built by hand): retuning uses rootPitch alone.
+    float bodyPitch = -1.f;
 
     bool pitched() const noexcept { return rootPitch >= 0.f; }
+    // Semitones the note plays off `root`: the fine correction added after every octave and window
+    // decision is made on `root` (so no fold moves). 0 when unmeasured or over half a semitone off
+    // (a read that far off is a different note, not a tune).
+    double bodyTune (double root) const noexcept
+    {
+        const double d = (double) bodyPitch - root;
+        return bodyPitch >= 0.f && root >= 0.0 && std::fabs (d) <= 0.5 ? d : 0.0;
+    }
 };
 
 inline constexpr float kPitchConfMin = 0.5f;
@@ -210,6 +221,62 @@ inline double refineNsdf (const std::vector<float>& mono, double rate, double gu
     return std::clamp (bestClarity, 0.0, 1.0);
 }
 
+// The tune a note plays (Oct 21 tuning forensics). NSDF reads the period of the whole waveform, so
+// the sharp voices of a detuned-unison stab pull it up (SRM_MR_CHAboutUs_C: NSDF +10.6 cents,
+// harmonics 1-4 -1.5) and a bass whose sub dips reads its tail. This is the first 220 ms of mono
+// (already onset + 30 ms; an eighth at 130 BPM), Hann, zero-padded to 4x or more; the peak within
+// +-0.8 st of each harmonic 1-4 of `near`, log-parabolic; the median of the fundamentals they imply,
+// harmonics under 1% of the strongest left out. Under 60 ms to read: `near`.
+inline double bodyPitch (const std::vector<float>& mono, double rate, double near)
+{
+    const size_t n = std::min (mono.size(), (size_t) (0.22 * rate));
+    if (near <= 0.0 || n < (size_t) (0.06 * rate))
+        return near;
+    size_t N = 1;
+    while (N < 4 * n)
+        N <<= 1;
+    std::vector<std::complex<double>> buf (N);
+    for (size_t i = 0; i < n; ++i)
+        buf[i] = std::complex<double> ((double) mono[i] * (0.5 - 0.5 * std::cos (2.0 * kPi * (double) i / (double) (n - 1))), 0.0);
+    fft (buf);
+    const double binHz = rate / (double) N;
+    const double f0 = 440.0 * std::pow (2.0, (near - 69.0) / 12.0);
+    double read[4] {}, mag[4] {}, top = 0.0;
+    int count = 0;
+    for (int h = 1; h <= 4; ++h)
+    {
+        const double fh = f0 * (double) h;
+        if (fh > 0.45 * rate)
+            break;
+        const size_t lo = std::max<size_t> (1, (size_t) (fh * std::pow (2.0, -0.8 / 12.0) / binHz));
+        const size_t hi = std::min (N / 2 - 2, (size_t) std::ceil (fh * std::pow (2.0, 0.8 / 12.0) / binHz));
+        size_t k = lo;
+        for (size_t j = lo; j <= hi; ++j)
+            if (std::abs (buf[j]) > std::abs (buf[k]))
+                k = j;
+        if (k <= lo || k >= hi)
+            continue; // no peak inside the band
+        const double a = std::log (std::max (1.0e-12, std::abs (buf[k - 1])));
+        const double b = std::log (std::max (1.0e-12, std::abs (buf[k])));
+        const double c = std::log (std::max (1.0e-12, std::abs (buf[k + 1])));
+        const double den = a - 2.0 * b + c;
+        const double off = std::fabs (den) > 1.0e-12 ? std::clamp (0.5 * (a - c) / den, -0.5, 0.5) : 0.0;
+        read[count] = midiOf (((double) k + off) * binHz / (double) h);
+        mag[count] = std::abs (buf[k]);
+        top = std::max (top, mag[count]);
+        ++count;
+    }
+    double kept[4] {};
+    int m = 0;
+    for (int i = 0; i < count; ++i)
+        if (mag[i] >= top * 0.01)
+            kept[m++] = read[i];
+    if (m == 0)
+        return near;
+    std::sort (kept, kept + m);
+    return m % 2 == 1 ? kept[m / 2] : 0.5 * (kept[m / 2 - 1] + kept[m / 2]);
+}
+
 } // namespace pitchprobe
 
 // Lowest root a lane can have. Sub rumble under this on a stab or pad is not
@@ -330,6 +397,7 @@ inline PitchInfo probePitch (const float* left, const float* right, int frames, 
         info.rootPitch = (float) (agree ? refined : classes[0].midi);
         info.conf = (float) std::clamp (fit * (agree ? std::max (0.7, clarity) : 0.6), 0.0, 1.0);
         info.chordPcs = 1;
+        info.bodyPitch = (float) bodyPitch (mono, rate, (double) info.rootPitch);
         return info;
     }
 
@@ -402,9 +470,13 @@ inline double tonalShift (const PitchInfo& m, int namedRoot, double midiNote, co
         return 0.0; // unpitched (noise, percussion): as recorded, whatever the label
     const bool hasName = namedRoot >= 0;
     double root = -1.0;
+    double tune = 0.0;
     const bool named = hasName && pitchprobe::pcDistance ((double) namedRoot, (double) m.rootPitch) <= 1.0;
     if (m.conf >= kPitchConfMin && (! hasName || named))
+    {
         root = m.rootPitch;
+        tune = m.bodyTune (root);
+    }
     else if (hasName)
         // The label's pitch class, the measured octave. Sample packs label keys reliably, and a
         // confident probe that disagrees with the label by more than a semitone has locked onto a
@@ -418,7 +490,9 @@ inline double tonalShift (const PitchInfo& m, int namedRoot, double midiNote, co
         semis -= 12.0;
     while (semis < -rule.cap)
         semis += 12.0;
-    return semis;
+    // Folded on the probe's root as before; the body's tune rides on top (Oct 21: NSDF read the
+    // detuned-unison SRM stabs 10-12 cents sharp, so they played that much flat).
+    return semis - tune;
 }
 
 // True when tonalShift retunes this file (it has a root to retune from), so a chord's
