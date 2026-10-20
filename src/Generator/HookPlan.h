@@ -1091,14 +1091,20 @@ inline void restateHeld (Lane& lane, int bars) noexcept
 } // namespace hook_cell
 
 // Applies the plan to the regenerated lanes (kept lanes are never touched).
-inline void applyHookPlan (Groove& g, const HookPlan& plan, int bars, std::uint32_t partMask) noexcept
+// hitsOnStab is the IN STAB switch (the user's own call, like the STAB knob): the hits are then
+// not a part of their own but a layer on the stab's hits, so they play wherever the stab still
+// plays and nowhere else. Without it the hits lane is never the hook or the support and stays out.
+inline void applyHookPlan (Groove& g, const HookPlan& plan, int bars, std::uint32_t partMask,
+                           bool hitsOnStab = false) noexcept
 {
     using namespace hook_detail;
     lastHookPlan() = plan;
     auto regen = [&] (int p) { return ((partMask >> p) & 1u) != 0; };
+    const bool stabPlays = plan.hook == Stab || plan.support == Stab || (! regen (Stab) && hasNotes (g.lane[Stab]));
+    const bool hitsLayer = hitsOnStab && stabPlays;
     // Silence every melodic lane that is not the floor, the hook or the support.
     for (int p : { (int) Stab, (int) Pluck, (int) Pad, (int) Hits, (int) Vox })
-        if (regen (p) && p != plan.hook && p != plan.support)
+        if (regen (p) && p != plan.hook && p != plan.support && ! (p == Hits && hitsLayer))
             g.lane[p].count = 0;
 
     // A vox hook speaks in every bar: the call bar's chops every bar through bar 7, at least two.
@@ -1210,6 +1216,22 @@ inline void applyHookPlan (Groove& g, const HookPlan& plan, int bars, std::uint3
         // still clear of a vox hook's own slots. The caller runs the clash rule again after this.
         if (plan.support == Stab && regen (Bass) && (plan.hook == Bass || bouncy))
             stabOnBass (sp, g.lane[Bass], bars, plan.hook == Bass ? nullptr : hookAt);
+    }
+    // IN STAB: the hits keep only the stab onsets that are still there.
+    if (hitsLayer && regen (Hits))
+    {
+        Lane& h = g.lane[Hits];
+        const Lane& st = g.lane[Stab];
+        int w = 0;
+        for (int i = 0; i < h.count; ++i)
+        {
+            bool onStab = false;
+            for (int k = 0; k < st.count && ! onStab; ++k)
+                onStab = std::fabs (h.notes[i].start - st.notes[k].start) < 0.01f;
+            if (onStab)
+                h.notes[w++] = h.notes[i];
+        }
+        h.count = w;
     }
 }
 } // namespace rolla

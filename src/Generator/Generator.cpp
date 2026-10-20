@@ -146,169 +146,12 @@ void clampLane (Lane& lane, int bars)
 
 // 0.90 at BUSY 0, 1.0 at the shipped 0.40, 1.36 at BUSY 1. The low end is
 // compressed so BUSY 0 still lands inside every style's density band (Maestro
-// 655: the gate runs BUSY 0.40 and BUSY 0, and both must pass).
+// 655: the gate runs BUSY 0.40 and BUSY 0, and both must pass). busyMotif
+// scales the restated riff's attacks by it.
 float busyFactor (float busy) noexcept
 {
     const float b = std::clamp (busy, 0.f, 1.f);
     return b < 0.40f ? 0.90f + 0.25f * b : 1.0f + 0.60f * (b - 0.40f);
-}
-
-// Scale one bar's attacks around the phrase the style already ships. Low BUSY
-// drops the latest hits. High BUSY adds off-kick fills, never on a kick, and
-// never into the last bar's turn rest. BUSY 0.40 is a no-op, so the scored
-// phrase stays the one the lane was written for.
-void applyBusyDensity (Lane& lane, int dialect, int bars, float busy, std::uint32_t seed)
-{
-    const float factor = busyFactor (busy);
-    if (std::fabs (factor - 1.f) < 0.02f || lane.count <= 0 || bars <= 0)
-        return;
-
-    Rng rng (seed ^ 0xB145u);
-    bool used[8][16] {};
-    for (int i = 0; i < lane.count; ++i)
-    {
-        const int st = (int) std::lround (lane.notes[i].start);
-        if (st >= 0 && st < bars * 16 && st / 16 < 8)
-            used[st / 16][st % 16] = true;
-    }
-
-    Note out[kMaxNotes];
-    int w = 0;
-    const int lastBar = std::min (bars, 8) - 1;
-    static const int fillSlots[] = { 1, 2, 3, 5, 6, 7, 9, 10, 11, 13, 14, 15 };
-
-    // Low BUSY: the same number of notes comes out, but only from bars of the
-    // sparser parity (bars 1/3/5/7 or 2/4/6/8), so the 2-bar pattern still
-    // repeats and the bar densities spread instead of evening out (A&R loop
-    // repeat and CONSTANT_DENSITY). Inside a bar the front half thins first,
-    // never the bar's first note, so bar-to-bar changes stay in the back halves.
-    int dropAt[8] {};
-    bool thinBar[8] {};
-    if (factor < 1.f)
-    {
-        int count[8] {};
-        int total = 0, parityCount[2] {};
-        for (int i = 0; i < lane.count; ++i)
-        {
-            const int st = (int) std::lround (lane.notes[i].start);
-            if (st >= 0 && st < bars * 16 && st / 16 < 8)
-            {
-                ++count[st / 16];
-                ++total;
-                parityCount[(st / 16) & 1]++;
-            }
-        }
-        int drops = 0;
-        for (int b = 0; b < std::min (bars, 8); ++b)
-            drops += count[b] - std::clamp ((int) std::lround ((float) count[b] * factor), 1, 9);
-        const int par = parityCount[0] <= parityCount[1] ? 0 : 1;
-        int nPar = 0;
-        for (int b = par; b < std::min (bars, 8); b += 2)
-            ++nPar;
-        const int each = nPar > 0 ? (drops + nPar - 1) / nPar : 0;
-        for (int b = par; b < std::min (bars, 8); b += 2)
-        {
-            thinBar[b] = true;
-            dropAt[b] = std::min (each, std::max (0, count[b] - 2));
-        }
-    }
-    for (int bar = 0; bar < bars && bar < 8; ++bar)
-    {
-        int idx[16];
-        int n = 0;
-        const float origin = (float) (bar * 16);
-        for (int i = 0; i < lane.count && n < 16; ++i)
-            if (lane.notes[i].start >= origin && lane.notes[i].start < origin + 16.f)
-                idx[n++] = i;
-        if (n <= 0)
-            continue;
-        std::sort (idx, idx + n, [&] (int a, int b) { return lane.notes[a].start < lane.notes[b].start; });
-        int target = (int) std::lround ((float) n * factor);
-        target = std::clamp (target, 1, 9);
-        if (bar == lastBar && target > n)
-            target = n;
-        if (factor < 1.f)
-        {
-            // Thinning: drop from this bar only if it is one of the thinned
-            // parity, front-half notes (not the first) before back-half ones.
-            target = thinBar[bar] ? std::max (2, n - dropAt[bar]) : n;
-            target = std::min (target, n);
-            bool drop[16] {};
-            int toDrop = n - target;
-            for (int pass = 0; pass < 2 && toDrop > 0; ++pass)
-                for (int k = n - 1; k >= 1 && toDrop > 0; --k)
-                {
-                    const int sl = (int) std::lround (lane.notes[idx[k]].start) % 16;
-                    if (! drop[k] && (pass == 1 || sl < 8))
-                    {
-                        drop[k] = true;
-                        --toDrop;
-                    }
-                }
-            for (int k = 0; k < n; ++k)
-            {
-                const int st = (int) std::lround (lane.notes[idx[k]].start);
-                if (drop[k])
-                {
-                    if (st >= 0 && st / 16 == bar && st / 16 < 8)
-                        used[bar][st % 16] = false;
-                }
-                else if (w < kMaxNotes)
-                    out[w++] = lane.notes[idx[k]];
-            }
-            continue;
-        }
-        const int keep = std::min (n, target);
-        for (int k = keep; k < n; ++k)
-        {
-            const int st = (int) std::lround (lane.notes[idx[k]].start);
-            if (st >= 0 && st / 16 == bar && st / 16 < 8)
-                used[bar][st % 16] = false;
-        }
-        for (int k = 0; k < keep && w < kMaxNotes; ++k)
-            out[w++] = lane.notes[idx[k]];
-
-        const float fillLen = dialect == Pop ? 1.1f : dialect == Long ? 2.f : dialect == Jackin ? 1.5f : 1.5f;
-        const auto fillPitch = (std::int8_t) (dialect == Pop ? 7 : 0);
-        int have = keep;
-        int guard = 0;
-        while (have < target && w < kMaxNotes && guard++ < 16)
-        {
-            int slot = -1;
-            const int spin = (int) (rng.next() * 12.0);
-            for (int t = 0; t < 12; ++t)
-            {
-                const int s = fillSlots[(spin + t) % 12];
-                if (! used[bar][s])
-                {
-                    slot = s;
-                    break;
-                }
-            }
-            if (slot < 0)
-                break;
-            used[bar][slot] = true;
-            Note nn;
-            nn.start = origin + (float) slot;
-            float next = origin + 16.f;
-            for (int i = 0; i < w; ++i)
-                if (out[i].start > nn.start && out[i].start < next)
-                    next = out[i].start;
-            nn.length = std::max (0.5f, std::min (fillLen, next - nn.start));
-            nn.chord[0] = fillPitch;
-            nn.nChord = 1;
-            nn.vel = 104;
-            for (int i = 0; i < w; ++i)
-                if (out[i].start < nn.start && out[i].start + out[i].length > nn.start)
-                    out[i].length = std::max (0.5f, nn.start - out[i].start);
-            out[w++] = nn;
-            ++have;
-        }
-    }
-    std::sort (out, out + w, [] (const Note& a, const Note& b) { return a.start < b.start; });
-    lane.count = w;
-    for (int i = 0; i < w; ++i)
-        lane.notes[i] = out[i];
 }
 
 int pcOf (int semi) noexcept
@@ -1730,10 +1573,8 @@ void finishPhrase (Lane& lane, const Settings& s, std::uint32_t seed, bool pulse
         styleJackinBass (lane, bars, seed, mode);
     else if (dialect == Long && deepIsDark (s.dark, seed))
         densifyDeepDark (lane, bars, seed, mode);
-    // BOUNCY bounce sets its own density (the 2-bar cell's contrast, its kick cap);
-    // low BUSY thinning on top took it under the A&R density band (3.9 a bar).
-    if (! (dialect == Pop && ! pulse && s.busy < 0.40f))
-        applyBusyDensity (lane, dialect, bars, s.busy, seed);
+    // BUSY is not applied here any more: per-bar edits were thrown away by the motif restate.
+    // busyMotif scales the riff that ships, after the restate.
     if (dialect == Long)
         fitRootShare (lane, 0.42f, 0.68f, seed, dialect, mode);
     if (dialect == Pop)
@@ -1773,8 +1614,6 @@ void finishPhrase (Lane& lane, const Settings& s, std::uint32_t seed, bool pulse
         if (pulse)
         {
             makePulse (lane, bars, seed);
-            // The pulse grid replaces the onsets, so BUSY has to scale it again.
-            applyBusyDensity (lane, dialect, bars, s.busy, seed);
         }
     }
     // Bounce carries the style's octave moves (pulse stays near zero and is 30-40%
@@ -2751,7 +2590,11 @@ float softPenalty (const Groove& g, float freedom, const char* plan, bool offPla
 float effectiveFreedom (const Settings& s, Rng& rng) noexcept
 {
     float f = std::clamp (s.freedom, 0.f, 1.f);
-    const float busyExt = std::fabs (s.busy - 0.5f) * 2.f;
+    // BUSY no longer moves the freedom (Oct 19, knob reach after the hook pass): at its ends it
+    // changed which candidate shipped, so turning BUSY swapped the riff instead of making the
+    // same riff busier. BUSY now scales the motif's attacks (busyMotif). The term stays at
+    // BUSY 0.40's old value (0.2) so rolls at the shipped BUSY are unchanged.
+    constexpr float busyExt = 0.20f;
     const float bounceExt = std::fabs (s.bounce - 0.5f) * 2.f;
     f += 0.20f * std::max (busyExt, bounceExt);
     f += std::clamp (s.chaos, 0.f, 1.f);
@@ -3790,15 +3633,15 @@ int bassFillPitch (const Lane& lane, int abs, int dialect, std::uint32_t seed)
     return place (pPc == 7 ? 3 : 7);
 }
 
-// Brings the bass to its style's onset density (bassDensityTarget, scaled by
-// BUSY the way applyBusyDensity scales the phrase, so the knob still moves it).
+// Brings the bass to its style's onset density (bassDensityTarget; BUSY scales
+// the restated motif afterwards, busyMotif).
 // Every bar takes the same lift, which keeps the bar-to-bar shape (BOUNCE's
 // spread, the call / answer bars); BOUNCE only lifts by what every bar can take.
 // DEEP's back half then moves against the front half on a seeded contour
 // (after the DEEP dark contour idea): a sparse line builds into bars 5-7, a
 // line already busier than the target thins there. Bar 8 keeps its turn.
 // Runs before placeBassOnKicks and the holds, so both see the new attacks.
-void fillBassDensity (Lane& lane, int dialect, int bars, float busy, std::uint32_t seed)
+void fillBassDensity (Lane& lane, int dialect, int bars, std::uint32_t seed)
 {
     const float base = bassDensityTarget (dialect);
     const int nb = std::min (bars, kMaxBars);
@@ -3807,7 +3650,7 @@ void fillBassDensity (Lane& lane, int dialect, int bars, float busy, std::uint32
     sortByStart (lane);
     const int nslots = nb * 16;
     const float tailCut = bassTailCut (nb);
-    const float target = base * busyFactor (busy) / busyFactor (0.40f);
+    const float target = base;
     bool used[kMaxSteps] {};
     int total = 0;
     for (int i = 0; i < lane.count; ++i)
@@ -4951,6 +4794,419 @@ void fitBounceMeanLength (Groove& g, int bars, float lo, float hi, std::uint32_t
     }
 }
 
+// ---- Knob reach on the motif (Oct 19, after the hook pass) ----
+// The hook pass restates bars 1-2 through bar 7 (PhraseLock.h). BUSY and DARK used to act per
+// bar early in the bass pipeline, and the restate threw away what they did to bars 3-7; BUSY's
+// per-bar cap (9) and its odd-or-even-bars-only thinning left the motif bars nearly untouched,
+// and BUSY's ends raised the candidate pick's freedom, so a different riff could ship instead
+// of a busier one. Both knobs now act once, on the motif (bars 1-2) and the turn (the last bar),
+// after the restate, and the motif is restated again: the repeated riff carries the knob.
+// Everything is the roll's own material: fills re-strike the riff's own notes, DARK moves the
+// riff's own degrees by a semitone; nothing is stored.
+namespace knob_motif
+{
+inline int slotOf (float start, int bar) noexcept
+{
+    return (int) std::lround (start) - bar * kStepsPerBar;
+}
+
+inline bool isDarkPc (int pc) noexcept
+{
+    return pc == 1 || pc == 3 || pc == 6 || pc == 8 || pc == 10;
+}
+
+// The darkPull measure: dark share of the non-root pitches.
+inline float darkShare (const Lane& lane) noexcept
+{
+    int dark = 0, pitched = 0;
+    for (int i = 0; i < lane.count; ++i)
+    {
+        const int pc = pcOf (lane.notes[i].chord[0]);
+        if (pc == 0)
+            continue;
+        ++pitched;
+        dark += isDarkPc (pc) ? 1 : 0;
+    }
+    return pitched > 0 ? (float) dark / (float) pitched : 0.f;
+}
+
+inline bool hasPc (const Lane& lane, int pc) noexcept
+{
+    for (int i = 0; i < lane.count; ++i)
+        if (pcOf (lane.notes[i].chord[0]) == pc)
+            return true;
+    return false;
+}
+
+inline void movePc (Lane& lane, int from, int to) noexcept
+{
+    for (int i = 0; i < lane.count; ++i)
+        if (pcOf (lane.notes[i].chord[0]) == from)
+            lane.notes[i].chord[0] = (std::int8_t) (lane.notes[i].chord[0] + (to - from));
+}
+} // namespace knob_motif
+
+// DARK on the riff. At the knob's ends (where the composer's tilt and darkPull act; 0.2 < DARK
+// < 0.8 changes nothing, so the shipped DARK 0.55 is untouched) the riff's colour degrees move
+// a semitone toward the end's colour, the same move on every note of that degree, so the riff
+// keeps its shape and the change comes back every repeat. Only moves inside the roll's mode;
+// b2 is never added (the b2 caps stay).
+//   DARK 1: 2 -> b3, 6 -> b7 (dorian). With neither: 4 -> b3; then the answer bar's and the
+//           turn's 5ths -> b6 (the call keeps its 5th); then one weak-slot root -> the b7 under it.
+//   DARK 0: b3 -> 2, b6 -> 5, b7 -> 6 (dorian), b2 -> 1, until the dark share (b2 b3 b5 b6 b7 of
+//           the non-root pitches, the darkPull measure) is 0.2 or less. With none: b3 -> 4
+//           (phrygian). A riff with no dark degree stays as it is.
+// Runs on the restated riff; anything that touches only the motif bars restates again.
+void darkMotif (Lane& lane, int mode, float dark, int bars) noexcept
+{
+    using namespace knob_motif;
+    if ((dark > 0.2f && dark < 0.8f) || lane.count <= 0)
+        return;
+    const bool toDark = dark >= 0.8f;
+    struct Move { int from, to; };
+    static constexpr Move kDark[] = { { 2, 3 }, { 9, 10 } };
+    static constexpr Move kBright[] = { { 3, 2 }, { 8, 7 }, { 10, 9 }, { 1, 0 } };
+    const Move* moves = toDark ? kDark : kBright;
+    const int nMoves = toDark ? (int) (sizeof kDark / sizeof kDark[0]) : (int) (sizeof kBright / sizeof kBright[0]);
+    int done = 0;
+    for (int k = 0; k < nMoves; ++k)
+    {
+        if (done > 0 && ! toDark && darkShare (lane) <= 0.2f)
+            break;
+        const Move m = moves[k];
+        if (! hasPc (lane, m.from) || ! phrase::inMode (m.to, mode))
+            continue;
+        movePc (lane, m.from, m.to);
+        ++done;
+    }
+    if (done > 0)
+        return;
+    // No colour degree: the next one in (4 -> b3 dark, b3 -> 4 bright when the 2 is not in mode).
+    const Move next = toDark ? Move { 5, 3 } : Move { 3, 5 };
+    if (hasPc (lane, next.from) && phrase::inMode (next.to, mode))
+    {
+        movePc (lane, next.from, next.to);
+        return;
+    }
+    const int turn = bars >= 4 ? bars - 1 : -1;
+    // Dark: the answer bar and the turn take the b6 for the 5th; the call keeps its 5th.
+    if (toDark && phrase::inMode (8, mode))
+    {
+        bool moved = false;
+        for (int i = 0; i < lane.count; ++i)
+        {
+            const int b = phrase_lock::barOf (lane.notes[i].start);
+            if ((b == 1 || b == turn) && pcOf (lane.notes[i].chord[0]) == 7)
+            {
+                lane.notes[i].chord[0] = (std::int8_t) (lane.notes[i].chord[0] + 1);
+                moved = true;
+            }
+        }
+        if (moved)
+        {
+            restateMotif (lane, bars);
+            keepMonophonic (lane, false);
+            return;
+        }
+    }
+    // Still nothing to move at the dark end: one root on a weak slot of the motif (not a bar's
+    // first note, not a kick slot) becomes the b7 under it. The restate repeats it. (At the bright
+    // end a riff with no dark degree is already bright: nothing is added.)
+    const int to = 10;
+    if (! toDark || ! phrase::inMode (to, mode))
+        return;
+    for (int bar : { 1, 0 })
+    {
+        if (bar >= bars)
+            continue;
+        int first = -1;
+        for (int i = 0; i < lane.count; ++i)
+        {
+            if (phrase_lock::barOf (lane.notes[i].start) != bar)
+                continue;
+            if (first < 0)
+            {
+                first = i;
+                continue;
+            }
+            const int sl = slotOf (lane.notes[i].start, bar);
+            if (sl % 4 == 0 || pcOf (lane.notes[i].chord[0]) != 0)
+                continue;
+            // The octave nearest the note before it (steps, not displaced leaps).
+            const int root = lane.notes[i].chord[0];
+            const int prev = lane.notes[i - 1].chord[0];
+            const int below = root - 12 + to, above = root + to;
+            lane.notes[i].chord[0] = (std::int8_t) (std::abs (below - prev) <= std::abs (above - prev) ? below : above);
+            restateMotif (lane, bars);
+            keepMonophonic (lane, false);
+            return;
+        }
+    }
+}
+
+// BUSY on the riff: the motif's attacks (bars 1-2, together) and the turn's front 3 beats are
+// scaled by busyFactor (0.90 at BUSY 0, 1 at 0.40 = no-op, 1.36 at BUSY 1), then the motif is
+// restated, so every repeat carries the change. Fills re-strike the note sounding before them
+// (same pitch: busier, no new leaps), off the kick, never making a run of more than four 16ths,
+// at most 10 attacks a bar; a 16th pickup into the next note first, the "and" when the e/a share
+// of the motif would pass 0.5. DEEP / ROLLER / JACKIN fills stay off the stab's onsets (the
+// stabs answer in the bass gaps); BOUNCY fills go under the stab's onsets first (its stabs ride
+// the bass attacks). Thinning drops e/a notes first, never a bar's first note, keeps one anchor
+// (beat or "and") and one off-kick note per bar, and keeps BOUNCY bounce at 4 a bar (its A&R
+// density floor, 3.9).
+void busyMotif (Lane& lane, const Lane& stab, int dialect, int bars, float busy, bool bounce,
+                std::uint32_t seed) noexcept
+{
+    using namespace knob_motif;
+    const float f = busyFactor (busy) / busyFactor (0.40f);
+    const int nb = std::min (bars, kMaxBars);
+    if (std::fabs (f - 1.f) < 0.02f || lane.count <= 0 || nb < 2)
+        return;
+    sortByStart (lane);
+    const int turn = nb >= 4 ? nb - 1 : -1;
+    bool on[kMaxBars][kStepsPerBar] {};
+    bool stabOn[kMaxBars][kStepsPerBar] {};
+    int cnt[kMaxBars] {};
+    for (int i = 0; i < lane.count; ++i)
+    {
+        const int b = phrase_lock::barOf (lane.notes[i].start);
+        const int sl = b >= 0 && b < nb ? slotOf (lane.notes[i].start, b) : -1;
+        if (sl < 0 || sl >= kStepsPerBar)
+            continue;
+        on[b][sl] = true;
+        ++cnt[b];
+    }
+    for (int i = 0; i < stab.count; ++i)
+    {
+        const int b = phrase_lock::barOf (stab.notes[i].start);
+        const int sl = b >= 0 && b < nb ? slotOf (stab.notes[i].start, b) : -1;
+        if (sl >= 0 && sl < kStepsPerBar)
+            stabOn[b][sl] = true;
+    }
+    auto eaShare = [&] ()
+    {
+        int ea = 0, all = 0;
+        for (int b = 0; b < 2; ++b)
+            for (int sl = 0; sl < kStepsPerBar; ++sl)
+                if (on[b][sl])
+                {
+                    ++all;
+                    ea += sl % 2;
+                }
+        return all > 0 ? (float) ea / (float) all : 0.f;
+    };
+    auto jitter = [&] (int b, int sl)
+    {
+        return (float) (postHash (seed ^ 0xB5A7u, (std::uint32_t) (b * 16 + sl)) % 1000u) / 4000.f;
+    };
+    const int cap = 10;
+    const int floorN = bounce ? 4 : 2;
+
+    // Pitch class sounding at each slot of a bar (-1 = no attack there).
+    auto pcAt = [&] (int b, int sl)
+    {
+        for (int i = 0; i < lane.count; ++i)
+            if (phrase_lock::barOf (lane.notes[i].start) == b && slotOf (lane.notes[i].start, b) == sl)
+                return pcOf (lane.notes[i].chord[0]);
+        return -1;
+    };
+    // The fill's pitch at `at`: the note before it re-struck (a b2 never is: the b2 caps; it
+    // takes the next note's pitch, or the root). prev / next are the neighbours' indices.
+    auto fillPitch = [&] (float at, int& prev, int& next)
+    {
+        prev = -1;
+        next = -1;
+        for (int i = 0; i < lane.count; ++i)
+        {
+            if (lane.notes[i].start < at - 1.0e-3f)
+                prev = i;
+            else if (lane.notes[i].start > at + 1.0e-3f && next < 0)
+                next = i;
+        }
+        if (prev < 0 && next < 0)
+            return 0;
+        int p = lane.notes[prev >= 0 ? prev : next].chord[0];
+        if (pcOf (p) == 1)
+            p = next >= 0 && pcOf (lane.notes[next].chord[0]) != 1 ? (int) lane.notes[next].chord[0] : p - 1;
+        return p;
+    };
+
+    // One fill in bar b (slots below `limit`); false when nothing fits.
+    auto addOne = [&] (int b, int limit)
+    {
+        if (cnt[b] >= cap || lane.count >= kMaxNotes)
+            return false;
+        const bool eaFull = eaShare() >= 0.45f;
+        const int other = b < 2 ? 1 - b : -1;
+        int best = -1, bestPitch = 0;
+        float bestScore = -1.0e9f;
+        for (int sl = 1; sl < limit; ++sl)
+        {
+            if (sl % 4 == 0 || on[b][sl])
+                continue;
+            if (dialect != Pop && stabOn[b][sl])
+                continue;
+            int run = 1;
+            for (int k = sl - 1; k >= 0 && on[b][k]; --k)
+                ++run;
+            for (int k = sl + 1; k < kStepsPerBar && on[b][k]; ++k)
+                ++run;
+            if (run > 4)
+                continue;
+            int prev, next;
+            const int pitch = fillPitch ((float) (b * kStepsPerBar + sl), prev, next);
+            const int pc = pcOf (pitch);
+            // Never the banned figures (Originality.h): the root on 16ths 2 and 4, the b3 tied
+            // over the barline from 16th 15.
+            if (pc == 0 && ((sl == 1 && pcAt (b, 3) == 0) || (sl == 3 && pcAt (b, 1) == 0)))
+                continue;
+            if (pc == 3 && sl == 14)
+                continue;
+            float score = jitter (b, sl);
+            if (dialect == Pop && stabOn[b][sl])
+                score += 3.f;
+            if (sl + 1 < kStepsPerBar && on[b][sl + 1])
+                score += 2.f;
+            if (sl % 2 == 1)
+                score += eaFull ? -3.f : 0.5f;
+            else
+                score += eaFull ? 1.5f : 0.5f;
+            // The call and the answer stay two different bars (JACKIN's 1-bar repeat cap).
+            if (other >= 0 && other < nb && pcAt (other, sl) == pc)
+                score -= 1.5f;
+            if (score > bestScore)
+            {
+                bestScore = score;
+                best = sl;
+                bestPitch = pitch;
+            }
+        }
+        if (best < 0)
+            return false;
+        const float at = (float) (b * kStepsPerBar + best);
+        int prev, next;
+        fillPitch (at, prev, next);
+        if (prev < 0 && next < 0)
+            return false;
+        Note n = lane.notes[prev >= 0 ? prev : next];
+        n.chord[0] = (std::int8_t) bestPitch;
+        n.start = at;
+        const float nextAt = next >= 0 ? lane.notes[next].start : (float) (nb * kStepsPerBar);
+        // A fill is a short re-strike (the style's 16th-note feel), not a new held note.
+        const float fillLen = dialect == Pop ? 1.1f : dialect == Long ? 2.f : 1.5f;
+        n.length = std::max (0.5f, std::min (fillLen, nextAt - at));
+        n.vel = (std::uint8_t) std::max (50, (int) n.vel - 8);
+        n.flags = NoteGhost;
+        if (prev >= 0 && lane.notes[prev].start + lane.notes[prev].length > at)
+            lane.notes[prev].length = std::max (0.25f, at - lane.notes[prev].start);
+        lane.notes[lane.count++] = n;
+        sortByStart (lane);
+        on[b][best] = true;
+        ++cnt[b];
+        return true;
+    };
+
+    // One note dropped from bar b (slots below `limit`); false when nothing may go.
+    auto dropOne = [&] (int b, int limit)
+    {
+        if (cnt[b] <= floorN)
+            return false;
+        int idx[kStepsPerBar];
+        int n = 0;
+        for (int i = 0; i < lane.count && n < kStepsPerBar; ++i)
+            if (phrase_lock::barOf (lane.notes[i].start) == b)
+                idx[n++] = i;
+        int pcs = 0;
+        for (int j = 0; j < n; ++j)
+            pcs |= 1 << pcOf (lane.notes[idx[j]].chord[0]);
+        int best = -1;
+        float bestScore = -1.0e9f;
+        for (int k = 1; k < n; ++k)
+        {
+            const int sl = slotOf (lane.notes[idx[k]].start, b);
+            if (sl < 0 || sl >= limit)
+                continue;
+            // Keep one anchor (beat or "and") and one off-kick note in the bar, and never leave
+            // a thin one-note bar (the A&R thin-cell guard, rules::thinRepeatedBackHalf).
+            int anchors = 0, offKick = 0, left = 0;
+            for (int j = 0; j < n; ++j)
+            {
+                if (j == k)
+                    continue;
+                const int sj = slotOf (lane.notes[idx[j]].start, b);
+                anchors += sj % 2 == 0 ? 1 : 0;
+                offKick += sj % 4 != 0 ? 1 : 0;
+                left |= 1 << pcOf (lane.notes[idx[j]].chord[0]);
+            }
+            if (anchors == 0 || offKick == 0)
+                continue;
+            const bool onePc = (left & (left - 1)) == 0;
+            if (onePc && n - 1 <= rules::tables::kThinBarMaxAttacks && (pcs & (pcs - 1)) != 0)
+                continue;
+            float score = jitter (b, sl) + (float) sl * 0.05f;
+            if (sl % 2 == 1)
+                score += 2.f;
+            if (lane.notes[idx[k]].length < 1.f)
+                score += 1.f;
+            if (score > bestScore)
+            {
+                bestScore = score;
+                best = idx[k];
+            }
+        }
+        if (best < 0)
+            return false;
+        const int sl = slotOf (lane.notes[best].start, b);
+        for (int i = best; i + 1 < lane.count; ++i)
+            lane.notes[i] = lane.notes[i + 1];
+        --lane.count;
+        on[b][sl] = false;
+        --cnt[b];
+        return true;
+    };
+
+    // The motif: bars 1-2 together, each step on the bar that has moved least against its own
+    // count (the answer bar on a tie), so both bars scale and the call / answer contrast is kept.
+    const int orig[2] = { std::max (1, cnt[0]), std::max (1, cnt[1]) };
+    int motif = cnt[0] + cnt[1];
+    const int want = (int) std::lround ((float) motif * f);
+    int changed = 0;
+    for (int step = 0; step < 32 && motif != want; ++step)
+    {
+        const bool up = want > motif;
+        int order[2] = { 1, 0 };
+        const float r0 = (float) cnt[0] / (float) orig[0], r1 = (float) cnt[1] / (float) orig[1];
+        if (up ? r0 < r1 - 1.0e-4f : r0 > r1 + 1.0e-4f)
+            std::swap (order[0], order[1]);
+        bool moved = false;
+        for (int k = 0; k < 2 && ! moved; ++k)
+        {
+            const int b = order[k];
+            const int limit = turn < 0 && b == nb - 1 ? 12 : kStepsPerBar;
+            moved = up ? addOne (b, limit) : dropOne (b, limit);
+        }
+        if (! moved)
+            break;
+        motif += up ? 1 : -1;
+        ++changed;
+    }
+    // The turn moves with it in its first three beats (its last beat is the turn / pickup).
+    if (turn >= 2)
+    {
+        const int wantTurn = (int) std::lround ((float) cnt[turn] * f);
+        for (int step = 0; step < 16 && cnt[turn] != wantTurn; ++step)
+        {
+            if (! (wantTurn > cnt[turn] ? addOne (turn, 12) : dropOne (turn, 12)))
+                break;
+            ++changed;
+        }
+    }
+    if (changed == 0)
+        return;
+    restateMotif (lane, bars);
+    keepMonophonic (lane, false);
+}
+
 // 0 not BOUNCY, 1 bounce, 2 pulse. `modeSeed` is the caller's drums seed (the
 // roll's batch position), so the pulse share is a quota over a batch.
 int bouncyModeOf (const Settings& s, std::uint32_t modeSeed) noexcept
@@ -5259,7 +5515,7 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
     if (regen (Bass))
     {
         if (popMode != BassModePulse)
-            fillBassDensity (g.lane[Bass], s.dialect, s.bars, s.busy, bassSeed);
+            fillBassDensity (g.lane[Bass], s.dialect, s.bars, bassSeed);
         // Maestro 655: at most 28% of bass attacks on the kick in every style
         // (the A&R soft limit). BOUNCY sits at 20-28% over the batch: the A&R
         // bounce lane wants 85% off the kick, so bounce keeps the kick for the
@@ -5389,6 +5645,11 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
         voiceLead (g.lane[Bass], s.bars);
         restateMotif (g.lane[Bass], s.bars);
         keepMonophonic (g.lane[Bass], false);
+        // Knob reach on the riff that repeats: DARK moves a degree, BUSY scales the attacks of
+        // the motif and the turn, then the motif is restated (both are no-ops at the shipped
+        // DARK 0.55 / BUSY 0.40).
+        darkMotif (g.lane[Bass], mode, s.dark, s.bars);
+        busyMotif (g.lane[Bass], g.lane[Stab], s.dialect, s.bars, s.busy, popMode == BassModeBounce, bassSeed);
         shapeSounding (g.lane[Bass], s.bars, heldLo, heldHi);
         fixUpperClashes (g, Pad);
     }
@@ -5409,7 +5670,7 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
     {
         const HookPlan plan = planHook (g, s.dialect, postHash (seeds[Bass] ? seeds[Bass] : 1u, 0x484F4F4Bu), partMask,
                                         s.stab >= 0.5f);
-        applyHookPlan (g, plan, s.bars, partMask);
+        applyHookPlan (g, plan, s.bars, partMask, s.hitsInStab);
         // The hook cell pass can move a bass hook's onsets by a 16th: the held-bass band is fitted
         // again (one rule for every note, so the restated bars stay identical).
         if (plan.hook == Bass)
