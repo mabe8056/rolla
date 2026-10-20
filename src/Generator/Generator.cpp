@@ -2009,18 +2009,28 @@ void writePluck (Lane& lane, const Settings& s, Rng& rng, int mode)
     }
     if (s.styleIntensity >= 0.75f)
     {
-        // An odd-length line over the bar (period and phase drawn per roll).
+        // An odd-length line over the bar (period and phase drawn per roll), phrased over the
+        // whole loop: NoteLayer keeps it out of the hook restatement, which would cut its period
+        // into 2-bar copies (PhraseLock.h). Its pitches are one short cell from the roll's own
+        // degree walk, said again on every pass: as many notes as fit inside one bar (2-4, the
+        // hook cell's pitch-class range), so the whole cell is heard in every bar and lands
+        // somewhere new against the bar line each time (3: 4 notes, 5: 3, 7: 2).
         static constexpr int kPeriods[3] = { 3, 5, 7 };
         const int step = kPeriods[(int) (rng.next() * 3.0) % 3];
         const int phase = 1 + (int) (rng.next() * (double) step);
-        for (int t = phase; t < s.bars * 16; t += step)
+        const int cellLen = clampi ((kStepsPerBar - 1) / step, 2, 4);
+        int cellDeg[4] {};
+        for (int k = 0; k < cellLen; ++k)
+            cellDeg[k] = nextDeg();
+        for (int t = phase, k = 0; t < s.bars * 16; t += step, ++k)
         {
             Ev e;
             e.start = (float) t;
             e.len = 1.f;
             e.nChord = 1;
-            e.chord[0] = (std::int8_t) nextDeg();
+            e.chord[0] = (std::int8_t) cellDeg[k % cellLen];
             e.vel = 76;
+            e.flags = NoteLayer;
             if (! pushEv (lane, e, s.bars))
                 break;
         }
@@ -2283,6 +2293,13 @@ void writeDrums (DrumLane& drums, std::uint32_t seed, const Settings& s, Rng& rn
                 drums.vel[Perc][bar * 16 + slot] = 70;
         }
     }
+    // Hook structure (PhraseLock.h): kick, clap, hats, perc, rim, toms and the ghost snare say
+    // bars 1-2 again through the phrase (bar 4 and the turn keep their own). It runs here, before
+    // the parts phrased over more than two bars: the ride keeps its own spell (bars 1-4, the whole
+    // loop at high BUSY, one hit at low BUSY), and the STYLE perc loop below keeps its odd period
+    // over the bar line instead of being cut into 2-bar copies (catchiness report Q4). The low
+    // STYLE strip and FILL act on single bars, so they land the same after the restatement.
+    restateMotif (drums, s.bars, ~(1u << Ride));
     // Style intensity. The middle leaves the style pattern alone. Low strips
     // percussion to one hit a bar (the bar's first). High lays an odd-length
     // perc loop over the bar line: its period (3, 5 or 7 sixteenths, the
@@ -6367,14 +6384,15 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
             dedupeNoteOns (g.lane[part]);
             trimSamePitchOverlaps (g.lane[part]);
         }
+    // Drums are restated inside writeDrums, before the ride and the STYLE perc loop are laid.
     if (((partMask >> Drums) & 1u) != 0)
     {
-        restateMotif (g.drums, s.bars);
         // Bar 8 is one clear move: the drums replay bar 2 at the turn (FILL keeps its beat), then
         // take the roll's one subtractive move, if it draws one (bar8DrumMove). Whenever the drums
         // are rolled, not only on a full roll: the move needs no hook plan, and the plugin's ROLL
-        // leaves the muted HITS lane out of its part mask.
-        replayBar2AtTurn (g.drums, s.bars, s.fill ? kStepsPerBar - 4 : kStepsPerBar);
+        // leaves the muted HITS lane out of its part mask. The ride and the perc keep their own
+        // phrasing (the ride's four-bar spell, the STYLE perc loop).
+        replayBar2AtTurn (g.drums, s.bars, s.fill ? kStepsPerBar - 4 : kStepsPerBar, ~((1u << Ride) | (1u << Perc)));
         bar8DrumMove (g.drums, s.bars, s.fill);
     }
     // The roll's chord loop is the stab's two chords, also when the plan below leaves the stab out

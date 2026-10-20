@@ -1494,6 +1494,9 @@ inline void applyHookPlan (Groove& g, const HookPlan& plan, int bars, std::uint3
     if ((plan.hook == Bass || plan.hook == Stab || plan.hook == Pluck) && regen (plan.hook))
     {
         Lane& h = g.lane[plan.hook];
+        // A STYLE overlay (the pluck's odd-length line) is not part of the cell: the rules shape
+        // the motif alone and the line comes back where it was written.
+        const Lane layer = phrase_lock::takeLayer (h);
         const Lane before = h;
         if (hook_cell::shapeHookCell (g, plan.hook, h, 2, bars, nullptr))
         {
@@ -1510,6 +1513,7 @@ inline void applyHookPlan (Groove& g, const HookPlan& plan, int bars, std::uint3
             else
                 restateMotif (h, bars);
         }
+        phrase_lock::putLayer (h, layer);
     }
 
     // The stab rides the bass's rhythm when the bass is the hook (the stab is its support), and in

@@ -50,7 +50,10 @@ inline constexpr int kMaxNotes = 96;
 enum NoteFlags : std::uint8_t
 {
     NoteGlide = 1,
-    NoteGhost = 2
+    NoteGhost = 2,
+    // A STYLE overlay note: a line phrased over the whole loop (the pluck's 3/5/7-sixteenth
+    // line). The hook restatement leaves it where it was written (PhraseLock.h).
+    NoteLayer = 4
 };
 
 struct Note

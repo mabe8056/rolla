@@ -13,9 +13,11 @@
 //
 // restateMotif keeps bars 1-2 as the motif, restates them in bars 3-7 and keeps the
 // generator's own last bar (the turn); drums also keep their bar 4, the bass the back half
-// of its bar 4 (restateBass: the answer), and JACKIN's bass keeps its own loop. Everything is the
-// roll's own material: nothing is stored or taken from a reference, and the originality
-// check runs on the locked result.
+// of its bar 4 (restateBass: the answer), and JACKIN's bass keeps its own loop. Parts the
+// generator phrases over more than two bars keep their own phrasing: the ride's four-bar spell and
+// the STYLE >= 0.75 odd-length overlays (pluck line, perc loop). Everything is the roll's own
+// material: nothing is stored or taken from a reference, and the originality check runs on the
+// locked result.
 
 namespace rolla
 {
@@ -65,12 +67,42 @@ inline int bassSourceBar (int b, int slot, int bars, bool ownLoop = false) noexc
         return b;
     return sourceBar (b, bars);
 }
+// STYLE overlay notes (NoteLayer, Pattern.h) are phrased over the whole loop: an odd 3/5/7-sixteenth
+// period runs across the bar lines, so copying bars 1-2 would cut it into 2-bar copies (catchiness
+// report Q4). A pass that works on the motif takes them out first and puts them back after.
+inline Lane takeLayer (Lane& lane) noexcept
+{
+    Lane layer;
+    layer.seed = lane.seed;
+    int w = 0;
+    for (int i = 0; i < lane.count; ++i)
+    {
+        if ((lane.notes[i].flags & NoteLayer) != 0)
+            layer.notes[layer.count++] = lane.notes[i];
+        else
+            lane.notes[w++] = lane.notes[i];
+    }
+    lane.count = w;
+    return layer;
+}
+
+inline void putLayer (Lane& lane, const Lane& layer) noexcept
+{
+    if (layer.count <= 0)
+        return;
+    for (int i = 0; i < layer.count && lane.count < kMaxNotes; ++i)
+        lane.notes[lane.count++] = layer.notes[i];
+    std::stable_sort (lane.notes, lane.notes + lane.count, [] (const Note& a, const Note& b) { return a.start < b.start; });
+}
+
 } // namespace phrase_lock
 
 inline void restateMotif (Lane& lane, int bars) noexcept
 {
     if (bars < 4 || lane.count <= 0)
         return;
+    // The STYLE overlay keeps its own period: it is not part of the motif.
+    const Lane layer = phrase_lock::takeLayer (lane);
     const Lane src = lane;
     lane.count = 0;
     for (int b = 0; b < bars; ++b)
@@ -90,6 +122,7 @@ inline void restateMotif (Lane& lane, int bars) noexcept
             lane.notes[lane.count++] = n;
         }
     }
+    phrase_lock::putLayer (lane, layer);
 }
 
 // The bass restatement, A B A B' A B A B'': restateMotif with bar 4's answer half kept
@@ -406,7 +439,8 @@ inline void voiceLead (Lane& lane, int bars, bool ownLoop = false) noexcept
 // The drums at the turn: the last bar replays bar 2 below 16th `upTo` (FILL keeps its own last
 // beat, so the same roll with FILL on and off still differs only in that beat). The bar-8 drum
 // move (Generator.cpp, bar8DrumMove) is then the only change there. Bar 4 keeps its light lift.
-inline void replayBar2AtTurn (DrumLane& drums, int bars, int upTo) noexcept
+// `voices` (bit per DrumVoice): the ride and the STYLE perc loop keep their own phrasing.
+inline void replayBar2AtTurn (DrumLane& drums, int bars, int upTo, std::uint32_t voices = ~0u) noexcept
 {
     if (bars < 4)
         return;
@@ -414,12 +448,16 @@ inline void replayBar2AtTurn (DrumLane& drums, int bars, int upTo) noexcept
     for (int s = 0; s < upTo && s < kStepsPerBar; ++s)
     {
         for (int v = 0; v < NumDrumVoices; ++v)
-            drums.vel[v][to + s] = drums.vel[v][kStepsPerBar + s];
+            if (((voices >> v) & 1u) != 0)
+                drums.vel[v][to + s] = drums.vel[v][kStepsPerBar + s];
         drums.accent[to + s] = drums.accent[kStepsPerBar + s];
     }
 }
 
-inline void restateMotif (DrumLane& drums, int bars) noexcept
+// `voices` (bit per DrumVoice) are restated; the others keep the bars they were written in.
+// writeDrums restates before it lays the parts phrased over more than two bars: the ride's
+// four-bar spell and the STYLE perc loop (catchiness report Q4).
+inline void restateMotif (DrumLane& drums, int bars, std::uint32_t voices = ~0u) noexcept
 {
     if (bars < 4)
         return;
@@ -432,7 +470,8 @@ inline void restateMotif (DrumLane& drums, int bars) noexcept
         for (int s = 0; s < kStepsPerBar; ++s)
         {
             for (int v = 0; v < NumDrumVoices; ++v)
-                drums.vel[v][b * kStepsPerBar + s] = src.vel[v][from * kStepsPerBar + s];
+                if (((voices >> v) & 1u) != 0)
+                    drums.vel[v][b * kStepsPerBar + s] = src.vel[v][from * kStepsPerBar + s];
             drums.accent[b * kStepsPerBar + s] = src.accent[from * kStepsPerBar + s];
         }
     }
