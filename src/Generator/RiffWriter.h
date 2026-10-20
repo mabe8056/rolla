@@ -37,36 +37,38 @@ enum Shape : int
     Rolling,
     Held,
     GhostClimb,
+    Groove,
     kShapes
 };
 
-inline constexpr const char* kShapeNames[kShapes] = { "riff_1bar", "riff_call_response", "riff_rolling", "riff_held", "riff_ghost_climb" };
+inline constexpr const char* kShapeNames[kShapes] = { "riff_1bar", "riff_call_response", "riff_rolling", "riff_held", "riff_ghost_climb", "riff_groove" };
 
 // Shape weights per style (ROLLER, DEEP, BOUNCY, JACKIN): his favourites are 1-bar riffs and call /
 // response first, rolling 16ths for the roller sound, held lines for organ / deep.
 // GhostClimb (Oct 20, "catchy and hypnotic grooves ... disco inspired"; lessons from the LIGHTLEAK
 // "Mambos" bass split he sent, learn only) takes half of every style's draws.
+// Groove (the verified stem splits: Mambos, Tonight, West Side Factory, House Party) leads.
 inline constexpr float kShapeW[4][kShapes] = {
-    { 0.12f, 0.10f, 0.22f, 0.06f, 0.50f },
-    { 0.18f, 0.15f, 0.07f, 0.10f, 0.50f },
-    { 0.20f, 0.15f, 0.10f, 0.05f, 0.50f },
-    { 0.18f, 0.17f, 0.05f, 0.10f, 0.50f },
+    { 0.06f, 0.05f, 0.12f, 0.02f, 0.15f, 0.60f },
+    { 0.08f, 0.07f, 0.03f, 0.05f, 0.17f, 0.60f },
+    { 0.10f, 0.07f, 0.05f, 0.03f, 0.15f, 0.60f },
+    { 0.08f, 0.08f, 0.02f, 0.05f, 0.17f, 0.60f },
 };
 // Attacks per bar by shape. Round 4 (Oct 20, Melak): "alot of your basslines are crowded ... empty
 // spaces work well if the drums work rhythmically": fewer attacks than the loops' median (6), with
 // a real rest in every bar (rolling stays busier for ROLLER).
-inline constexpr int kAttacksLo[kShapes] = { 3, 3, 5, 2, 4 };
-inline constexpr int kAttacksHi[kShapes] = { 4, 4, 6, 3, 5 };
+inline constexpr int kAttacksLo[kShapes] = { 3, 3, 5, 2, 4, 5 };
+inline constexpr int kAttacksHi[kShapes] = { 4, 4, 6, 3, 5, 6 };
 // The longest silence inside a bar (16ths, to the next attack or the next bar's beat 1).
-inline constexpr int kMinRest[kShapes] = { 3, 3, 2, 3, 1 };
+inline constexpr int kMinRest[kShapes] = { 3, 3, 2, 3, 1, 1 };
 // Onset weight per 16th: the 229 Artist Series loops pooled, the e's (1, 5, 9, 13) x1.5 toward his
 // favourite tracks (28% of their onsets on the e against 13% in the loops).
 inline constexpr float kStepW[16] = { 0.73f, 0.26f, 0.32f, 0.34f, 0.36f, 0.30f, 0.58f, 0.33f,
                                       0.33f, 0.38f, 0.48f, 0.31f, 0.42f, 0.32f, 0.63f, 0.15f };
 // Gate (length against the gap to the next onset) by shape; held lines tie.
-inline constexpr float kGate[kShapes] = { 0.60f, 0.62f, 0.70f, 0.90f, 0.85f };
+inline constexpr float kGate[kShapes] = { 0.60f, 0.62f, 0.70f, 0.90f, 0.85f, 0.85f };
 // Organ-style octave bounce (Get Busy, House Party, Josh Baker's organ; 33 of 229 loops).
-inline constexpr float kOrganP[kShapes] = { 0.30f, 0.30f, 0.15f, 0.50f, 0.0f };
+inline constexpr float kOrganP[kShapes] = { 0.30f, 0.30f, 0.15f, 0.50f, 0.0f, 0.0f };
 
 struct Cell
 {
@@ -74,6 +76,7 @@ struct Cell
     int semi[16] {};
     int vel[16] {};
     bool ghost[16] {}; // GhostClimb's quiet upper-octave notes (staccato)
+    float len[16] {};  // Groove: explicit length in 16ths (0: from the gap)
     int n = 0;
 };
 
@@ -527,6 +530,299 @@ inline void layOutGhost (Lane& lane, const Cell* bars, int nb) noexcept
         }
 }
 
+// ------------------------------------------------------------------ Groove
+// Pooled from the four verified stem splits Melak sent (Oct 20; learn only, each riff sits in a
+// private anti-copy index): a short cell looped exactly (1 bar .5, 2 bars where bar 2 changes only
+// its first onset .25, 4 bars call / answer / call / answer-with-turnaround .25); the root plus 2-3 of
+// b3 (.75), 4 (.75), 5 (.5), b7 (.5), never 2 / 6 / b6 / 3, one b5 at most and only between two 4s;
+// range 5-7 semitones; 5-6 main attacks a bar, 1-2 16ths long, one anchor of 3-6 on the beat-1 / 2
+// kick at most; the first half anchors on the root, the second half carries the hook; the loudest
+// note between kicks on the a of 2 or the a of 3; nothing bright on a kick or a clap (a note there
+// is a ducked swell); a rest on or right before a beat; the last note leads home (+2 from the b7
+// below, or -5 from the 4); optional quiet octave ghosts. Four contour families:
+//   Climb          root, then one attack per pitch up the set (b5 between two 4s), ends on 4 / b3
+//   RiseDropBelow  root x2, b3, 4 x2, then the b7 below the root, which steps up into bar 1
+//   HookRepeat     long root anchor, down a 4th to the 5, then a hook pitch repeated three times
+//   PedalCall      call bar: the root alone in rhythm; answer bar: 5 then b3 repeated, no root;
+//                  every 4th bar's last cell turns to the 4 to lead back (period 4)
+enum GrooveContour : int { Climb = 0, RiseDropBelow, HookRepeat, PedalCall, kContours };
+inline constexpr float kContourW[4][kContours] = {
+    { 0.25f, 0.30f, 0.25f, 0.20f }, // ROLLER
+    { 0.20f, 0.25f, 0.25f, 0.30f }, // DEEP (Tonight)
+    { 0.25f, 0.25f, 0.30f, 0.20f }, // BOUNCY (House Party)
+    { 0.30f, 0.25f, 0.30f, 0.15f }, // JACKIN (Mambos)
+};
+
+struct GrooveHit
+{
+    int slot;
+    int semi;
+    float len;
+    int vel;
+};
+
+inline int gVel (int slot, bool accent) noexcept
+{
+    if (accent)
+        return 116;
+    if ((slot & 3) == 0)
+        return 76; // on a kick: a ducked swell, not a bright pluck
+    return 100;
+}
+
+inline void putHits (Cell& c, const GrooveHit* h, int n) noexcept
+{
+    for (int i = 0; i < n; ++i)
+    {
+        const int k = std::clamp (h[i].slot, 0, 15);
+        c.on[k] = true;
+        c.semi[k] = h[i].semi;
+        c.len[k] = h[i].len;
+        c.vel[k] = std::clamp (h[i].vel, 1, 127);
+    }
+    c.n = 0;
+    for (bool b : c.on)
+        c.n += b ? 1 : 0;
+}
+
+// The bar's rhythm, drawn fresh from the splits' rules (no slot pattern of any reference is
+// stored): an anchor on beat 1 (or the e of 1); 0-2 more attacks in the first half, outside the
+// anchor; 2-4 hook attacks in the second half on e / & / a slots (the clap 16th only as a swell);
+// 5-6 attacks in all; never two attacks on adjacent 16ths except a run into the bar line; at least
+// one of the 16ths right before a beat (3, 7, 11, 15) left empty.
+struct GrooveRhythm
+{
+    int slot[8];
+    int n = 0;
+    float anchorLen = 1.f;
+};
+
+inline GrooveRhythm drawGrooveRhythm (Rng& r, bool longAnchor, bool restDownbeat) noexcept
+{
+    GrooveRhythm g;
+    for (int t = 0; t < 48; ++t)
+    {
+        bool on[16] {};
+        const int a0 = restDownbeat ? 1 + (int) (r.next() * 3.0) : (r.next() < 0.75 ? 0 : 1);
+        on[a0] = true;
+        const float alen = longAnchor ? 3.f + (float) (int) (r.next() * 4.0) : (r.next() < 0.5 ? 1.f : 2.f);
+        const int busyUntil = a0 + (int) alen; // the anchor still sounds
+        const int want = 5 + (r.next() < 0.5 ? 1 : 0);
+        static constexpr int kFront[6] = { 2, 3, 5, 6, 7, 4 };
+        float fw[6] = { 0.5f, 0.35f, 0.35f, 0.5f, 0.8f, 0.1f };
+        static constexpr int kBack[7] = { 9, 10, 11, 13, 14, 15, 8 };
+        float bw[7] = { 0.6f, 0.5f, 0.9f, 0.6f, 0.5f, 0.35f, 0.15f };
+        int n = 1;
+        const int front = longAnchor ? (r.next() < 0.5 ? 0 : 1) : (r.next() < 0.5 ? 1 : 2);
+        for (int i = 0; i < front; ++i)
+        {
+            float w[6];
+            for (int j = 0; j < 6; ++j)
+                w[j] = (kFront[j] < busyUntil || on[kFront[j]] || on[kFront[j] - 1] || (kFront[j] < 15 && on[kFront[j] + 1])) ? 0.f : fw[j];
+            const int j = pickW (w, 6, r.next());
+            if (j < 0)
+                break;
+            on[kFront[j]] = true;
+            ++n;
+        }
+        while (n < want)
+        {
+            float w[7];
+            for (int j = 0; j < 7; ++j)
+            {
+                const int k = kBack[j];
+                const bool adj = on[k - 1] || (k < 15 && on[k + 1] && k + 1 != 15);
+                w[j] = (on[k] || k < busyUntil || (adj && k != 15)) ? 0.f : bw[j];
+            }
+            const int j = pickW (w, 7, r.next());
+            if (j < 0)
+                break;
+            on[kBack[j]] = true;
+            ++n;
+        }
+        const bool rest = ! on[3] || ! on[7] || ! on[11] || ! on[15];
+        if (n < 5 || ! rest)
+            continue;
+        g.n = 0;
+        for (int k = 0; k < 16; ++k)
+            if (on[k])
+                g.slot[g.n++] = k;
+        g.anchorLen = std::min (alen, (float) (g.n > 1 ? g.slot[1] - g.slot[0] : alen));
+        return g;
+    }
+    g.n = 0;
+    for (int k : { 0, 6, 9, 11, 14 })
+        g.slot[g.n++] = k;
+    g.anchorLen = 2.f;
+    return g;
+}
+
+inline Cell grooveBar (int contour, const int* set, int nSet, bool b5, Rng& r, bool answer, bool turnaround) noexcept
+{
+    auto has = [&] (int iv) { for (int i = 0; i < nSet; ++i) if (set[i] == iv) return true; return false; };
+    const bool longAnchor = contour == HookRepeat || (contour == PedalCall && ! answer);
+    const bool restDownbeat = contour == PedalCall && answer;
+    const GrooveRhythm g = drawGrooveRhythm (r, longAnchor, restDownbeat);
+    int ups[5];
+    int nu = 0;
+    for (int iv : { 3, 5, 7, 10 })
+        if (has (iv))
+            ups[nu++] = iv;
+    int pitch[8] {};
+    const int n = g.n;
+    if (contour == Climb)
+    {
+        // one attack per pitch up the set; the top note settles a step back if attacks remain
+        int lvl = 0;
+        for (int i = 0; i < n; ++i)
+        {
+            if (i == 0)
+                pitch[i] = 0;
+            else if (lvl < nu)
+                pitch[i] = ups[lvl++];
+            else
+                pitch[i] = nu >= 2 ? ups[nu - 2] : 0;
+        }
+        if (b5 && has (5))
+            for (int i = 1; i + 1 < n; ++i)
+                if (pitch[i] == 5 && (i + 2 >= n || pitch[i + 2] != 6))
+                {
+                    pitch[i + 1] = 6; // 4, b5, 4
+                    if (i + 2 < n)
+                        pitch[i + 2] = 5;
+                    break;
+                }
+    }
+    else if (contour == RiseDropBelow)
+    {
+        // root (often doubled), up through the set (each may double), the last attack to the b7 below
+        int lvl = 0;
+        pitch[0] = 0;
+        for (int i = 1; i < n - 1; ++i)
+        {
+            const bool dbl = r.next() < 0.45;
+            if (! dbl && lvl < std::min (nu, 2))
+                ++lvl;
+            pitch[i] = lvl == 0 ? 0 : ups[lvl - 1];
+        }
+        pitch[n - 1] = has (10) || phrase::inMode (10, 1) ? -2 : -5;
+    }
+    else if (contour == HookRepeat)
+    {
+        // long root, then down a 4th to the 5 (or the b7 below), then one hook pitch repeated
+        const int drop = r.next() < 0.6 ? -5 : -2;
+        const int hook = ups[(int) (r.next() * nu)] == 7 ? 10 : ups[(int) (r.next() * nu)];
+        pitch[0] = 0;
+        if (n > 1)
+            pitch[1] = drop;
+        for (int i = 2; i < n; ++i)
+            pitch[i] = hook > 7 ? hook - 12 : hook;
+    }
+    else // PedalCall
+    {
+        if (! answer)
+            for (int i = 0; i < n; ++i)
+                pitch[i] = 0;
+        else
+        {
+            const int a = has (7) ? 7 : (has (5) ? 5 : ups[0]);
+            const int b = has (3) ? 3 : (has (10) ? -2 : ups[0]);
+            const int split = std::max (1, n / 2);
+            for (int i = 0; i < n; ++i)
+                pitch[i] = i < split ? a : b;
+            if (turnaround)
+                pitch[n - 1] = has (5) ? 5 : 7;
+        }
+    }
+    Cell c;
+    GrooveHit h[8];
+    int accent = -1;
+    for (int i = 0; i < n; ++i)
+        if (g.slot[i] == 11 || (accent < 0 && g.slot[i] == 7))
+            accent = i;
+    for (int i = 0; i < n; ++i)
+    {
+        const int k = g.slot[i];
+        const float len = i == 0 ? g.anchorLen : (r.next() < 0.6 ? 1.f : 2.f);
+        h[i] = { k, pitch[i], len, gVel (k, i == accent) };
+    }
+    putHits (c, h, n);
+    return c;
+}
+
+// Quiet octave ghosts (p .5 per riff): 1-3 a bar, the previous main's pitch an octave up, in free
+// 16ths right after a main, never on a kick or a clap.
+inline void addGhosts (Cell& c, Rng& r) noexcept
+{
+    int prev = -100;
+    int placed = 0;
+    for (int k = 0; k < 16 && placed < 3; ++k)
+    {
+        if (c.on[k] && ! c.ghost[k])
+        {
+            prev = c.semi[k];
+            continue;
+        }
+        if (prev == -100 || c.on[k] || (k & 3) == 0 || k == 15)
+            continue;
+        if (k > 0 && c.on[k - 1] && ! c.ghost[k - 1] && c.len[k - 1] > 1.01f)
+            continue; // a held note still sounds
+        if (r.next() < 0.45)
+        {
+            c.on[k] = true;
+            c.ghost[k] = true;
+            c.semi[k] = prev + 12;
+            c.len[k] = 0.5f;
+            c.vel[k] = 48 + (int) (r.next() * 8.0);
+            ++placed;
+        }
+    }
+}
+
+inline void layOutGroove (Lane& lane, const Cell* bars, int nb) noexcept
+{
+    lane.count = 0;
+    for (int b = 0; b < nb; ++b)
+        for (int k = 0; k < 16 && lane.count < kMaxNotes; ++k)
+        {
+            if (! bars[b].on[k])
+                continue;
+            int next = 16 + 0;
+            for (int j = k + 1; j < 16; ++j)
+                if (bars[b].on[j])
+                {
+                    next = j;
+                    break;
+                }
+            const float gap = (float) (next - k);
+            Note n;
+            n.start = (float) (b * 16 + k);
+            n.chord[0] = (std::int8_t) bars[b].semi[k];
+            n.nChord = 1;
+            n.vel = (std::uint8_t) std::clamp (bars[b].vel[k], 1, 127);
+            const float want = bars[b].len[k] > 0.f ? bars[b].len[k] : 1.f;
+            n.length = std::max (0.5f, std::min (want, gap - (next < 16 ? 0.25f : 0.f)));
+            lane.notes[lane.count++] = n;
+        }
+}
+
+inline int grooveSet (Rng& r, int mode, int* set) noexcept
+{
+    for (int t = 0; t < 32; ++t)
+    {
+        int n = 0;
+        set[n++] = 0;
+        if (r.next() < 0.75 && phrase::inMode (3, mode)) set[n++] = 3;
+        if (r.next() < 0.75 && phrase::inMode (5, mode)) set[n++] = 5;
+        if (r.next() < 0.50 && phrase::inMode (7, mode)) set[n++] = 7;
+        if (r.next() < 0.50 && phrase::inMode (10, mode)) set[n++] = 10;
+        if (n >= 3 && n <= 4)
+            return n;
+    }
+    set[0] = 0; set[1] = 3; set[2] = 5;
+    return 3;
+}
+
 // Designs and writes the riff for `bars` bars (8 or fewer). Returns the shape drawn.
 inline int compose (Lane& lane, int dialect, int mode, int bars, std::uint32_t seed, int forceShape = -1) noexcept
 {
@@ -535,6 +831,61 @@ inline int compose (Lane& lane, int dialect, int mode, int bars, std::uint32_t s
     const int nb = std::clamp (bars, 1, kMaxBars);
     const int drawn = std::max (0, pickW (kShapeW[st], kShapes, r.next()));
     const int shape = forceShape >= 0 && forceShape < kShapes ? forceShape : drawn;
+    if (shape == Groove)
+    {
+        int set[5];
+        const int nSet = grooveSet (r, mode, set);
+        const int contour = std::max (0, pickW (kContourW[st], kContours, r.next()));
+        const bool b5 = r.next() < 0.25;
+        const bool ghosts = r.next() < 0.5;
+        // period: PedalCall is 4 bars; the others 1 bar (.67) or 2 (bar 2 changes its first onset)
+        const int period = contour == PedalCall ? 4 : (r.next() < 0.67 ? 1 : 2);
+        Cell cells[4];
+        for (int i = 0; i < period; ++i)
+        {
+            const bool answer = (i & 1) == 1;
+            const bool turn = period == 4 && i == 3;
+            cells[i] = grooveBar (contour, set, nSet, b5, r, answer, turn);
+            if (period == 2 && i == 1 && contour != RiseDropBelow)
+            {
+                // bar 2 differs only in its first onset: the on-beat root becomes a pluck on the e of 1
+                cells[1] = cells[0];
+                if (cells[1].on[0] && ! cells[1].on[1])
+                {
+                    cells[1].on[1] = true;
+                    cells[1].semi[1] = cells[1].semi[0];
+                    cells[1].len[1] = std::max (1.f, cells[1].len[0] - 1.f);
+                    cells[1].vel[1] = 100;
+                    cells[1].on[0] = false;
+                }
+            }
+        }
+        if (ghosts)
+        {
+            Rng gr (seed ^ 0x47484F53u);
+            for (int i = 0; i < period; ++i)
+            {
+                Rng g2 = gr; // the same ghosts in every cell bar
+                addGhosts (cells[i], g2);
+            }
+        }
+        Cell out[kMaxBars];
+        for (int b = 0; b < nb; ++b)
+            out[b] = cells[b % period];
+        // bar 8: at most one subtractive change (the last note drops), p .5
+        if (nb >= 8 && r.next() < 0.5)
+        {
+            Cell& f = out[nb - 1];
+            for (int k = 15; k > 0; --k)
+                if (f.on[k] && ! f.ghost[k])
+                {
+                    f.on[k] = false;
+                    break;
+                }
+        }
+        layOutGroove (lane, out, nb);
+        return shape;
+    }
     if (shape == GhostClimb)
     {
         const Cell x = ghostClimbCell (mode, r);

@@ -130,7 +130,8 @@ struct Knobs
     int bassMatch = 0;         // --knob BASSMATCH=0|1|2 (Settings::bassMatch, EngineParams::bassMatch)
     bool drop = false;         // --knob DROP=0|1 (Settings::drop: the roll is the 8-bar peak drop)
     bool riff = false;         // --knob RIFF=0|1 (Settings::riff: the bass is a designed riff)
-    int riffShape = -1;        // --knob RIFFSHAPE=0..4 (force a RiffWriter shape; -1 drawn)
+    int riffShape = -1;        // --knob RIFFSHAPE=0..5 (force a RiffWriter shape; -1 drawn)
+    bool duck = false;         // --knob DUCK=0|1 (EngineParams::duck: the bass pumps on the kick)
     bool stems = false;
     bool midiOnly = false;     // --midi-only: write the MIDI and roll.json, no WAV render
     bool styleFolders = false; // --folder-names styles
@@ -187,8 +188,10 @@ bool parseKnob (const std::string& text, Knobs& knobs)
         for (int i = 0; i < rolla::NumParts; ++i) knobs.levelDb[i] = value;
     else if (name == "HARMONY")
         knobs.harmony = std::clamp ((int) std::lround (value), 0, 3);
+    else if (name == "DUCK")
+        knobs.duck = value >= 0.5f;
     else if (name == "RIFFSHAPE")
-        knobs.riffShape = std::clamp ((int) std::lround (value), -1, 4);
+        knobs.riffShape = std::clamp ((int) std::lround (value), -1, 5);
     else if (name == "RIFF")
         knobs.riff = value >= 0.5f;
     else if (name == "DROP")
@@ -326,7 +329,7 @@ Rendered renderWav (const rolla::PresetBank& bank, const rolla::Groove& groove, 
         params.drumDecay[v] = 0.5f;
     if (hitsMute)
         params.mute[rolla::Hits] = true;
-    params.duck = false; // plugin default (sample-true)
+    params.duck = knobs.duck; // plugin default off (sample-true); --knob DUCK=1 pumps the bass
     params.drumsToMain = true;
     params.swing = swing;
     params.outputDb = 0.f;
