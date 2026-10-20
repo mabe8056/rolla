@@ -3188,21 +3188,38 @@ void trimSamePitchOverlaps (Lane& lane)
 // unless it is the top voice (the stepwise top line stays). The composer already voices for
 // the bass it saw; later bass passes can move a note under a stab. Only removes tones, so
 // no clash, duplicate or overlap comes back.
-void leaveBassNoteToBass (Lane& stab, const Lane& bass) noexcept
+// The motif stays one motif (PhraseLock): a hit is thinned only when the bass plays that
+// pitch class at the same spot in every bar restating it (bars 1, 3, 5, 7 / 2, 4, 6), so a
+// tie ringing into bar 3 but not bar 1 cannot make the restated bars differ. The turn bar
+// decides alone.
+void leaveBassNoteToBass (Lane& stab, const Lane& bass, int bars) noexcept
 {
+    auto bassPcAt = [&] (float t) noexcept
+    {
+        int pc = -1;
+        for (int i = 0; i < bass.count; ++i)
+        {
+            const Note& b = bass.notes[i];
+            if (b.vel > 2 && b.start <= t + 1e-3f && b.start + b.length > t + 1e-3f)
+                pc = pcOf (b.chord[0]);
+        }
+        return pc;
+    };
+    const int nb = clampi (bars, 1, kMaxBars);
     for (int k = 0; k < stab.count; ++k)
     {
         Note& n = stab.notes[k];
         const int nc = clampi ((int) n.nChord, 1, 4);
         if (n.vel <= 2 || nc < 4)
             continue;
-        int bpc = -1;
-        for (int i = 0; i < bass.count; ++i)
-        {
-            const Note& b = bass.notes[i];
-            if (b.vel > 2 && b.start <= n.start + 1e-3f && b.start + b.length > n.start + 1e-3f)
-                bpc = pcOf (b.chord[0]);
-        }
+        const int bar = clampi (phrase_lock::barOf (n.start), 0, nb - 1);
+        const float off = n.start - (float) (bar * kStepsPerBar);
+        const int src = nb >= 4 ? phrase_lock::sourceBar (bar, nb) : bar;
+        int bpc = bassPcAt (n.start);
+        for (int b = 0; b < nb && bpc >= 0; ++b)
+            if (b != bar && nb >= 4 && phrase_lock::sourceBar (b, nb) == src
+                && bassPcAt ((float) (b * kStepsPerBar) + off) != bpc)
+                bpc = -1;
         if (bpc < 0)
             continue;
         int top = 0;
@@ -5823,7 +5840,7 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
     }
     // DEEP's jazz voicings leave the bass note to the bass that ships (RuleComposer deepJazzStab).
     if (s.dialect == Long && regen (Stab))
-        leaveBassNoteToBass (g.lane[Stab], g.lane[Bass]);
+        leaveBassNoteToBass (g.lane[Stab], g.lane[Bass], s.bars);
         // A locked scale is the last pitch step, after the roll-mode pass, so the
     // user's scale always wins and Auto rolls are untouched byte for byte. Only
     // regenerated lanes move: a kept lane stays as the user locked it.
