@@ -557,11 +557,14 @@ enum GrooveContour : int { Climb = 0, RiseDropBelow, HookRepeat, PedalCall, Call
 // Round 7 (Oct 20): Melak called 4, 7, 8, 9, 10 "great riff" and 3, 5 "good"; five of those seven
 // were PedalCall (a rhythmic root call, a two-note answer stepping down: 4 -> b3, 5 -> 4), one
 // RiseDropBelow; the "eh" / "too chaotic" ones carried the most ghosts. PedalCall leads now.
+// Round 11 (Oct 21): with PedalCall at .40 and riffs ranked by the old penalty, 9 of 10 were the same
+// riff ("all the basslines were the same lol"): PedalCall back to about a quarter, RiseDropBelow (the
+// other round-7 favourite) up, and PedalCall's call and answer now vary (below).
 inline constexpr float kContourW[4][kContours] = {
-    { 0.08f, 0.16f, 0.10f, 0.30f, 0.12f, 0.12f, 0.12f }, // ROLLER
-    { 0.06f, 0.16f, 0.08f, 0.40f, 0.12f, 0.10f, 0.08f }, // DEEP
-    { 0.08f, 0.14f, 0.12f, 0.30f, 0.12f, 0.10f, 0.14f }, // BOUNCY
-    { 0.08f, 0.14f, 0.12f, 0.28f, 0.12f, 0.10f, 0.16f }, // JACKIN
+    { 0.10f, 0.20f, 0.10f, 0.24f, 0.12f, 0.12f, 0.12f }, // ROLLER
+    { 0.08f, 0.22f, 0.10f, 0.26f, 0.14f, 0.10f, 0.10f }, // DEEP
+    { 0.10f, 0.18f, 0.12f, 0.24f, 0.12f, 0.10f, 0.14f }, // BOUNCY
+    { 0.10f, 0.18f, 0.12f, 0.22f, 0.12f, 0.10f, 0.16f }, // JACKIN
 };
 
 struct GrooveHit
@@ -814,18 +817,40 @@ inline Cell grooveBar (int contour, const int* set, int nSet, bool b5, Rng& r, b
     else // PedalCall
     {
         if (! answer)
+        {
+            // the call: the root in rhythm; or the root jumping to its octave on an offbeat or two (the
+            // Dreams / Mambos lift); or the root with the b7 under it leading back at the end
             for (int i = 0; i < n; ++i)
                 pitch[i] = 0;
+            const double cv = r.next();
+            if (cv < 0.30)
+            {
+                int jumps = 0;
+                for (int i = 1; i < n && jumps < 2; ++i)
+                    if ((g.slot[i] & 3) != 0 && r.next() < 0.6)
+                    {
+                        pitch[i] = 12;
+                        ++jumps;
+                    }
+            }
+            else if (cv < 0.50 && n > 2)
+                pitch[n - 1] = -2;
+        }
         else
         {
-            // the answer steps down: 5 -> 4 or 4 -> b3 (his round-7 favourites), else the old pair
+            // the answer: a two-note move away from the root. His round-7 favourites step down
+            // (4 -> b3, 5 -> 4); more of the same family: b7 -> 5, 4 -> 5 rising, b3 -> 4 rising
             int a = has (7) ? 7 : (has (5) ? 5 : ups[0]);
             int b = has (3) ? 3 : (has (10) ? -2 : ups[0]);
-            if (r.next() < 0.85)
+            static constexpr int kPairs[5][2] = { { 5, 3 }, { 7, 5 }, { 10, 7 }, { 5, 7 }, { 3, 5 } };
+            static constexpr float kPairW[5] = { 0.30f, 0.25f, 0.17f, 0.14f, 0.14f };
+            if (r.next() < 0.90)
             {
-                const bool fiveFour = r.next() < 0.45;
-                a = fiveFour ? 7 : 5;
-                b = fiveFour ? 5 : 3;
+                const int pk = std::max (0, pickW (kPairW, 5, r.next()));
+                a = kPairs[pk][0];
+                b = kPairs[pk][1];
+                if (a == 10 && ! phrase::inMode (10, 1))
+                    a = 7;
             }
             const int split = std::max (1, n / 2);
             for (int i = 0; i < n; ++i)

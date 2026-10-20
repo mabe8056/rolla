@@ -6312,6 +6312,11 @@ static void generateOnce (Groove& g, const Settings& settings, const std::uint32
         pool[nPool].penalty = last.penalty;
         std::snprintf (pool[nPool].tag, sizeof pool[nPool].tag, "%s", g.brokenRules);
         ++nPool;
+        // RIFF: the riff writer designs the bass itself; ranking riffs by the rule composer's penalty
+        // picked the same riff family 9 times in 10 (Oct 21, Melak: "all the basslines were the same
+        // lol"). The first clean candidate (the roll's own seed) ships.
+        if (s.riff && regen (Bass))
+            break;
     }
 
     int chosen = 0;

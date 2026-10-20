@@ -497,8 +497,8 @@ inline void writeLock (Lane& lane, const Lane& bassLane, int mode, int bars, int
             const BassNote& x = b.n[i];
             if (x.ghost || x.start < (float) (src * 16) - 0.01f || x.start >= (float) (src * 16 + 16) - 0.01f)
                 continue;
-            if (idxOf (pcOf (x.v)) < 0)
-                continue;
+            if (idxOf (pcOf (x.v)) < 0 || x.v != rootV[idxOf (pcOf (x.v))])
+                continue; // an octave jump of the root keeps the chord already sounding
             const int slot = (int) std::lround (x.start) - src * 16;
             float s = 0.f;
             s += (slot % 4) != 0 ? 2.f : 0.f;
