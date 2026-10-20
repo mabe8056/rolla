@@ -336,6 +336,7 @@ bool loadProgram (rolla::MixProgram& program)
 rolla::EngineParams makeParams (const rolla::PresetBank& bank, const rolla::MixProgram& mix, int dialect)
 {
     rolla::EngineParams params;
+    params.sampleTrue = false; // tests the -6 dBTP guard and the MIX_SPEC strip (legacy path)
     const auto& row = bank.dialect[dialect];
     for (int i = 0; i < rolla::NumParts; ++i)
     {

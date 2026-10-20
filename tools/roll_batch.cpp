@@ -305,7 +305,7 @@ Rendered renderWav (const rolla::PresetBank& bank, const rolla::Groove& groove, 
         params.drumDecay[v] = 0.5f;
     if (hitsMute)
         params.mute[rolla::Hits] = true;
-    params.duck = true;
+    params.duck = false; // plugin default (sample-true)
     params.drumsToMain = true;
     params.swing = swing;
     params.outputDb = 0.f;

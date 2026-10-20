@@ -1371,7 +1371,7 @@ void Engine::process (const Groove& groove,
                 // plays, duck follows this function's kick note-ons instead.
                 // Mix path: muting drums must not retarget duck, or SOLO/MUTE/FULL
                 // bass envelopes stop nulling. Quarter-grid fallback stays on the legacy path.
-                if (params.mix == nullptr && params.mute[Drums] && (params.duck && ! params.sampleTrue) && (t % 4) == 0)
+                if (params.mix == nullptr && params.mute[Drums] && params.duck && (t % 4) == 0)
                 {
                     const float depth = std::max (0.f, bp.duckDb + punchB * 8.f);
                     const float rec = bp.duckRecoverMs;
@@ -1503,7 +1503,7 @@ void Engine::process (const Groove& groove,
                     const float sampleGain = accentOf (voice) * ((voice == Kick || voice == Clap) ? quarterAcc : 1.f);
                     // Mix path: muting drums must not drop the kick duck, or SOLO/MUTE/FULL
                     // bass envelopes stop nulling. The legacy path still skips it.
-                    if (voice == Kick && (params.duck && ! params.sampleTrue) && (params.mix != nullptr || ! params.mute[Drums]))
+                    if (voice == Kick && params.duck && (params.mix != nullptr || ! params.mute[Drums]))
                     {
                         const float depth = std::max (0.f, bp.duckDb + punchB * 8.f);
                         const float rec = bp.duckRecoverMs;
@@ -1815,7 +1815,7 @@ void Engine::process (const Groove& groove,
         sampler.render (playL, playR, (float) prev, (float) pos, transport.playing, (float) loop16);
 
         const float bFader = E.level[Bass].next();
-        const float bDuck = (params.duck && ! params.sampleTrue) ? E.duckB.next() : 1.f;
+        const float bDuck = params.duck ? E.duckB.next() : 1.f;
         // Sample-true: a stereo bass file sums to mono (it was its left channel only).
         const float bDry = renderBass (E.bass) + renderBass (E.live)
                            + (params.sampleTrue ? 0.5f * (playL[Bass] + playR[Bass]) : playL[Bass]);
@@ -1830,7 +1830,7 @@ void Engine::process (const Groove& groove,
             sDelay += (l + r) * 0.5f * v.delaySend;
             sRev += (l + r) * 0.5f * v.revSend;
         }
-        const float stabDuck = (params.duck && ! params.sampleTrue) ? E.duckS.next() : 1.f;
+        const float stabDuck = params.duck ? E.duckS.next() : 1.f;
         const float stabFader = E.level[Stab].next();
         const float sDryL = sL + playL[Stab];
         const float sDryR = sR + playR[Stab];
@@ -1847,7 +1847,7 @@ void Engine::process (const Groove& groove,
             pR += r;
         }
         const float pluckFader = E.level[Pluck].next();
-        const float pluckDuck = (params.duck && ! params.sampleTrue) ? E.duckPl.next() : 1.f;
+        const float pluckDuck = params.duck ? E.duckPl.next() : 1.f;
         const float pDryL = pL + playL[Pluck];
         const float pDryR = pR + playR[Pluck];
         pL = pDryL * pluckFader * pluckDuck;
@@ -1861,7 +1861,7 @@ void Engine::process (const Groove& groove,
             aR += r;
             aRev += (l + r) * 0.5f * v.revSend;
         }
-        const float padDuck = (params.duck && ! params.sampleTrue) ? E.duckP.next() : 1.f;
+        const float padDuck = params.duck ? E.duckP.next() : 1.f;
         const float padFader = E.level[Pad].next();
         const float aDryL = aL + playL[Pad];
         const float aDryR = aR + playR[Pad];
@@ -2016,7 +2016,7 @@ void Engine::process (const Groove& groove,
             hR += y * (1.f + v.pan * 0.5f);
         }
         const float hitsFader = E.level[Hits].next();
-        const float hitsDuck = (params.duck && ! params.sampleTrue) ? E.duckH.next() : 1.f;
+        const float hitsDuck = params.duck ? E.duckH.next() : 1.f;
         const float hDryL = hL + playL[Hits];
         const float hDryR = hR + playR[Hits];
         hL = hDryL * hitsFader * hitsDuck;
@@ -2076,7 +2076,7 @@ void Engine::process (const Groove& groove,
             voxRev += y * v.revSend;
         }
         const float voxFader = E.level[Vox].next();
-        const float voxDuck = (params.duck && ! params.sampleTrue) ? E.duckV.next() : 1.f;
+        const float voxDuck = params.duck ? E.duckV.next() : 1.f;
         const float vDryL = voxL + playL[Vox];
         const float vDryR = voxR + playR[Vox];
         voxL = vDryL * voxFader * voxDuck;

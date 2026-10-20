@@ -508,7 +508,7 @@ void testStems (rolla::RollaProcessor& proc, const std::string& tag, const rolla
                     tag + ": bar-1 kick sounds at the start of the drum stem (first sound at sample "
                         + std::to_string (w.firstLoud) + ")");
         if (pack)
-            expect (w.peak <= 0.5012f, tag + " " + lane + " stem under -6 dBFS sample peak");
+            expect (w.peak <= 0.8913f, tag + " " + lane + " stem under the -1 dBFS sample-true safety ceiling");
     }
     if (pack)
         expect (silent == 0, tag + ": no silent stems right after a roll " + silentNames);

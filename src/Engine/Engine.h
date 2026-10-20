@@ -27,7 +27,8 @@ struct EngineParams
     float levelDb[NumParts] {};
     bool mute[NumParts] {};
     int preset[NumParts] {};
-    bool duck = true;
+    // Kick sidechain duck. Off by default: sample-true plays the samples as they are; DUCK turns pumping on.
+    bool duck = false;
     bool drumsToMain = true;
     float swing = 0.537f; // model v1.2 hat swing target (53-57%)
     float outputDb = 0.f;

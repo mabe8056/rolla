@@ -73,7 +73,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout (const PresetBa
         StringArray { "2", "4", "8" }, 2));
 
     add (std::make_unique<AudioParameterBool> (ParameterID { "fill", 1 }, "Fill", false));
-    add (std::make_unique<AudioParameterBool> (ParameterID { "duck", 1 }, "Duck", true));
+    // Off by default (sample-true: samples as they are); turning it on brings the kick pump back.
+    add (std::make_unique<AudioParameterBool> (ParameterID { "duck", 1 }, "Duck", false));
     add (std::make_unique<AudioParameterBool> (ParameterID { "drumsToMain", 1 }, "Drums To Main", true));
     add (std::make_unique<AudioParameterFloat> (ParameterID { "drumsAccent", 1 }, "Drums Accent", unit, 0.60f));
     add (std::make_unique<AudioParameterFloat> (

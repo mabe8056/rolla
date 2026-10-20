@@ -120,11 +120,11 @@ def gate_mix(path):
     problems = []
     # The mix program's reference-loop gate is -19 LUFS-S. A generated tone does not
     # have that crest, so a missing mix (about -33 LUFS-S) is the failure this catches.
-    # Mono-below and the -6 dBTP ceiling are the mix_check numbers this material can meet.
+    # Sample-true master: the true-peak guard is a -1 dBTP safety (Melak, Oct 19), not a -6 level control.
     if st is None or st < -28.0 or st > -16.0:
         problems.append(f"short-term {st} outside -28..-16 (mix program not at the plugin gain)")
-    if tp is None or tp > -6.0:
-        problems.append(f"true peak {tp} above -6 dBTP")
+    if tp is None or tp > -0.9:
+        problems.append(f"true peak {tp} above the -1 dBTP safety ceiling")
     if low is not None and low > -40 and (corr is None or corr < 0.99):
         problems.append(f"corr<120 {corr} below 0.99")
     if lead is None or lead >= 12.0:
@@ -261,8 +261,8 @@ def main():
         else:
             r = measure(os.path.join(quiet_dir, quiet_mixes[0]))
             print(f"  intensity 0 tp={r['tp_dbtp']:.2f} lead={r['lead_silence_ms']}")
-            if r["tp_dbtp"] is None or r["tp_dbtp"] > -6.0:
-                problems.append(f"intensity 0 true peak {r['tp_dbtp']} above -6")
+            if r["tp_dbtp"] is None or r["tp_dbtp"] > -0.9:
+                problems.append(f"intensity 0 true peak {r['tp_dbtp']} above -1")
             if r["lead_silence_ms"] is None or r["lead_silence_ms"] >= 12.0:
                 problems.append(f"intensity 0 lead silence {r['lead_silence_ms']}")
 

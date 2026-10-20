@@ -3496,6 +3496,7 @@ int main()
         for (auto& pool : kit.drums[0].voicePool)
             pool.clear();
         rolla::EngineParams kp;
+        kp.sampleTrue = false; // key follow is a legacy-path feature; sample-true plays drums at recorded pitch
         kp.presets = &kit;
         kp.library = &follow;
         kp.sampleIndex = followSnap.get();
@@ -4352,6 +4353,7 @@ int main()
         rolla::Sampler chopSampler;
         chopSampler.prepare (48000.0);
         rolla::EngineParams chopParams;
+        chopParams.sampleTrue = false; // slicing is a legacy-path feature; sample-true plays the whole file
         chopParams.presets = &chopBank;
         chopParams.library = &chopLib;
         chopParams.sampleIndex = chopSnap.get();
